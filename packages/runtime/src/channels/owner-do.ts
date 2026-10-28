@@ -34,7 +34,7 @@ import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from 
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
 import { invokeHealth } from './app-health';
-import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, HEALTH_TRIGGER_FORMAT, HEALTH_TRIGGER_ID } from '../health/trigger';
+import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, HEALTH_TRIGGER_ID } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -4621,13 +4621,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             tasks: tasks ? () => tasks.tasks('todo', 50) : null, loops: () => loops.list() }, from, to, timezone);
         },
         admit: budget.admit, charge: budget.charge,
-        decide: async (id, prompt) => {
+        decide: async (id, prompt, format) => {
           const asked = Date.now();
           let answered = false;
-          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, HEALTH_TRIGGER_FORMAT); answered = true; return said; }
+          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format); answered = true; return said; }
           finally { log({ trace: id, hop: 'machine_turn', ms: Date.now() - asked, ok: answered, detail: 'health_card' }); }
         },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),
+        // A day with nothing coming: a note, as an update card under the update cards' own gate, and recorded for the next main card.
+        soloNotice: { enabled: () => this.env.HEALTH_SOLO_NOTICE === '1', held: () => sweepGate(localIso(Date.now(), timezone).slice(0, 10)),
+          deliver: async (id, text, commit) => {
+            if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+            const recordId = updates.record(localIso(Date.now(), timezone).slice(0, 10), Date.now(), [], null);
+            await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+              doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
+            await scheduler.rearm();
+          } },
         reschedule: async at => { await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: at, dueAt: at, payloadRefs: { id: HEALTH_TRIGGER_ID } }); },
         log: line => log({ trace, hop: line.hop, ms: 0, ok: line.ok, code: line.code, ...(line.mode ? { detail: line.mode } : {}) }) }) !== 'failed'; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: ran, detail: 'health_trigger' }); }

@@ -23,3 +23,10 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
     expect(parsed.vars.WHATSAPP_DEBUG_LOG).toBe('false');
   });
 });
+
+describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
+  it('is declared off for production and staging until the gate turns it on', () => {
+    expect(parsed.vars.HEALTH_SOLO_NOTICE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('0');
+  });
+});

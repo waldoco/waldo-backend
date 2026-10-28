@@ -3,7 +3,8 @@
 // reminder path, as the owner object's alarm drives it.
 import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
-import { HEALTH_TRIGGER_FORMAT } from '../../src/health/trigger';
+import { isSkip } from '../../src/channels/day-cards';
+import type { CardId } from '../../src/prompt/day-cards';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -24,6 +25,8 @@ export type Step =
   | Readonly<{ health: 'shared' | 'withdrawn' }>
   // The owner's derived health moves zone and the health trigger runs, with one structured model call.
   | Readonly<{ health_change: true }>
+  // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
+  | Readonly<{ card: CardId }>
   | Readonly<{ mail_arrives: SeedMail }>;
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
@@ -110,9 +113,14 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
       } else if ('health_change' in step) {
-        const { outcome, proposal } = await world.healthChange((id, prompt) => responder.prompt(id, 1, prompt, time, [], async () => undefined, HEALTH_TRIGGER_FORMAT));
+        const { outcome, proposal, notice } = await world.healthChange((id, prompt, format) => responder.prompt(id, 1, prompt, time, [], async () => undefined, format));
         transcript.push({ role: 'world', text: `The owner's health moves zone and the health trigger runs (${outcome}).` });
         if (proposal) transcript.push({ role: 'waldo', surface: 'notification', text: proposal.reason });
+        if (notice) transcript.push({ role: 'waldo', surface: 'notification', text: notice });
+      } else if ('card' in step) {
+        transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card), time, undefined, undefined, undefined, undefined, 'external');
+        if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
         world.shareHealth(step.health === 'shared');
         transcript.push({ role: 'world', text: step.health === 'shared' ? 'The owner shares health data.' : 'The owner withdraws health sharing.' });
