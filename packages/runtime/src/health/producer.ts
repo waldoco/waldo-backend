@@ -339,13 +339,13 @@ const storedBefore = async (read: ProducerDeps['readScores'], day: string): Prom
   } catch { return null; }
 };
 // The days that already hold a row. The window is anchored on the database's today in the owner's latest zone, so ninety
-// days covers the thirty-day series with room at a zone edge. Nothing stored is an empty set; any other answer, or a read
-// that fails, is unknown, and the run backfills nothing rather than write blind.
+// days covers the thirty-day series with room at a zone edge. Nothing stored (no_readings) is an empty set. Any other answer,
+// a consent refusal included, or a read that fails, is unknown, and the run backfills nothing rather than write blind.
 const HISTORY_WINDOW_DAYS = 90;
 const heldDays = async (read: NonNullable<ProducerDeps['readHistory']>): Promise<ReadonlySet<string> | null> => {
   try {
     const answer = asRecord(await read(HISTORY_WINDOW_DAYS));
-    if (typeof answer?.unavailable === 'string') return new Set();
+    if (answer?.unavailable === 'no_readings') return new Set();
     const days = asRecord(answer?.history)?.days;
     if (!Array.isArray(days)) return null;
     const held = days.map(day => asRecord(day)?.day);
