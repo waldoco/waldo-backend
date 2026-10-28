@@ -607,3 +607,29 @@ describe('welcome build: a source connected after setup', () => {
     });
   });
 });
+
+describe('welcome build: what the model is told it may cite', () => {
+  it('every stage\'s model input names each source a node may be filed under, so a real answer can pass admission', async () => {
+    await withSql(async (sql, transaction) => {
+      const claims = claimStore(sql, transaction);
+      claims.add({ kind: 'preference', text: 'Wants mornings protected for deep work', source: 'stated', evidence: 'mornings', origin: 'owner', source_ref: 'owner, first run: protect' }, new Date(T0).toISOString());
+      const given: Partial<Record<WelcomeStage, readonly string[]>> = {};
+      const recorded = (stage: WelcomeStage, read: () => Promise<StageInput>) => async () => { const got = await read(); if (got.kind === 'input') given[stage] = got.sources; return got; };
+      const { build, inputs, deps: d } = deps(sql, transaction, {
+        read: {
+          health: recorded('health', async () => input(['apple_health'], ['sleep_midpoint'])),
+          calendar: recorded('calendar', async () => input(['calendar', 'tasks'], ['evt_a'])),
+          mail: recorded('mail', async () => input(['gmail'], ['thr_1'])),
+          web: async () => ({ kind: 'settled', state: 'skipped' }),
+          setup: recorded('setup', setupStage(claims, () => true)),
+        },
+      });
+      build.start();
+      await runWelcome(d);
+      expect(Object.keys(given).sort()).toEqual(['calendar', 'health', 'mail', 'setup']);
+      for (const [stage, sources] of Object.entries(given) as [WelcomeStage, readonly string[]][]) {
+        for (const source of sources) expect(inputs[stage], `${stage}: ${source}`).toMatch(new RegExp(`Sources to name[^\\n]*\\b${source}\\b`));
+      }
+    });
+  });
+});
