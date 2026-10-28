@@ -7,6 +7,7 @@ import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
 import { ActivityControls, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
 import { DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
+import { forgetCardsRevealed } from './day-cards-model';
 
 type ActionProps = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 export type ControlsState = { kind: 'loading' } | { kind: 'ready'; data: ControlRecord } | { kind: 'error'; message: string; signedOut: boolean };
@@ -258,7 +259,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
       setResult(receipt);
       if (receipt.receipt.state !== 'unconfirmed') {
         attempt.current = null;
-        if (receipt.receipt.signed_out) setState({ kind: 'error', signedOut: true, message: 'This session was signed out.' });
+        if (receipt.receipt.signed_out) { forgetCardsRevealed(); setState({ kind: 'error', signedOut: true, message: 'This session was signed out.' }); }
         else setRetry(n => n + 1);
       }
     } catch (e) {

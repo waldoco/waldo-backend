@@ -858,3 +858,19 @@ footer .refresh:disabled { opacity:1; }
 .access-log-table { width:100%; border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; margin-bottom:8px; }
 .access-log-table th,.access-log-table td { text-align:left; padding:6px 10px 6px 0; border-bottom:.5px solid var(--hair); white-space:nowrap; }
 .access-log-table th { font-weight:500; color:var(--t2); }
+
+/* ── Today's messages: the Brief, Check-in and the Close in the order of the day, each under its name and time and split by hairlines,
+   as the app's Home lists them. A message seen for the first time plays in word by word at the app's pace: each word fades up over
+   420ms in ink, and 900ms after it began eases to the paragraph's grey over 600ms. The settled grey is the base style, so with reduced
+   motion (every animation off) the words are simply there. ── */
+.day-cards-tile>.label { display:block; margin-bottom:4px; }
+.day-cards { list-style:none; margin:0; padding:0; }
+.day-card { padding:14px 0; border-bottom:.5px solid var(--hair); }
+.day-card:last-child { border-bottom:0; padding-bottom:0; }
+.day-card>p { margin:0 0 6px; }
+.day-card-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px; }
+.day-card-head .meta { font-variant-numeric:tabular-nums; }
+.card-letter p { margin:0 0 10px; font-size:17px; line-height:1.45; color:var(--t2); }
+.card-word { display:inline-block; animation:card-word-in 420ms var(--ease) backwards, card-word-settle 600ms ease backwards; animation-delay:var(--at,0ms), calc(var(--at,0ms) + 900ms); }
+@keyframes card-word-in { from { opacity:0; transform:translateY(4px); } }
+@keyframes card-word-settle { from { color:var(--ink); } }
