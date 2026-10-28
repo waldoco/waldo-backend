@@ -38,12 +38,12 @@ export const revokeBrowserErrand = (storage: DurableObjectStorage, runId: string
   return grant;
 });
 
-// The owner's line for an ended grant: how many of the allowed submissions went out, where, and when. Never what they carried.
-export const browserErrandReceipt = (storage: DurableObjectStorage, runId: string, timezone: string): string | null => {
+// What an ended grant allowed and when its submissions went out, in the owner's local time. Never what they carried.
+export type BrowserErrandRecord = Readonly<{ origin: string; allowed: number; submitted_at: readonly string[] }>;
+export const browserErrandRecord = (storage: DurableObjectStorage, runId: string, timezone: string): BrowserErrandRecord | null => {
   const grant = storage.kv.get<BrowserErrandGrant>(receiptKey(runId));
   if (!grant) return null;
-  if (!grant.submits.length) return `Receipts: this errand submitted nothing on ${grant.origin}.`;
-  const times = grant.submits.map(at => new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(at)).join(', ');
-  return `Receipts: this errand submitted ${grant.submits.length} of ${grant.maxSubmits} allowed form${grant.maxSubmits === 1 ? '' : 's'} on ${grant.origin} (${times}).`;
+  const local = new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  return { origin: grant.origin, allowed: grant.maxSubmits, submitted_at: grant.submits.map(at => local.format(at)) };
 };
 export const clearBrowserErrandReceipt = (storage: DurableObjectStorage, runId: string): void => { storage.kv.delete(receiptKey(runId)); };

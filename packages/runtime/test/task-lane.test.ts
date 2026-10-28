@@ -83,21 +83,28 @@ describe('the jobs lane', () => {
     });
   });
 
-  it('an errand that held a site grant ends its report with the host\'s receipt of what it submitted, cleared with the settle', async () => {
+  it('an errand that held a site grant gives its report turn the host\'s record of what it submitted; the owner hears the model\'s words, and the record clears with the settle', async () => {
     await withLane(async ({ book, sent, deps }) => {
-      const id = reported(book, 'k1'), cleared: string[] = [];
-      await runJobsLane(deps({ errandReceipt: { line: job => job === id ? 'Receipts: this errand submitted 2 of 3 allowed forms on https://checkin.airline.example (14:03, 14:05).' : null, clear: job => { cleared.push(job); } } }));
-      expect(sent.get(`task:${id}`)).toMatch(/^Reply to [\s\S]+\n\nReceipts: this errand submitted 2 of 3 allowed forms on https:\/\/checkin\.airline\.example \(14:03, 14:05\)\.$/);
+      const id = reported(book, 'k1'), cleared: string[] = [], texts: string[] = [];
+      const record = { origin: 'https://checkin.airline.example', allowed: 3, submitted_at: ['2026-10-27 14:03', '2026-10-27 14:05'] };
+      await runJobsLane(deps({
+        errandRecord: { get: job => job === id ? record : null, clear: job => { cleared.push(job); } },
+        turn: async (_job, _trace, text) => { texts.push(text); return 'Checked in: two forms went to the airline at 14:03 and 14:05.'; },
+      }));
+      expect(texts[0]).toContain('<site_grant_record>');
+      expect(texts[0]).toContain('https://checkin.airline.example');
+      expect(texts[0]).toContain('2026-10-27 14:05');
+      expect(sent.get(`task:${id}`)).toBe('Checked in: two forms went to the airline at 14:03 and 14:05.');
       expect(cleared).toEqual([id]);
     });
   });
 
-  it('an errand whose report the model would skip still tells the owner what it submitted', async () => {
-    await withLane(async ({ book, sent, deps }) => {
-      const id = reported(book, 'k1');
-      await runJobsLane(deps({ turn: async () => 'SKIP', errandReceipt: { line: () => 'Receipts: this errand submitted nothing on https://checkin.airline.example.', clear: () => {} } }));
-      expect(sent.get(`task:${id}`)).toBe('Receipts: this errand submitted nothing on https://checkin.airline.example.');
-      expect(book.get(id)!.status).toBe('applied');
+  it('a task with no site grant gets no grant record in its report turn', async () => {
+    await withLane(async ({ book, deps }) => {
+      reported(book, 'k1');
+      const texts: string[] = [];
+      await runJobsLane(deps({ errandRecord: { get: () => null, clear: () => {} }, turn: async (_job, _trace, text) => { texts.push(text); return 'Done.'; } }));
+      expect(texts[0]).not.toContain('site_grant_record');
     });
   });
 

@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import {commonBrowserHost,type CommonBrowserGrant} from '../src/channels/common-browser-host';
-import {BROWSER_ERRAND_GRANT_MS,browserErrandAdmits,browserErrandReceipt,clearBrowserErrandReceipt,grantBrowserErrand,revokeBrowserErrand,spendBrowserErrandSubmit} from '../src/channels/browser-errand-grant';
+import {BROWSER_ERRAND_GRANT_MS,browserErrandAdmits,browserErrandRecord,clearBrowserErrandReceipt,grantBrowserErrand,revokeBrowserErrand,spendBrowserErrandSubmit} from '../src/channels/browser-errand-grant';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 const probe=vi.hoisted(()=>({authorize:undefined as undefined|((url:string,method:string,body?:Uint8Array)=>Promise<boolean>)}));
 vi.mock('../src/channels/cloudflare-general-browser',async load=>{
@@ -68,13 +68,13 @@ it('under the run\'s live grant a step marked send may submit to the approved or
  expect(await send('task:other-job')).toMatchObject({ok:false});expect(commonBrowserFixture.effects).toBe(0);
  expect(await send(RUN)).toMatchObject({ok:true});expect(commonBrowserFixture.effects).toBe(1);await f.host.cancel();
 });
-it('an ended grant leaves the owner one receipt line, counts and times only, until it is cleared',async()=>{
+it('an ended grant leaves a record of the origin, the allowance and the local times of its submissions, never their contents, until cleared',async()=>{
  const {storage}=memory(),now=Date.UTC(2026,9,27,14,3);granted(storage,now,3);
  spendBrowserErrandSubmit(storage,RUN,`${ORIGIN}/check-in`,now);spendBrowserErrandSubmit(storage,RUN,`${ORIGIN}/seat`,now+2*60_000);
- expect(browserErrandReceipt(storage,RUN,'UTC')).toBeNull();
+ expect(browserErrandRecord(storage,RUN,'UTC')).toBeNull();
  revokeBrowserErrand(storage,RUN);
- expect(browserErrandReceipt(storage,RUN,'Asia/Tokyo')).toBe(`Receipts: this errand submitted 2 of 3 allowed forms on ${ORIGIN} (23:03, 23:05).`);
+ expect(browserErrandRecord(storage,RUN,'Asia/Tokyo')).toEqual({origin:ORIGIN,allowed:3,submitted_at:['2026-10-27 23:03','2026-10-27 23:05']});
  expect(spendBrowserErrandSubmit(storage,RUN,`${ORIGIN}/a`,now)).toBe(false);
- clearBrowserErrandReceipt(storage,RUN);expect(browserErrandReceipt(storage,RUN,'UTC')).toBeNull();
- granted(storage,now,1);revokeBrowserErrand(storage,RUN);expect(browserErrandReceipt(storage,RUN,'UTC')).toBe(`Receipts: this errand submitted nothing on ${ORIGIN}.`);
+ clearBrowserErrandReceipt(storage,RUN);expect(browserErrandRecord(storage,RUN,'UTC')).toBeNull();
+ granted(storage,now,1);revokeBrowserErrand(storage,RUN);expect(browserErrandRecord(storage,RUN,'UTC')).toEqual({origin:ORIGIN,allowed:1,submitted_at:[]});
 });

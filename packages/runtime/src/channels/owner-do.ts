@@ -165,7 +165,7 @@ import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standi
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
-import { browserErrandReceipt, clearBrowserErrandReceipt, revokeBrowserErrand } from './browser-errand-grant';
+import { browserErrandRecord, clearBrowserErrandReceipt, revokeBrowserErrand } from './browser-errand-grant';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
@@ -3003,7 +3003,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const kv = storage.kv, jobs = this.jobs();
       const ran = await runJobsLane({
         book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, surface, log: runtime.log,
-        errandReceipt: { line: id => browserErrandReceipt(storage, `task:${id}`, runtime.timezone), clear: id => { clearBrowserErrandReceipt(storage, `task:${id}`); } },
+        errandRecord: { get: id => browserErrandRecord(storage, `task:${id}`, runtime.timezone), clear: id => { clearBrowserErrandReceipt(storage, `task:${id}`); } },
         quiet: () => isQuiet(loopBook(storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), runtime.timezone),
         startWorker: async ticket => {
           const workers = this.env.TASK_WORKER_DO;
