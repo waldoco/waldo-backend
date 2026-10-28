@@ -11,5 +11,7 @@ begin
     join auth.users u on u.id = o.auth_user_id and lower(u.email) = lower(o.email) and u.email_confirmed_at is not null
     where o.do_name = p_do_name and o.state = 'active' limit 1);
 end $$;
-revoke all on function waldo.owner_account_email(text, bigint, text) from public;
+-- The Worker's signed read uses the publishable key, which is the anon role, so anon keeps EXECUTE exactly as it does for
+-- owner_phone_state: the router signature, bound to this owner's do_name, is the gate. Signed-in end users get none.
+revoke all on function waldo.owner_account_email(text, bigint, text) from public, anon, authenticated;
 grant execute on function waldo.owner_account_email(text, bigint, text) to anon;

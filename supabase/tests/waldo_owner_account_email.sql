@@ -30,6 +30,7 @@ select throws_ok($$select waldo.owner_account_email('account-owner-b', extract(e
 select throws_ok(format($$select waldo.owner_account_email('account-owner-b', %s, %L)$$, pg_temp.at(), pg_temp.sig('accountemail.account-owner-a')),
   '42501', 'unsigned router call', 'a signature for another owner does not read this one');
 select ok(has_function_privilege('anon', 'waldo.owner_account_email(text,bigint,text)', 'execute'), 'the signed entry is callable');
+select ok(not has_function_privilege('authenticated', 'waldo.owner_account_email(text,bigint,text)', 'execute'), 'a signed-in end user cannot call it');
 select ok(not exists(select 1 from pg_proc p, lateral aclexplode(p.proacl) a
   where p.oid = 'waldo.owner_account_email(text,bigint,text)'::regprocedure and a.grantee = 0), 'no PUBLIC execution privilege');
 select * from finish();
