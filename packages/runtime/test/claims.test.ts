@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, HEALTH_NOTES_OFF, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { HEALTH_MEMORY_RULES } from '../src/memory/health-rules';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
-import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
+import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS, sourceClaimOps } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -697,6 +697,25 @@ it('nightly promotion uses the model durable field rather than host wording heur
     expect(store.nodes()).toEqual([]);
     expect(applyPromotion(store, JSON.stringify({ nodes: [{ ...node, durable: true, reason: 'lasting routine' }], edges: [], promoted: [] }), AT)).toContain('nodes1');
     expect(store.nodes()[0]?.label).toBe('Check the calendar today');
+  });
+});
+
+describe('outside-content admission', () => {
+  it('an ungrounded paraphrase of outside content is untrusted, never Waldo\'s read, and only adds survive', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I live in Pune"', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      const pune = store.claims()[0]!.id;
+      const add = { kind: 'fact', text: 'Meets the design leads weekly', source: 'stated', evidence: 'a paraphrase that quotes nothing', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false };
+      const raw = sourceClaimOps(JSON.stringify({ add: [add], seen: [pune], confirm: [pune], dismiss: [pune], forget_claims: [pune], forget_topic: 'Pune', pin: [{ id: pune, block: 'profile', order: 0 }] }));
+      applyClaimOps(store, raw, AT, 'outside content', undefined, { shared: 'calendar added: design review', outside: true }, true, undefined, true);
+      expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([['Lives in Pune', 'owner', 'stated'], ['Meets the design leads weekly', 'untrusted', 'inferred']]);
+      expect(store.claims().find((claim) => claim.id === pune)).toMatchObject({ seen_count: 1, pinned: null, status: 'active' });
+      expect(store.barriers()).toEqual([]);
+      // Without the outside mark the same paraphrase is Waldo's read, as before.
+      applyClaimOps(store, ops({ add: [{ ...add, text: 'Plans the week on Mondays' }] }), AT, 'day', undefined, { shared: 'calendar added: design review' });
+      expect(store.claims().find((claim) => claim.text === 'Plans the week on Mondays')?.origin).toBe('agent');
+    });
   });
 });
 
