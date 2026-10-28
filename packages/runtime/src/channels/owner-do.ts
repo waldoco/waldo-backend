@@ -4567,15 +4567,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
       let outcome: string;
+      // Each run closes its trace with a machine_turn root, so the trace exporter flushes it.
       try { outcome = await recompute.run(); }
-      catch (error) { log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: false, code: 'failed' }); throw error; }
+      catch (error) {
+        log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: false, code: 'failed' });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'health_recompute' });
+        throw error;
+      }
       log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: outcome });
+      log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'health_recompute' });
     };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const budget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
-      await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
+      // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
+      const started = Date.now();
+      let ran = false;
+      try { ran = await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
         enabled: () => schedPrefs.enabled('health_proposals'), modeSetting: () => schedPrefs.healthMode(), proactivity: () => loops.proactivity(),
         readHealth: async () => (rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null),
         comingItems: async (from, to) => {
@@ -4585,10 +4594,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             tasks: tasks ? () => tasks.tasks('todo', 50) : null, loops: () => loops.list() }, from, to, timezone);
         },
         admit: budget.admit, charge: budget.charge,
-        decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, HEALTH_TRIGGER_FORMAT),
+        decide: async (id, prompt) => {
+          const asked = Date.now();
+          let answered = false;
+          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, HEALTH_TRIGGER_FORMAT); answered = true; return said; }
+          finally { log({ trace: id, hop: 'machine_turn', ms: Date.now() - asked, ok: answered, detail: 'health_card' }); }
+        },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),
         reschedule: async at => { await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: at, dueAt: at, payloadRefs: { id: HEALTH_TRIGGER_ID } }); },
-        log: line => log({ trace, hop: line.hop, ms: 0, ok: line.ok, code: line.code, ...(line.mode ? { detail: line.mode } : {}) }) });
+        log: line => log({ trace, hop: line.hop, ms: 0, ok: line.ok, code: line.code, ...(line.mode ? { detail: line.mode } : {}) }) }) !== 'failed'; }
+      finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: ran, detail: 'health_trigger' }); }
     };
     // Legacy owner counters used UTC. Adopt a new zone only once both civil days
     // have advanced past every retained daily row and send; never reset aggregates.
@@ -5005,7 +5020,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
-      ask: (stage, text) => this.serial(async () => (await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(`welcome:${stage}`, stage, text)))) });
+      // Each stage's call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
+      // a build taken up again after a cut must not add to a trace an earlier run already closed.
+      ask: (stage, text) => this.serial(async () => {
+        const started = Date.now(), trace = `welcome:${stage}:${started}`;
+        let answered = false;
+        try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text)); answered = true; return said; }
+        finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'welcome' }); }
+      }) });
     const runtime: OwnerRuntime = { welcome, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
