@@ -117,7 +117,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
-import { appTurnTraceId, ownerTraceSalt, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
+import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
@@ -1365,6 +1365,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return linkingAppRows(route, {
       card: (card, appRow) => dayPlanBook(this.ctx.storage.sql).delivered(card.day, card.card, appRow, Date.now()),
       update: (recordId, appRow) => updateBook(this.ctx.storage.sql).linked(recordId, appRow),
+      ...(langfuseOtlpConfig(this.env) ? { row: (appRow: string, trace: string) => rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now()) } : {}),
     });
   }
 
@@ -3098,8 +3099,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // A rating's Langfuse calls run one change at a time, so a delete never reaches Langfuse before the score it deletes.
   private ratingScores: Promise<void> = Promise.resolve();
   private scoreRating(change: RatingScoreChange): void {
-    const salt = ownerTraceSalt(this.ctx.storage.kv);
-    this.ratingScores = this.ratingScores.then(() => syncRatingScore(this.env, salt, change))
+    const traceKey = rowTraces(this.ctx.storage.sql).traceKey(change.messageId);
+    const traceId = traceKey === null ? null : ownerTraceId(ownerTraceSalt(this.ctx.storage.kv), traceKey) ?? null;
+    this.ratingScores = this.ratingScores.then(() => syncRatingScore(this.env, traceId, change))
       .then((result) => { if (result) console.log(JSON.stringify({ hop: 'rating_score', ok: result.ok, code: result.code })); }, () => undefined);
     this.ctx.waitUntil(this.ratingScores);
   }
@@ -3356,9 +3358,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const otlp = langfuseOtlpConfig(this.env);
     // Traces are filed under the verified owner principal once an owner turn has resolved it, else under the chat.
     let tracePrincipal: string | undefined;
-    // An app turn's trace id comes from the owner's salt, so a rating made later can score the trace its reply came from.
+    // A turn's or a scheduled occurrence's trace id comes from the owner's salt, so a rating made later can score the trace its row came from.
     const exportTurn = otlp ? otlpTurnExporter(otlp, {
-      traceId: (key) => appTurnTraceId(ownerTraceSalt(this.ctx.storage.kv), key),
+      traceId: (key) => ownerTraceId(ownerTraceSalt(this.ctx.storage.kv), key),
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
       channel, userId: () => tracePrincipal ?? (owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`), sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
       captureText: resolveCaptureText(this.env),
@@ -4995,7 +4997,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let appRow: string | undefined;
         if (!skipped) {
           const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
-          if (typeof receipt.app_row_id === 'string') { appRow = receipt.app_row_id; plans.delivered(day, card.id, appRow, Date.now()); }
+          if (typeof receipt.app_row_id === 'string') {
+            appRow = receipt.app_row_id; plans.delivered(day, card.id, appRow, Date.now());
+            if (otlp) rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now());
+          }
         }
         if (skipped) plans.skipped(day, card.id); else plans.sent(day, card.id);
         updates.fold(now);
