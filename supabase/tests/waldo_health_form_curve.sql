@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(47);
+select plan(52);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -53,7 +53,7 @@ select ok(pg_temp.model_read('curve-owner')->'context' is not null and not (pg_t
 select ok(not (pg_temp.h('scores_history','curve-owner','{"days":7}')::text ~ 'form_curve|stress_trend|measured|rising'),'the history read returns neither');
 select is(jsonb_array_length(pg_temp.h('scores_history','curve-owner','{"days":7}')->'history'->'days'),1,'though it returns the day itself');
 
--- A write without them replaces the row, so yesterday's curve does not outlive a recompute that found none.
+-- A write for today without them clears both, so a curve does not outlive a recompute of that day that found none.
 select is(pg_temp.write()->>'written','true','a row written without them lands');
 select ok(not (pg_temp.scores() ? 'form_curve') and not (pg_temp.scores() ? 'stress_trend'),'and the scores read leaves both keys out, never nulls');
 select ok((select form_curve is null and stress_trend is null from public.health_context_daily where user_id='f1000000-0000-0000-0000-0000000000f1'),'and the columns are cleared');
@@ -111,6 +111,16 @@ select is((select count(*)::int from unnest(array['"Rising"','"flat"','""','"ris
 select is(pg_temp.refused(jsonb_build_object('day',pg_temp.day(-1),'form_curve',pg_temp.curve())),true,'a curve on yesterday''s row is refused');
 select is(pg_temp.refused(jsonb_build_object('day',pg_temp.day(-1),'stress_trend','steady')),true,'and a stress word on it');
 select is(pg_temp.write(jsonb_build_object('day',pg_temp.day(-1)))->>'written','true','while yesterday''s row without them is written as ever');
+
+-- A past day's measured curve is what later projections read, so a rewrite of that day without one keeps it. The fence refuses a
+-- curve on that day, so it is seeded directly. The stress word is today's alone and follows the write.
+update public.health_context_daily set form_curve = pg_temp.curve(2), stress_trend = 'rising'
+  where user_id = 'f1000000-0000-0000-0000-0000000000f1' and day = (now() at time zone 'UTC')::date - 1;
+select is(pg_temp.write(jsonb_build_object('day',pg_temp.day(-1)))->>'written','true','yesterday''s row written again without a curve lands');
+select is((select form_curve from public.health_context_daily where user_id = 'f1000000-0000-0000-0000-0000000000f1' and day = (now() at time zone 'UTC')::date - 1),pg_temp.curve(2),'and keeps the curve it held');
+select ok((select stress_trend is null from public.health_context_daily where user_id = 'f1000000-0000-0000-0000-0000000000f1' and day = (now() at time zone 'UTC')::date - 1),'while its stress word, which is today''s alone, is cleared');
+select ok(not (pg_temp.h('scores_read','curve-owner',jsonb_build_object('day',pg_temp.day(-1)))->'scores' ? 'form_curve'),'and the scores read of that day shows no curve, since it serves today''s only');
+select is(pg_temp.refused(jsonb_build_object('day',pg_temp.day(-1),'form_curve',pg_temp.curve())),true,'while a curve sent for that day is still refused');
 select is(pg_temp.refused(jsonb_build_object('day',pg_temp.day(1),'form_curve',pg_temp.curve())),true,'a curve on tomorrow''s row is refused');
 select is(pg_temp.write(jsonb_build_object('day',pg_temp.day(-5),'backfilled',true,'form',jsonb_build_object('reason','intraday_inputs_unavailable')))->>'written','true','a backfilled row without them is written');
 select is(pg_temp.refused(jsonb_build_object('day',pg_temp.day(-5),'backfilled',true,'form',jsonb_build_object('reason','intraday_inputs_unavailable'),'form_curve',pg_temp.curve())),true,'a backfilled row with a curve is refused');
