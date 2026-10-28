@@ -122,4 +122,3 @@ export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
     receipts: [none(['health.notice', 'calendar.change.proposed'], 'no note and no card for a change that does not matter')],
   },
 ];
-
