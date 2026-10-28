@@ -1,4 +1,3 @@
-import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import { renderMarkdownPdf } from './artifact-export';
 import { WORKSPACE_TEXT_MAX_BYTES } from '@waldo/contracts';
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -15,6 +14,8 @@ export const renderWorkspaceDocument = async (text: string, format: 'pdf' | 'doc
     // OOXML requires XML 1.0 characters; rejecting forbidden controls preserves valid
     // Unicode instead of silently replacing text or producing a corrupt Word document.
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(text)) return { status: 'unsupported_text' };
+    // Loaded on first export: a static import runs the library's module body at Worker startup.
+    const { Document, HeadingLevel, Packer, Paragraph } = await import('docx');
     const children = text.replace(/\r/g, '').split('\n').map(line => {
       const heading = /^(#{1,3})\s+(.*)$/.exec(line);
       if (heading) return new Paragraph({ text: heading[2]!, heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][heading[1]!.length - 1]! });

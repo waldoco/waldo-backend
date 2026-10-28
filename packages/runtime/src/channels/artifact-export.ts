@@ -2,7 +2,7 @@
 // scripts. Only headings (#), bullets (-, *) and paragraphs are laid out; every other character
 // is drawn as literal text. Built-in Helvetica covers Latin (WinAnsi) only, so any other script
 // returns 'unsupported_text' rather than a garbled or blank PDF.
-import { PDFDocument, StandardFonts, type PDFFont } from 'pdf-lib';
+import type { PDFFont } from 'pdf-lib';
 
 export const MAX_EXPORT_CHARS = 200_000;
 const PAGE = { width: 595.28, height: 841.89, margin: 56 };
@@ -44,6 +44,8 @@ const wrap = (text: string, font: PDFFont, size: number, width: number): string[
 export const renderMarkdownPdf = async (markdown: string): Promise<RenderResult> => {
   if (markdown.length > MAX_EXPORT_CHARS) return { status: 'too_large' };
   if (!markdown.trim()) return { status: 'empty' };
+  // Loaded on first export: a static import runs the library's module body at Worker startup.
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
