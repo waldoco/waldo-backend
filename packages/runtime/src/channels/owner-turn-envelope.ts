@@ -57,8 +57,8 @@ export type OwnerResponder = Readonly<{
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
-  // The day's calendar and mail changes (outside content): only adds apply, each written untrusted. Absent on fakes.
-  consolidateSources?(trace: string, updates: string, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
+  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.

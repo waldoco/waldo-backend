@@ -42,7 +42,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceClaimOps, sourceUpdatesInput, withoutHealthClaims, type Claim, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type Claim, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
@@ -1017,14 +1017,14 @@ export const createOwnerResponder = (
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
-    async consolidateSources(trace, updates, policy) {
-      const asOwner = await asOwnerJob(trace, job => job.consolidateSources!(trace, updates, policy));
+    // The memory_ purpose keeps the changes' text out of every trace; the caller applies the reply and moves its mark together.
+    async sourceClaims(trace, updates, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.sourceClaims!(trace, updates, policy));
       if (asOwner !== undefined) return asOwner;
-      if (!memory) return { done: true, detail: 'no memory' };
-      const raw = await ask(trace, 'nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(promptMemory()!, updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      if (!memory) return '{"add":[]}';
+      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(promptMemory()!, updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
-      const ops = sourceClaimOps(raw);
-      return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(ops) : ops, new Date().toISOString(), `outside content, day of ${trace}`, undefined, { shared: updates, outside: true }, false) };
+      return raw;
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),

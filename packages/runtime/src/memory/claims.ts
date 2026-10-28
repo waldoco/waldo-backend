@@ -1193,7 +1193,7 @@ export const NIGHTLY_MEMORY_INSTRUCTION = [
   ...PIN_RULES,
 ].join('\n');
 
-// The day's calendar and mail changes, read after the conversation behind NIGHTLY_SOURCE_UPDATES. They are outside content:
+// The day's calendar and mail changes, read after the conversation behind MEMORY_NIGHTLY_SOURCE_UPDATES. They are outside content:
 // the reply can only add, and code writes every claim it adds as untrusted, so none is recalled, pinned or promoted until the
 // owner confirms it.
 export const SOURCE_MEMORY_INSTRUCTION = [

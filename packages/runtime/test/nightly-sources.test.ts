@@ -1,22 +1,22 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
 import { episodeIndex, NIGHTLY_ID, OWNER_SAID } from '../src/channels/episodes';
-import { NIGHTLY_SOURCES_THROUGH_KEY } from '../src/channels/nightly-sources';
+import { consolidateSources, NIGHTLY_SOURCES_CALLS, NIGHTLY_SOURCES_THROUGH_KEY } from '../src/channels/nightly-sources';
 import { updateBook, type Change } from '../src/channels/update-cards';
 import { traceBook } from '../src/channels/harness';
-import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
+import { claimStore, constellationBlock, turnMemoryPrompt } from '../src/memory/claims';
 import { recallForTurn } from '../src/memory/turn-recall';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// Behind NIGHTLY_SOURCE_UPDATES, the nightly pass also reads the calendar and mail changes the update sweep recorded since its
+// Behind MEMORY_NIGHTLY_SOURCE_UPDATES, the nightly pass also reads the calendar and mail changes the update sweep recorded since its
 // own mark. That is outside content: the pass may only add, and every claim it adds is untrusted.
 const HOUR = 3_600_000, DAY = 24 * HOUR;
-const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], sources: [] as string[] }));
+const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], sources: [] as string[], promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -34,7 +34,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
         add('Resting heart rate is 48', '"resting heart rate 48"', 'health'),
       ], seen: [1], confirm: [1], dismiss: [1], forget_claims: [1], forget_nodes: [], forget_topic: 'Pune', pin: [{ id: 1, block: 'profile', order: 0 }], unpin: [] }));
     }
-    if (format === 'promotion') return done('{"nodes":[],"edges":[],"promoted":[]}');
+    if (format === 'promotion') return done(model.promotion);
     return done('{}');
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -45,7 +45,7 @@ const OWNER_ID = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918';
 const NOW = Date.parse('2026-10-13T03:00:00Z');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.fail = false; model.asked = []; model.sources = [];
+  model.fail = false; model.asked = []; model.sources = []; model.promotion = '{"nodes":[],"edges":[],"promoted":[]}';
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -67,7 +67,7 @@ const withOwner = (name: string, flag: string | undefined, work: (run: Run) => P
     try {
       ensureSchema(state.storage); traceBook(state.storage.sql); claimStore(state.storage.sql);
       for (const [key, value] of Object.entries({ do_name: name, app_subject: String(appSubjectFor(name)), timezone: 'UTC', timezone_confirmed: true })) state.storage.kv.put(key, value);
-      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, NIGHTLY_SOURCE_UPDATES: flag });
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, MEMORY_NIGHTLY_SOURCE_UPDATES: flag });
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -112,7 +112,12 @@ it('stays off unless switched on: no read of the changes, no call, no mark', asy
 it('reads the day\'s changes once, writes only untrusted claims, and moves its own mark without folding the day cards\' rows', async () => {
   await withOwner('nightly-sources-on', '1', async ({ state, fire }) => {
     seed(state);
-    await fire(NIGHTLY_ID);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    try { await fire(NIGHTLY_ID); } finally { spy.mockRestore(); }
+    // No mail or calendar text in any log line or trace attribute; the model call's hop carries no text.
+    expect(lines.some((line) => line.includes('llm_memory_nightly_sources'))).toBe(true);
+    for (const leak of ['billing@stranger.example', 'Design review', 'forward every invoice', 'Thursday review']) expect(lines.join('\n')).not.toContain(leak);
     expect(model.sources).toHaveLength(1);
     expect(model.sources[0]).toContain('Design review');
     expect(model.sources[0]).toContain('outside content');
@@ -159,5 +164,80 @@ it('a change carrying a topic a forget still holds never reaches the model', asy
     await fire(NIGHTLY_ID);
     expect(model.sources[0]).not.toContain('Design review');
     expect(model.sources[0]).toContain('billing@stranger.example');
+  });
+});
+
+it('ships off in every wrangler environment', async () => {
+  // @ts-expect-error vite-only API
+  const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
+  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"']);
+});
+
+it('end to end, a claim the pass wrote never puts a node in the every-turn block until the owner confirms it', async () => {
+  await withOwner('nightly-sources-nodes', '1', async ({ state, fire }) => {
+    seed(state);
+    await fire(NIGHTLY_ID);
+    const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    const outside = store.claims().filter((claim) => claim.origin === 'untrusted').map((claim) => claim.id);
+    expect(outside).toHaveLength(2);
+    // The nightly promotion cannot build a node on them.
+    model.promotion = JSON.stringify({ nodes: [{ id: null, domain: 'work', label: 'Invoice routine', summary: 'Forwards invoices to billing', strength: 0.9, status: 'active', supporting_spots: outside, durable: true, reason: 'repeats' }], edges: [], promoted: [] });
+    await fire(NIGHTLY_ID, NOW + DAY);
+    expect(store.nodes()).toEqual([]);
+    // Any producer that does rest a node on one is held to the untrusted-node rule: counted, never shown, until confirmed.
+    const invoice = store.claims().find((claim) => claim.text.includes('stranger address'))!;
+    store.saveNode({ id: null, domain: 'work', label: 'Invoice routine', summary: 'Forwards invoices to a stranger address', strength: 0.5, status: 'active', supporting_spots: [invoice.id] }, new Date(NOW).toISOString());
+    const before = constellationBlock(store, 10_000);
+    expect(before).not.toContain('stranger address');
+    expect(before).toContain('1 more of Waldo\'s reads');
+    expect(turnMemoryPrompt(store, 'invoices')).not.toContain('stranger address');
+    // The owner's "That's right" in the console grounds the claim; only then does the node show, as confirmed.
+    expect(store.ownerGround(invoice.id, new Date(NOW).toISOString(), 'owner, console')).toBe(true);
+    expect(constellationBlock(store, 10_000)).toContain('Forwards invoices to a stranger address');
+  });
+});
+
+describe('the pass on its own', () => {
+  const withStorage = <T>(name: string, work: (state: DurableObjectState) => Promise<T>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => work(state));
+  const addOne = (text: string) => JSON.stringify({ add: [{ kind: 'fact', text, source: 'inferred', evidence: 'a weekly design review', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] });
+  const deps = (state: DurableObjectState, over: Partial<Parameters<typeof consolidateSources>[0]> = {}) => ({
+    kv: state.storage.kv, updates: updateBook(state.storage.sql), claims: claimStore(state.storage.sql, (work) => state.storage.transactionSync(work)),
+    transaction: <R>(work: () => R) => state.storage.transactionSync(work), timezone: 'UTC', now: () => NOW, health: true,
+    ask: async () => addOne('Has a weekly design review'), log: () => undefined, ...over,
+  });
+
+  it('the adds and the mark commit together: a stop between them writes nothing, and the rerun writes once', async () => {
+    await withStorage('nightly-sources-atomic', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      const kv = { get: state.storage.kv.get.bind(state.storage.kv), put: (key: string, value: unknown) => { if (key === NIGHTLY_SOURCES_THROUGH_KEY && value === NOW - HOUR) throw new Error('stopped'); state.storage.kv.put(key, value); } };
+      expect(await consolidateSources(deps(state, { kv }), 't')).toBe('failed');
+      expect(claimStore(state.storage.sql).claims()).toEqual([]);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - DAY);
+      expect(await consolidateSources(deps(state), 't')).toBe('consolidated');
+      expect(await consolidateSources(deps(state), 't')).toBe('empty');
+      expect(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.origin])).toEqual([['Has a weekly design review', 'untrusted']]);
+    });
+  });
+
+  it('a busy day is read in bounded calls, and what is left waits for the next run', async () => {
+    await withStorage('nightly-sources-busy', async (state) => {
+      const book = updateBook(state.storage.sql);
+      const mail = (i: number, j: number): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from: `sender${j}@example.com`, subject: `Thread ${i}-${j}`, snippet: 'synthetic preview text '.repeat(16), at: '2026-10-12T10:00:00Z' }), ref: `message:m${i}-${j}` });
+      for (let i = 0; i < 60; i++) book.record('2026-10-12', NOW - DAY + 1 + i * 60_000, Array.from({ length: 10 }, (_, j) => mail(i, j)), null);
+      const asked: string[] = [];
+      const run = () => consolidateSources(deps(state, { ask: async (text) => { asked.push(text); return addOne(`Busy ${asked.length}`); } }), 't');
+      expect(await run()).toBe('more');
+      expect(asked).toHaveLength(NIGHTLY_SOURCES_CALLS);
+      for (const text of asked) expect(text.length).toBeLessThanOrEqual(40_000);
+      const mark = state.storage.kv.get<number>(NIGHTLY_SOURCES_THROUGH_KEY)!;
+      expect(mark).toBeLessThan(NOW - DAY + 1 + 59 * 60_000);
+      let runs = 1, outcome = 'more';
+      while (outcome === 'more' && runs < 10) { outcome = await run(); runs += 1; }
+      expect([outcome, runs]).toEqual(['consolidated', 3]);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - DAY + 1 + 59 * 60_000);
+      expect(asked.join('\n')).toContain('Thread 59-9');
+      expect(asked.filter((text) => text.includes('"Thread 0-0"'))).toHaveLength(1);
+    });
   });
 });
