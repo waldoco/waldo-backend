@@ -57,22 +57,40 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
   (minute === null ? day : { ...day, hourly: day.hourly.filter(bucket => wallMinute(Date.parse(bucket.startAt), day.timezone) < minute) });
 // Form reads the hours that hold one of its own signals. An hour holding only active energy is Weight's, so it never counts
 // toward Form's hours, its data horizon or the hour still filling.
-const formHours = (day: DayRecord): DayRecord =>
+export const formHours = (day: DayRecord): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrv !== null || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult => {
-  const target = formHours(record), prior = earlier.map(formHours);
-  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
-  if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
-  if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
-  // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
-  // judged on the hours it has, so a recompute the next morning does not turn it stale.
+// What Form reads of a day read at `asOf`, or null when the day holds no hour of its own. The day's data horizon is the end of its
+// newest hour. A day still running needs that horizon recent; a finished day is judged on the hours it has, so a recompute the
+// next morning does not turn it stale. Only the current hour grows, so the newest hour, while the read falls inside it, is left
+// out on both sides until it ends: `settled` is the instant the day's hours are taken through.
+export const formReading = (record: DayRecord, asOf: string | null): Readonly<{ stale: boolean; settled: number }> | null => {
+  const target = formHours(record);
+  if (target.hourly.length === 0) return null;
   const { end } = localDayWindow(target.day, target.timezone);
   const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
-  if (asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS) return { state: 'unavailable', reason: 'stale_inputs' };
-  // Only the current hour grows, so the newest hour, while the read falls inside it, is left out on both sides until it ends.
+  const stale = asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS;
   const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
-  const settled = filling ? horizon - HOUR_MS : horizon;
+  return { stale, settled: filling ? horizon - HOUR_MS : horizon };
+};
+
+// What one evaluation of Form leaves besides its result: the stress part's own score where the day had a stress reading (higher
+// is calmer, as Form weighs it), null when Form is unavailable.
+export type FormEvaluation = Readonly<{ result: FormResult; stress: number | null }>;
+const none = (reason: Extract<FormResult, { state: 'unavailable' }>['reason']): FormEvaluation => ({ result: { state: 'unavailable', reason }, stress: null });
+
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult =>
+  evaluateForm(record, earlier, sleepNeedMinutes, asOf, provisional).result;
+
+export const evaluateForm = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormEvaluation => {
+  const target = formHours(record), prior = earlier.map(formHours);
+  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  if ('reason' in recovery) return none(recovery.reason);
+  const reading = formReading(target, asOf);
+  if (reading === null) return none('intraday_inputs_unavailable');
+  if (reading.stale) return none('stale_inputs');
+  const { settled } = reading;
+  const { end } = localDayWindow(target.day, target.timezone);
   const cutoff = settled >= end ? null : wallMinute(settled, target.timezone);
   const sameHours = (day: DayRecord) => throughMinute(day, cutoff);
   const today = sameHours(target);
@@ -136,10 +154,13 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
       add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
     }
   }
-  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'stress')) return { state: 'unavailable', reason: 'baseline_immature' };
+  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'stress')) return none('baseline_immature');
 
   const { score, coverage } = combine(components);
   const used = { signals, days: [...days].sort() };
-  if (provisional) return { state: 'available', score, zone: formZone(score), algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted', coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior) };
-  return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
+  const stress = components.find(component => component.name === 'stress')?.score ?? null;
+  const result: FormResult = provisional
+    ? { state: 'available', score, zone: formZone(score), algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted', coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior) }
+    : { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
+  return { result, stress };
 };

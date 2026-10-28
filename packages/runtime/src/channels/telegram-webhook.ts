@@ -41,6 +41,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" scores from the owner's first day against the shared baseline and writes the provisional versions; anything else keeps
   // the earlier engine. Apply the derived-row migration that admits the new keys before turning it on.
   HEALTH_PROVISIONAL_SCORES?: string;
+  // "1" writes today's measured Form curve and stress trend on today's derived row; anything else writes neither.
+  HEALTH_FORM_CURVE?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

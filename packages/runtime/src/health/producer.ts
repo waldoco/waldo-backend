@@ -1,5 +1,6 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
+import { formCurveRow } from './scores/form-curve';
 import { shiftDay } from './scores/time';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
@@ -25,6 +26,9 @@ export type ProducerDeps = Readonly<{
   readHistory?: (days: number) => Promise<unknown>;
   // How many past days one run may backfill; the rest wait for the next run.
   backfillLimit?: number;
+  // The HEALTH_FORM_CURVE switch as the environment holds it: only the exact value "1" writes today's measured Form curve and
+  // stress trend beside the row's scores. Anything else, or none, leaves every row as it was.
+  formCurve?: string;
 }>;
 
 // Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.
@@ -330,6 +334,11 @@ const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: strin
   };
 };
 
+// Today's curve and stress word to ride the row, or nothing. A curve that cannot be computed costs the owner the curve only.
+const curveOf = (input: DailyScoresInput, scores: DailyScores): object => {
+  try { return formCurveRow(input, scores.form) ?? {}; } catch { console.error('health form curve failed'); return {}; }
+};
+
 // The row this one replaces: the same day's, written by an earlier upload. A day's first row, a read that fails and an answer
 // for another day are no row.
 const storedBefore = async (read: ProducerDeps['readScores'], day: string): Promise<Record<string, unknown> | null> => {
@@ -452,13 +461,17 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt });
+      const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt };
+      const scores = deps.compute(input);
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today);
+      const row = {
+        ...rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...(targetDay === today && deps.formCurve === '1' ? curveOf(input, scores) : {}),
+      };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (writeOutcome(answer) === 'written') logWritten(row);

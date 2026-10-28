@@ -229,3 +229,17 @@ describe('score history: consent and faults match the scores route', () => {
     }
   });
 });
+
+describe('score history: nothing of the Form curve', () => {
+  it('serves a day whose row carries a curve and a stress word without either, and still parses', async () => {
+    const curve = { version: 'form.v9', points: [{ at: '2026-10-10T09:00:00.000Z', score: 61, kind: 'measured' }] };
+    rpcResult = answerOf('2026-10-04', '2026-10-10', [stored('2026-10-10', { form_curve: curve, stress_trend: 'easing' })]);
+    for (const header of [REV4, contracts('health=5')]) {
+      const response = await call(`${HISTORY}?days=7`, header);
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).not.toMatch(/form_curve|stress_trend|measured|easing/);
+      expect(healthScoresHistoryResponseV1Schema.safeParse(JSON.parse(text)).success).toBe(true);
+    }
+  });
+});
