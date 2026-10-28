@@ -1068,9 +1068,9 @@ const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
   : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 
-// The owner's pinned blocks for a system prompt: <owner_profile> and <owner_facts>, each in pin order within its budget. While
-// nothing is pinned, <owner_profile> shows the newest owner facts within both budgets, so an owner whose memory was never
-// curated keeps a profile. Rows are read through the store's claims(), so a caller's filter (held topics, the decision path's
+// The owner's pinned blocks for a system prompt: <owner_profile> and <owner_facts>, each in pin order within its budget, then
+// <owner_recent> with the newest unpinned owner facts in what the pins leave of both budgets. While nothing is pinned,
+// <owner_profile> shows the newest owner facts within both budgets, so an owner whose memory was never curated keeps a profile. Rows are read through the store's claims(), so a caller's filter (held topics, the decision path's
 // owner-only, no-health view) applies to the blocks too. maxChars is the room left in the system prompt (the sanitiser drops a
 // system prompt over its limit WHOLE, which would lose the base prompt too). A fact is never cut mid-line: what does not fit is
 // counted in one plain line, and recall still finds it. The question is not read: the blocks are the same on every turn.
@@ -1107,16 +1107,22 @@ const constellationLines = (store: ClaimStore): readonly string[] => {
 export const turnMemoryPrompt = (store: ClaimStore, _question: string, maxChars = Number.POSITIVE_INFINITY): string => {
   const eligible = profileClaims(store);
   const curated = eligible.some((claim) => claim.pinned === 'profile' || claim.pinned === 'facts');
+  const newest = (claims: readonly Claim[]) => [...claims].sort((a, b) => b.id - a.id);
+  const unpinned = newest(eligible.filter((claim) => claim.pinned !== 'profile' && claim.pinned !== 'facts'));
+  const total = PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS;
+  // The pins come first; the newest unpinned owner facts fill what they leave of the two budgets, so a pin never hides the rest.
   const blocks = curated
     ? [{ tag: 'owner_profile', claims: pinnedIn(eligible, 'profile'), budget: PROFILE_BLOCK_MAX_CHARS, omitted: 'more pinned' },
-      { tag: 'owner_facts', claims: pinnedIn(eligible, 'facts'), budget: FACTS_BLOCK_MAX_CHARS, omitted: 'more pinned' }]
-    : [{ tag: 'owner_profile', claims: [...eligible].sort((a, b) => b.id - a.id), budget: PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS, omitted: 'older' }];
+      { tag: 'owner_facts', claims: pinnedIn(eligible, 'facts'), budget: FACTS_BLOCK_MAX_CHARS, omitted: 'more pinned' },
+      ...(unpinned.length ? [{ tag: 'owner_recent', claims: unpinned, budget: total, omitted: 'older' }] : [])]
+    : [{ tag: 'owner_profile', claims: unpinned, budget: total, omitted: 'older' }];
   const parts = [MEMORY_HEADER];
-  let room = maxChars - MEMORY_HEADER.length;
+  let room = maxChars - MEMORY_HEADER.length, used = 0;
   for (const block of blocks) {
     const open = `<${block.tag}>`, close = `</${block.tag}>`;
     // One newline before the block and up to three inside it, plus room for the omitted line.
-    const kept = fittingLines(block.claims.map(profileLine), Math.min(block.budget, room - open.length - close.length - 4 - OMITTED_LINE_MAX_CHARS));
+    const kept = fittingLines(block.claims.map(profileLine), Math.min(block.budget, total - used, room - open.length - close.length - 4 - OMITTED_LINE_MAX_CHARS));
+    used += kept.join('\n').length;
     const omitted = block.claims.length - kept.length;
     const text = [open, ...kept, ...(omitted > 0 ? [`(${omitted} ${block.omitted} owner facts are not shown here; search memory to recall them.)`] : []), close].join('\n');
     parts.push(text);
@@ -1158,7 +1164,7 @@ const PIN_RULES = [
   `owner_profile, up to ${PROFILE_BLOCK_MAX_CHARS} characters: who the owner is, their stable preferences and routines, and how much autonomy they give Waldo.`,
   `owner_facts, up to ${FACTS_BLOCK_MAX_CHARS} characters: standing decisions, and the people and places the owner relies on.`,
   'Only owner-grounded claims of kind fact, preference, routine, goal or health can be pinned. pin sets a claim\'s block and its order (lower comes first); pinning a pinned claim moves or reorders it. unpin takes a claim out of its block, never out of memory.',
-  'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. While nothing is pinned, Waldo shows the newest claims instead.',
+  'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. Waldo shows the newest unpinned claims in whatever room the pins leave.',
 ];
 
 export const NIGHTLY_MEMORY_INSTRUCTION = [
