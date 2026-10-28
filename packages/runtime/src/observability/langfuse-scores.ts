@@ -5,12 +5,12 @@ type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string; WALDO_ENVIRONMENT?: string }>;
 type Send = (input: string, init: RequestInit) => Promise<Response>;
 
-// A trace key that names one owner turn (`app-12`, `tg-12`, an iMessage event key) or one scheduled occurrence
+// A trace key that names one owner turn (`app-12`, `tg-12`: `ownerTurnTrace`) or one scheduled occurrence
 // (`card:brief:<ms>`) names its Langfuse trace through the owner's own random salt, so a rating made later finds the trace
 // the row came from. Keys repeat across owners and after an erase, which also wipes the salt, so the salt keeps one owner's
 // traces apart from every other's. A key shared by unrelated work (`telegram-unlinked`) keeps a random trace id, or every
 // such trace would become one.
-const ONE_TURN_OR_OCCURRENCE = /^[a-z]+-\d+$|^\["imessage",|:\d+$/;
+const ONE_TURN_OR_OCCURRENCE = /^[a-z]+-\d+$|:\d+$/;
 const SALT_KEY = 'langfuse_trace_salt_v1';
 export const ownerTraceSalt = (kv: Kv): string => {
   const known = kv.get<string>(SALT_KEY);
@@ -28,7 +28,9 @@ const ROW_TRACE_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
 export const rowTraces = (sql: SqlStorage) => {
   sql.exec('CREATE TABLE IF NOT EXISTS app_row_traces (row_id TEXT PRIMARY KEY, trace_key TEXT NOT NULL, at INTEGER NOT NULL)');
   return {
+    // Only a key with a trace a rating can name is kept.
     link(rowId: string, traceKey: string, at: number): void {
+      if (!ONE_TURN_OR_OCCURRENCE.test(traceKey)) return;
       sql.exec('DELETE FROM app_row_traces WHERE at < ?', at - ROW_TRACE_KEPT_MS);
       sql.exec('INSERT INTO app_row_traces (row_id, trace_key, at) VALUES (?, ?, ?) ON CONFLICT (row_id) DO NOTHING', rowId, traceKey, at);
     },
