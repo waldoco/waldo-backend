@@ -12,7 +12,7 @@ import {
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 import { setupStage } from '../src/onboarding/welcome-sources';
-import { WELCOME_RECHECK_MS } from '../src/onboarding/welcome';
+import { WELCOME_LATE_HEALTH_MS, WELCOME_RECHECK_MS } from '../src/onboarding/welcome';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => Promise<T> | T) =>
@@ -604,6 +604,71 @@ describe('welcome build: a source connected after setup', () => {
       await runWelcome({ ...d, build: welcomeBuild(sql, () => now) });
       expect(asked).toEqual([]);
       expect(welcomeBuild(sql, () => now).view().state).toBe('done');
+    });
+  });
+});
+
+describe('welcome build: health that arrives after the health stage ran', () => {
+  const settled = (state: 'empty' | 'skipped' | 'revoked') => async (): Promise<StageInput> => ({ kind: 'settled', state });
+  const others = { calendar: settled('skipped'), mail: settled('skipped'), web: settled('skipped'), setup: settled('skipped') };
+
+  it('a health stage that found nothing is read once more on late data, and writes Waldo\'s read when the readings are there', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0, synced = false;
+      const { asked, deps: d } = deps(sql, transaction, {
+        now: () => now, read: { ...others, health: async () => synced ? input(['apple_health'], ['sleep_midpoint']) : ({ kind: 'settled', state: 'empty' }) },
+        answers: { health: answer(healthNode()) },
+      });
+      const build = () => welcomeBuild(sql, () => now);
+      build().start();
+      await runWelcome({ ...d, build: build() });
+      expect(build().view()).toMatchObject({ state: 'done', stages: { health: 'empty' } });
+      synced = true; now += 60 * 60_000;
+      expect(transaction(() => build().lateHealth())).toBe(true);
+      expect(build().view()).toMatchObject({ state: 'building', stages: { health: 'pending' } });
+      await runWelcome({ ...d, build: build() });
+      expect(asked).toEqual(['health']);
+      expect(build().view()).toMatchObject({ state: 'done', nodes: 1, stages: { health: 'done' } });
+      expect(transaction(() => build().lateHealth())).toBe(false);
+    });
+  });
+
+  it('reads it once only: a second empty settles for good, and a second caller in the same window retries nothing', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0;
+      const { asked, deps: d } = deps(sql, transaction, { now: () => now, read: { ...others, health: settled('empty') } });
+      const build = () => welcomeBuild(sql, () => now);
+      build().start();
+      await runWelcome({ ...d, build: build() });
+      now += 60_000;
+      expect(transaction(() => build().lateHealth())).toBe(true);
+      expect(transaction(() => build().lateHealth())).toBe(false);
+      await runWelcome({ ...d, build: build() });
+      expect(build().view()).toMatchObject({ state: 'done', stages: { health: 'empty' } });
+      now += 60_000;
+      expect(transaction(() => build().lateHealth())).toBe(false);
+      expect(asked).toEqual([]);
+    });
+  });
+
+  it('never after a day, and never for a health stage that was skipped, revoked or already done', async () => {
+    for (const state of ['empty', 'skipped', 'revoked'] as const) {
+      await withSql(async (sql, transaction) => {
+        let now = T0;
+        const { deps: d } = deps(sql, transaction, { now: () => now, read: { ...others, health: settled(state) } });
+        const build = () => welcomeBuild(sql, () => now);
+        build().start();
+        await runWelcome({ ...d, build: build() });
+        if (state === 'empty') now += WELCOME_LATE_HEALTH_MS + 1;
+        expect(transaction(() => build().lateHealth()), state).toBe(false);
+        expect(build().view().state, state).toBe('done');
+      });
+    }
+    await withSql(async (sql, transaction) => {
+      const { build, deps: d } = deps(sql, transaction, { read: { ...others, health: async () => input(['apple_health'], ['sleep_midpoint']) }, answers: { health: answer(healthNode()) } });
+      build.start();
+      await runWelcome(d);
+      expect(transaction(() => build.lateHealth())).toBe(false);
     });
   });
 });

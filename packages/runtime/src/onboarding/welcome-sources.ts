@@ -195,6 +195,8 @@ export const ownerWelcome = (deps: Readonly<{
   build: () => welcomeBuild(deps.sql, deps.now),
   // Something to do: a stage due, or a skipped stage to check for its source.
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
+  // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
+  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth()),
   run: () => runWelcome({
     build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
     read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())(), setup: setupStage(deps.claims, deps.healthMemory) },
