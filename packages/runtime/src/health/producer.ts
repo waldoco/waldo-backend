@@ -21,6 +21,8 @@ export type ProducerDeps = Readonly<{
   // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
   // zone is the score's own band.
   readScores?: (day: string) => Promise<unknown>;
+  // Which days in the last `days` local days hold a row (waldo.health_scores_history). The backfill asks it once a run.
+  readHistory?: (days: number) => Promise<unknown>;
   // How many past days one run may backfill; the rest wait for the next run.
   backfillLimit?: number;
 }>;
@@ -336,6 +338,20 @@ const storedBefore = async (read: ProducerDeps['readScores'], day: string): Prom
     return same?.day === day ? same : null;
   } catch { return null; }
 };
+// The days that already hold a row. The window is anchored on the database's today in the owner's latest zone, so ninety
+// days covers the thirty-day series with room at a zone edge. Nothing stored is an empty set; any other answer, or a read
+// that fails, is unknown, and the run backfills nothing rather than write blind.
+const HISTORY_WINDOW_DAYS = 90;
+const heldDays = async (read: NonNullable<ProducerDeps['readHistory']>): Promise<ReadonlySet<string> | null> => {
+  try {
+    const answer = asRecord(await read(HISTORY_WINDOW_DAYS));
+    if (typeof answer?.unavailable === 'string') return new Set();
+    const days = asRecord(answer?.history)?.days;
+    if (!Array.isArray(days)) return null;
+    const held = days.map(day => asRecord(day)?.day);
+    return held.every((day): day is string => typeof day === 'string' && DAY.test(day)) ? new Set(held) : null;
+  } catch { return null; }
+};
 // Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
 // report a change only on a real crossing. A day's first row is its own band, so the word never drifts from a fresh night's
 // score for longer than that day. A zone another algorithm version wrote is not the same state and holds nothing.
@@ -408,11 +424,13 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // for past days), no windows, and no zone notice, since a late row is not a change the owner lived through. A day that
     // already holds a row of any kind is left alone, and the database refuses a backfilled row over a live one regardless.
     const recordsBySource = new Map<string, ReturnType<typeof recordsOf>>();
-    const backfill = async (): Promise<void> => {
+    const backfill = async (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<void> => {
       const newestBackfilled = shiftDay(today, -2);
       const candidates = [...new Set(present.flatMap(s => s.readings.filter(r => r.signal === 'sleep_duration' && r.day <= newestBackfilled).map(r => r.day)))].sort();
-      const held = await Promise.all(candidates.map(day => storedBefore(deps.readScores, day)));
-      const missing = candidates.filter((_, i) => held[i] === null).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
+      if (!candidates.length) return;
+      const held = await heldDays(readHistory);
+      if (!held) return;
+      const missing = candidates.filter(day => !held.has(day)).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
       for (const day of missing) {
         const chosen = chooseFor(day);
         const records = recordsBySource.get(chosen.source) ?? recordsOf(chosen);
@@ -446,9 +464,9 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
-    if (provisional && deps.readScores) {
+    if (provisional && deps.readHistory) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.
-      try { await backfill(); } catch { console.error('health backfill failed'); }
+      try { await backfill(deps.readHistory); } catch { console.error('health backfill failed'); }
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
     return 'no_readings';

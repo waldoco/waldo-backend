@@ -201,6 +201,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
     readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
+    readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
