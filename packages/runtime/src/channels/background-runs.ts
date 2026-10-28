@@ -1,3 +1,4 @@
+import type { HealthTriggerOutcome } from '../health/trigger';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // A5b (BUILD_PLAN_2026-09-25: "Background task tracking - tasks table, trace hops, console
@@ -101,8 +102,21 @@ export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
     failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
   } as const)[outcome],
 };
-// The trigger does not report its outcome to its caller, so its run says only that it ran.
-export const HEALTH_TRIGGER_RUN: RunSummary<void> = { threw: 'health check stopped with an error', settled: () => ({ status: 'completed', summary: 'health check ran' }) };
+// One fixed line per health-trigger outcome: codes become words here, never zone words or values. A new outcome has no
+// line until one is written for it. Only a check that failed reads failed; a held or refused one did its job.
+const HEALTH_TRIGGER_LINES: Readonly<Record<HealthTriggerOutcome, string>> = {
+  idle: 'nothing to check; stayed quiet', opted_out: 'health proposals are off', held_quiet: 'held for quiet hours',
+  held_cooldown: 'held: too soon after the last; checks again later', no_health: 'no health reading to check',
+  nothing_coming: 'nothing coming, stayed quiet', budget_gate: 'held: today\'s proposals are spent', stale_day: 'the day had passed; stayed quiet',
+  no_op: 'nothing to change', invalid: 'the answer could not be used; nothing raised', egress_refused: 'held back: it would have shared health detail',
+  duplicate: 'already raised; nothing new', proposed: 'proposed a change', shadow_proposed: 'would have proposed a change (trial mode)',
+  noticed: 'queued a note', shadow_noticed: 'would have queued a note (trial mode)', notice_held: 'note held for later', failed: 'health check failed',
+};
+export const HEALTH_TRIGGER_OUTCOMES = Object.keys(HEALTH_TRIGGER_LINES) as readonly HealthTriggerOutcome[];
+export const HEALTH_TRIGGER_RUN: RunSummary<HealthTriggerOutcome> = {
+  threw: 'health check stopped with an error',
+  settled: outcome => ({ status: outcome === 'failed' ? 'failed' : 'completed', summary: HEALTH_TRIGGER_LINES[outcome] }),
+};
 
 // A scheduled job recorded as one run, settled by what it returned; a job that throws is recorded failed and still throws.
 export const recordedRun = <Entry extends { id: string }, Outcome>(
