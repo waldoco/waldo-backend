@@ -25,12 +25,15 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c1f0d0e-2b7a-4c43-9a51-0d8f5e3b2a77';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const rpc = vi.hoisted(() => ({ called: [] as string[], series: [] as unknown[] }));
+const rpc = vi.hoisted(() => ({ called: [] as string[], series: [] as unknown[], readings: [230, 300], otlp: [] as string[] }));
+const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' };
+const LANGFUSE_URL = 'https://langfuse.test/api/public/otel/v1/traces';
 const sample = (day: string, value: number) => ({ signal: 'sleep_midpoint', day, value, method: null, start_at: null, end_at: `${day}T07:00:00.000Z`, timezone: 'UTC' });
 
 beforeEach(() => {
-  model.welcome = []; rpc.called = []; rpc.series = [];
+  model.welcome = []; rpc.called = []; rpc.series = []; rpc.readings = [230, 300]; rpc.otlp = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input instanceof Request ? input.url : input) === LANGFUSE_URL) { rpc.otlp.push(String(init?.body)); return Response.json({}); }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn) rpc.called.push(fn);
@@ -38,7 +41,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_consent_list') return Response.json({ consents: ['storage_compute', 'model_processing'].map(purpose => ({ source: 'apple', purpose, status: 'granted', epoch: 1 })) });
     if (fn === 'health_series_read') rpc.series.push(JSON.parse(asked.p_payload!));
-    if (fn === 'health_series_read') return Response.json({ access: 'granted', read_at: new Date().toISOString(), sources: [{ source: 'apple', consent_epoch: 1, samples: [sample('2026-10-18', 230), sample('2026-10-19', 300)] }] });
+    if (fn === 'health_series_read') return Response.json({ access: 'granted', read_at: new Date().toISOString(), sources: [{ source: 'apple', consent_epoch: 1, samples: [sample('2026-10-18', rpc.readings[0]!), sample('2026-10-19', rpc.readings[1]!)] }] });
     if (fn === 'health_context_read') return Response.json(null);
     return new Response('unexpected', { status: 500 });
   });
@@ -122,6 +125,34 @@ it('an owner who keeps health out of memory gets a build that reads no health an
       expect(JSON.parse(build()[0]!.stages_json).health.state).toBe('skipped');
       expect([build()[0]!.nodes, model.welcome.length]).toEqual([0, 0]);
       expect(rpc.called.filter((fn) => fn.startsWith('health_'))).toEqual([]);
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('each welcome stage closes its model call\'s trace with a machine root, one trace per run, and the export carries no reading', async () => {
+  rpc.readings = [231.37, 307.61];
+  const name = `welcome-owner-trace-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, ...LANGFUSE, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    type Span = { name: string; attributes: { key: string; value: { stringValue?: string } }[] };
+    const spans = () => rpc.otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+    const key = (span: Span) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue;
+    try {
+      const saved = await owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+        headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ request_id: 'welcome-answers-trace', name: 'Asha' }) }));
+      expect(saved.status).toBe(200);
+      await vi.waitFor(() => expect(state.storage.sql.exec<{ finished_at: number | null }>('SELECT finished_at FROM welcome_builds').one().finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      expect(model.welcome).toHaveLength(1);
+      const roots = state.storage.sql.exec<{ trace: string; ok: number }>("SELECT trace, ok FROM trace_log WHERE hop = 'machine_turn'").toArray();
+      expect(roots).toEqual([{ trace: expect.stringMatching(/^welcome:health:\d+$/), ok: 1 }]);
+      await vi.waitFor(() => expect(spans().filter(span => span.name === 'app.machine').map(key)).toEqual([roots[0]!.trace]));
+      expect(spans().filter(span => key(span) === roots[0]!.trace && span.name !== 'app.machine').some(span => span.name.startsWith('llm_'))).toBe(true);
+      const wire = rpc.otlp.join('\n');
+      for (const reading of ['231.37', '307.61', 'sleep_midpoint (apple_health']) expect(wire, reading).not.toContain(reading);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

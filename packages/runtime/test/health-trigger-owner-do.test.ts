@@ -30,7 +30,7 @@ const ROW = {
 
 const fixture = vi.hoisted(() => ({
   event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, writes: 0,
-  pushes: [] as unknown[][], targetsAsked: 0,
+  pushes: [] as unknown[][], targetsAsked: 0, otlp: [] as string[],
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -56,12 +56,14 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
+const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging' };
+const LANGFUSE_URL = 'https://langfuse.test/api/public/otel/v1/traces';
 const move = (start: string, end: string) => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start, end, title: null, notify_guests: true, reason: 'Recovery is compromised; a later slot gives you a slower morning.' });
 
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.pushes = []; fixture.targetsAsked = 0; printed.length = 0;
+  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.pushes = []; fixture.targetsAsked = 0; fixture.otlp = []; printed.length = 0;
   fixture.decision = move('2026-10-21T16:00', '2026-10-21T17:30');
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
   for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
@@ -72,6 +74,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_context_read') return Response.json(fixture.health);
     if (fn === 'app_push_targets') { fixture.targetsAsked += 1; return Response.json([{ installation_id: '41000000-0000-4000-8000-000000000001', device_epoch: 1, token: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]' }]); }
+    if (String(input instanceof Request ? input.url : input) === LANGFUSE_URL) { fixture.otlp.push(String(init?.body)); return Response.json({}); }
     if (String(input instanceof Request ? input.url : input) === 'https://exp.host/--/api/v2/push/send') { fixture.pushes.push(JSON.parse(String(init?.body))); return Response.json({ data: [{ status: 'ok', id: 'ticket' }] }); }
     if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
     return fn ? Response.json(null) : new Response('unexpected', { status: 500 });
@@ -204,4 +207,29 @@ describe('the push that tells the app a health card is up', () => {
       expect(fixture.pushes).toEqual([]);
     }, PUSH);
   });
+});
+
+describe('the health trigger\'s traces', () => {
+  type Span = { name: string; attributes: { key: string; value: { stringValue?: string } }[] };
+  const spans = () => fixture.otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  const key = (span: Span) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue ?? '';
+
+  for (const capture of ['false', 'true']) {
+    it(`closes the run and its model call with machine roots, so both export, with no reading in them (capture ${capture})`, async () => {
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect(runs(state)).toMatchObject([{ outcome: 'proposed' }]);
+        const roots = state.storage.sql.exec<{ trace: string }>("SELECT trace FROM trace_log WHERE hop = 'machine_turn' ORDER BY trace").toArray().map(row => row.trace);
+        expect(roots).toEqual([expect.stringMatching(/^health-trigger:/), expect.stringMatching(/^health:/)]);
+        await vi.waitFor(() => expect(spans().filter(span => span.name.endsWith('.machine')).map(key).sort()).toEqual(roots));
+        const named = (prefix: string) => spans().filter(span => key(span).startsWith(prefix) && !span.name.endsWith('.machine')).map(span => span.name);
+        expect(named('health-trigger:')).toContain('health_trigger');
+        expect(named('health:').some(name => name.startsWith('llm_'))).toBe(true);
+        const wire = fixture.otlp.join('\n');
+        for (const leak of LEAKS) expect(wire, leak).not.toContain(leak);
+        if (capture === 'false') for (const said of ['Quarterly board review', 'recovery compromised', 'slower morning']) expect(wire, said).not.toContain(said);
+      }, { ...CONFIG, ...LANGFUSE, LANGFUSE_CAPTURE_TEXT: capture });
+    });
+  }
 });
