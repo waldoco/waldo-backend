@@ -131,6 +131,7 @@ import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, scrubEpisodeTexts, transcript } from './episodes';
+import { consolidateSources } from './nightly-sources';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
@@ -4559,6 +4560,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await migrateCoreFiles(`${trace}:migration`);
         const outcome = await consolidateBacklog(trace, entry.occurrence_at);
         if (outcome === 'more' || outcome === 'failed') await armCatchUp();
+        if (this.env.NIGHTLY_SOURCE_UPDATES === '1' && responder.consolidateSources) {
+          const read = responder.consolidateSources.bind(responder);
+          await consolidateSources({ kv: storage.kv, updates, claims: memory, timezone: clock.timezone, now: Date.now, log,
+            consolidate: text => read(trace, text, { health: healthMemoryOn(identity) }) }, trace);
+        }
         const promoting = Date.now();
         await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) })
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) }))

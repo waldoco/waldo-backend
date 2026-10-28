@@ -93,6 +93,11 @@ export const updateBook = (sql: Sql) => {
         .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[])}`)
         .join('\n');
     },
+    // The rows recorded after `at`, oldest first, read without folding them: the nightly source pass keeps its own mark.
+    recordedAfter(at: number, limit: number): readonly Readonly<{ at: number; changes: readonly Change[] }>[] {
+      return sql.exec<{ at: number; changes: string }>("SELECT at, changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT ?", at, limit).toArray()
+        .map((row) => ({ at: row.at, changes: JSON.parse(row.changes) as Change[] }));
+    },
     fold(upTo: number): void {
       sql.exec('UPDATE update_cards SET folded = 1 WHERE at <= ?', upTo);
     },
