@@ -4607,8 +4607,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
             const recordId = updates.record(localIso(Date.now(), timezone).slice(0, 10), Date.now(), [], null);
             await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-              doName: doName ?? '', ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}),
-              expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
+              doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
             await scheduler.rearm();
           } },
         reschedule: async at => { await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: at, dueAt: at, payloadRefs: { id: HEALTH_TRIGGER_ID } }); },
