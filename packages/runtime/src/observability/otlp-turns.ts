@@ -6,7 +6,8 @@ import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
 // userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean }>;
+// traceId, when given, names the Langfuse trace for a trace key it knows; any other key gets a random one.
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean; traceId?: (traceKey: string) => string | undefined }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
@@ -302,7 +303,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       // New work survives; the rejected promise feeds the host's durable export-failure row.
       return overflow ? Promise.reject(new Error('otlp_buffer_evicted')) : Promise.resolve();
     }
-    const ids = { traceId: hex(16), rootId: hex(8), rootHop: entry.hop };
+    const ids = { traceId: context.traceId?.(entry.trace) ?? hex(16), rootId: hex(8), rootHop: entry.hop };
     const hops = pending.get(entry.trace) ?? [];
     pending.delete(entry.trace);
     bufferedHops -= hops.length;

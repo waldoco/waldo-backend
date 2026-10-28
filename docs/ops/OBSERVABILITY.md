@@ -65,6 +65,25 @@ The owner turned this on for staging on 2026-09-23 to read model inputs, thinkin
 
 Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most specific type, add a row here. Model calls are hops named `llm_<purpose>`.
 
+### Like and Dislike as scores (built, on with the Langfuse keys)
+
+A Like or Dislike on one of Waldo's replies in the app's main chat becomes a Langfuse score on that reply's turn trace:
+
+- **What the score carries.** `name: reply_rating`, a `BOOLEAN` value (Like is 1, Dislike is 0), the deployment's environment, and `metadata.source: app`. It carries no message text, owner name or health value. The owner object still keeps its own `reply_ratings` row.
+- **How a score finds its trace.**
+  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn.
+  - An app turn's trace key (`app-<n>`) maps to its Langfuse trace id through `md5(<owner salt>:<trace key>)`. The exporter uses the same rule.
+  - The salt is a random value kept in the owner object, and an account erase wipes it. Without it, every owner's `app-1` would share one trace.
+  - Other trace keys keep random trace ids.
+- **What a change does.**
+  - Each change deletes the score it replaces, then creates a new score under a fresh id. Langfuse overwrites a score only within the day it was made.
+  - A clear only deletes.
+  - The calls for one owner run one at a time. Each is tried once, and a 207 is not retried.
+  - A failure logs `{"hop":"rating_score","ok":false,"code":"http_<status>"}` and nothing else.
+  - Score deletes spend from Langfuse's 50-a-day trace-data deletion bucket.
+- **What is not scored.** A rating on a reply that did not come from an app owner turn scores nothing (`unlinked`). That includes Brief and day-card rows, and iMessage or Telegram rows shown in the app.
+- **Retention.** Deleting a trace deletes its scores.
+
 ### Context size per model call
 
 Each `llm_*` generation carries numeric metadata (bytes, UTF-8) describing what filled that call, never text: `context_system_bytes`, `context_request_bytes`, `context_tools_count`, `context_tools_bytes` (the tool definitions sent), `context_tool_turns_bytes`, `context_history_messages`, `context_history_bytes`, `context_current_bytes`, `context_attachments`, and on the owner reply one `context_system_<section>_bytes` per system-prompt section (`reasons`, `behavior`, `health`, `clock`, `memory`, `orders`, `loops`, `skill_catalog`, `task_context`, `skill_procedures`). The sections plus their joins equal `context_system_bytes`. What rides the owner's message as the turn context is sized per section as `context_turn_<section>_bytes`. Calls whose system prompt carries the voice block (`llm_reply`, `llm_background_decision`) also carry `voice_version`. Trace schema version 6.
