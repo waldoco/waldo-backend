@@ -808,6 +808,20 @@ describe('pinned blocks', () => {
     });
   });
 
+  it('leaves stated health readings out of the recent block, counted, as the profile view does', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      owned(store, 'Lives in Pune');
+      owned(store, 'Resting heart rate was 61 this morning', 'health');
+      owned(store, 'Walks after lunch', 'routine');
+      nightly(store, ops({ pin: [{ id: idOf(store, 'Lives in Pune'), block: 'profile', order: 0 }] }));
+      const recent = block(turnMemoryPrompt(store, 'unrelated'), 'owner_recent')!;
+      expect(recent).not.toContain('Resting heart rate');
+      expect(recent).toContain('Walks after lunch');
+      expect(recent).toContain('(1 health readings the owner stated are left out here; recall finds them, and get_health is current.)');
+    });
+  });
+
   it('keeps pins as views: a forgotten or dismissed claim leaves its block, and a correction carries its pin', async () => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
