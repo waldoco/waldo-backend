@@ -610,8 +610,9 @@ describe('app health scores: revision 4', () => {
       expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
       expect(Object.keys(body), JSON.stringify(header)).toEqual(expect.not.arrayContaining(['form_curve', 'stress_trend']));
     }
+    const bare = { ...plain, form_curve: curve, stress_trend: 'rising' };
     for (const header of [contracts('health=2'), contracts('health=3'), contracts('health=4')]) {
-      expect(pinnedScores.safeParse(await json(stored, header)).success, JSON.stringify(header)).toBe(true);
+      expect(pinnedScores.safeParse(await json(bare, header)).success, JSON.stringify(header)).toBe(true);
     }
     const consoleView = healthScoresView({ scores: stored }, null, Date.parse(row.compiled_at as string), 4);
     expect('body' in consoleView).toBe(true);

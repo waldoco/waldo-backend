@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { produceHealthScores } from '../src/health/producer';
+import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
 import { dailyScoresFor } from '../src/health/scores';
 
 // The derived row with the Form curve switch on: today's measured curve and the stress word, written beside the scores. A
@@ -31,7 +31,7 @@ const series = (nights: number, source = 'apple', epoch = 3, todayThrough = 15, 
 });
 type Row = Record<string, any>;
 type Switch = string | undefined;
-const written = async (engine: Switch, formCurve: Switch, samples: unknown = series(20), extra: Record<string, unknown> = {}, now = NOW): Promise<Row[]> => {
+const written = async (engine: Switch, formCurve: Switch, samples: unknown = series(20), extra: Partial<ProducerDeps> = {}, now = NOW): Promise<Row[]> => {
   const rows: Row[] = [];
   await produceHealthScores({
     readSeries: async range => { const s = samples as ReturnType<typeof series>; return { ...s, sources: s.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }; },
@@ -39,7 +39,7 @@ const written = async (engine: Switch, formCurve: Switch, samples: unknown = ser
     compute: dailyScoresFor(engine),
     ...(formCurve === undefined ? {} : { formCurve }),
     ...extra,
-  } as never, { now, timezone: 'UTC' });
+  }, { now, timezone: 'UTC' });
   return rows;
 };
 afterEach(() => vi.restoreAllMocks());

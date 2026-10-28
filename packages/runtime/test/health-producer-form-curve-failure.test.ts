@@ -34,7 +34,7 @@ describe('a curve that throws', () => {
       readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
       writeContext: async payload => { rows.push(JSON.parse(payload) as Record<string, unknown>); return { written: true }; },
       compute: dailyScoresFor('1'), formCurve: '1',
-    } as never, { now: NOW, timezone: 'UTC' });
+    }, { now: NOW, timezone: 'UTC' });
     expect(outcome).toBe('written');
     const today = rows.find(r => r.day === TODAY)!;
     expect(today.form).toMatchObject({ score: expect.any(Number) });

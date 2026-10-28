@@ -9,10 +9,10 @@ const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00
 const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
 const at = (day: string, hour: number, minute = 0) => new Date(Date.parse(`${day}T00:00:00Z`) + (hour * 60 + minute) * 60_000).toISOString();
 
-type Shape = (hour: number) => Partial<HourlyBucket>;
+type Shape = (hour: number, night: number) => Partial<HourlyBucket>;
 const bucket = (day: string, hour: number, i: number, shape: Shape = () => ({})): HourlyBucket => ({
   startAt: at(day, hour), heartRate: 70 + wobble(hour + i, 2), hrv: 50 + wobble(hour + i, 3), hrvMethod: 'rmssd',
-  daylightMinutes: 20 + wobble(hour + i, 2), movementMinutes: 12 + wobble(hour + i, 2), activeEnergyKcal: null, ...shape(hour),
+  daylightMinutes: 20 + wobble(hour + i, 2), movementMinutes: 12 + wobble(hour + i, 2), activeEnergyKcal: null, ...shape(hour, i),
 });
 // Asleep from 22:00 the evening before to 08:00, so a day holds eight night hours before its wake. `through` is the first
 // hour with no bucket: a day read at 14:30 holds buckets for hours 0 to 14.
@@ -25,7 +25,7 @@ const day = (i: number, through = 24, shape: Shape = () => ({}), zone = 'UTC'): 
     hourly: Array.from({ length: through }, (_, hour) => bucket(d, hour, i, shape)), workouts: [], demand: null,
   };
 };
-const week = (today: DayRecord, nights = 20): DayRecord[] => [today, ...Array.from({ length: nights }, (_, k) => day(k + 1))];
+const week = (today: DayRecord, nights = 20, shape: Shape = () => ({})): DayRecord[] => [today, ...Array.from({ length: nights }, (_, k) => day(k + 1, 24, shape))];
 const inputOf = (days: DayRecord[], asOf: string, over: Partial<DailyScoresInput> = {}): DailyScoresInput =>
   ({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: null, asOf, provisional: true, ...over });
 const rowFormOf = (input: DailyScoresInput): FormResult => computeDailyScores(input).form;
@@ -119,10 +119,12 @@ describe('the stress trend', () => {
   // Heart rate and variability sit at the owner's usual level except where a case moves one of them, so each case moves
   // the stress reading one way only. The first of the three hours sets the level; the two steps are the hours after it.
   const READ = at(TARGET, 22, 30);
-  const trendOf = (shape: Shape, over: Partial<DailyScoresInput> = {}) => curveOf(inputOf(week(day(0, 23, shape)), READ, over))?.stress_trend;
+  // Each earlier day sits at its own level all day, so the owner's usual for the hours so far does not move with the cut-off.
+  const calm: Shape = (_hour, night) => ({ heartRate: 70 + wobble(night, 2), hrv: 50 + wobble(night, 3) });
+  const trendOf = (shape: Shape, over: Partial<DailyScoresInput> = {}) => curveOf(inputOf(week(day(0, 23, shape), 20, calm), READ, over))?.stress_trend;
   const usual: Shape = () => ({ heartRate: 70, hrv: 50 });
-  const pulse = (...above: readonly number[]): Shape => hour => ({ ...usual(hour), ...(hour >= 19 && hour <= 21 ? { heartRate: 70 + above[hour - 19]! } : {}) });
-  const variability = (...above: readonly number[]): Shape => hour => ({ ...usual(hour), ...(hour >= 19 && hour <= 21 ? { hrv: 50 + above[hour - 19]! } : {}) });
+  const pulse = (...above: readonly number[]): Shape => (hour, night) => ({ ...usual(hour, night), ...(hour >= 19 && hour <= 21 ? { heartRate: 70 + above[hour - 19]! } : {}) });
+  const variability = (...above: readonly number[]): Shape => (hour, night) => ({ ...usual(hour, night), ...(hour >= 19 && hour <= 21 ? { hrv: 50 + above[hour - 19]! } : {}) });
   it('is rising when the stress reading is worse at both of the last two steps', () => {
     expect(trendOf(pulse(2, 4, 6))).toBe('rising');
   });
@@ -144,7 +146,7 @@ describe('the stress trend', () => {
     const early = inputOf(week(day(0, 15)), at(TARGET, 14, 30));
     expect(curveOf(early)!.stress_trend).toBe('steady');
     expect(curveOf(early)!.form_curve.points.length).toBeGreaterThan(0);
-    const dark: Shape = hour => ({ ...usual(hour), ...(hour >= 19 ? { heartRate: null, hrv: null } : {}) });
+    const dark: Shape = (hour, night) => ({ ...usual(hour, night), ...(hour >= 19 ? { heartRate: null, hrv: null } : {}) });
     expect(trendOf(dark)).toBe('steady');
   });
   it('is paired with the curve: no curve, no word', () => {
