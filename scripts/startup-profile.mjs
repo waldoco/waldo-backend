@@ -4,8 +4,9 @@
 //   node scripts/startup-profile.mjs [--runs 7] [--env staging]
 // One run is not a measurement - the same bundle ranged 3-4x between runs on a busy machine - so
 // this prints median and min over --runs, plus each package's median share of sampled startup time.
-// Shares move far less with load than milliseconds do. It always exits 0: a timing budget needs
-// numbers from the CI runner first, and the blocking wall is guard-startup-lazy-sdks.
+// Shares move far less with load than milliseconds do. It exits 0 on every outcome, saying so
+// when the profiler cannot run: a timing budget needs numbers from the CI runner first, and the
+// blocking wall is guard-startup-lazy-sdks.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -62,6 +63,8 @@ try {
   process.stdout.write(`startup profile, ${env}, ${runs} runs (local CPU, not Cloudflare's clock)\n`);
   process.stdout.write(`active ms: median ${median(active)}  min ${Math.min(...active)}  max ${Math.max(...active)}; gc median ${median(gc)}\n`);
   for (const [name, share] of rows) process.stdout.write(`${(share * 100).toFixed(1).padStart(5)}%  ${name}\n`);
+} catch (error) {
+  process.stdout.write(`startup profile unavailable: ${String(error.message).split('\n')[0]}\n`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

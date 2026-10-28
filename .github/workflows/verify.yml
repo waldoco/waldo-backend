@@ -55,9 +55,9 @@ jobs:
         run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:guards
 
       # Report only: prints where Worker startup CPU goes so a timing budget can be set from runner
-      # numbers. The blocking wall is guard-startup-lazy-sdks inside verify:guards.
+      # numbers; the script exits 0 even when the profiler cannot run. The blocking wall is
+      # guard-startup-lazy-sdks inside verify:guards.
       - name: Startup profile (report only)
-        continue-on-error: true
         run: node scripts/startup-profile.mjs --runs 7
 
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
