@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { confirmHref, isStepUpRefusal, SignInRequired, signInHref, StepUpRequired } from './model';
-import { forgetBriefRevealed } from './brief-model';
+import { forgetCardsRevealed } from './day-cards-model';
 
 export type OwnerView = 'invites' | 'account';
 type InviteRow = { email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null };
@@ -98,7 +98,7 @@ export function OwnerControlsPanel({ view, embedded=false }: { view: OwnerView; 
       const receipt = await submitOwnerControl(value, window.location.origin);
       if (generation.current !== active) return;
       setResult(receipt); setBlocked(receipt.receipt.state === 'unconfirmed' || (value.record.view === 'invites' && receipt.receipt.state === 'recorded' && !receipt.invite));
-      if (receipt.receipt.signed_out) { forgetBriefRevealed(); setSignedOut(true); setRead(null); }
+      if (receipt.receipt.signed_out) { forgetCardsRevealed(); setSignedOut(true); setRead(null); }
       else setRetry(number => number + 1);
     } catch (error) {
       if (generation.current !== active) return;
