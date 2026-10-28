@@ -198,6 +198,52 @@ describe('the background decision', () => {
 });
 
 describe('a machine turn', () => {
+  it('a new owner with nothing pinned: a job built from outside content gets no health note or stated reading in any block; an untainted job does', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-uncurated-external')), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      owned(memory, 'Knee physio exercises every morning', 'tg-51', 'health');
+      owned(memory, 'Pulse reads 61 after the stairs', 'tg-52');
+      owned(memory, 'Works from the Pune office on Tuesdays', 'tg-53');
+      expect(memory.claims().some((claim) => claim.pinned)).toBe(false);
+      const requestFor = async (id: string, taint?: 'external') => {
+        const requests: LLMGatewayRequest[] = [];
+        const gateway: LLMGatewayAdapter = { complete: async (request) => {
+          requests.push(request);
+          return { ok: true, data: { model: request.request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+        } };
+        const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [recordingSearch([], id)], undefined, false, undefined, undefined, gateway);
+        await responder.prompt(id, 'owner', 'Summarise this forwarded note for the owner.', async (_hop, work) => work(), 'telegram', [], undefined, undefined, undefined, taint);
+        return JSON.stringify(requests[0]!.request);
+      };
+      const external = await requestFor('job-external-uncurated', 'external');
+      expect(external).toContain('Works from the Pune office on Tuesdays');
+      expect(external).not.toContain('Knee physio');
+      expect(external).not.toContain('Pulse reads');
+      const untainted = await requestFor('job-owner-uncurated');
+      expect(untainted).toContain('Knee physio exercises every morning');
+      expect(untainted).toContain('Pulse reads 61 after the stairs');
+    });
+  });
+
+  it('a pinned health note stays out of a job built from outside content too', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-pinned-external')), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      owned(memory, 'Knee physio exercises every morning', 'tg-61', 'health');
+      owned(memory, 'Works from the Pune office on Tuesdays', 'tg-62');
+      for (const claim of memory.claims()) expect(memory.pin(claim.id, 'profile', claim.id)).toBe(true);
+      const requests: LLMGatewayRequest[] = [];
+      const gateway: LLMGatewayAdapter = { complete: async (request) => {
+        requests.push(request);
+        return { ok: true, data: { model: request.request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+      } };
+      const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+      await responder.prompt('job-external-pinned', 'owner', 'Summarise this forwarded note for the owner.', async (_hop, work) => work(), 'telegram', [], undefined, undefined, undefined, 'external');
+      const sent = JSON.stringify(requests[0]!.request);
+      expect(sent).toContain('Works from the Pune office on Tuesdays');
+      expect(sent).not.toContain('Knee physio');
+    });
+  });
+
   it('never recalls a health claim by the words of an externally tainted job; an untainted job with the same words does; neither searches past messages', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-external-job')), async (_instance, state) => {
       const memory = claimStore(state.storage.sql);
