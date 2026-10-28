@@ -1354,7 +1354,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     } finally { abort.abort(); }
   }
 
-  // An app route that keeps, for each day card and update card it delivers, the Main chat row it became.
+  // A route that keeps, for each day card and update card it delivers to the app, the Main chat row it became.
   private linkingAppRows(route: OutboxRoute): OutboxRoute {
     return linkingAppRows(route, {
       card: (card, appRow) => dayPlanBook(this.ctx.storage.sql).delivered(card.day, card.card, appRow, Date.now()),
@@ -2825,7 +2825,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 0) { try { await lane('inbox', () => this.drainInbox(alarmEnd)); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.
-        const routeFor = (surface: ChannelKind): OutboxRoute => surface === 'app' ? this.linkingAppRows(this.outboxRoute(surface)) : this.outboxRoute(surface);
+        // Only the app answers a send with the Main chat row it became, so linking is a no-op on every other surface.
+        const routeFor = (surface: ChannelKind): OutboxRoute => this.linkingAppRows(this.outboxRoute(surface));
         // An owner the directory admits on the app has the app's route and, while WhatsApp takes proactive work, WhatsApp's.
         const routes = whatsappTarget === null ? [routeFor(channel)] : [routeFor('app'), ...(whatsappTarget ? [routeFor('whatsapp')] : [])];
         if (appWithTelegramCopy) routes.push(admittedRoute(routeFor('app'), async () => {
