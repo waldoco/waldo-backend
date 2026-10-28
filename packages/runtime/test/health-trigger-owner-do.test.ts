@@ -5,6 +5,7 @@ import type { CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
@@ -32,7 +33,7 @@ const ROW = {
 };
 
 const fixture = vi.hoisted(() => ({
-  event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, notice: '' as string, writes: 0,
+  event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, notice: '' as string, writes: 0, sent: [] as string[],
   pushes: [] as unknown[][], targetsAsked: 0, otlp: [] as string[],
 }));
 vi.mock('../src/connectors/google', async load => {
@@ -45,7 +46,11 @@ vi.mock('../src/connectors/google', async load => {
   }) };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
-  createTelegramCaller: () => async (method: string) => (method === 'sendMessage' ? { message_id: 91, chat: { id: 7 } } : true) }));
+  createTelegramCaller: () => async (method: string, payload?: { text?: string }) => {
+    if (method !== 'sendMessage') return true;
+    fixture.sent.push(payload?.text ?? '');
+    return { message_id: 91, chat: { id: 7 } };
+  } }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
@@ -67,7 +72,7 @@ const move = (start: string, end: string) => JSON.stringify({ kind: 'propose', a
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.pushes = []; fixture.targetsAsked = 0; fixture.otlp = []; printed.length = 0;
+  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.sent = []; fixture.pushes = []; fixture.targetsAsked = 0; fixture.otlp = []; printed.length = 0;
   fixture.decision = move('2026-10-21T16:00', '2026-10-21T17:30');
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
   for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
@@ -245,7 +250,7 @@ describe('the health-only note on the owner object', () => {
   // The Expo token is set so a push, if the note path made one, would be seen: the only pushes are the Brief's and an approval's.
   const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
   const notices = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_notice');
-  const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
+  const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; status: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
   beforeEach(() => { fixture.event = null; fixture.notice = JSON.stringify({ kind: 'notice', text: NOTE }); });
 
   it('sends the note the model writes as one update card, which the next main card reads, with no reading stored anywhere', async () => {
@@ -300,6 +305,32 @@ describe('the health-only note on the owner object', () => {
       expect([notices().length, queued(state)]).toEqual([0, []]);
       expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
     }, ON);
+  });
+
+  // Sharing can be revoked, or health proposals turned off, while a note waits in the outbox (a send that has to wait, a
+  // retry). The route checks again at send time, and a note it refuses ends unsent and is never retried or folded into a card.
+  it('drops a queued note, unsent, once health sharing is revoked or health proposals are turned off before it goes out', async () => {
+    const turnings = [
+      () => { fixture.health = null; },
+      (state: DurableObjectState) => schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() })).set('health_proposals', false),
+    ];
+    for (const turnOff of turnings) {
+      fixture.health = ROW; fixture.sent = []; fixture.requests = [];
+      vi.setSystemTime(NOW);
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect(queued(state)).toMatchObject([{ id: 'health-notice:2026-10-21', status: 'pending' }]);
+        turnOff(state);
+        for (const at of [NOW + 5_000, NOW + 15 * 60_000]) {
+          vi.setSystemTime(at);
+          await pass();
+        }
+        expect(queued(state)).toMatchObject([{ status: 'blocked' }]);
+        expect(fixture.sent.filter(text => text.includes('Recovery is compromised'))).toEqual([]);
+        expect(updateBook(state.storage.sql).unfolded('Asia/Kolkata')).not.toContain('Recovery is compromised');
+      }, ON);
+    }
   });
 
   it('asks nothing of the model when health sharing is off', async () => {

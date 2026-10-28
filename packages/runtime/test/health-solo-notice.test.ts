@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { Proactivity } from '../src/channels/loops';
 import {
-  healthNoticeId, healthNoticePrompt, healthTriggerBook, healthTriggerView, parseHealthNotice, runHealthTrigger,
+  healthNoticeCurrent, healthNoticeId, healthNoticePrompt, healthTriggerBook, healthTriggerView, parseHealthNotice, runHealthTrigger,
   HEALTH_NOTICE_FORMAT, HEALTH_TRIGGER_FLOOR_MS, type HealthTriggerDeps,
 } from '../src/health/trigger';
 
@@ -229,5 +229,18 @@ describe('the note prompt and its answer', () => {
     expect(parseHealthNotice(note(`  ${LINE}  `))).toEqual({ kind: 'notice', text: LINE });
     expect(() => parseHealthNotice('[]')).toThrow('invalid health notice');
     expect(() => parseHealthNotice(JSON.stringify({ kind: 'notice', text: 7 }))).toThrow('invalid health notice');
+  });
+});
+
+describe('whether a queued note may still go out', () => {
+  it('only while health proposals are on and the consented read still answers with a row', async () => {
+    let reads = 0;
+    const read = (row: unknown) => async () => { reads += 1; return row; };
+    expect(await healthNoticeCurrent({ enabled: () => true, readHealth: read(ROW), now: NOW, timezone: TZ })).toBe(true);
+    expect(await healthNoticeCurrent({ enabled: () => true, readHealth: read(null), now: NOW, timezone: TZ })).toBe(false);
+    expect(await healthNoticeCurrent({ enabled: () => true, readHealth: read({ context: null, previous: null }), now: NOW, timezone: TZ })).toBe(false);
+    reads = 0;
+    expect(await healthNoticeCurrent({ enabled: () => false, readHealth: read(ROW), now: NOW, timezone: TZ })).toBe(false);
+    expect(reads).toBe(0);
   });
 });
