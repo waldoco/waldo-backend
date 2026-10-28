@@ -23,11 +23,15 @@ const series = (nights: number, source = 'apple') => ({
   sources: [{ source, consent_epoch: 3, truncated: false, samples: Array.from({ length: nights }, (_, i) => dayOfReadings(addDays(TODAY, -i), i)).flat() }],
 });
 type Row = Record<string, any>;
-type Run = Readonly<{ rows: Row[]; zoneNotices: string[]; scoreReads: string[]; outcome: string }>;
+type Run = Readonly<{ rows: Row[]; zoneNotices: string[]; scoreReads: string[]; historyReads: number[]; outcome: string }>;
+// The stored-day read as the database answers it: every stored day in the window, oldest first, with its pillars.
+const historyOf = (stored: ReadonlySet<string>) => stored.size
+  ? { history: { from: addDays(TODAY, -89), to: TODAY, days: [...stored].sort().map(day => ({ day, recovery: { reason: 'no_readings' }, form: { reason: 'no_readings' }, weight: { reason: 'no_readings' } })) } }
+  : { unavailable: 'no_readings' };
 // `stored` is the set of days that already hold a row; the fake writer adds to it, as the database would.
-const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown } = {}): Promise<Run> => {
+const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown; historyAnswer?: () => Promise<unknown> } = {}): Promise<Run> => {
   const samples = over.samples ? { access: 'granted', read_at: READ_AT, sources: [{ source: over.source ?? 'apple', consent_epoch: 3, truncated: false, samples: over.samples }] } : series(nights, over.source);
-  const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [];
+  const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [], historyReads: number[] = [];
   const stored = over.stored ?? new Set<string>();
   const outcome = await produceHealthScores({
     readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
@@ -40,11 +44,12 @@ const run = async (flag: string | undefined, nights: number, over: Partial<Produ
       return { written: true, changed: over.changed ?? [] };
     },
     readScores: async day => { scoreReads.push(day); return stored.has(day) ? { scores: { day } } : { unavailable: 'no_readings' }; },
+    readHistory: async days => { historyReads.push(days); return over.historyAnswer ? over.historyAnswer() : historyOf(stored); },
     compute: dailyScoresFor(flag),
     onZoneChange: async day => { zoneNotices.push(day); },
     ...(over.backfillLimit === undefined ? {} : { backfillLimit: over.backfillLimit }),
   }, { now: NOW, timezone: 'UTC' });
-  return { rows, zoneNotices, scoreReads, outcome };
+  return { rows, zoneNotices, scoreReads, historyReads, outcome };
 };
 const live = (rows: Row[]) => rows.filter(r => r.backfilled === undefined);
 const late = (rows: Row[]) => rows.filter(r => r.backfilled === true);
@@ -77,9 +82,10 @@ describe('backfilled rows: which days and what they hold', () => {
     expect(today.recovery.baseline.state).toBe('personal');
   });
   it('writes none with provisional scores off, and reads no stored row for an older day', async () => {
-    const { rows, scoreReads } = await run(undefined, 25);
+    const { rows, scoreReads, historyReads } = await run(undefined, 25);
     expect(late(rows)).toEqual([]);
     expect(scoreReads.filter(day => day < addDays(TODAY, -1))).toEqual([]);
+    expect(historyReads).toEqual([]);
   });
 });
 
@@ -101,6 +107,7 @@ describe('backfilled rows: never a change, never over a live row', () => {
       readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
       writeContext: async payload => { if ((JSON.parse(payload) as Row).backfilled) throw new Error('database down'); return { written: true }; },
       readScores: async () => ({ unavailable: 'no_readings' }),
+      readHistory: async () => ({ unavailable: 'no_readings' }),
       compute: dailyScoresFor('1'),
     }, { now: NOW, timezone: 'UTC' });
     expect(outcome).toBe('written');
@@ -153,6 +160,29 @@ describe('backfilled rows: a refused write ends the scan', () => {
   it('stops at the first backfilled write the database refuses, and the live rows stand', async () => {
     const { rows, outcome } = await run('1', 25, { lateAnswer: { error: 'consent_required' } });
     expect(late(rows)).toHaveLength(1);
+    expect(live(rows)).toHaveLength(2);
+    expect(outcome).toBe('written');
+  });
+});
+
+describe('backfilled rows: one read of the stored days a run', () => {
+  it('reads which days hold a row once, over ninety days, and the stored row only for yesterday and today', async () => {
+    const { rows, scoreReads, historyReads } = await run('1', 25, { stored: new Set([addDays(TODAY, -5)]) });
+    expect(late(rows).length).toBeGreaterThan(10);
+    expect(historyReads).toEqual([90]);
+    expect(scoreReads).toEqual([addDays(TODAY, -1), TODAY]);
+  });
+  it('takes nothing stored as every day missing', async () => {
+    const { rows } = await run('1', 25, { historyAnswer: async () => ({ unavailable: 'consent_withdrawn' }) });
+    expect(late(rows).length).toBeGreaterThan(10);
+  });
+  it.each([
+    ['an error', async () => ({ error: 'unavailable' })],
+    ['a throw', async () => { throw new Error('database down'); }],
+    ['an answer of another shape', async () => ({ history: { days: [{ when: TODAY }] } })],
+  ])('backfills nothing this run when the read gives %s, and the live rows stand', async (_kind, historyAnswer) => {
+    const { rows, outcome } = await run('1', 25, { historyAnswer });
+    expect(late(rows)).toEqual([]);
     expect(live(rows)).toHaveLength(2);
     expect(outcome).toBe('written');
   });

@@ -12,10 +12,10 @@ const auth = { readAppCredential: async (credential: string) => (credential === 
 // notice, so the Worker recomputes on its own, as it does when the object is away.
 const toOwner: Request[] = [];
 let ownerAnswer = (): Response => Response.json({ error: 'unavailable' }, { status: 503 });
-const env = () => ({
+const env = (over: Record<string, string> = {}) => ({
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { toOwner.push(request); return ownerAnswer(); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
+  SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, ...over,
 }) as never;
 
 const today = new Date().toISOString().slice(0, 10);
@@ -50,9 +50,9 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) => void) => handleApp(new Request('https://w.test/app/v1/health/ingest', {
+const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) => void, over: Record<string, string> = {}) => handleApp(new Request('https://w.test/app/v1/health/ingest', {
   method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-}), env(), auth, defer) as Promise<Response>;
+}), env(over), auth, defer) as Promise<Response>;
 const deferrals = () => { const work: Promise<unknown>[] = []; return { work, defer: (p: Promise<unknown>) => { work.push(p); } }; };
 
 describe('a committed ingest asks the owner\'s object to recompute', () => {
@@ -108,6 +108,18 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toMatchObject({ from: day(30), to: today });
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('sleep_duration');
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).not.toContain('steps_window');
+  });
+
+  it('with provisional scores, asks which days hold a row once, signed, as ninety days in a number', async () => {
+    answers.health_scores_history = { unavailable: 'no_readings' };
+    const d = deferrals();
+    await ingest(batch, d.defer, { HEALTH_PROVISIONAL_SCORES: '1' });
+    await Promise.all(d.work);
+    const history = rpcs.filter(r => r.fn === 'health_scores_history');
+    expect(history.map(r => r.body.p_payload)).toEqual(['{"days":90}']);
+    expect(history[0]!.body.p_sig).toBe(await routerSignature(SECRET, history[0]!.body.p_at as number, `health.scores_history.owner-1.${md5Hex('{"days":90}')}`));
+    expect(rpcs.filter(r => r.fn === 'health_scores_read')).toHaveLength(2);
+    expect(rpcs.filter(r => r.fn === 'health_context_write').length).toBeGreaterThan(2);
   });
 
   it('writes the read instant and the consent epoch it read, so the database can fence on both', async () => {
