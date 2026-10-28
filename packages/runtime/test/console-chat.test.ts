@@ -70,6 +70,20 @@ describe('console chat', () => {
     expect(keys).toEqual(['app-read:owner-1']);
   });
 
+  it('reads today\'s cards as the app reads them, with what each delivered, on the read budget and nothing else', async () => {
+    const { env, forwards, keys } = setup();
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day?view=connections&extra=1`, { headers: { 'x-waldo-app-contract': 'controls=3' } }), env, fakeAuth());
+    const forwarded = forwards[0]!;
+    expect(`${new URL(forwarded.url).pathname}${new URL(forwarded.url).search}`).toBe('/app/v1/controls?view=day');
+    expect(forwarded.method).toBe('GET');
+    expect(forwarded.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash(SESSION));
+    expect(forwarded.headers.get('x-waldo-app-contract')).toBe('controls=3');
+    expect(keys).toEqual(['app-read:owner-1']);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day`, { method: 'POST', body: {} }), env, fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day/more`), env, fakeAuth()))!.status).toBe(404);
+    expect(forwards).toHaveLength(1);
+  });
+
   it('maps a receipt and a stop to the app routes, on the read budget', async () => {
     const { env, forwards, keys } = setup();
     await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`), env, fakeAuth());
