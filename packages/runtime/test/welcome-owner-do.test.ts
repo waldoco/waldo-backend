@@ -10,12 +10,14 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // A fresh app-only owner finishes setup in the app: the build starts on that signal alone, before any chat, runs its model
 // calls as the owner's job, and writes Waldo's read of the owner's health as nodes; a second signal starts nothing.
 const model = vi.hoisted(() => ({ welcome: [] as string[], purposes: [] as string[] }));
+// The setup stage cites the owner's own answers by their claim ids, as its input lists them.
+const SETUP_ANSWER = (pointer: string | undefined) => JSON.stringify({ nodes: [{ domain: 'people', label: 'Goes by a chosen name', summary: 'Asked Waldo to use the name they go by.', observation: 'Named how Waldo should address them.', source: 'setup', pointers: pointer ? [pointer] : [] }] });
 const WELCOME_ANSWER = JSON.stringify({ nodes: [{ domain: 'health', label: 'Late weekend sleeper', summary: 'Sleeps in on weekends, then starts slowly.', observation: 'Weekend nights end later than weeknights.', source: 'apple_health', pointers: ['sleep_midpoint'] }] });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const body = JSON.stringify(request);
-    const text = body.includes('welcome_nodes') ? (model.welcome.push(body), WELCOME_ANSWER)
+    const text = body.includes('welcome_nodes') ? (model.welcome.push(body), body.includes('Source: what the owner told Waldo') ? SETUP_ANSWER(/\[(c\d+)\] /.exec(body)?.[1]) : WELCOME_ANSWER)
       : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -67,16 +69,17 @@ it('setup done in the app starts one welcome build for an app-only owner who has
       expect(state.storage.kv.get('app_subject')).toBe(String(appSubjectFor(name)));
       await vi.waitFor(() => expect(build()[0]?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
       const [row] = build();
-      expect(row!.nodes).toBe(1);
+      expect(row!.nodes).toBe(2);
       expect(Object.fromEntries(Object.entries(JSON.parse(row!.stages_json) as Record<string, { state: string }>).map(([stage, value]) => [stage, value.state])))
-        .toEqual({ health: 'done', calendar: 'skipped', mail: 'skipped', web: 'skipped' });
-      expect(model.welcome).toHaveLength(1);
+        .toEqual({ health: 'done', calendar: 'skipped', mail: 'skipped', web: 'skipped', setup: 'done' });
+      expect(model.welcome).toHaveLength(2);
       expect(model.welcome[0]).toContain('sleep_midpoint (apple_health');
+      expect(model.welcome[1]).toContain('Wants to be called Asha');
       // The gift is the owner's last thirty days of health: today in their zone and the twenty-nine days before it.
       const today = new Date().toISOString().slice(0, 10), from = new Date(Date.parse(`${today}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10);
       expect(rpc.series).toEqual([expect.objectContaining({ from, to: today })]);
       const node = state.storage.sql.exec<{ label: string; supporting_spots: string }>('SELECT label, supporting_spots FROM constellation_nodes').toArray();
-      expect(node.map(row => row.label)).toEqual(['Late weekend sleeper']);
+      expect(node.map(row => row.label)).toEqual(['Late weekend sleeper', 'Goes by a chosen name']);
       const [support] = JSON.parse(node[0]!.supporting_spots) as number[];
       expect(state.storage.sql.exec('SELECT origin, source, source_ref FROM claims WHERE id = ?', support).one()).toEqual({ origin: 'agent', source: 'inferred', source_ref: 'welcome:apple_health:sleep_midpoint' });
       // No DO table holds a number from the health input. Whole numbers only: a millisecond time or a digest carries the same
@@ -91,17 +94,24 @@ it('setup done in the app starts one welcome build for an app-only owner who has
 
       // Forgetting the node from the app takes Waldo's read behind it too, and bars the label.
       const runtime = (owner as unknown as { setup(channel: string): { act(action: object, current: () => Promise<void>): Promise<unknown> } }).setup('app');
-      const nodeId = state.storage.sql.exec<{ id: number }>('SELECT id FROM constellation_nodes').one().id;
+      const nodeId = state.storage.sql.exec<{ id: number }>("SELECT id FROM constellation_nodes WHERE label = 'Late weekend sleeper'").one().id;
       expect(await runtime.act({ action: 'node.forget', id: String(nodeId), value: '' }, async () => {})).toBe(true);
-      expect(state.storage.sql.exec('SELECT count(*) AS n FROM constellation_nodes').one().n).toBe(0);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM constellation_nodes').one().n).toBe(1);
       expect(state.storage.sql.exec("SELECT status FROM claims WHERE id = ?", support).toArray().map(row => row.status)).not.toContain('active');
+      // Forgetting the node drawn from the setup answers takes Waldo's read, never the owner's own answer.
+      const setupNode = state.storage.sql.exec<{ id: number; supporting_spots: string }>("SELECT id, supporting_spots FROM constellation_nodes WHERE label = 'Goes by a chosen name'").one();
+      const [read] = JSON.parse(setupNode.supporting_spots) as number[];
+      expect(await runtime.act({ action: 'node.forget', id: String(setupNode.id), value: '' }, async () => {})).toBe(true);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM constellation_nodes').one().n).toBe(0);
+      expect(state.storage.sql.exec("SELECT status FROM claims WHERE id = ?", read).toArray().map(row => row.status)).not.toContain('active');
+      expect(state.storage.sql.exec("SELECT status FROM claims WHERE text = 'Wants to be called Asha'").toArray().map(row => row.status)).toEqual(['active']);
 
       // The second signal, the first-run complete, starts nothing new.
       await app('/app/v1/onboarding/actions', { request_id: 'welcome-start-01', action: 'start' });
       await app('/app/v1/onboarding/actions', { request_id: 'welcome-complete-1', action: 'complete' });
       await app('/app/v1/onboarding/answers', { request_id: 'welcome-answers-2', name: 'Asha K' });
       await new Promise(resolve => setTimeout(resolve, 200));
-      expect(model.welcome).toHaveLength(1);
+      expect(model.welcome).toHaveLength(2);
       expect(build()).toHaveLength(1);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
@@ -123,7 +133,10 @@ it('an owner who keeps health out of memory gets a build that reads no health an
       expect(saved.status).toBe(200);
       await vi.waitFor(() => expect(build()[0]?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
       expect(JSON.parse(build()[0]!.stages_json).health.state).toBe('skipped');
-      expect([build()[0]!.nodes, model.welcome.length]).toEqual([0, 0]);
+      // Nothing connected and health kept out: the owner's own answers still give the first node, and no health is read.
+      expect([build()[0]!.nodes, model.welcome.length]).toEqual([1, 1]);
+      expect(model.welcome[0]).toContain('Wants to be called Asha');
+      expect(state.storage.sql.exec<{ domain: string }>('SELECT domain FROM constellation_nodes').toArray()).toEqual([{ domain: 'people' }]);
       expect(rpc.called.filter((fn) => fn.startsWith('health_'))).toEqual([]);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
@@ -146,13 +159,14 @@ it('each welcome stage closes its model call\'s trace with a machine root, one t
         headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ request_id: 'welcome-answers-trace', name: 'Asha' }) }));
       expect(saved.status).toBe(200);
       await vi.waitFor(() => expect(state.storage.sql.exec<{ finished_at: number | null }>('SELECT finished_at FROM welcome_builds').one().finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
-      expect(model.welcome).toHaveLength(1);
+      expect(model.welcome).toHaveLength(2);
       const roots = state.storage.sql.exec<{ trace: string; ok: number }>("SELECT trace, ok FROM trace_log WHERE hop = 'machine_turn'").toArray();
-      expect(roots).toEqual([{ trace: expect.stringMatching(/^welcome:health:\d+$/), ok: 1 }]);
-      await vi.waitFor(() => expect(spans().filter(span => span.name === 'app.machine').map(key)).toEqual([roots[0]!.trace]));
-      expect(spans().filter(span => key(span) === roots[0]!.trace && span.name !== 'app.machine').some(span => span.name.startsWith('llm_'))).toBe(true);
+      expect(roots.map(root => root.trace).sort()).toEqual([expect.stringMatching(/^welcome:health:\d+$/), expect.stringMatching(/^welcome:setup:\d+$/)]);
+      expect(roots.every(root => root.ok === 1)).toBe(true);
+      await vi.waitFor(() => expect(spans().filter(span => span.name === 'app.machine').map(key).sort()).toEqual(roots.map(root => root.trace).sort()));
+      for (const root of roots) expect(spans().filter(span => key(span) === root.trace && span.name !== 'app.machine').some(span => span.name.startsWith('llm_'))).toBe(true);
       const wire = rpc.otlp.join('\n');
-      for (const reading of ['231.37', '307.61', 'sleep_midpoint (apple_health']) expect(wire, reading).not.toContain(reading);
+      for (const reading of ['231.37', '307.61', 'sleep_midpoint (apple_health', 'Wants to be called Asha']) expect(wire, reading).not.toContain(reading);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

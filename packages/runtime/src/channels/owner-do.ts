@@ -3090,7 +3090,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The owner's one welcome build: started by setup, and taken up again by a constellation read when a run was cut short.
   private welcomeRun: Promise<void> | null = null;
   private continueWelcome(runtime: OwnerRuntime): void {
-    if (this.welcomeRun || !runtime.welcome.build().due().length) return;
+    if (this.welcomeRun || !runtime.welcome.wanted()) return;
     this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); }).finally(() => { this.welcomeRun = null; });
     this.ctx.waitUntil(this.welcomeRun);
   }
@@ -3652,6 +3652,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
     };
     const googleEnvironment = this.env;
+    const welcomeAfterConnect = () => this.continueWelcome(runtime);
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
       // A proxy link carries only the connection id. A raw token is kept here only when no proxy exists.
@@ -3785,6 +3786,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'oauth_callback', ms: Date.now() - started, ok: outcome.kind === 'linked', detail: `${outcome.kind}${fresh ? '' : ' (replayed)'}`, ...(outcome.kind === 'failed' ? { error: outcome.reason } : {}) });
         if (fresh && outcome.kind === 'linked') {
           log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
+          // A welcome build that skipped calendar or mail at setup takes them up now that Google is connected.
+          welcomeAfterConnect();
           const session = (await consentDeps.store.read())[input.nonce]?.session;
           const callRpc = signedRpc(env);
           if (session && callRpc) {
@@ -4559,6 +4562,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await migrateCoreFiles(`${trace}:migration`);
         const outcome = await consolidateBacklog(trace, entry.occurrence_at);
         if (outcome === 'more' || outcome === 'failed') await armCatchUp();
+        // A source the owner connected since setup (health consent, Google) joins the welcome build without a visit to the app.
+        this.continueWelcome(runtime);
         const promoting = Date.now();
         await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) })
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) }))
