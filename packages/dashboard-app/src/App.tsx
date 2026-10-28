@@ -1,5 +1,6 @@
 import {greeting} from './greeting';
 import { DayCards } from './DayCards';
+import { DayHistory } from './DayHistory';
 import {Icon,WaldoMark} from './icons';
 import {clockLabel,DayRail,localMinutes,sameLocalDay,stagger,type RailMark} from './Infographics';
 import {Drawer,Riffle} from '@lucasmarkes/hairline/react';
@@ -130,7 +131,8 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
         <div className="disclosure-body"><p>{activity ? (activity.summary?.trim() ? activity.summary : missingOutcome) : 'No owner-facing activity in the latest record.'}</p>
           {activity && <p className="meta">Recorded status: {activity.status} · {date(activity.at, zone)}</p>}<a className="quiet-link" href="#/patrol">Open Patrol</a></div></details>
     </div>
-    <p className="caption reveal" style={stagger(5)}>The Brief, Check-in and the Close show above as they go out, and in Chat.</p>
+    <div className="reveal" style={stagger(5)}><DayHistory/></div>
+    <p className="caption reveal" style={stagger(6)}>The Brief, Check-in and the Close show above as they go out, and in Chat.</p>
   </div>;
 }
 

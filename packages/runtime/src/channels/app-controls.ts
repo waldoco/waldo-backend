@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -19,6 +19,8 @@ export type AppControlsHost = Readonly<{
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
   cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
+  // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
+  days?(date?:string):Promise<object|null>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
   // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
   welcome?():AppWelcomeBuildV1;
@@ -92,6 +94,14 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:host.welcome()}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='days'){
+      if(!host.days||appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_DAY_HISTORY_REVISION)return reply({error:'invalid_query'},400);
+      let data:object|null;
+      try{data=await host.days(query.data.date);}catch{return reply({error:'projection_unavailable'},503);}
+      if(data===null)return reply({error:'not_found'},404);
+      const parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'days',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='phone'){

@@ -22,6 +22,10 @@ export const updateBook = (sql: Sql) => {
   } catch {
     // column already exists
   }
+  // When the card reached the owner, and the Main chat row it became when that was the app: an id and a time, never text.
+  const columns = new Set(sql.exec<{ name: string }>('PRAGMA table_info(update_cards)').toArray().map(column => column.name));
+  if (!columns.has('delivered_at')) sql.exec('ALTER TABLE update_cards ADD COLUMN delivered_at INTEGER');
+  if (!columns.has('app_row')) sql.exec('ALTER TABLE update_cards ADD COLUMN app_row TEXT');
   const state = (key: string) => sql.exec<{ value: string }>('SELECT value FROM watch_state WHERE key = ?', key).toArray()[0]?.value ?? null;
   const setState = (key: string, value: string) => sql.exec('INSERT INTO watch_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
   return {
@@ -68,7 +72,14 @@ export const updateBook = (sql: Sql) => {
       for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET update_id = ? WHERE source_ref = ? AND message_id = ? AND update_id IS NULL', id, change.source_ref, change.source_message_id ?? change.source_ref);
       return id;
     },
-    pushed(id: number, text: string): void { sql.exec('UPDATE update_cards SET text = ?, pushed = 1 WHERE id = ?', text, id); },
+    pushed(id: number, text: string, at: number): void { sql.exec('UPDATE update_cards SET text = ?, pushed = 1, delivered_at = ? WHERE id = ?', text, at, id); },
+    linked(id: number, appRow: string): void { sql.exec('UPDATE update_cards SET app_row = ? WHERE id = ?', appRow, id); },
+    // The update cards delivered on one local day, newest first. A card delivered before delivery times were kept is not listed.
+    delivered(day: string): readonly Readonly<{ app_row: string | null; delivered_at: number }>[] {
+      return sql.exec<{ app_row: string | null; delivered_at: number }>(
+        'SELECT app_row, delivered_at FROM update_cards WHERE day = ? AND delivered_at IS NOT NULL ORDER BY delivered_at DESC, id DESC', day,
+      ).toArray();
+    },
     rate(id: number, feedback: 'useful' | 'not useful'): boolean {
       return sql.exec('UPDATE update_cards SET feedback = ? WHERE id = ? AND pushed = 1 RETURNING id', feedback, id).toArray().length > 0;
     },

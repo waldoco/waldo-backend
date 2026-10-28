@@ -5,7 +5,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -25,15 +25,18 @@ export const APP_NODE_CORRECTION_MAX_V1 = 140;
 const nodeId = /^memory:node:[1-9][0-9]{0,15}$/;
 const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
+// One of the owner's local days, as the days view names it.
+const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
 // id for detail and pattern, max_nodes and max_links for pattern. Ids and cursors are opaque.
 export const appControlQueryV1Schema = z.strictObject({
   view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional(),
   memory_view: memoryViews.optional(), cursor: memoryCursor.optional(), limit: memoryPageSize.optional(), id: memoryId.optional(),
-  max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(),
+  max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(), date: historyDay.optional(),
 }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
   if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
+  if (query.view !== 'days' && query.date !== undefined) ctx.addIssue({ code: 'custom', message: 'date requires the days view' });
 });
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
@@ -150,6 +153,36 @@ export const appControlDayDataV1Schema = z.strictObject({
   carrying: firstPage(carried).optional(),
   open_loops: firstPage(openLoop).optional(),
   updates: updates.optional(),
+});
+// Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
+// them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets
+// invalid_query. History starts the day Waldo began keeping it (history_since) and is never backfilled: a day that began
+// before it, or a night whose runs were partly trimmed, reads complete false.
+// A card's state: sent or skipped once finished, pending while today's card may still come, not_sent for an earlier day's
+// card that never went out, unknown for a card that finished before the outcome was kept. latest is as on the day view.
+// text is reserved for the card's full words and is not sent until the health-number question on card text is settled.
+export const APP_CONTROLS_DAY_HISTORY_REVISION = 6;
+export const APP_DAY_HISTORY_DAYS_V1 = 14;
+export const APP_NIGHT_RUNS_MAX_V1 = 50;
+export const appDayHistoryCardStateV1Schema = z.enum(['sent', 'skipped', 'pending', 'not_sent', 'unknown']);
+const historyCard = { id: text, name: text, state: appDayHistoryCardStateV1Schema, latest: latestDelivery.nullable().optional() };
+export const appControlDaysDataV1Schema = z.strictObject({
+  timezone: text, today: historyDay, history_since: historyDay.nullable(),
+  days: z.array(z.strictObject({ date: historyDay, complete: z.boolean(), cards: z.array(z.strictObject(historyCard)), updates_total: count })).max(APP_DAY_HISTORY_DAYS_V1),
+});
+// The night before the day: from the previous day's Close to this day's Brief (now, while the Brief is still to come), the
+// background runs started in it, oldest first. Times are epoch ms. A summary is the runner's fixed outcome line, plain text.
+const nightRun = z.strictObject({
+  id: text, kind: text, status: z.enum(['running', 'completed', 'failed', 'stopped']), summary: text.nullable(),
+  started_at: z.int().positive(), ended_at: z.int().positive().nullable(),
+});
+export const appControlDayHistoryDataV1Schema = z.strictObject({
+  timezone: text, date: historyDay, complete: z.boolean(),
+  cards: z.array(z.strictObject({ ...historyCard, text: text.min(1).optional() })),
+  updates: z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW_PAGE_MAX_V1), total: count })
+    .refine(page => page.total >= page.items.length, { error: 'total counts every update card delivered that day', path: ['total'] }),
+  night: z.strictObject({ from: z.int().positive(), to: z.int().positive(), complete: z.boolean(), runs: z.array(nightRun).max(APP_NIGHT_RUNS_MAX_V1), total: count })
+    .refine(night => night.total >= night.runs.length, { error: 'total counts every run in the night', path: ['total'] }),
 });
 // Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
 // binding keeps it: an unlinked or pending channel holds no peer identifier.
@@ -288,6 +321,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({

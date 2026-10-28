@@ -95,6 +95,19 @@ describe('console chat', () => {
     expect(forwards.map(request => `${new URL(request.url).pathname}${new URL(request.url).search}`)).toEqual(Array(4).fill('/app/v1/controls?view=day'));
   });
 
+  it('reads the day history as the app reads it: the fourteen days, or one by its date, and no other view or key', async () => {
+    const { env, forwards, keys } = setup();
+    const target = (request: Request) => `${new URL(request.url).pathname}${new URL(request.url).search}`;
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days`, { headers: { 'x-waldo-app-contract': 'controls=6' } }), env, fakeAuth());
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days?date=2026-10-27&view=connections&owner=owner-2`), env, fakeAuth());
+    expect(forwards.map(target)).toEqual(['/app/v1/controls?view=days', '/app/v1/controls?view=days&date=2026-10-27']);
+    expect(forwards[0]!.headers.get('x-waldo-app-contract')).toBe('controls=6');
+    expect(keys).toEqual(['app-read:owner-1', 'app-read:owner-1']);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days`, { method: 'POST', body: {} }), env, fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days/2026-10-27`), env, fakeAuth()))!.status).toBe(404);
+    expect(forwards).toHaveLength(2);
+  });
+
   it('reads the day of the owner the console cookie names, never one a header or query names', async () => {
     const opened: string[] = [], forwards: Request[] = [];
     const env = {

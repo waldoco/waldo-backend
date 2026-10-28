@@ -871,6 +871,11 @@ footer .refresh:disabled { opacity:1; }
 .day-card-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px; }
 .day-card-head .meta { font-variant-numeric:tabular-nums; }
 .card-letter p { margin:0 0 10px; font-size:17px; line-height:1.45; color:var(--t2); }
+.day-pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; font-variant-numeric:tabular-nums; }
+.day-history-updates { padding:12px 0; border-top:.5px solid var(--hair); }
+.day-history-updates p { margin:4px 0 0; }
+.night-runs { list-style:none; margin:8px 0 0; padding:0; }
+.night-runs li { padding:4px 0; }
 .card-word { display:inline-block; animation:card-word-in 420ms var(--ease) backwards, card-word-settle 600ms ease backwards; animation-delay:var(--at,0ms), calc(var(--at,0ms) + 900ms); }
 @keyframes card-word-in { from { opacity:0; transform:translateY(4px); } }
 @keyframes card-word-settle { from { color:var(--ink); } }

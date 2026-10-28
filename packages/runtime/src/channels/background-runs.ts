@@ -5,7 +5,8 @@ import type { OwnerClock } from '../tools/live/get-context';
 // fire, a proactive beat - records one row. parent_id carries the trace hop: a child run
 // points at the turn or run that spawned it, so the console can show what came from what.
 // Summaries are one-line outcomes written by the runner itself, never provider text.
-export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event'] as const;
+// nightly is the night's memory pass and its catch-ups; health_trigger is the health check that may raise one change.
+export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event', 'nightly', 'health_trigger'] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 export const RUN_STATUSES = ['running', 'completed', 'failed', 'stopped'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
@@ -27,6 +28,9 @@ export type RunBook = Readonly<{
   latestActivity(): BackgroundRun | null;
   listPage(limit: number, before?: number): { rows: readonly BackgroundRun[]; next: number | null };
   byId(id: string): BackgroundRun | null;
+  // The runs started in [from, to), oldest first, at most limit, with how many there were. complete is false when the
+  // oldest rows were trimmed past the cap after the window opened, so some of its runs may be gone.
+  between(from: number, to: number, limit: number): { rows: readonly BackgroundRun[]; total: number; complete: boolean };
 }>;
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -75,5 +79,38 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
       return { rows: rows.slice(0, limit), next: rows.length > limit ? rows[limit - 1]!.started_at : null };
     },
     byId: (id) => sql.exec<BackgroundRun>('SELECT * FROM background_runs WHERE id = ?', id).toArray()[0] ?? null,
+    between: (from, to, limit) => {
+      const kept = sql.exec<{ count: number; oldest: number | null }>('SELECT COUNT(*) AS count, MIN(started_at) AS oldest FROM background_runs').one();
+      return {
+        rows: sql.exec<BackgroundRun>('SELECT * FROM background_runs WHERE started_at >= ? AND started_at < ? ORDER BY started_at, id LIMIT ?', from, to, limit).toArray(),
+        total: sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM background_runs WHERE started_at >= ? AND started_at < ?', from, to).one().count,
+        complete: kept.count < MAX_RUN_ROWS || (kept.oldest !== null && kept.oldest <= from),
+      };
+    },
   };
+};
+
+// How a recorded job's run settles: the line for a job that threw, and the status and line for each outcome it returned.
+export type RunSummary<Outcome> = Readonly<{ threw: string; settled(outcome: Outcome): Readonly<{ status: 'completed' | 'failed'; summary: string }> }>;
+export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
+  threw: 'memory pass failed',
+  settled: outcome => ({
+    done: { status: 'completed', summary: 'memory pass finished' },
+    more: { status: 'completed', summary: 'memory pass read part of the backlog; a catch-up follows' },
+    capped: { status: 'completed', summary: 'memory pass stopped at the day\'s limit; the rest waits' },
+    failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
+  } as const)[outcome],
+};
+// The trigger does not report its outcome to its caller, so its run says only that it ran.
+export const HEALTH_TRIGGER_RUN: RunSummary<void> = { threw: 'health check stopped with an error', settled: () => ({ status: 'completed', summary: 'health check ran' }) };
+
+// A scheduled job recorded as one run, settled by what it returned; a job that throws is recorded failed and still throws.
+export const recordedRun = <Entry extends { id: string }, Outcome>(
+  runs: Pick<RunBook, 'start' | 'finish'>, kind: RunKind, summary: RunSummary<Outcome>, job: (entry: Entry) => Promise<Outcome>,
+) => async (entry: Entry): Promise<void> => {
+  const run = runs.start(kind, entry.id);
+  let outcome: Outcome;
+  try { outcome = await job(entry); } catch (error) { runs.finish(run.id, 'failed', summary.threw); throw error; }
+  const settled = summary.settled(outcome);
+  runs.finish(run.id, settled.status, settled.summary);
 };
