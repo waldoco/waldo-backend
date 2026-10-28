@@ -808,17 +808,19 @@ describe('pinned blocks', () => {
     });
   });
 
-  it('leaves stated health readings out of the recent block, counted, as the profile view does', async () => {
+  it('leaves health notes and stated readings out of the recent block, counted', async () => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
       owned(store, 'Lives in Pune');
       owned(store, 'Resting heart rate was 61 this morning', 'health');
+      owned(store, 'Knee physio every morning', 'health');
+      owned(store, 'Pulse reads 61 after the stairs');
       owned(store, 'Walks after lunch', 'routine');
       nightly(store, ops({ pin: [{ id: idOf(store, 'Lives in Pune'), block: 'profile', order: 0 }] }));
       const recent = block(turnMemoryPrompt(store, 'unrelated'), 'owner_recent')!;
-      expect(recent).not.toContain('Resting heart rate');
+      for (const health of ['Resting heart rate', 'Knee physio', 'Pulse reads']) expect(recent).not.toContain(health);
       expect(recent).toContain('Walks after lunch');
-      expect(recent).toContain('(1 health readings the owner stated are left out here; recall finds them, and get_health is current.)');
+      expect(recent).toContain('(3 health notes are left out here; recall finds them when a message needs them, and get_health is current.)');
     });
   });
 
