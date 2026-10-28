@@ -242,7 +242,8 @@ describe('the health trigger\'s traces', () => {
 // and one goes out as an update card through the final outbox. Off, the day stays as silent as it always was.
 describe('the health-only note on the owner object', () => {
   const NOTE = 'Update\nRecovery is compromised after a short night. Nothing is booked today, so an easy evening would help.';
-  const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1' };
+  // The Expo token is set so a push, if the note path made one, would be seen: the only pushes are the Brief's and an approval's.
+  const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
   const notices = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_notice');
   const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
   beforeEach(() => { fixture.event = null; fixture.notice = JSON.stringify({ kind: 'notice', text: NOTE }); });
@@ -266,6 +267,7 @@ describe('the health-only note on the owner object', () => {
       await pass();
       expect(notices()).toHaveLength(1);
       expect(queued(state)).toHaveLength(1);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
       for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
     }, ON);
   });
