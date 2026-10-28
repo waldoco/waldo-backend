@@ -173,10 +173,12 @@ describe('backfilled rows: one read of the stored days a run', () => {
     expect(scoreReads).toEqual([addDays(TODAY, -1), TODAY]);
   });
   it('takes nothing stored as every day missing', async () => {
-    const { rows } = await run('1', 25, { historyAnswer: async () => ({ unavailable: 'consent_withdrawn' }) });
+    const { rows } = await run('1', 25, { historyAnswer: async () => ({ unavailable: 'no_readings' }) });
     expect(late(rows).length).toBeGreaterThan(10);
   });
   it.each([
+    ['no consent', async () => ({ unavailable: 'consent_required' })],
+    ['withdrawn consent', async () => ({ unavailable: 'consent_withdrawn' })],
     ['an error', async () => ({ error: 'unavailable' })],
     ['a throw', async () => { throw new Error('database down'); }],
     ['an answer of another shape', async () => ({ history: { days: [{ when: TODAY }] } })],
