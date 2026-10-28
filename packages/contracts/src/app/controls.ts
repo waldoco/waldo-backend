@@ -250,15 +250,24 @@ const memoryNode = z.strictObject({
   sources: z.array(appNodeSourceV1Schema).max(appNodeSourceV1Schema.options.length).optional(),
   confirmation: z.enum(['waldos_read', 'confirmed']).optional(),
 });
-// The one-time welcome build that starts when setup ends. Each source's stage settles once: done with nodes, empty when the
+// The one-time welcome build that starts when setup ends. Each source's stage settles: done with nodes, empty when the
 // source had nothing, skipped when it is not connected or not offered, revoked when its consent or grant was withdrawn, and
 // unavailable when the read failed. nodes counts the nodes the build wrote. A build that has not started has no times.
 export const APP_WELCOME_STAGES_V1 = ['health', 'calendar', 'mail', 'web'] as const;
+// Controls revision 5 (`controls=5`) adds the setup stage: the first nodes Waldo draws from the owner's own setup answers, so an
+// owner who connected nothing still gets a constellation. Revisions 1 to 4 never receive the key. At every revision a stage that
+// settled skipped may go back to pending once, when its source is connected later, and the build reads building again until it
+// settles; a build reads building while the setup stage runs, even where the stage itself is not shown.
+export const APP_CONTROLS_WELCOME_SETUP_REVISION = 5;
+export const APP_WELCOME_STAGES_V5 = [...APP_WELCOME_STAGES_V1, 'setup'] as const;
 export const appWelcomeStageStateV1Schema = z.enum(['pending', 'reading', 'done', 'empty', 'skipped', 'revoked', 'unavailable']);
 export const appWelcomeBuildV1Schema = z.strictObject({
   state: z.enum(['not_started', 'building', 'done']),
   started_at: z.int().positive().nullable(), finished_at: z.int().positive().nullable(),
-  stages: z.strictObject(Object.fromEntries(APP_WELCOME_STAGES_V1.map(stage => [stage, appWelcomeStageStateV1Schema])) as Record<(typeof APP_WELCOME_STAGES_V1)[number], typeof appWelcomeStageStateV1Schema>),
+  stages: z.strictObject({
+    ...Object.fromEntries(APP_WELCOME_STAGES_V1.map(stage => [stage, appWelcomeStageStateV1Schema])) as Record<(typeof APP_WELCOME_STAGES_V1)[number], typeof appWelcomeStageStateV1Schema>,
+    setup: appWelcomeStageStateV1Schema.optional(),
+  }),
   nodes: count,
 }).superRefine((build, ctx) => {
   if ((build.state === 'not_started') !== (build.started_at === null)) ctx.addIssue({ code: 'custom', path: ['started_at'], message: 'only a build that has not started has no start time' });

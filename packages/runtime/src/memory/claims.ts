@@ -856,14 +856,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           }
         });
       }
-      // An interpretation is derived from its supporting claims: one left with no support is deleted with its edges.
+      // An interpretation is derived from its supporting claims: one left with no support is deleted with its edges. So is one
+      // that rests on a welcome read drawn from the claims it cites: its words may carry the claim the owner just removed.
       attempt('constellation_refs', () => {
         const live = new Set(sql.exec<{ id: number }>('SELECT id FROM claims').toArray().map((row) => row.id));
+        const welcomeReads = new Set(sql.exec<{ id: number }>("SELECT id FROM claims WHERE source_ref LIKE 'welcome:%' AND COALESCE(origin, '') != 'owner'").toArray().map((row) => row.id));
         for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
           const spots = JSON.parse(node.supporting_spots) as number[];
           const kept = spots.filter((id) => !ids.includes(id) && live.has(id));
           if (kept.length === spots.length) continue;
-          if (kept.length === 0) {
+          if (kept.length === 0 || kept.some((id) => welcomeReads.has(id))) {
             sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', node.id, node.id);
             sql.exec('DELETE FROM constellation_nodes WHERE id = ?', node.id);
             tally('deleted', 'constellation_nodes');

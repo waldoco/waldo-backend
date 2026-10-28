@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -492,6 +492,17 @@ describe('welcome constellation fixture', () => {
     for (const projection of [fixture.summary_building, fixture.summary_done, fixture.interpretations_after_welcome, fixture.detail_node]) expect(appControlProjectionV1Schema.safeParse(projection).success).toBe(true);
     for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
     expect(appControlResultV1Schema.safeParse(fixture.action_result).success).toBe(true);
+  });
+
+  it('carries the setup stage from revision 5 only as an added key; an unknown stage is refused', async () => {
+    const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;
+    const parsed = appControlProjectionV1Schema.safeParse(fixture.summary_setup_v5);
+    expect(parsed.success).toBe(true);
+    const welcome = fixture.summary_setup_v5.data.welcome;
+    expect(welcome.stages.setup).toBe('done');
+    expect(appWelcomeBuildV1Schema.safeParse({ ...welcome, stages: { ...welcome.stages, setup: undefined } }).success).toBe(true);
+    expect(appWelcomeBuildV1Schema.safeParse({ ...welcome, stages: { ...welcome.stages, answers: 'done' } }).success).toBe(false);
+    expect(APP_WELCOME_STAGES_V5).toEqual([...APP_WELCOME_STAGES_V1, 'setup']);
   });
 });
 
