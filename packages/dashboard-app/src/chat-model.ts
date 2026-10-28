@@ -98,7 +98,7 @@ const failure = async (response: Response): Promise<ChatRequestError> => {
   return new ChatRequestError(response.status, message, code, retryAfter);
 };
 
-const request = async (url: string, init: RequestInit = {}): Promise<unknown> => {
+export const request = async (url: string, init: RequestInit = {}): Promise<unknown> => {
   let response: Response;
   try { response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...init, headers: { ...HEADERS, ...(init.headers ?? {}) } }); }
   catch (error) { if (error instanceof DOMException && error.name === 'AbortError') throw error; throw new ChatRequestError(0, 'Can’t reach Waldo. Check your connection.'); }
