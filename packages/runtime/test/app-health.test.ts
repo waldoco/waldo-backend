@@ -598,6 +598,25 @@ describe('app health scores: revision 4', () => {
     expect('body' in consoleView && (consoleView.body as Record<string, unknown>).sleep_debt).toEqual(own);
     expect(JSON.stringify(consoleView)).not.toContain('trend');
   });
+  // The Form curve and the stress word are for the calendar day view only. Every health route answers with named keys, and the
+  // app's objects are strict, so a row that carries them must still be served whole, without them, at every revision.
+  it('never serves the Form curve or the stress word on a scores answer, at revisions 2, 3 and 4, nor in the console, and the answer still parses strictly', async () => {
+    const curve = { version: 'form.v9', points: [{ at: '2026-10-11T09:00:00.000Z', score: 61, kind: 'measured' }, { at: '2026-10-11T09:15:00.000Z', score: 61, kind: 'measured' }] };
+    const stored = withBaseline(personal, { ...extras, form_curve: curve, stress_trend: 'rising' });
+    for (const header of [{}, contracts('health=2'), contracts('health=3'), contracts('health=4'), contracts('approvals=3,health=4'), contracts('health=5')]) {
+      const [, bytes] = await text(stored, header);
+      expect(bytes, JSON.stringify(header)).not.toMatch(/form_curve|stress_trend|measured|rising/);
+      const body = JSON.parse(bytes) as Record<string, unknown>;
+      expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      expect(Object.keys(body), JSON.stringify(header)).toEqual(expect.not.arrayContaining(['form_curve', 'stress_trend']));
+    }
+    for (const header of [contracts('health=2'), contracts('health=3'), contracts('health=4')]) {
+      expect(pinnedScores.safeParse(await json(stored, header)).success, JSON.stringify(header)).toBe(true);
+    }
+    const consoleView = healthScoresView({ scores: stored }, null, Date.parse(row.compiled_at as string), 4);
+    expect('body' in consoleView).toBe(true);
+    expect(JSON.stringify(consoleView)).not.toMatch(/form_curve|stress_trend|measured|rising/);
+  });
   // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
   it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {
     const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };

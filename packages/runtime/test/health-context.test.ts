@@ -206,6 +206,13 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
     });
   });
 
+  it('never carries the Form curve or the stress word a row holds, into the view or the narrative', () => {
+    const curve = { version: 'form.v9', points: [{ at: '2026-03-20T09:00:00.000Z', score: 58, kind: 'measured' }, { at: '2026-03-20T09:15:00.000Z', score: 58, kind: 'measured' }] };
+    const bare = at(), carrying = at({ form_curve: curve, stress_trend: 'rising' });
+    expect(carrying).toEqual(bare);
+    expect(JSON.stringify(carrying)).not.toMatch(/form_curve|stress_trend|measured|rising|2026-03-20T09:15/);
+  });
+
   it('names the Recovery version when Form has no score, and states no minutes, days or scores anywhere', () => {
     const material = at({ form: null });
     expect(material!.view).toMatchObject({ algorithm_version: 'recovery.v5', recovery_zone: 'solid', baseline_state: { recovery: 'provisional', load: 'personal' } });

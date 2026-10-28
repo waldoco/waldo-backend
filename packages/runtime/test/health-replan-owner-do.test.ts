@@ -35,6 +35,8 @@ const world = vi.hoisted(() => ({
   recorded: null as null | (() => number), recordedAtRead: [] as number[],
   // The kind of each event Waldo created, as the approval handed it to Google.
   created: [] as string[],
+  // The readings' hourly windows, when a case wants them, and every derived row the object wrote, whole.
+  hourly: false, payloads: [] as Record<string, unknown>[],
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -86,6 +88,15 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: TZ, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
 
+// The owner's local hours of a day, each with a heart rate and a movement reading, up to the first hour not yet read.
+const hourlyWindows = (day: string, through: number, i: number) => Array.from({ length: through }, (_, h) => {
+  const start_at = new Date(Date.parse(`${day}T00:00:00+05:30`) + h * 3_600_000).toISOString(), end_at = new Date(Date.parse(start_at) + 3_600_000).toISOString();
+  return [
+    { signal: 'heart_rate_window', day, start_at, end_at, timezone: TZ, value: 70 + ((h + i) % 5) },
+    { signal: 'movement_duration', day, start_at, end_at, timezone: TZ, value: 10 + ((h + i) % 4) },
+  ];
+}).flat();
+
 // Twenty-five nights from the phone, ending on the last day the read asks for.
 const series = (to: string) => ({
   access: world.access, read_at: new Date().toISOString(),
@@ -96,6 +107,7 @@ const series = (to: string) => ({
       { signal: 'sleep_midpoint', day, start_at, end_at, timezone: TZ, value: 180 + (i % 3) * 7 },
       { signal: 'overnight_hrv', day, start_at, end_at, timezone: TZ, value: i === 0 ? 61.37 : 52 + (i % 4) * 3, method: 'rmssd' },
       { signal: 'resting_heart_rate', day, start_at: `${day}T03:00:00.000Z`, end_at: `${day}T04:00:00.000Z`, timezone: TZ, value: i === 0 ? 54.75 : 55 + (i % 2) },
+      ...(world.hourly ? hourlyWindows(day, i === 0 ? 10 : 24, i) : []),
     ];
   }).flat() }],
 });
@@ -135,6 +147,7 @@ beforeEach(() => {
       const row = payload as Record<string, Record<string, unknown>> & { day: string };
       const old = world.rows.get(row.day) ?? world.rows.get(newestBefore(row.day) ?? '');
       const changed = old ? pillars.filter(p => typeof (old[p] as Record<string, unknown> | undefined)?.zone === 'string' && typeof row[p]?.zone === 'string' && (old[p] as Record<string, unknown>).zone !== row[p]!.zone) : [];
+      world.payloads.push(payload);
       world.rows.set(row.day, { recovery: row.recovery, form: row.form, weight: row.weight, basis: row.basis });
       world.trace.push(`context_write:${row.day}:${changed.join('+') || 'none'}`);
       return Response.json({ written: true, changed });
@@ -224,6 +237,29 @@ describe('the owner object backfills from one read of the stored days', () => {
       expect(world.trace.filter(step => step.startsWith('scores_read:') && step.slice('scores_read:'.length) < addDays(TODAY, -1))).toEqual([]);
       expect(world.trace.filter(step => step.startsWith('context_write:')).length).toBeGreaterThan(2);
     }, true, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1' });
+  });
+});
+
+describe('the owner object and the Form curve switch', () => {
+  const todayRows = async (flag: string): Promise<Record<string, unknown>[]> => {
+    world.hourly = true; world.payloads = [];
+    try {
+      await withOwner(async o => { await o.upload(); vi.setSystemTime(NOW + HEALTH_RECOMPUTE_WINDOW_MS); await o.pass(); }, true, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1', HEALTH_FORM_CURVE: flag });
+    } finally { world.hourly = false; }
+    return world.payloads.filter(row => row.day === TODAY);
+  };
+  it('writes today\'s curve with the switch at "1", on today\'s row only', async () => {
+    const rows = await todayRows('1');
+    expect(rows.length).toBeGreaterThan(0);
+    const row = rows.at(-1) as Record<string, any>;
+    expect(row.form_curve.points.length).toBeGreaterThan(1);
+    expect(row.form_curve.version).toBe(row.form.algorithm_version);
+    expect(world.payloads.filter(p => 'form_curve' in p).map(p => p.day)).toEqual(rows.map(() => TODAY));
+  });
+  it('writes none with the switch at "0"', async () => {
+    const rows = await todayRows('0');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(world.payloads)).not.toMatch(/form_curve|stress_trend/);
   });
 });
 
