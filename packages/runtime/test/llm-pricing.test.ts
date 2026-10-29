@@ -52,3 +52,22 @@ it('adds hosted web search at $10 per 1,000 calls to the call total', () => {
 it('leaves the cost shape unchanged for a call with no hosted search', () => {
   expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: 1, output: 1, cached: 0, web_searches: 0 })).not.toHaveProperty('web_search');
 });
+
+// Cache writes bill at their own rate (OpenAI 30-minute write, Anthropic 5-minute write), never as plain input.
+it('prices cache writes at each provider\'s published write rate, apart from reads and uncached input', () => {
+  expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: M, output: 0, cached: 0, cache_write: M })?.total).toBeCloseTo(1.25, 10);
+  expect(modelCost({ model: OPENAI_GPT_6_1_SOL_MODEL, input: M, output: 0, cached: 0, cache_write: M })?.total).toBeCloseTo(2.5, 10);
+  expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: M, output: 0, cached: 0, cache_write: M })?.total).toBeCloseTo(0.125, 10);
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: M, output: 0, cached: 0, cache_write: M })?.total).toBeCloseTo(2.5, 10);
+  const mixed = modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 2_000, output: 100, cached: 500, cache_write: 1_000 })!;
+  expect(mixed).toEqual({
+    input: expect.closeTo((500 * 1 + 500 * 0.05) / M, 12),
+    cache_write: expect.closeTo((1_000 * 1.25) / M, 12),
+    output: expect.closeTo((100 * 5) / M, 12),
+    total: expect.closeTo((500 * 1 + 500 * 0.05 + 1_000 * 1.25 + 100 * 5) / M, 12),
+  });
+});
+
+it('leaves the cost shape unchanged for a call that wrote nothing to the cache', () => {
+  expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 1, output: 1, cached: 0, cache_write: 0 })).not.toHaveProperty('cache_write');
+});

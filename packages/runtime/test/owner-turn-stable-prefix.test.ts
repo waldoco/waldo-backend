@@ -431,3 +431,27 @@ it('rebuilds the turn context mid-turn when health sharing is withdrawn', async 
   expect(messages[1]).not.toContain('Form zone');
   expect(messages[2]).toBe(messages[1]);
 });
+
+// With the harness loader the system prompt carries the catalogue of deferred tools. Two turns that admit the same tools,
+// assembled in a different order, send the same system prompt.
+it('two turns admitting the same deferred tools in a different order send byte-identical system prompts', async () => {
+  const quiet = async () => ({ ok: true as const, data: {}, source_taint: null });
+  const deferred = (['list_reminders', 'cancel_reminder', 'set_proactivity', 'set_schedule_preference', 'search_episodes', 'read_tool_output'] as const)
+    .map((name) => ({ name, description: `${name}.`, schema: z.object({}), trigger_allowlist: allowlist(name), autonomy_gated: false, handle: quiet }));
+  const systems: string[] = [];
+  const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+    if (request.tools !== undefined) systems.push(request.system ?? '');
+    return { ok: true, data: { model: request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+  } };
+  const turn = async (n: number, handlers: typeof deferred) => {
+    const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture', toolLoader: 'harness' }];
+    args[4] = { timezone: 'UTC', now: () => new Date(Date.UTC(2026, 9, 15, 1, n)) }; args[5] = handlers as never; args[10] = gateway;
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('stable-prefix-order')), () =>
+      createOwnerResponder(...args).respond(ownerTyped({ traceId: `stable-order-${n}`, conversationRef: 'app-order', surface: 'app', text: 'what is on my list?', memoryWrites: false, presentation: presentation('app') }), time));
+  };
+  await turn(1, deferred);
+  await turn(2, [...deferred].reverse());
+  expect(systems).toHaveLength(2);
+  expect(systems[0]).toContain('Tool catalogue:');
+  expect(systems[1]).toBe(systems[0]);
+});
