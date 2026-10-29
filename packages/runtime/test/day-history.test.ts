@@ -92,6 +92,19 @@ describe('an app route links the Main chat row each card became', () => {
     linked.receipt!({ app_row_id: 'row-c' }, record({ dayCard: { day: '2026-10-28', card: 'card:brief', foldUpTo: 1 } }));
     expect(card.mock.calls).toEqual([[{ day: '2026-10-28', card: 'card:brief', foldUpTo: 1 }, 'row-c']]);
   });
+
+  it('links every delivered app row to the trace of the job that queued it, when asked to', () => {
+    const acks: unknown[] = ['delivered', 'held', 'delivered', 'delivered'];
+    const route = { receipt: () => acks.shift() } as unknown as OutboxRoute;
+    const row = vi.fn();
+    const linked = linkingAppRows(route, { card: vi.fn(), update: vi.fn(), row });
+    const record = (trace: string, extra: Partial<FinalRecord> = {}) => ({ trace, payload: { chat_id: 1, text: 'x' }, ...extra }) as FinalRecord;
+    linked.receipt!({ app_row_id: 'row-r' }, record('reminder:0b6f:1793520000000', { reminder: { id: 'reminder:0b6f' } } as never));
+    linked.receipt!({ app_row_id: 'row-held' }, record('card:brief:1793520000000'));
+    linked.receipt!({}, record('card:close:1793560000000'));
+    linked.receipt!({ app_row_id: 'row-c' }, record('card:brief:1793520000000', { dayCard: { day: '2026-10-28', card: 'card:brief', foldUpTo: 1 } }));
+    expect(row.mock.calls).toEqual([['row-r', 'reminder:0b6f:1793520000000'], ['row-c', 'card:brief:1793520000000']]);
+  });
 });
 
 describe('runBook.between', () => {

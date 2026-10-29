@@ -34,6 +34,7 @@ const TABLES: Record<string, Row> = {
   app_write_requests: exempt('request id, route, body digest and the stored answer: ids, states and times, never owner text'),
   reply_ratings: exempt('a reply\'s message id, up or down, and a time; never the reply\'s text'),
   reply_rating_scores: exempt('a reply\'s message id and the random id of its Langfuse score; no owner text'),
+  app_row_traces: exempt('a chat row id and the trace key of the job that wrote it, kept only in the shape `<schedule id>:<time>` or `<surface>-<n>`; no owner text'),
   onboarding_runs: exempt('run id, step states, the first-look client id, a clock time and times; the answers live as claims'),
   welcome_builds: exempt('stage states, times and a node count; the nodes and their support live in constellation_nodes and claims'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),

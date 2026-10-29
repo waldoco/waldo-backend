@@ -67,21 +67,23 @@ Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most s
 
 ### Like and Dislike as scores (built, on with the Langfuse keys)
 
-A Like or Dislike on one of Waldo's replies in the app's main chat becomes a Langfuse score on that reply's turn trace:
+A Like or Dislike on one of Waldo's messages in the app's main chat becomes a Langfuse score on the trace the message came from: the owner turn that replied, or the scheduled job that wrote a day card.
 
 - **What the score carries.** `name: reply_rating`, a `BOOLEAN` value (Like is 1, Dislike is 0), the deployment's environment, and `metadata.source: app`. It carries no message text, owner name or health value. The owner object still keeps its own `reply_ratings` row.
 - **How a score finds its trace.**
-  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn.
-  - An app turn's trace key (`app-<n>`) maps to its Langfuse trace id through `md5(<owner salt>:<trace key>)`. The exporter uses the same rule.
+  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn. That holds for every listener turn, whose key comes from `ownerTurnTrace`: `app-<n>`, Telegram's `tg-<n>` and iMessage's `imessage-<n>`, whose `turn` root the listener logs once the reply is frozen.
+  - A day card sent to the app is a `scheduled-<uuid>` row. When it is delivered, `app_row_traces` links that row to its job's trace key (`<schedule id>:<occurrence ms>`) for 30 days, Langfuse's retention. A Brief sent straight to the app links at that send; a record that reaches the app through the outbox links at its receipt (`linkingAppRows`).
+  - A delivered row is linked only when its job's key can be scored, so the table holds only `<schedule id>:<time>` and `<surface>-<n>` keys.
+  - A key that names one turn or one occurrence maps to its Langfuse trace id through `md5(<owner salt>:<trace key>)`. The exporter uses the same rule.
   - The salt is a random value kept in the owner object, and an account erase wipes it. Without it, every owner's `app-1` would share one trace.
-  - Other trace keys keep random trace ids.
+  - A key shared by unrelated work (`telegram-unlinked`) keeps a random trace id, or every such trace would become one. A retried turn or occurrence that reaches a new isolate now joins its earlier trace as a second root, where it used to start a new trace.
 - **What a change does.**
   - Each change deletes the score it replaces, then creates a new score under a fresh id. Langfuse overwrites a score only within the day it was made.
   - A clear only deletes.
   - The calls for one owner run one at a time. Each is tried once, and a 207 is not retried.
   - A failure logs `{"hop":"rating_score","ok":false,"code":"http_<status>"}` and nothing else.
   - Score deletes spend from Langfuse's 50-a-day trace-data deletion bucket.
-- **What is not scored.** A rating on a reply that did not come from an app owner turn scores nothing (`unlinked`). That includes Brief and day-card rows, and iMessage or Telegram rows shown in the app.
+- **What is not scored.** A rating on a row with no linked trace scores nothing (`unlinked`). That includes rows written before this link existed, rows older than 30 days, and a scheduled message that reaches the app chat by a direct send other than the day card's, which is not linked yet.
 - **Retention.** Deleting a trace deletes its scores.
 
 ### Retention (built, off)
