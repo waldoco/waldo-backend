@@ -114,6 +114,9 @@ export const appMessagePartV1Schema = z.union([
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
   replyReceiptPartV1Schema,
 ]);
+// Chat revision 6 (`chat=6`): a main-chat reply the owner rated carries `rating`, so a rating survives a relaunch. An unrated
+// reply, a user row and every thread row leave the key out, and revisions below 6 never receive it.
+export const APP_CHAT_RATING_REVISION = 6;
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
 // was kept have none, and no time is ever invented for them.
@@ -121,6 +124,7 @@ export const appMessageV1Schema = z.strictObject({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), parts: z.array(appMessagePartV1Schema),
   channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
   created_at: z.int().nonnegative().optional(),
+  rating: z.enum(['up', 'down']).optional(),
 });
 // The history row `id`, URL-encoded in a path.
 export const appMessageIdV1Schema = z.string().min(1).max(256);

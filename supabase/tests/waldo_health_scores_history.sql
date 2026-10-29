@@ -86,7 +86,6 @@ select is(pg_temp.listed('west-owner',7) || array[pg_temp.hist('west-owner',7)->
 
 -- A day carries only its pillars, and backfilled when the row says so.
 select ok((select bool_and((select array_agg(k order by k) from jsonb_object_keys(d) k) = array['day','form','recovery','weight']) from jsonb_array_elements(pg_temp.hist('history-owner',90)->'history'->'days') d),'every day carries its pillars and nothing else: no readings, drivers, windows, sleep debt or freshness');
-alter table public.health_context_daily add column backfilled boolean;
 update public.health_context_daily set backfilled = true where user_id = 'e1000000-0000-0000-0000-0000000000e1' and day = (now() at time zone 'UTC')::date - 4;
 update public.health_context_daily set backfilled = false where user_id = 'e1000000-0000-0000-0000-0000000000e1' and day = (now() at time zone 'UTC')::date - 2;
 select is((select array_agg(d->>'day' order by n) from jsonb_array_elements(pg_temp.hist('history-owner',7)->'history'->'days') with ordinality as x(d,n) where d ? 'backfilled'),array[pg_temp.d(4)],'once the row has a backfilled column, only a true one is returned, and it is returned as true');

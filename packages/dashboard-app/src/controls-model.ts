@@ -2,10 +2,13 @@ import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
 export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
+export const CARD_STATES = ['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused'] as const;
+export type CardState = (typeof CARD_STATES)[number];
 export type DayRecord = Base<'day', {
   timezone: string;
   date: string;
-  cards: { id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }[];
+  // state, state_reason and retries_left: controls revision 3, the same card state the app reads.
+  cards: { id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null; state?: CardState; state_reason?: string; retries_left?: number }[];
   proactivity: { quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' };
   // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
   proactive_surface?: ProactiveSurface;
@@ -64,7 +67,7 @@ export type PhoneRecord = Base<'phone', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -104,14 +107,17 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   const data = value.data;
   const base = { version: 1 as const, state: 'available' as const, csrf: value.csrf, revision: value.revision };
   if (expected === 'day') {
-    if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
+    if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)
+      && (card.state === undefined || CARD_STATES.includes(card.state as CardState)) && (card.state_reason === undefined || (string(card.state_reason) && card.state_reason.length <= 120))
+      && (card.retries_left === undefined || (Number.isInteger(card.retries_left) && Number(card.retries_left) >= 0 && Number(card.retries_left) <= 3))) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
-      cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
+      cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin,
+        ...(card.state === undefined ? {} : { state: card.state }), ...(card.state_reason === undefined ? {} : { state_reason: card.state_reason }), ...(card.retries_left === undefined ? {} : { retries_left: card.retries_left }) })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
@@ -244,8 +250,8 @@ const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a
 export function allowedControlNavigation(value: string, origin: string): string {
   let url: URL;
   try { url = new URL(value, origin); } catch { throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true); }
-  // An MCP connect continues on this deployment's own start link, which redirects only for the signed-in owner.
-  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
+  // An MCP or Google connect continues on this deployment's own start link, which redirects only for the signed-in owner.
+  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/(mcp|google)\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
   const google = url.hostname === 'accounts.google.com' && url.port === '' && url.pathname === '/o/oauth2/v2/auth' && !url.hash;
   if (url.protocol !== 'https:' || url.username || url.password || (!localTicket && !google)) throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true);
   return url.href;

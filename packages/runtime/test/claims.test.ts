@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, HEALTH_NOTES_OFF, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { HEALTH_MEMORY_RULES } from '../src/memory/health-rules';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
-import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
+import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS, sourceClaimOps } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -700,6 +700,25 @@ it('nightly promotion uses the model durable field rather than host wording heur
   });
 });
 
+describe('outside-content admission', () => {
+  it('an ungrounded paraphrase of outside content is untrusted, never Waldo\'s read, and only adds survive', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I live in Pune"', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      const pune = store.claims()[0]!.id;
+      const add = { kind: 'fact', text: 'Meets the design leads weekly', source: 'stated', evidence: 'a paraphrase that quotes nothing', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false };
+      const raw = sourceClaimOps(JSON.stringify({ add: [add], seen: [pune], confirm: [pune], dismiss: [pune], forget_claims: [pune], forget_topic: 'Pune', pin: [{ id: pune, block: 'profile', order: 0 }] }));
+      applyClaimOps(store, raw, AT, 'outside content', undefined, { shared: 'calendar added: design review', outside: true }, true, undefined, true);
+      expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([['Lives in Pune', 'owner', 'stated'], ['Meets the design leads weekly', 'untrusted', 'inferred']]);
+      expect(store.claims().find((claim) => claim.id === pune)).toMatchObject({ seen_count: 1, pinned: null, status: 'active' });
+      expect(store.barriers()).toEqual([]);
+      // Without the outside mark the same paraphrase is Waldo's read, as before.
+      applyClaimOps(store, ops({ add: [{ ...add, text: 'Plans the week on Mondays' }] }), AT, 'day', undefined, { shared: 'calendar added: design review' });
+      expect(store.claims().find((claim) => claim.text === 'Plans the week on Mondays')?.origin).toBe('agent');
+    });
+  });
+});
+
 describe('pinned blocks', () => {
   const owned = (store: ReturnType<typeof claimStore>, text: string, kind = 'fact') =>
     store.add({ kind, text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: `owner, tg-${900 + sequence++}` }, AT);
@@ -727,8 +746,8 @@ describe('pinned blocks', () => {
       const curated = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(curated, 'owner_profile'))).toEqual([`- [c${short} · owner-grounded] Prefers short replies`, `- [c${pune} · owner-grounded] Lives in Pune`]);
       expect(shown(block(curated, 'owner_facts'))).toEqual([]);
-      // Once anything is pinned, an unpinned claim is reached by recall, not shown in a block.
-      expect(curated).not.toContain('Gym at eleven');
+      // Once anything is pinned, an unpinned owner fact is shown after the pins, in its own block, in the room they leave.
+      expect(shown(block(curated, 'owner_recent'))).toEqual([`- [c${gym} · owner-grounded] Gym at eleven`]);
       // An unpin and a pin of the same claim in one reply is a move: the pin wins.
       expect(nightly(store, ops({ unpin: [short, pune, gym], pin: [{ id: pune, block: 'facts', order: 1 }] }))).toMatch(/ pinned1 unpinned2\b/);
       const moved = turnMemoryPrompt(store, 'unrelated');
@@ -782,7 +801,45 @@ describe('pinned blocks', () => {
       nightly(store, ops({ pin: [{ id: idOf(store, text(3)), block: 'profile', order: 1 }] }));
       const curated = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(curated, 'owner_profile'))).toEqual([`- [c${idOf(store, text(3))} · owner-grounded] ${text(3)}`]);
-      expect(curated).not.toContain('older owner facts are not shown');
+      expect(curated).toContain(`older owner facts are not shown here; search memory to recall them.)`);
+    });
+  });
+
+  it('fills the room the pins leave with the newest unpinned owner facts, never past both budgets', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      const text = (i: number) => `Recent ${String(i).padStart(2, '0')}: ${'synthetic detail '.repeat(5)}`.trim();
+      for (let i = 0; i < 60; i++) owned(store, text(i));
+      const pinned = [text(0), text(1), text(2)];
+      nightly(store, ops({ pin: pinned.map((pin, order) => ({ id: idOf(store, pin), block: order ? 'facts' : 'profile', order })) }));
+      const prompt = turnMemoryPrompt(store, 'unrelated');
+      const pins = [...shown(block(prompt, 'owner_profile')), ...shown(block(prompt, 'owner_facts'))];
+      const recent = shown(block(prompt, 'owner_recent'));
+      expect(pins.map((line) => line.split('] ')[1])).toEqual(pinned);
+      expect(recent[0]).toContain('Recent 59');
+      expect(recent.some((line) => pinned.some((pin) => line.endsWith(pin)))).toBe(false);
+      const used = [...pins, ...recent].join('\n').length;
+      expect(used).toBeLessThanOrEqual(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS);
+      expect(used).toBeGreaterThan(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS - 200);
+      expect(block(prompt, 'owner_recent')).toContain(`(${57 - recent.length} older owner facts are not shown here; search memory to recall them.)`);
+      expect(prompt.indexOf('<owner_facts>')).toBeLessThan(prompt.indexOf('<owner_recent>'));
+      expect(prompt.indexOf('<owner_recent>')).toBeLessThan(prompt.length);
+    });
+  });
+
+  it('leaves health notes and stated readings out of the recent block, counted', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      owned(store, 'Lives in Pune');
+      owned(store, 'Resting heart rate was 61 this morning', 'health');
+      owned(store, 'Knee physio every morning', 'health');
+      owned(store, 'Pulse reads 61 after the stairs');
+      owned(store, 'Walks after lunch', 'routine');
+      nightly(store, ops({ pin: [{ id: idOf(store, 'Lives in Pune'), block: 'profile', order: 0 }] }));
+      const recent = block(turnMemoryPrompt(store, 'unrelated'), 'owner_recent')!;
+      for (const health of ['Resting heart rate', 'Knee physio', 'Pulse reads']) expect(recent).not.toContain(health);
+      expect(recent).toContain('Walks after lunch');
+      expect(recent).toContain('(3 health notes are left out here; recall finds them when a message needs them, and get_health is current.)');
     });
   });
 
@@ -804,7 +861,8 @@ describe('pinned blocks', () => {
       const prompt = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(prompt, 'owner_profile'))).toEqual([`- [c${idOf(store, 'Desk is by the door now')} · owner-grounded] Desk is by the door now`]);
       expect(shown(block(prompt, 'owner_facts'))).toEqual([`- [c${idOf(store, 'Commutes by metro')} · owner-grounded] Commutes by metro`]);
-      for (const gone of ['Locker is the blue door one', 'Parks on level two', 'Desk is by the window', 'Commutes by train', 'Gym at eleven']) expect(prompt).not.toContain(gone);
+      for (const gone of ['Locker is the blue door one', 'Parks on level two', 'Desk is by the window', 'Commutes by train']) expect(prompt).not.toContain(gone);
+      expect(shown(block(prompt, 'owner_recent'))).toEqual([`- [c${idOf(store, 'Gym at eleven')} · owner-grounded] Gym at eleven`]);
     });
   });
 

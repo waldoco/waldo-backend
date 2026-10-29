@@ -1,7 +1,6 @@
 import { isLookupRef } from '../onboarding/findings';
 import { isSetupRef } from '../onboarding/first-run';
-import { numericHealthIn } from '../scribe/sanitiser';
-import { claimTag, constellationBlock, FACTS_BLOCK_MAX_CHARS, fence, PROFILE_BLOCK_MAX_CHARS, profileEligible, type Claim, type ClaimStore } from './claims';
+import { claimTag, constellationBlock, FACTS_BLOCK_MAX_CHARS, fence, PROFILE_BLOCK_MAX_CHARS, profileEligible, readingsLine, statedReading, type Claim, type ClaimStore } from './claims';
 
 // The owner profile every turn reads, behind OWNER_PROFILE: what the owner said or confirmed about themselves, grouped by where
 // it came from in the trust order of the owner model (their own words, then what they kept from the look-up, then Waldo's reads
@@ -10,8 +9,6 @@ import { claimTag, constellationBlock, FACTS_BLOCK_MAX_CHARS, fence, PROFILE_BLO
 // Waldo's unconfirmed reads stay in the constellation block, apart from the owner's words.
 const SECTIONS = ['In their own words', 'Kept from the web look-up', "Waldo's reads they confirmed"] as const;
 const sectionOf = (claim: Claim): number => isLookupRef(claim.source_ref) ? 1 : claim.source === 'confirmed' ? 2 : 0;
-// A reading is a moment, read live through get_health; a line that would carry a health number on every turn is left to recall.
-const statedReading = (claim: Claim): boolean => numericHealthIn(claim.text) || (claim.kind === 'health' && /\p{Nd}/u.test(claim.text));
 const PIN_BLOCK_ORDER: Readonly<Record<string, number>> = { profile: 0, facts: 1 };
 const rank = (claim: Claim): readonly number[] => [
   claim.pinned ? 0 : 1, PIN_BLOCK_ORDER[claim.pinned ?? ''] ?? 2, claim.pin_order ?? 0,
@@ -44,7 +41,7 @@ export const ownerProfilePrompt = (store: ClaimStore, _question: string, maxChar
   const block = [open,
     ...SECTIONS.flatMap((title, index) => kept[index]!.length ? [`${title}:`, ...kept[index]!.map(line)] : []),
     ...(omitted > 0 ? [`(${omitted} more owner facts are not shown here; search memory to recall them.)`] : []),
-    ...(readings > 0 ? [`(${readings} health readings the owner stated are left out here; recall finds them, and get_health is current.)`] : []),
+    ...(readings > 0 ? [readingsLine(readings)] : []),
     close].join('\n');
   const prompt = `${HEADER}\n${block}`;
   const constellation = constellationBlock(store, maxChars - prompt.length - 1);

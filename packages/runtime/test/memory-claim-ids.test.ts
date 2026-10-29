@@ -27,6 +27,9 @@ it('pinned blocks and recall lines carry the claim id and provenance', async () 
       '<owner_facts>',
       '- [c2 · owner-grounded] Lives in Pune',
       '</owner_facts>',
+      '<owner_recent>',
+      '- [c3 · owner-grounded] Gym locker is number 214',
+      '</owner_recent>',
     ].join('\n'));
 
     const recalled = await recallForTurn({ claims: store, question: 'what number is my gym locker', room: 100_000, holds: () => false });

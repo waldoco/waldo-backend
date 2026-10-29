@@ -43,8 +43,9 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
+import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
@@ -310,6 +311,7 @@ export const createOwnerResponder = (
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
       ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
+    access.onAttempts?.(result.attempts);
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
@@ -370,6 +372,9 @@ export const createOwnerResponder = (
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
+  // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
+  // any memory block or in recall. Every other turn reads the store as it is.
+  const memoryFor = (store: ClaimStore): ClaimStore => backgroundSourceTaint !== 'external' ? store : outsideView(store);
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
@@ -380,8 +385,7 @@ export const createOwnerResponder = (
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
-    const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit, near) => source.recall(query, limit, near).filter((claim) => claim.kind !== 'health') } : source;
-    const recalled = await recallForTurn({ claims, question: text, room, holds: barrier().holds, ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const recalled = await recallForTurn({ claims: memoryFor(source), question: text, room, holds: barrier().holds, ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
@@ -608,7 +612,7 @@ export const createOwnerResponder = (
             jobContext: { kind: 'text', origin: 'external', text: promptContext },
             orders: { kind: 'lines', origin: 'owner_record', text: standingOrders?.() ?? '' },
             loops: { kind: 'sized', origin: 'owner_record', text: (loopsRoom: number) => standingOrders?.({ loopsRoom }) ?? '' },
-            memory: { kind: 'sized', origin: 'owner_store', text: (room: number) => memory ? (privateOwner?.profileView ? ownerProfilePrompt : turnMemoryPrompt)(promptMemory()!, ownerCurrentText, room) : '' },
+            memory: { kind: 'sized', origin: 'owner_store', text: (room: number) => memory ? (privateOwner?.profileView ? ownerProfilePrompt : turnMemoryPrompt)(memoryFor(promptMemory()!), ownerCurrentText, room) : '' },
             recalled: { kind: 'lines', origin: 'owner_store', text: raw?.recalled ?? '' },
             earlier: { kind: 'lines', origin: 'external', text: raw?.earlier ?? '' },
             receipts: { kind: 'text', origin: 'external', text: raw?.receipts ?? '' },
@@ -1018,6 +1022,17 @@ export const createOwnerResponder = (
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
+    },
+    // The memory_ purpose keeps the changes' text out of every trace; the caller applies the reply and moves its mark together.
+    async sourceClaims(trace, updates, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.sourceClaims!(trace, updates, policy));
+      if (asOwner !== undefined) return asOwner;
+      if (!memory) return '{"add":[]}';
+      // Outside text never sits beside a health note or a node drawn from health: this call reads memory as a job built from
+      // outside content does.
+      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      await assertFresh();
+      return raw;
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),

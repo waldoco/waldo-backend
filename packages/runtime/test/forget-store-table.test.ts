@@ -26,6 +26,7 @@ const TABLES: Record<string, Row> = {
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('a forgotten topic in custody until the forget purge job settles it, then deleted: the one place a forgotten text stays on purpose, so the job can clean it'),
   forget_purge_steps: exempt('fingerprint hash, store name, state, attempt count, a content-free code and a time'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
+  model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
   claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),

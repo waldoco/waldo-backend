@@ -140,9 +140,9 @@ it('a day card held for quiet hours still closes its trace, so the exporter flus
       state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
       const owner = new UpdateOwner(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' } as never);
-      const runtime = (owner as unknown as { setup(): { cards(entry: { id: string; occurrence_at: number }): Promise<void> } }).setup();
+      const runtime = (owner as unknown as { setup(): { cards(entry: { id: string; occurrence_at: number; due_at: number; payload_refs: Record<string, string> }): Promise<void> } }).setup();
       updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' }).setProactivity({ volume: 'normal', quiet_start: '08:00', quiet_end: '10:00', followups: true });
-      await runtime.cards({ id: 'card:brief', occurrence_at: now });
+      await runtime.cards({ id: 'card:brief', occurrence_at: now, due_at: now, payload_refs: {} });
       expect(closedTraces(state, `card:brief:${now}`)).toBe(1);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });

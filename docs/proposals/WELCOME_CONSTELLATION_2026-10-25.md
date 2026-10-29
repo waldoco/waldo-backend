@@ -179,9 +179,12 @@ support, held-topic suppression, forget cascades and the app projection unchange
 
 - **What it lists:** active nodes whose supports are all live. Each line reads
   `- [n<id> · <source tags> · waldo's read|confirmed] <label>: <summary>`, fenced like every other memory line.
-- **Calendar and mail nodes are included**, labelled as Waldo's read. The text is a model-written, digit-free phrase of at most
-  180 characters, built from titles and senders, never bodies. This is the narrow use of untrusted-origin text the gate is asked
-  to approve (section 4).
+- **Calendar and mail nodes are counted, not shown, until the owner confirms them** (amended 28 Oct 2026, PR #1650, after the
+  27 Oct audit's security finding). A node whose supports include an `untrusted` one would otherwise put text that other
+  people can write into every turn. The block carries a count-only line instead ("N more of Waldo's reads, drawn from the
+  owner's mail or calendar, wait for the owner to confirm them in the app"), and the model reads those sources live when a
+  message needs them. Confirming a node owner-grounds its supports and it appears, labelled `confirmed`. Health nodes
+  (`agent` origin) and owner-corrected nodes are shown as before. The gift in the app is unchanged.
 - **Web:** findings are not listed. The block's header says how many unconfirmed look-up findings the gift showed, and that
   `list_owner_findings` reads them. That tool's results are marked `external`, so reading them taints the turn as it does today.
 - **Held topics:** the block goes through the same held-topic filter as `promptMemory()`.
@@ -197,7 +200,8 @@ from mail and calendar text, so it needs a defined exception. The exception is n
    or `agent` (health), plus nodes backed only by them. **No effects, no pins, no owner-origin rows,** and no update to any
    existing claim or node.
 3. Untrusted-origin rows stay out of `recall()` (existing rule). They can never be pinned (`profileEligible` requires owner
-   origin). The only way they reach a chat turn is the bounded `<owner_constellation>` block, labelled as Waldo's read.
+   origin). Since #1650 they stay out of the `<owner_constellation>` block too, until the owner confirms the node; until then
+   they reach chat only as a count.
 4. The web stage is a machine turn whose only writing tool is `record_owner_finding`, already exempt as `honest_origin` in #1494.
 
 So the ADR records an **exemption kind, `welcome_read`**: untrusted-origin, inferred-only memory rows, written by the welcome

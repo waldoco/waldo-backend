@@ -279,10 +279,10 @@ it('the overnight memory pass says so once, then stays quiet through later pause
     };
     pause(start);
     expect(notify(start)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 03:00."]);
-    expect(pausedJobs(sql, start, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
+    expect(pausedJobs(sql, start, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
     // Paused again on each of the next nights, past the daily cap and the two days the per-pause record keeps: silent.
     for (const night of [1, 2, 3]) { pause(start + night * DAY_MS); expect(notify(start + night * DAY_MS)).toEqual([null]); }
-    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
+    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
     // It runs well one night, then fails again: the owner hears once more.
     run(start + 4 * DAY_MS, 'ok', null);
     pause(start + 5 * DAY_MS);
@@ -316,6 +316,6 @@ it('a paused forget cleanup is named to the owner and listed, without the topic'
     sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES ('forget-purge:run', 'forget-purge', 'forget_purge', ?, 3, 'quarantined', 'run', ?, 0)", at, at);
     const [notice] = dueFailureNotices(sql, kv, at, ZONE);
     expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 10:00.");
-    expect(pausedJobs(sql, at, ZONE)).toEqual([{ name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
+    expect(pausedJobs(sql, at, ZONE)).toEqual([{ id: 'forget-purge', name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_FILES_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_FILES_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -244,5 +244,17 @@ describe('the contract revisions a build declares', () => {
   it('reads revision 1 when the header is absent, malformed or leaves the contract out', () => {
     expect(appContractRevision('approvals=2', 'approvals')).toBe(2);
     for (const header of [null, undefined, 'approvals=x', 'threads=4']) expect([header, appContractRevision(header, 'approvals')]).toEqual([header, 1]);
+  });
+});
+
+describe('chat revision 6: a history row carries its rating', () => {
+  it('is revision 6', () => expect(APP_CHAT_RATING_REVISION).toBe(6));
+  it('parses a reply rated up or down, and a row without one', () => {
+    expect(appMessageV1Schema.safeParse({ ...row, rating: 'up' }).success).toBe(true);
+    expect(appMessageV1Schema.safeParse({ ...row, rating: 'down' }).success).toBe(true);
+    expect(appMessageV1Schema.safeParse(row).success).toBe(true);
+  });
+  it('refuses any other rating, and a cleared rating as null (an unrated row leaves the key out)', () => {
+    for (const rating of ['sideways', '', null, 1]) expect(appMessageV1Schema.safeParse({ ...row, rating }).success).toBe(false);
   });
 });

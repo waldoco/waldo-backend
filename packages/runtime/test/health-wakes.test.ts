@@ -175,6 +175,13 @@ describe('sleep debt that a stored row names as building', () => {
     expect(await wakes({ debt: debts({ minutes: 150, trend: 'building' }, null) })).toEqual(['sleep_debt_building']);
   });
 
+  // The version of the figure is the version of the word: a word under another version is another measure, as it is for figures.
+  it('reads yesterday\'s building word only when it came from the same algorithm version', async () => {
+    const days = (today: string, yesterday: string) => debts({ minutes: 150, trend: 'building', version: today }, { minutes: 150, trend: 'building', version: yesterday });
+    expect(await wakes({ debt: days('sleep-debt.v2', 'sleep-debt.v2') })).toEqual([]);
+    expect(await wakes({ debt: days('sleep-debt.v2', 'sleep-debt.v1') })).toEqual(['sleep_debt_building']);
+  });
+
   it('ignores a word outside the three, and then decides from the figures as it does for a row with no word', async () => {
     for (const trend of ['rising', 'Building', '', 7, null, {}]) {
       expect(await wakes({ debt: trended(trend, 150, 90, 40) }), JSON.stringify(trend)).toEqual(['sleep_debt_building']);

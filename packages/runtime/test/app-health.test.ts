@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
+import { healthScoresView } from '../src/channels/app-health';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
 import type { ConsoleAuth } from '../src/identity/console-auth';
@@ -562,6 +563,40 @@ describe('app health scores: revision 4', () => {
     expect(tagsOf(error)).not.toMatch(/1234|secret|feeling|provisional|personal/);
     expect(error).toHaveBeenCalledWith('app health scores drivers shape');
     expect(error).toHaveBeenCalledWith('app health scores windows shape');
+  });
+  // The app's sleep debt and scores are strict objects, so a key the pin lacks would cost an installed build its whole answer.
+  // The trend and the windows' version live on the stored row for the model and the backend only.
+  it('never serves the sleep debt trend or the windows version, at any revision, and the answer still parses strictly', async () => {
+    const debt = { state: 'available', debt_minutes: 95, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    for (const trend of ['building', 'easing', 'steady']) {
+      const stored = withBaseline(personal, { ...extras, windows_version: 'energy-windows.v1', sleep_debt: { ...debt, trend } });
+      const headers: [Record<string, string>, boolean][] = [[{}, false], [contracts('health=2'), false], [contracts('health=3'), false], [contracts('health=4'), true], [contracts('approvals=3,health=4'), true], [contracts('health=5'), true]];
+      for (const [header, fromFour] of headers) {
+        const [, bytes] = await text(stored, header);
+        expect(bytes, JSON.stringify(header)).not.toMatch(/trend|windows_version|energy-windows/);
+        const body = JSON.parse(bytes) as Record<string, unknown>;
+        if (fromFour) expect(body.sleep_debt, JSON.stringify(header)).toEqual(debt);
+        expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      }
+    }
+    const partial = await json(withBaseline(personal, { sleep_debt: { state: 'partial', confidence: 0.4, algorithm_version: 'sleep-debt.v2', activation: 'accepted', trend: 'steady' } }), contracts('health=4'));
+    expect(partial.sleep_debt).toEqual({ state: 'partial', confidence: 0.4, algorithm_version: 'sleep-debt.v2', activation: 'accepted' });
+    expect(healthScoresV1Schema.safeParse(partial).success).toBe(true);
+  });
+  // Every route that shows the stored sleep debt goes through the one view: the app's scores at each revision, and the owner's
+  // console. A row that carries the trend must still show its sleep debt, without the key, to a build pinned strictly.
+  it('still serves the sleep debt of a row that carries a trend, without it, to builds pinned at revisions 2, 3 and 4 and to the console', async () => {
+    const own = { state: 'available', debt_minutes: 95, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    const stored = { ...plain, sleep_debt: { ...own, trend: 'building' } };
+    for (const header of [contracts('health=2'), contracts('health=3'), contracts('health=4')]) {
+      const body = await json(stored, header);
+      expect(body.sleep_debt, JSON.stringify(header)).toEqual(own);
+      expect(pinnedScores.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
+    }
+    const consoleView = healthScoresView({ scores: stored }, null, Date.parse(row.compiled_at as string), 4);
+    expect('body' in consoleView && (consoleView.body as Record<string, unknown>).sleep_debt).toEqual(own);
+    expect(JSON.stringify(consoleView)).not.toContain('trend');
   });
   // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
   it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {

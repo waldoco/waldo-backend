@@ -144,8 +144,7 @@ it('the excerpt is read from the row each time: a forgotten card shows the forgo
   });
   await appOwner('card-latest-gone', async ctx => {
     await deliver(ctx, 'card:brief');
-    const kept = ctx.state.storage.kv.get<{ day: string; cards: Record<string, { message_id: string; delivered_at: number }> }>('day_card_delivery_v1')!;
-    ctx.state.storage.kv.put('day_card_delivery_v1', { ...kept, cards: { ...kept.cards, 'card:brief': { ...kept.cards['card:brief']!, message_id: 'scheduled-gone' } } });
+    ctx.state.storage.sql.exec("UPDATE day_plan SET delivered_message_id = 'scheduled-gone' WHERE card = 'card:brief'");
     expect((await dayRead(ctx)).cards['card:brief']?.latest).toBeNull();
   });
 });
