@@ -233,6 +233,18 @@ it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML
     expect(payload).toEqual({chat_id:OWNER,text});
   }
 });
+it('a queued turn closes its own trace with one turn root only where the surface declares its outbox settles no hop', async () => {
+  for (const [surface, closes, roots] of [['imessage', true, 1], ['whatsapp', false, 0], ['telegram', false, 0]] as const) {
+    const entries: { trace: string; hop: string; ok: boolean; text?: { input: string; output?: string } }[] = [];
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface, api: recorder().api, respond: async () => 'the reply', saveOffset: async () => undefined,
+      queueFinal: async () => undefined, closesTraceOnQueue: closes, log: entry => entries.push(entry) });
+    expect(await listener.handle(ownerTyped({ updateId: 5, senderId: OWNER, chatId: OWNER, messageId: null, sentAt: null, text: 'the question' }))).toBe('queued');
+    const turns = entries.filter(entry => entry.hop === 'turn');
+    expect(turns, surface).toHaveLength(roots);
+    if (roots) expect(turns[0]).toMatchObject({ trace: `${surface}-5`, ok: true, text: { input: 'the question', output: 'the reply' } });
+    if (roots) expect(entries.map(entry => entry.hop).indexOf('turn')).toBeGreaterThan(entries.map(entry => entry.hop).indexOf('delivery_pending'));
+  }
+});
 it('WhatsApp actual listener propagates uncertain final send without retry wording or second send',async()=>{
  let effects=0;const sent:string[]=[];
  const api={...recorder().api,sendMessage:async(payload:{text:string})=>{sent.push(payload.text);throw Error('uncertain post-issue');}};

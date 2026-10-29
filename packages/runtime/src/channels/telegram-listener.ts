@@ -33,6 +33,8 @@ export type TelegramOwnerListenerOptions = Readonly<{
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
+  // True where the queued reply's outbox settles no hop, so the turn's trace closes once the reply is queued.
+  closesTraceOnQueue?: boolean;
   clearTurnReceipts?(trace: string): void;
   // Sends the files the turn queued, after its reply is out. Only for surfaces whose reply is a direct send.
   deliverAttachments?(trace: string, runScope?: RunEffectScope): Promise<void>;
@@ -172,6 +174,7 @@ export class TelegramOwnerListener {
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
         await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
         this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        if (this.options.closesTraceOnQueue) this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, detail: 'reply_frozen', text: { input: turn.text, output: text } });
         return 'queued';
       }
       // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.

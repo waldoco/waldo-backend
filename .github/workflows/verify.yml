@@ -79,6 +79,9 @@ jobs:
       - name: iMessage bridge
         working-directory: packages/runtime
         run: npx vitest run --config vitest.imessage.config.ts
+      - name: iMessage Langfuse roots
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.imessage-langfuse.config.ts
       - name: Mac result recovery
         working-directory: packages/runtime
         run: npx vitest run --config vitest.mac-closeout.config.ts
