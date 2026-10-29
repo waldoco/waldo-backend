@@ -70,6 +70,72 @@ describe('console chat', () => {
     expect(keys).toEqual(['app-read:owner-1']);
   });
 
+  it('reads today\'s cards as the app reads them, with what each delivered, on the read budget and nothing else', async () => {
+    const { env, forwards, keys } = setup();
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day?view=connections&extra=1`, { headers: { 'x-waldo-app-contract': 'controls=3' } }), env, fakeAuth());
+    const forwarded = forwards[0]!;
+    expect(`${new URL(forwarded.url).pathname}${new URL(forwarded.url).search}`).toBe('/app/v1/controls?view=day');
+    expect(forwarded.method).toBe('GET');
+    expect(forwarded.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash(SESSION));
+    expect(forwarded.headers.get('x-waldo-app-contract')).toBe('controls=3');
+    expect(keys).toEqual(['app-read:owner-1']);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day`, { method: 'POST', body: {} }), env, fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day/more`), env, fakeAuth()))!.status).toBe(404);
+    expect(forwards).toHaveLength(1);
+  });
+
+  it('reaches the app\'s controls only for today\'s day view: no other view, path or method', async () => {
+    const { env, forwards } = setup();
+    const status = async (path: string, method = 'GET') => (await handleConsoleChat(call(path, method === 'GET' ? {} : { method, body: {} }), env, fakeAuth()))!.status;
+    for (const path of ['controls', 'controls?view=day', 'actions', 'approvals', 'approvals/decisions', 'day/connections', 'day%2F..%2Fapprovals', 'Day'])
+      expect(await status(`${CONSOLE_CHAT_PATH}/${path}`)).toBe(404);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) expect(await status(`${CONSOLE_CHAT_PATH}/day`, method)).toBe(405);
+    expect(forwards).toHaveLength(0);
+    for (const view of ['connections', 'account', 'activity', 'phone']) await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day?view=${view}`), env, fakeAuth());
+    expect(forwards.map(request => `${new URL(request.url).pathname}${new URL(request.url).search}`)).toEqual(Array(4).fill('/app/v1/controls?view=day'));
+  });
+
+  it('reads the day history as the app reads it: the fourteen days, or one by its date, and no other view or key', async () => {
+    const { env, forwards, keys } = setup();
+    const target = (request: Request) => `${new URL(request.url).pathname}${new URL(request.url).search}`;
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days`, { headers: { 'x-waldo-app-contract': 'controls=6' } }), env, fakeAuth());
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days?date=2026-10-27&view=connections&owner=owner-2`), env, fakeAuth());
+    expect(forwards.map(target)).toEqual(['/app/v1/controls?view=days', '/app/v1/controls?view=days&date=2026-10-27']);
+    expect(forwards[0]!.headers.get('x-waldo-app-contract')).toBe('controls=6');
+    expect(keys).toEqual(['app-read:owner-1', 'app-read:owner-1']);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days`, { method: 'POST', body: {} }), env, fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/days/2026-10-27`), env, fakeAuth()))!.status).toBe(404);
+    expect(forwards).toHaveLength(2);
+  });
+
+  it('reads the day of the owner the console cookie names, never one a header or query names', async () => {
+    const opened: string[] = [], forwards: Request[] = [];
+    const env = {
+      OWNER_DO: { idFromName: (name: string) => name, get: (id: string) => ({ fetch: async (request: Request) => { opened.push(id); forwards.push(request); return Response.json({}); } }) },
+      RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    } as never;
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day?owner=owner-2&do=owner-2`, { headers: { 'x-waldo-do-name': 'owner-2', 'x-waldo-app-session-hash': 'f'.repeat(64) } }), env, fakeAuth());
+    expect(opened).toEqual(['owner-1']);
+    expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
+    expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash(SESSION));
+    const other = `waldo_console=ticket; waldo_owner=owner-2.${'d'.repeat(32)}.sig`;
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day`, { headers: { cookie: other } }), env, fakeAuth(async () => 'owner-2'));
+    expect(opened).toEqual(['owner-1', 'owner-2']);
+    expect(forwards[1]!.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash('d'.repeat(32)));
+  });
+
+  it('passes the day back exactly as the owner object answered, and logs none of it', async () => {
+    const answered = JSON.stringify({ version: 1, view: 'day', data: { cards: [{ id: 'card:brief', latest: { message_id: 'row-1', delivered_at: 1, excerpt: 'Morning. Design review at ten.' } }] } });
+    const env = {
+      OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response(answered, { status: 200, headers: { 'content-type': 'application/json' } }) }) },
+      RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    } as never;
+    const logged = [vi.spyOn(console, 'log'), vi.spyOn(console, 'error'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'info')];
+    const response = await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/day`), env, fakeAuth());
+    expect([response!.status, await response!.text()]).toEqual([200, answered]);
+    for (const spy of logged) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
+  });
+
   it('maps a receipt and a stop to the app routes, on the read budget', async () => {
     const { env, forwards, keys } = setup();
     await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`), env, fakeAuth());

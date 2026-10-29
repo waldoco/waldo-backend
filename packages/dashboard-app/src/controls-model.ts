@@ -250,8 +250,8 @@ const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a
 export function allowedControlNavigation(value: string, origin: string): string {
   let url: URL;
   try { url = new URL(value, origin); } catch { throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true); }
-  // An MCP connect continues on this deployment's own start link, which redirects only for the signed-in owner.
-  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
+  // An MCP or Google connect continues on this deployment's own start link, which redirects only for the signed-in owner.
+  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/(mcp|google)\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
   const google = url.hostname === 'accounts.google.com' && url.port === '' && url.pathname === '/o/oauth2/v2/auth' && !url.hash;
   if (url.protocol !== 'https:' || url.username || url.password || (!localTicket && !google)) throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true);
   return url.href;

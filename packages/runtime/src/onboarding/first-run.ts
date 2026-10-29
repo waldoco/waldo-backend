@@ -136,6 +136,16 @@ const setupFacts = (answer: SetupAnswer, value: NonNullable<AppSetupAnswersReque
   return [main, part && { ...part, kind: 'health' }];
 };
 
+// The name the owner asked to be called, as the one active name claim holds it, or null when there is none to serve. The claim's
+// text is the owner's word and its evidence the name as typed: the two agree until a claim edit rewrites the text alone, and
+// then no name is served rather than whatever the edit says.
+export const ownerName = (claims: ClaimStore): string | null => {
+  const claim = claims.claims().find(candidate => candidate.source_ref === NAME_REF && candidate.status === 'active');
+  if (!claim) return null;
+  const name = claim.evidence.split(' | ')[0]!.trim();
+  return name.length > 0 && name.length <= 80 && claim.text === calledText(name) ? name : null;
+};
+
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.
 export const recordSignupName = (claims: ClaimStore, name: string, at: number): boolean => {

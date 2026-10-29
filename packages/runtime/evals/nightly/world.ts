@@ -12,7 +12,9 @@ import { loopBook, loopHandlers } from '../../src/channels/loops';
 import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
-import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
+import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
+import { composeDayCard } from '../../src/channels/day-cards';
+import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
@@ -356,9 +358,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
-  const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
+  const healthChange = async (decide: (id: string, prompt: string, format: HealthDecisionFormat) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null; notice: string | null }>> => {
     healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now());
     let proposal: ProposeCalendarChangeArgs | null = null;
+    let notice: string | null = null;
     const outcome = await runHealthTrigger({
       book: healthBook, now, newId: () => nextId('health'), timezone: TIMEZONE, enabled: () => true, proactivity: () => ({ quiet_start: null, quiet_end: null, volume: 'normal' }), modeSetting: () => 'auto',
       readHealth: async () => (sharing === 'shared' ? triggerRow() : null),
@@ -367,13 +370,17 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       }, from, to, TIMEZONE),
       admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
+      // HEALTH_SOLO_NOTICE on, as the switch would have it, with an update card free to go out.
+      soloNotice: { enabled: () => true, held: () => null, deliver: async (id, text, commit) => { notice = text; effect('health.notice', { id }); commit(); } },
       reschedule: async () => undefined, log: () => undefined,
     });
-    return { outcome, proposal };
+    return { outcome, proposal, notice };
   };
 
   return {
     clock, conversation, memory, handlers, healthChange,
+    // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
+    dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
     ready: Promise.all([mcpReady, chat.seed(conversation)]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },

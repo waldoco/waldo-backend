@@ -3,8 +3,11 @@ import type { Claim, ConstellationNode } from './claims';
 
 // A support claim Waldo read from a connected source names that source and the items it rests on in its source_ref:
 // welcome:<source>:<pointer>,<pointer>. The pointers are the source's own ids (a thread, an event, a signal), never content.
+// welcome:setup:<claim ids> names the owner's own setup answers a read rests on; it carries no app source, since the owner said it.
 const PREFIX = 'welcome:';
-export const sourceRef = (source: AppNodeSourceV1, pointers: readonly string[]): string => `${PREFIX}${source}:${pointers.join(',')}`;
+export type WelcomeSource = AppNodeSourceV1 | 'setup';
+export const sourceRef = (source: WelcomeSource, pointers: readonly string[]): string => `${PREFIX}${source}:${pointers.join(',')}`;
+export const isWelcomeRef = (ref: string | null | undefined): boolean => ref?.startsWith(PREFIX) === true;
 export const refSource = (ref: string | null | undefined): AppNodeSourceV1 | null => {
   if (!ref?.startsWith(PREFIX)) return null;
   const parsed = appNodeSourceV1Schema.safeParse(ref.slice(PREFIX.length).split(':')[0]);
