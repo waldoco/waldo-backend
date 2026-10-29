@@ -54,6 +54,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
     bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
+    ...(input.envelope.replyTo || ref?.threadOriginatorId ? { ownerThreaded: true as const } : {}),
     ...(input.replyQuote !== undefined ? { replyNote: `[Replying to your message: ${JSON.stringify(redactNumericHealth(input.replyQuote, HEALTH_SPAN_MARKER))}]` } : {}),
   });
   return result.kind;
