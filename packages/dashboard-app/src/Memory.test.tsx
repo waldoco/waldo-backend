@@ -13,6 +13,11 @@ describe('modern Memory presentation',()=>{
   const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:node:1')) as MemoryDetail} returnTo={origin}/>);
   expect(detail).toContain('#/memory/spots?cursor=saved-page');
   expect(detail).toContain('Back to Spots');
+  expect(detail).toContain('Waldo’s read · from Gmail, Calendar');
+  expect(detail).toContain('until you confirm it below');
+  const patterns=renderToStaticMarkup(<MemoryList initialView="list" data={readMemory(response('view=interpretations&limit=25')) as MemoryPage} onNext={()=>{}} onRestart={()=>{}}/>);
+  expect(patterns).toContain('Waldo’s read · from Gmail, Calendar · built from 1 Spot');
+  expect(patterns).toContain('Confirmed by you · built from 1 Spot');
   const spot=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail} returnTo={{view:'constellation'}}/>);
   expect(spot).toContain('Back to patterns');
   expect(detail).toContain('explore=1&amp;returnView=spots&amp;returnCursor=saved-page');

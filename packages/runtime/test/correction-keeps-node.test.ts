@@ -56,6 +56,18 @@ describe('a correction and the nodes that cite the corrected claim', () => {
     });
   });
 
+  it('leaves a node built on Waldo\'s read citing the superseded row, so it stays out rather than turning into the owner\'s words', async () => {
+    await withStore((store, sql) => {
+      store.add({ kind: 'observation', text: 'Clears investor mail first', source: 'inferred', evidence: 'read from a thread', origin: 'untrusted', source_ref: 'welcome:gmail:t1' }, AT);
+      const read = store.claims().find((claim) => claim.text === 'Clears investor mail first')!.id;
+      const id = node(store, [read]);
+      expect(store.correct(read, correction('Clears investor mail after standup'), AT)).toBe(true);
+      expect(supportsOf(store, id)).toEqual([read]);
+      expect(readMemoryGraph(sql, 'owner').nodes).toEqual([]);
+      expect(turnMemoryPrompt(store, 'unrelated')).not.toContain(`[n${id} `);
+    });
+  });
+
   it('carries a pin to the replacement as before', async () => {
     await withStore((store) => {
       const pinned = owned(store, 'Desk is by the window', 'fact');

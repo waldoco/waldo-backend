@@ -492,14 +492,18 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
         WHERE id = ? AND status IN ('active', 'promoted')`, how, how, at, id).rowsWritten === 1;
     },
-    // A node cites the fact, not the row: a correction moves each citation to the row that now carries the fact, in the same
-    // transaction, so the node never rests on a superseded claim the graph and the turn block would drop it for.
+    // A node cites the fact, not the row: a correction of an owner-grounded claim moves each citation to the row that now
+    // carries the fact, in the same transaction, so the node never rests on a superseded claim the graph and the turn block
+    // would drop it for. A node built on Waldo's read (outside content, an inference) keeps citing the superseded row and
+    // stays out until it is rebuilt or the owner corrects the node itself: re-pointing it would put Waldo's wording in every
+    // turn as the owner's confirmed words.
     correct(id: number, claim: NewClaim, at: string): boolean {
-      const repointNodes = (from: number, to: number) => {
+      const repointNodes = (from: Claim, to: number) => {
+        if (from.verification_status !== 'owner-grounded') return;
         for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
           const ids = supportIds(node);
-          if (!ids.includes(from)) continue;
-          sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify([...new Set(ids.map((spot) => spot === from ? to : spot))]), node.id);
+          if (!ids.includes(from.id)) continue;
+          sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify([...new Set(ids.map((spot) => spot === from.id ? to : spot))]), node.id);
         }
       };
       // Two writes must never leave contradictory active claims. A caller without a DO
@@ -520,7 +524,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
           if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
-          repointNodes(id, twin.id);
+          repointNodes(old, twin.id);
           return true;
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
@@ -528,7 +532,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null).one().id;
         const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
         if (retired.rowsWritten !== 1) throw new Error('correction conflict');
-        repointNodes(id, replacement);
+        repointNodes(old, replacement);
         return true;
       });
     },

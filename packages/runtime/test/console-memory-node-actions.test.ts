@@ -42,7 +42,9 @@ const owner = async (name: string) => {
     return stub.fetch(root + CONTROL_ACTION_PATH, { method: 'POST', headers: headers({ 'content-type': 'application/x-www-form-urlencoded' }),
       body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'memory', action, id, request_id: `${action.replace('.', '-')}-${crypto.randomUUID()}`, ...(value === undefined ? {} : { value }) }) });
   };
-  return { stub, token, codeAge, seedRead, node, turnBlock, scoped, read, act };
+  const supportsOf = async (id: number) => JSON.parse((await node(id))!.supporting_spots) as number[];
+  const claimRef = (id: number) => runInDurableObject(stub, (_instance, state) => `${state.id}:claim:${id}`);
+  return { stub, token, codeAge, seedRead, node, turnBlock, scoped, read, act, supportsOf, claimRef };
 };
 
 describe('console pattern confirm and correct', () => {
@@ -89,6 +91,16 @@ describe('console pattern confirm and correct', () => {
     const supports = JSON.parse((await o.node(id))!.supporting_spots) as number[];
     const origins = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ origin: string }>(`SELECT origin FROM claims WHERE id IN (${supports.join(',')})`).toArray().map((row) => row.origin));
     expect(origins).toEqual(['untrusted', 'untrusted']);
+  });
+
+  it('editing a support Waldo read from mail does not pass the node off as the owner\'s words', async () => {
+    const o = await owner('console-node-edit-read');
+    const id = await o.seedRead();
+    await o.codeAge(60_000);
+    for (const support of await o.supportsOf(id)) expect((await o.act(await o.claimRef(support), 'spot.edit', `Owner wording ${support}`)).status).toBe(200);
+    const block = await o.turnBlock();
+    expect(block).not.toContain('Investor mornings');
+    expect(block).not.toContain('their words · confirmed] Investor');
   });
 
   it('only the owner can read or act on their pattern', async () => {
