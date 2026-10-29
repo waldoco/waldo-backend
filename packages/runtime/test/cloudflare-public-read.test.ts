@@ -596,3 +596,24 @@ it('a page the output guard refuses shows none of its text', async () => {
   expect(result).toMatchObject({ ok: false, code: 'rejected' });
   expect(JSON.stringify(result)).not.toContain('xxxx');
 });
+
+// Every round resends the turn's tool results, so their size sets the turn's context. Ten reads of ~15K-character pages
+// used to resend up to ~150K characters of results; one window per read keeps the peak near ten windows.
+it('a ten-round browse-heavy turn resends at most one window per read', async () => {
+  const f = fake(); let url = args.url;
+  f.page.goto = async (...input: unknown[]) => { url = input[0] as string; f.calls.push('navigate'); return { status: () => 200, headers: () => ({}) }; };
+  f.page.url = () => url;
+  f.page.locator = () => ({ innerText: async () => Array.from({ length: 160 }, (_, index) => `${url} line ${index}: an ordinary line of listing text on this page.`).join('\n') });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const sizes: number[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never], ctx, offload: inMemoryToolOutputStore(), maxSteps: 12, step: async (tools, turns) => {
+    sizes.push((turns ?? []).reduce((sum, turn) => sum + turn.output.length, 0));
+    if (!tools || step >= 10) return { text: 'Done' };
+    step += 1;
+    return { text: '', tool_calls: [{ call_id: `read-${step}`, name: 'browse_page', arguments: JSON.stringify({ url: `https://example.com/listing-${step}`, instruction: 'compare the listings' }) }] };
+  } });
+  expect(sizes).toHaveLength(11);
+  expect(Math.max(...sizes)).toBeLessThan(10 * 8_500);
+});
