@@ -29,13 +29,13 @@ export function readingOrder(text: string, instruction: string): string {
   const asked = words(instruction);
   const present = parts.map(words);
   // Inverse document frequency over the page's sections: a word in more than half of them singles nothing out.
-  const weight = new Map<string, number>();
+  const rarity = new Map<string, number>();
   for (const word of asked) {
     const df = present.filter((set) => set.has(word)).length;
-    if (df > 0 && df <= parts.length / 2) weight.set(word, Math.log(parts.length / df));
+    if (df > 0 && df <= parts.length / 2) rarity.set(word, Math.log(parts.length / df));
   }
-  if (weight.size === 0) return text;
-  const scored = parts.map((part, index) => ({ index, score: [...weight].reduce((sum, [word, w]) => sum + (present[index]!.has(word) ? w : 0), 0) }))
+  if (rarity.size === 0) return text;
+  const scored = parts.map((part, index) => ({ index, score: [...rarity].reduce((sum, [word, idf]) => sum + (present[index]!.has(word) ? idf : 0), 0) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index);
   const lead = new Set<number>();
