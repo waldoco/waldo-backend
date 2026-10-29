@@ -143,7 +143,7 @@ Nobody can write to Waldo, and Waldo can't write as itself.
 **Data**
 
 12. **Storage.**
-    - Bodies and attachments are not stored by this feature. They are transient in the turn.
+    - Bodies and attachments are not stored by this feature beyond the turn. The raw message is held in the OwnerDO's inbox (`agent_mail_raw`) from admission until its turn closes, for at most a fixed hold (24 h). After that the row closes as expired and its bytes are deleted. The held bytes are a declared forget gap, because MIME encoding hides literals.
     - Where the turn's text persists, it follows the existing rules for the owner's conversation and tool outputs, with external taint, and retention follows chat.
     - The only new state is the per-owner thread map: Message-ID, direction, time, and the thread it belongs to. It has no bodies, no subjects and no attachment names.
     - The thread map is deleted with the owner's account.
