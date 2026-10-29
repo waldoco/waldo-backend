@@ -195,7 +195,7 @@ describe('AnthropicMessagesAdapter stop reasons', () => {
 
   it('counts cache writes into the prompt total and reports cache reads separately', async () => {
     const { adapter } = recording([reply([{ type: 'text', text: 'ok' }], 'end_turn', { usage: { input_tokens: 5, output_tokens: 2, cache_read_input_tokens: 30, cache_creation_input_tokens: 15 } })]);
-    await expect(adapter.complete(gatewayRequest())).resolves.toMatchObject({ ok: true, data: { input_tokens: 50, output_tokens: 2, cache_read_input_tokens: 30 } });
+    await expect(adapter.complete(gatewayRequest())).resolves.toMatchObject({ ok: true, data: { input_tokens: 50, output_tokens: 2, cache_read_input_tokens: 30, cache_write_input_tokens: 15 } });
   });
 
   it('reports response metadata without text', async () => {

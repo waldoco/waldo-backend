@@ -191,6 +191,17 @@ describe('otlpTurnExporter', () => {
     expect(root!.traceId).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it('names a trace by the context\'s trace id when it knows the key, and by a random one otherwise', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, traceId: (key) => (key === 'app-8000000000001' ? 'a'.repeat(32) : undefined) }, send, () => 5_000);
+    await log({ trace: 'app-8000000000001', hop: 'respond', ms: 1, ok: true });
+    await log({ trace: 'app-8000000000001', hop: 'turn', ms: 2, ok: true });
+    await log({ trace: 'tg-9', hop: 'turn', ms: 2, ok: true });
+    expect(spans(0).map((span) => span.traceId)).toEqual(['a'.repeat(32), 'a'.repeat(32)]);
+    expect(spans(1)[0]!.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(spans(1)[0]!.traceId).not.toBe('a'.repeat(32));
+  });
+
   it('flushes machine traces on a machine_turn root: reminders, ticks and nightly stop being invisible', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
@@ -284,6 +295,19 @@ describe('otlpTurnExporter', () => {
     expect(JSON.parse(gen['langfuse.observation.cost_details'] as string).total).toBeCloseTo((176 * 0.1 + 1024 * 0.01 + 80 * 0.5) / 1e6, 12);
     expect(attrs(root!)).toMatchObject({ 'langfuse.trace.metadata.model_calls': '1', 'langfuse.trace.metadata.tokens_input': '1200', 'langfuse.trace.metadata.tokens_output': '80' });
     expect(attrs(root!)['langfuse.observation.type']).toBe('agent');
+  });
+
+  it('reports cache writes as their own usage and cost, apart from uncached input and reads', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-w', hop: 'llm_reply', ms: 900, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1200, output: 80, cached: 200, cache_write: 900 } });
+    await log({ trace: 'tg-w', hop: 'turn', ms: 1000, ok: true });
+    const gen = attrs(spans(0)[1]!);
+    expect(JSON.parse(gen['langfuse.observation.usage_details'] as string)).toEqual({ input: 100, input_cached_tokens: 200, input_cache_write_tokens: 900, output: 80 });
+    const cost = JSON.parse(gen['langfuse.observation.cost_details'] as string);
+    expect(cost.cache_write).toBeCloseTo((900 * 0.125) / 1e6, 12);
+    expect(cost.total).toBeCloseTo((100 * 0.1 + 200 * 0.01 + 900 * 0.125 + 80 * 0.5) / 1e6, 12);
+    expect(JSON.parse(gen['langfuse.observation.metadata.price_source'] as string).usd_per_million.cache_write).toBeCloseTo(0.125, 10);
   });
 
   it('carries input, output and reasoning only when text capture is on', async () => {

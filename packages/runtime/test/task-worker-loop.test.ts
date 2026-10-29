@@ -184,6 +184,12 @@ describe('the production task model step', () => {
     expect(event).toMatchObject({ hop: 'llm_task', ok: true, cost_kind: 'worker', job_id: ticket.jobId, job_profile: 'reader', provider: OPENAI_PROVIDER, usage: { model: OPENAI_GPT_6_LUNA_MODEL } });
   });
 
+  it('logs a task call\'s cache writes with its usage, so worker spend counts them', async () => {
+    const gateway = { complete: async (request: { request: { model: string } }) => ({ ok: true as const, data: { model: request.request.model, text: 'Read it.', input_tokens: 900, output_tokens: 3, cache_read_input_tokens: 100, cache_write_input_tokens: 700, latency_ms: 1 } }) };
+    const { event } = await taskModel({ openaiApiKey: 'fixture-openai' }, gateway as never)(input);
+    expect(event.usage).toEqual({ model: OPENAI_GPT_6_LUNA_MODEL, input: 900, output: 3, cached: 100, cache_write: 700, web_searches: 0 });
+  });
+
   it('a deep task runs on the chat model, and past the owner\'s spend ceiling it is clamped to the auxiliary route like a turn', async () => {
     const deep = { ...input, claim: { ...claim, brief: { ...brief, effort: 'deep' as const } } };
     const open = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });

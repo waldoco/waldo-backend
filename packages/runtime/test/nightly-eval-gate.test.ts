@@ -48,7 +48,7 @@ describe('nightly eval gate', () => {
   });
 
   it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set, the runnable errands, the connector case, the health trigger case, the state and memory set, the owner look-up case, the personality cases, the two worker scenarios, the forget cases, the spoofed paid mail case, the long conversation and the health set', () => {
-    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 94, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
+    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 103, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
   });
 
   it('renders a marked, text-free comment with the verdict, totals and each scenario', () => {
