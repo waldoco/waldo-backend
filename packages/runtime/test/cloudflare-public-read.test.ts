@@ -531,9 +531,9 @@ it('only a typed reservation refusal is reported as rejected; any other reservat
   expect(refused.calls).toEqual([]); expect(failed.calls).toEqual([]);
 });
 
-// A long page: the model sees one window in reading order, the part the instruction asks about first, and pages the rest
-// from the stored copy by offset, without opening the browser again.
-it('in the tool loop, a long page comes back as one window led by what the instruction asks for, the rest paged by offset', async () => {
+// A long page: the model sees the page's first window in its own order and an outline of where its sections start, and
+// pages to whatever part it wants from the stored copy by offset, without opening the browser again.
+it('in the tool loop, a long page comes back as its first window with an outline, the rest paged by offset', async () => {
   const filler = (label: string, n: number) => Array.from({ length: n }, (_, index) => `${label} block ${index}: navigation, promotions and the usual site chrome repeated on every page.`).join('\n\n');
   const body = [filler('Top', 300), 'Vegetarian options\nMushroom risotto and a spinach lasagne, both available every day.', filler('Bottom', 100)].join('\n\n');
   const f = fake(); f.page.locator = () => ({ innerText: async () => body });
@@ -546,37 +546,42 @@ it('in the tool loop, a long page comes back as one window led by what the instr
     if (!tools || step > 1) return { text: 'Done' };
     if (step++ === 0) return { text: '', tool_calls: [{ call_id: 'read-1', name: 'browse_page', arguments: JSON.stringify(args) }] };
     const page = JSON.parse(outputs[0]!).data.data;
-    return { text: '', tool_calls: [{ call_id: 'read-2', name: 'read_tool_output', arguments: JSON.stringify({ id: page.stored_output, offset: page.next_offset, length: 2_000 }) }] };
+    const at = Number(/^at (\d+): Vegetarian options$/m.exec(page.outline)?.[1] ?? page.next_offset);
+    return { text: '', tool_calls: [{ call_id: 'read-2', name: 'read_tool_output', arguments: JSON.stringify({ id: page.stored_output, offset: at, length: 2_000 }) }] };
   } });
   expect(outputs).toHaveLength(2);
   const first = JSON.parse(outputs[0]!);
   expect(first).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', total_chars: expect.any(Number), next_offset: expect.any(Number), stored_output: expect.any(String), read_with: 'read_tool_output' } } });
   const page = first.data.data;
-  // One window inline, not the page and not a 4,000-character head of escaped JSON.
-  expect(outputs[0]!.length).toBeLessThan(9_000);
-  expect(page.text.length).toBeLessThanOrEqual(8_000);
-  expect(page.text.slice(0, 400)).toContain('Mushroom risotto');
-  expect(page.total_chars).toBeGreaterThan(body.length);
-  // The next read starts exactly where the window ended.
+  // One window inline, in the page's own order, not the page and not a 4,000-character head of escaped JSON.
+  expect(outputs[0]!.length).toBeLessThan(9_500);
+  expect(body.startsWith(page.text)).toBe(true);
+  expect(page.total_chars).toBe(body.length);
+  // Every outline offset is where its line starts in the stored copy, so a read from it lands on that section.
+  const stored = offload.read(page.stored_output, 0, page.total_chars)!.text;
+  const entries = (page.outline as string).split('\n').map((line) => /^at (\d+): (.*)$/.exec(line)!);
+  expect(entries.length).toBeGreaterThan(10);
+  for (const [, offset, line] of entries) expect(stored.startsWith(line!, Number(offset))).toBe(true);
   const second = JSON.parse(outputs[1]!);
   expect(second).toMatchObject({ ok: true, data: { total: page.total_chars } });
-  expect(page.text + second.data.text).toBe(offload.read(page.stored_output, 0, page.next_offset + 2_000)!.text);
+  expect(second.data.text).toBe(stored.slice(second.data.next_offset - 2_000, second.data.next_offset));
   expect(f.calls.filter(call => call === 'acquire')).toHaveLength(1);
 });
 
-it('a page that fits the window comes back whole, in its own order when the instruction singles nothing out', async () => {
+it('a page that fits the window comes back whole, as the page has it, with no outline', async () => {
   const f = fake();
-  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })({ ...args, instruction: 'zzzz' } as never, context);
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
   expect(result).toMatchObject({ ok: true, data: { data: { title: 'Menu', text: 'Vegetarian pasta — £12' } } });
   expect(result.ok && result.data.data).not.toHaveProperty('next_offset');
+  expect(result.ok && result.data.data).not.toHaveProperty('outline');
 });
 
-it('without an output store, a long page shows its first window and says how to reach another part', async () => {
+it('without an output store, a long page shows its first window and says the rest was not kept', async () => {
   const body = Array.from({ length: 400 }, (_, index) => `Line ${index} of an ordinary long page with nothing special in it.`).join('\n');
   const f = fake(); f.page.locator = () => ({ innerText: async () => body });
   const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
-  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, note: expect.stringContaining('read the page again') } } });
-  expect(result.ok && result.data.data.text.length).toBeLessThanOrEqual(8_000);
+  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, note: expect.stringContaining('could not be kept') } } });
+  expect(result.ok && result.data.data.text.length).toBeLessThanOrEqual(7_000);
   expect(result.ok && result.data.data).not.toHaveProperty('stored_output');
 });
 
@@ -598,7 +603,7 @@ it('a page the output guard refuses shows none of its text', async () => {
 });
 
 // Every round resends the turn's tool results, so their size sets the turn's context. Ten reads of ~15K-character pages
-// used to resend up to ~150K characters of results; one window per read keeps the peak near ten windows.
+// used to resend up to ~140K characters of results; one window and outline per read keeps the peak near ten of them.
 it('a ten-round browse-heavy turn resends at most one window per read', async () => {
   const f = fake(); let url = args.url;
   f.page.goto = async (...input: unknown[]) => { url = input[0] as string; f.calls.push('navigate'); return { status: () => 200, headers: () => ({}) }; };
@@ -615,5 +620,5 @@ it('a ten-round browse-heavy turn resends at most one window per read', async ()
     return { text: '', tool_calls: [{ call_id: `read-${step}`, name: 'browse_page', arguments: JSON.stringify({ url: `https://example.com/listing-${step}`, instruction: 'compare the listings' }) }] };
   } });
   expect(sizes).toHaveLength(11);
-  expect(Math.max(...sizes)).toBeLessThan(10 * 8_500);
+  expect(Math.max(...sizes)).toBeLessThan(10 * 9_500);
 });

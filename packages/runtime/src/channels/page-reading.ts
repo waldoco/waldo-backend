@@ -1,57 +1,60 @@
-// How a read page reaches the model: in reading order, the sections that share rare words with the read's instruction
-// first, then the whole page in its own order. Ordering only: nothing is dropped or judged, and every moved section is
-// marked where it stood. The model sees one window; the rest is paged by offset.
+// How a read page reaches the model: in its own order, one window at a time, with an outline of where its sections start
+// when it is longer than the window. The outline is structural (section starts spread over the page), so the model, not
+// a rule, decides which part to read next.
 
-// The window shown inline. With its JSON wrapping it stays under the dispatcher's 16,384-character offload threshold.
-export const PAGE_WINDOW_CHARS = 8_000;
-// A blank-line block longer than this is split at line breaks, so a page rendered without paragraph gaps still orders.
-const SECTION_CHARS = 1_000;
-export const MOVED_MARK = '[moved to the top]';
-const LEAD_NOTE = `[Read for the instruction: the sections that share its words come first; the whole page then follows in its own order, each moved section marked ${MOVED_MARK}.]`;
-const PAGE_NOTE = '[The page in its own order:]';
+// The window shown inline. With its outline, its JSON wrapping and a URL at its 2,000-character cap, the result stays under
+// the dispatcher's 16,384-character offload threshold.
+export const PAGE_WINDOW_CHARS = 7_000;
+export const OUTLINE_ENTRIES = 24;
+export const OUTLINE_LINE_CHARS = 60;
 
-const words = (text: string): Set<string> => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+export type OutlineEntry = Readonly<{ offset: number; line: string }>;
 
-const sections = (text: string): string[] => text.split(/\n[^\S\n]*\n/).flatMap((block) => {
-  if (block.length <= SECTION_CHARS) return block.trim() ? [block] : [];
-  const out: string[] = [];
-  let current = '';
-  for (const line of block.split('\n')) {
-    if (current && current.length + line.length + 1 > SECTION_CHARS) { out.push(current); current = line; }
-    else current = current ? `${current}\n${line}` : line;
-  }
-  if (current.trim()) out.push(current);
-  return out;
-});
-
-export function readingOrder(text: string, instruction: string): string {
-  const parts = sections(text);
-  const asked = words(instruction);
-  const present = parts.map(words);
-  // Inverse document frequency over the page's sections: a word in more than half of them singles nothing out.
-  const rarity = new Map<string, number>();
-  for (const word of asked) {
-    const df = present.filter((set) => set.has(word)).length;
-    if (df > 0 && df <= parts.length / 2) rarity.set(word, Math.log(parts.length / df));
-  }
-  if (rarity.size === 0) return text;
-  const scored = parts.map((part, index) => ({ index, score: [...rarity].reduce((sum, [word, idf]) => sum + (present[index]!.has(word) ? idf : 0), 0) }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-  const lead = new Set<number>();
-  let room = PAGE_WINDOW_CHARS - LEAD_NOTE.length;
-  for (const { index } of scored) {
-    if (lead.size > 0 && parts[index]!.length + 2 > room) break;
-    lead.add(index);
-    room -= parts[index]!.length + 2;
-  }
-  return [LEAD_NOTE, ...[...lead].map((index) => parts[index]!), PAGE_NOTE, ...parts.map((part, index) => lead.has(index) ? MOVED_MARK : part)].join('\n\n');
-}
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 
 // The first window of a text, cut at a line break when one falls in its second half, and the offset the rest starts at.
+// A cut never leaves half a surrogate pair at the window's end.
 export function pageWindow(text: string, limit = PAGE_WINDOW_CHARS): Readonly<{ text: string; next_offset: number | null }> {
   if (text.length <= limit) return { text, next_offset: null };
   const lineEnd = text.lastIndexOf('\n', limit - 1) + 1;
-  const cut = lineEnd > limit / 2 ? lineEnd : limit;
+  let cut = lineEnd > limit / 2 ? lineEnd : limit;
+  if (isHighSurrogate(text.charCodeAt(cut - 1))) cut -= 1;
   return { text: text.slice(0, cut), next_offset: cut };
 }
+
+// Where the page's sections start: the first line after each blank line, or every line when the page has no blank lines.
+// With more sections than entries, the entries are the first section start at or after each of OUTLINE_ENTRIES evenly
+// spaced points, so the outline covers the whole page.
+export function pageOutline(text: string): OutlineEntry[] {
+  const lineStarts: number[] = [];
+  const blockStarts: number[] = [];
+  let afterBlank = true;
+  for (let at = 0; at < text.length;) {
+    const end = text.indexOf('\n', at);
+    const lineEnd = end === -1 ? text.length : end;
+    const blank = text.slice(at, lineEnd).trim() === '';
+    if (!blank) {
+      lineStarts.push(at);
+      if (afterBlank) blockStarts.push(at);
+    }
+    afterBlank = blank;
+    at = lineEnd + 1;
+  }
+  const starts = blockStarts.length > 1 ? blockStarts : lineStarts;
+  const chosen: number[] = [];
+  for (let slot = 0, next = 0; slot < OUTLINE_ENTRIES && next < starts.length; slot += 1) {
+    while (next < starts.length && starts[next]! < (slot * text.length) / OUTLINE_ENTRIES) next += 1;
+    if (next < starts.length && starts[next] !== chosen.at(-1)) chosen.push(starts[next]!);
+  }
+  return chosen.map((start) => {
+    const end = text.indexOf('\n', start);
+    const first = text.slice(start, end === -1 ? text.length : end);
+    const lead = first.length - first.trimStart().length;
+    const line = first.trim();
+    const cut = line.length > OUTLINE_LINE_CHARS && isHighSurrogate(line.charCodeAt(OUTLINE_LINE_CHARS - 1)) ? OUTLINE_LINE_CHARS - 1 : OUTLINE_LINE_CHARS;
+    return { offset: start + lead, line: line.slice(0, cut) };
+  });
+}
+
+// The outline as the model reads it: one "at <offset>: <first line>" line per entry, the offset to page from.
+export const outlineText = (entries: readonly OutlineEntry[]): string => entries.map((entry) => `at ${entry.offset}: ${entry.line}`).join('\n');

@@ -1,43 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { PAGE_WINDOW_CHARS, pageWindow, readingOrder } from '../src/channels/page-reading';
+import { OUTLINE_ENTRIES, OUTLINE_LINE_CHARS, PAGE_WINDOW_CHARS, outlineText, pageOutline, pageWindow } from '../src/channels/page-reading';
 
-const filler = (label: string, n: number) => Array.from({ length: n }, (_, index) => `${label} paragraph ${index} about the usual site navigation and other unrelated material.`).join('\n\n');
+const filler = (label: string, n: number) => Array.from({ length: n }, (_, index) => `${label} paragraph ${index}\nabout the usual site navigation and other material on the page.`).join('\n\n');
 const page = [filler('Intro', 60), 'Opening hours\nMonday to Friday 9:00 to 17:00. Saturdays 10:00 to 14:00.', filler('Footer', 60)].join('\n\n');
-
-describe('readingOrder', () => {
-  it('leaves a page in its own order when no instruction words single out a section', () => {
-    expect(readingOrder(page, 'zzzz qqqq')).toBe(page);
-    expect(readingOrder('Short page.', 'opening hours')).toBe('Short page.');
-  });
-
-  it('leads with the sections that match the instruction, says so, and keeps every character of the page', () => {
-    const ordered = readingOrder(page, 'What are the opening hours on Saturday?');
-    const firstSection = ordered.split('\n\n')[1]!;
-    expect(ordered.startsWith('[')).toBe(true);
-    expect(firstSection).toContain('Saturdays 10:00 to 14:00');
-    // Nothing is dropped: every section of the page is still there, the moved one marked where it stood.
-    for (const section of page.split('\n\n')) expect(ordered).toContain(section);
-    expect(ordered).toContain('[moved to the top]');
-    expect(ordered.indexOf('Intro paragraph 0')).toBeGreaterThan(ordered.indexOf('Saturdays'));
-  });
-
-  it('weighs words by how rare they are on the page, so a word every section has moves nothing', () => {
-    // "paragraph" is in every filler section; only the hours section has "saturdays".
-    const ordered = readingOrder(page, 'paragraph saturdays');
-    expect(ordered.split('\n\n')[1]).toContain('Saturdays');
-    expect(readingOrder(page, 'paragraph')).toBe(page);
-  });
-
-  it('splits a page with no blank lines into sections by line, so one long block still orders', () => {
-    const flat = [...Array.from({ length: 200 }, (_, index) => `Menu item ${index} with ordinary words`), 'Gluten free pasta is available on request'].join('\n');
-    const ordered = readingOrder(flat, 'is there gluten free pasta');
-    expect(ordered.split('\n\n')[1]).toContain('Gluten free pasta');
-  });
-
-  it('is deterministic', () => {
-    expect(readingOrder(page, 'opening hours saturday')).toBe(readingOrder(page, 'opening hours saturday'));
-  });
-});
 
 describe('pageWindow', () => {
   it('returns a short text whole', () => {
@@ -57,5 +22,53 @@ describe('pageWindow', () => {
     const { text, next_offset } = pageWindow('x'.repeat(PAGE_WINDOW_CHARS * 2));
     expect(text).toHaveLength(PAGE_WINDOW_CHARS);
     expect(next_offset).toBe(PAGE_WINDOW_CHARS);
+  });
+
+  it('never splits a surrogate pair at the cut', () => {
+    const text = `${'x'.repeat(PAGE_WINDOW_CHARS - 1)}😀${'y'.repeat(100)}`;
+    const { text: shown, next_offset } = pageWindow(text);
+    expect(next_offset).toBe(PAGE_WINDOW_CHARS - 1);
+    expect(shown.charCodeAt(shown.length - 1)).toBe('x'.charCodeAt(0));
+    expect(text.slice(next_offset!).startsWith('😀')).toBe(true);
+  });
+});
+
+describe('pageOutline', () => {
+  it('lists section starts in page order, each with its first line and the exact offset it starts at', () => {
+    const outline = pageOutline(page);
+    expect(outline.length).toBeGreaterThan(1);
+    expect(outline.length).toBeLessThanOrEqual(OUTLINE_ENTRIES);
+    expect(outline[0]).toEqual({ offset: 0, line: 'Intro paragraph 0' });
+    for (const entry of outline) expect(page.startsWith(entry.line, entry.offset)).toBe(true);
+    expect(outline.map((entry) => entry.offset)).toEqual([...outline.map((entry) => entry.offset)].sort((a, b) => a - b));
+  });
+
+  it('spreads its entries over the whole page when it has more sections than entries', () => {
+    const outline = pageOutline(page);
+    expect(outline.at(-1)!.offset).toBeGreaterThan(page.length * 0.9);
+    // No entry is chosen for what it says: the outline does not depend on any section's words.
+    const renamed = page.replace('Opening hours', 'Closing times');
+    expect(pageOutline(renamed).map((entry) => entry.offset)).toEqual(outline.map((entry) => entry.offset));
+  });
+
+  it('uses line starts for a page with no blank lines, and shortens long first lines', () => {
+    const flat = Array.from({ length: 300 }, (_, index) => `Row ${index} ${'z'.repeat(200)}`).join('\n');
+    const outline = pageOutline(flat);
+    expect(outline.length).toBe(OUTLINE_ENTRIES);
+    for (const entry of outline) {
+      expect(entry.line.length).toBeLessThanOrEqual(OUTLINE_LINE_CHARS);
+      expect(flat.startsWith(entry.line, entry.offset)).toBe(true);
+    }
+  });
+
+  it('keeps a windowed result with its outline under the 16,384-character offload threshold, even with a 2,000-character URL', () => {
+    const lines = Array.from({ length: 4_000 }, (_, index) => `Line ${index}: "quoted" text with a tab\tand ${'w'.repeat(OUTLINE_LINE_CHARS)}`).join('\n\n');
+    const { text, next_offset } = pageWindow(lines);
+    const result = { ok: true, data: { url: `https://example.com/${'p'.repeat(1_980)}`, provider: 'cloudflare_playwright', data: { title: 'T'.repeat(200), text, total_chars: lines.length, next_offset, stored_output: 'to-12', read_with: 'read_tool_output', outline: outlineText(pageOutline(lines)) } }, source_taint: 'external' };
+    expect(JSON.stringify(result).length).toBeLessThan(16_384);
+  });
+
+  it('reads as one "at <offset>: <first line>" line per entry', () => {
+    expect(outlineText([{ offset: 0, line: 'Intro' }, { offset: 412, line: 'Opening hours' }])).toBe('at 0: Intro\nat 412: Opening hours');
   });
 });

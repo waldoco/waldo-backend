@@ -56,11 +56,11 @@ it.each(['telegram','app'] as const)('a reader task worker started on %s reads a
   const offered=(claim.tools as {name:string}[]).map(tool=>tool.name);
   expect(offered).toEqual(expect.arrayContaining(['browse_page','read_tool_output']));
   const read=await host.taskTool(ticket,browse,CANARIES);
-  expect(read).toMatchObject({ok:true,source_taint:'external',data:{data:{stored_output:expect.any(String),read_with:'read_tool_output',next_offset:8_000}}});
+  expect(read).toMatchObject({ok:true,source_taint:'external',data:{data:{stored_output:expect.any(String),read_with:'read_tool_output',next_offset:7_000}}});
   expect(read.data.data.text).toContain('HTTP is an application layer protocol.');
   expect(proof.calls).toEqual(['acquire','close']);
   const page=await host.taskTool(ticket,call('read_tool_output',{id:read.data.data.stored_output,offset:read.data.data.next_offset,length:8_000}),CANARIES);
-  expect(page).toMatchObject({ok:true,source_taint:'external',data:{next_offset:16_000}});
+  expect(page).toMatchObject({ok:true,source_taint:'external',data:{next_offset:15_000}});
   expect(page.data.text).toContain('It carries requests and responses');
  });
 },20000);
