@@ -4281,7 +4281,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
       // Freeze the reply text, stable commandId and exact target together with the turn's closure.
-      ...(channel === 'imessage' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload) => {
+      ...(channel === 'imessage' ? { closesTraceOnQueue: true, queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload) => {
         const record = this.activeIMessage;
         if (!turn.runScope || !record || record.id !== turn.runScope.runId || record.attempt !== turn.runScope.attempt || record.updateId !== turn.updateId) throw new ClosedRunError();
         const text = redactSecretUrls(payload.text).text;
