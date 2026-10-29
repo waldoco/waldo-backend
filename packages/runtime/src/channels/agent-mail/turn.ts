@@ -80,7 +80,7 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'bas
 };
 
 // Fixed codes for the turn, as for the ingress: never an address, subject, body, filename or Message-ID.
-export type AgentMailTurnCode = 'replied' | 'skipped' | 'interrupted' | 'released' | 'unavailable';
+export type AgentMailTurnCode = 'replied' | 'skipped' | 'interrupted' | 'released' | 'unavailable' | 'expired';
 
 export type AgentMailDrainDeps = Readonly<{
   inbox: AgentMailInbox;

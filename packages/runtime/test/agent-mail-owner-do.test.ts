@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import worker from '../src/index';
 import { fromAddresses, messageIds, receiveAgentMail } from '../src/channels/agent-mail/ingress';
-import { AGENT_MAIL_DAILY_TURNS, agentMailInbox } from '../src/channels/agent-mail/inbox';
+import { AGENT_MAIL_DAILY_TURNS, AGENT_MAIL_DUE_KEY, AGENT_MAIL_HOLD_MS, agentMailInbox } from '../src/channels/agent-mail/inbox';
 import { READ_BODY_BUDGET } from '../src/tools/live/google';
 import { AGENT_MAIL_TURN_TOOLS, AGENT_MAIL_UNFINISHED } from '../src/channels/agent-mail/turn';
 import { presenceAuthority } from './helpers/directory-presence';
@@ -94,7 +94,7 @@ const sends = () => proof.telegram.filter(entry => entry.method === 'sendMessage
 
 // One owner per test: the pool's own object takes the ingress RPC, and a fixture object over the same storage runs the
 // alarm with a bot token. The pool object's alarm is held so a real wake cannot hold the pass.
-const withOwner = async (work: (io: Readonly<{ owner: OwnerDO; state: DurableObjectState; passes(n?: number): Promise<void> }>) => Promise<void>, extraEnv: Record<string, string> = {}) => {
+const withOwner = async (work: (io: Readonly<{ owner: OwnerDO; state: DurableObjectState; passes(n?: number): Promise<void>; advance(ms: number): void }>) => Promise<void>, extraEnv: Record<string, string> = {}) => {
   doName = `agent-mail-${crypto.randomUUID()}`;
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (pool, state) => {
@@ -105,7 +105,7 @@ const withOwner = async (work: (io: Readonly<{ owner: OwnerDO; state: DurableObj
     const owner = new OwnerDO(state, { ...env, ...directory, AGENT_MAIL_DOMAIN: DOMAIN, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', COMMON_OWNER_TASKS: '0', BROWSER: undefined, ...extraEnv } as never);
     state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7'); state.storage.kv.put('origin', 'https://owner.fixture.invalid');
     const passes = async (n = 3) => { for (let i = 0; i < n; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); } };
-    try { await work({ owner, state, passes }); } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+    try { await work({ owner, state, passes, advance: ms => { now += ms; } }); } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 };
 const mailText = () => proof.requests.find(request => request.includes('Waldo address')) ?? '';
@@ -284,6 +284,43 @@ describe('agent mail inbound', () => {
       expect(sends().map(entry => entry.body.text)).toEqual([AGENT_MAIL_UNFINISHED]);
       expect(state.storage.sql.exec('SELECT state FROM agent_mail_inbox').one().state).toBe('interrupted');
       expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM agent_mail_raw').one().n).toBe(0);
+    });
+  });
+
+  // A row that cannot run (no surface, a directory that keeps failing) holds the mail's bytes; past the hold it expires.
+  const heldPastTheHold = async (stall: (state: DurableObjectState) => void) => {
+    await withOwner(async ({ state, passes, advance }) => {
+      expect(await deliver({ body: 'HELD-BODY' })).toBe('admitted');
+      stall(state);
+      const logs: string[] = [];
+      vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+      await passes(2);
+      advance(AGENT_MAIL_HOLD_MS - 5 * 60_000);
+      await passes(2);
+      expect(state.storage.sql.exec('SELECT state FROM agent_mail_inbox').one().state).toBe('admitted');
+      expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM agent_mail_raw').one().n).toBeGreaterThan(0);
+      advance(5 * 60_000);
+      await passes(1);
+      expect(state.storage.sql.exec('SELECT state FROM agent_mail_inbox').one().state).toBe('expired');
+      expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM agent_mail_raw').one().n).toBe(0);
+      expect(state.storage.kv.get(AGENT_MAIL_DUE_KEY) ?? null).toBeNull();
+      expect(logs.filter(line => line.includes('"code":"expired"'))).toEqual([JSON.stringify({ hop: 'agent_mail_turn', code: 'expired' })]);
+      // A day on the clock runs the owner's scheduled jobs; no mail turn ran.
+      expect(proof.requests.filter(request => request.includes('Waldo address') || request.includes('HELD-BODY'))).toHaveLength(0);
+      expect(await everythingStored(state)).not.toContain('HELD-BODY');
+    });
+  };
+  it('mail that cannot run for want of a surface expires after the hold, its bytes deleted', async () => {
+    await heldPastTheHold(state => { state.storage.kv.put('telegram_unlinked', true); });
+  });
+  it('mail held by a directory that keeps failing expires after the hold, its bytes deleted', async () => {
+    await heldPastTheHold(() => {
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1] ?? 'other';
+        if (fn === 'route_agent_mail') return new Response('down', { status: 503 });
+        if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+        return Response.json(true);
+      });
     });
   });
 

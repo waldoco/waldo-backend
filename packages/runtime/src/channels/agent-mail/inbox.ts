@@ -13,6 +13,9 @@ export const AGENT_MAIL_DAILY_TURNS = 50;
 export const AGENT_MAIL_RAW_MAX = 25 * 1024 * 1024;
 // A SQLite row in a Durable Object holds at most 2 MB, so the raw message is kept in chunks under that.
 const CHUNK = 1024 * 1024;
+// An admitted row that cannot run (no surface to answer on, a directory that keeps failing) holds the mail's bytes; past
+// this hold it expires and the bytes go. A day covers an outage; the owner's own inbox still has the mail.
+export const AGENT_MAIL_HOLD_MS = 24 * 60 * 60_000;
 // A finished row keeps only its dedup digest, for this long; a provider redelivers within hours.
 export const AGENT_MAIL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const COUNTS_KEY = 'agent_mail_counts_v1';
@@ -44,7 +47,7 @@ export const agentMailInbox = (storage: Pick<DurableObjectStorage, 'sql' | 'kv' 
   const { sql, kv } = storage;
   sql.exec(`CREATE TABLE IF NOT EXISTS agent_mail_inbox (
     id TEXT PRIMARY KEY, dedup TEXT NOT NULL UNIQUE, handle TEXT NOT NULL, basis TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('admitted', 'running', 'completed', 'interrupted', 'closed')),
+    state TEXT NOT NULL CHECK (state IN ('admitted', 'running', 'completed', 'interrupted', 'closed', 'expired')),
     attempt TEXT, admitted_at INTEGER NOT NULL, closed_at INTEGER)`);
   sql.exec('CREATE TABLE IF NOT EXISTS agent_mail_raw (inbox_id TEXT NOT NULL, seq INTEGER NOT NULL, bytes BLOB NOT NULL, PRIMARY KEY (inbox_id, seq))');
   // The thread map: which Message-IDs Waldo was sent or sent, and the thread each belongs to. No bodies, subjects or names.
@@ -61,7 +64,7 @@ export const agentMailInbox = (storage: Pick<DurableObjectStorage, 'sql' | 'kv' 
     const open = sql.exec("SELECT 1 FROM agent_mail_inbox WHERE state = 'admitted' LIMIT 1").toArray().length > 0;
     kv.put(AGENT_MAIL_DUE_KEY, open ? now() + 250 : null);
   };
-  const close = (id: string, state: 'completed' | 'interrupted' | 'closed') => {
+  const close = (id: string, state: 'completed' | 'interrupted' | 'closed' | 'expired') => {
     sql.exec('UPDATE agent_mail_inbox SET state = ?, closed_at = ? WHERE id = ?', state, now(), id);
     sql.exec('DELETE FROM agent_mail_raw WHERE inbox_id = ?', id);
   };
@@ -138,6 +141,16 @@ export const agentMailInbox = (storage: Pick<DurableObjectStorage, 'sql' | 'kv' 
         for (const row of lost) close(row.id, 'interrupted');
         rearm();
         return lost.length;
+      });
+    },
+    // Closes every admitted row past the hold, with its bytes. The wake is re-armed only when one closed, so a backoff set by
+    // retryLater stands.
+    expire(): number {
+      return storage.transactionSync(() => {
+        const old = sql.exec<{ id: string }>("SELECT id FROM agent_mail_inbox WHERE state = 'admitted' AND admitted_at <= ?", now() - AGENT_MAIL_HOLD_MS).toArray();
+        for (const row of old) close(row.id, 'expired');
+        if (old.length) rearm();
+        return old.length;
       });
     },
     retryLater(ms: number): void { kv.put(AGENT_MAIL_DUE_KEY, now() + ms); },

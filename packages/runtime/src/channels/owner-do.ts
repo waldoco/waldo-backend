@@ -62,7 +62,7 @@ import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
-import { agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
+import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -2739,6 +2739,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const lane: LaneRunner = (id, work) => runLane(id, held, work);
     await this.browserReady;
     await lane('whatsapp', () => this.recoverWhatsappPending());
+    // Before any surface is chosen: mail that cannot run for want of one still expires.
+    await lane('mail', async () => this.expireAgentMail());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
     const entered = await this.serialWithin(alarmEnd, async () => {
@@ -2967,6 +2969,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return admitted;
   }
   private readonly agentMailAttempts = new Set<string>();
+  private expireAgentMail(): void {
+    if (this.ctx.storage.kv.get(AGENT_MAIL_DUE_KEY) == null) return;
+    for (let expired = agentMailInbox(this.ctx.storage).expire(); expired > 0; expired--) console.log(JSON.stringify({ hop: 'agent_mail_turn', code: 'expired' }));
+  }
   // Mail turns run as the owner's job on the surface that takes their proactive work, as Mac reports do, and only while the
   // handle still routes here: a handle released after its mail arrived closes that mail unread.
   private async drainAgentMail(channel: ChannelKind, alarmEnd?: number): Promise<void> {
