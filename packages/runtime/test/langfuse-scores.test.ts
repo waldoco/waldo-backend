@@ -27,10 +27,10 @@ describe('the owner trace salt', () => {
   });
 
   it('names the trace of one owner turn on any surface and of one scheduled occurrence, and of nothing that repeats', () => {
-    for (const key of ['app-8000000000001', 'tg-12', 'whatsapp-40', 'card:brief:1793520000000', 'reminder:0b6f2c1e:1793520000000:2', 'welcome:calendar:1793520000000'])
+    for (const key of ['app-8000000000001', 'tg-12', 'whatsapp-40', 'imessage-41', 'card:brief:1793520000000', 'reminder:0b6f2c1e:1793520000000:2', 'welcome:calendar:1793520000000'])
       expect(ownerTraceId('salt', key), key).toMatch(/^[0-9a-f]{32}$/);
     // A key shared by unrelated work keeps a random trace id, or every such trace would be one.
-    // An iMessage turn exports no root trace under its event key, so there is nothing for a rating to name.
+    // An iMessage turn's root is `imessage-<n>`; the bridge's event key never names a root, so it names no trace.
     for (const key of ['telegram-unlinked', 'app-browser-cleanup', 'cost:telegram', 'connect:deliver', 'app-', 'app-12-reply', 'tg--3', 'card:brief:1:mail-followup',
       'langfuse-check-1793520000000', 'health:0b6f2c1e-5a4d-4c3b-9a8f-7e6d5c4b3a21', JSON.stringify(['imessage', 'bridge-1', 'account-1', 3, 'event-9'])])
       expect(ownerTraceId('salt', key), key).toBeUndefined();
@@ -44,6 +44,7 @@ describe('the row a rating names', () => {
       const day = 24 * 60 * 60_000;
       expect(rows.traceKey('app-8000000000001-reply')).toBe('app-8000000000001');
       expect(rows.traceKey('tg-12-reply')).toBe('tg-12');
+      expect(rows.traceKey('imessage-41-reply')).toBe('imessage-41');
       expect(rows.traceKey(`${JSON.stringify(['imessage', 'b', 'a', 3, 'e'])}-reply`)).toBeNull();
       expect(rows.traceKey('scheduled-0b6f')).toBeNull();
       // A job key no rating can name is not kept.

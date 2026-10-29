@@ -71,7 +71,7 @@ A Like or Dislike on one of Waldo's messages in the app's main chat becomes a La
 
 - **What the score carries.** `name: reply_rating`, a `BOOLEAN` value (Like is 1, Dislike is 0), the deployment's environment, and `metadata.source: app`. It carries no message text, owner name or health value. The owner object still keeps its own `reply_ratings` row.
 - **How a score finds its trace.**
-  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn. That holds for `app-<n>` and Telegram's `tg-<n>`, both from `ownerTurnTrace`. An iMessage turn exports no root trace under its event key, so its replies stay unscored.
+  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn. That holds for every listener turn, whose key comes from `ownerTurnTrace`: `app-<n>`, Telegram's `tg-<n>` and iMessage's `imessage-<n>`, whose `turn` root the listener logs once the reply is frozen.
   - A day card sent to the app is a `scheduled-<uuid>` row. When it is delivered, `app_row_traces` links that row to its job's trace key (`<schedule id>:<occurrence ms>`) for 30 days, Langfuse's retention. A Brief sent straight to the app links at that send; a record that reaches the app through the outbox links at its receipt (`linkingAppRows`).
   - A delivered row is linked only when its job's key can be scored, so the table holds only `<schedule id>:<time>` and `<surface>-<n>` keys.
   - A key that names one turn or one occurrence maps to its Langfuse trace id through `md5(<owner salt>:<trace key>)`. The exporter uses the same rule.

@@ -5,7 +5,7 @@ type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string; WALDO_ENVIRONMENT?: string }>;
 type Send = (input: string, init: RequestInit) => Promise<Response>;
 
-// A trace key that names one owner turn (`app-12`, `tg-12`: `ownerTurnTrace`) or one scheduled occurrence
+// A trace key that names one owner turn (`app-12`, `tg-12`, `imessage-12`: `ownerTurnTrace`) or one scheduled occurrence
 // (`card:brief:<ms>`) names its Langfuse trace through the owner's own random salt, so a rating made later finds the trace
 // the row came from. Keys repeat across owners and after an erase, which also wipes the salt, so the salt keeps one owner's
 // traces apart from every other's. A key shared by unrelated work (`telegram-unlinked`) keeps a random trace id, or every
