@@ -43,6 +43,7 @@ async function world() {
     const handled = await fx.fetcher(input as RequestInfo, init);
     if (handled) return handled;
     const url = String(input instanceof Request ? input.url : input);
+    if (url === 'https://langfuse.fixture.invalid/api/public/otel/v1/traces') return Response.json({});
     forbiddenEgress.push(url);
     throw new Error(`forbidden egress ${new URL(url).origin}`);
   });
