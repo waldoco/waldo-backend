@@ -511,7 +511,7 @@ const exportedSpans = () => otlp.flatMap(body => (JSON.parse(body) as { resource
 const keyOf = (span: OtlpSpan) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue;
 const rootsOf = (traceKey: string) => exportedSpans().filter(span => !span.parentSpanId && keyOf(span) === traceKey);
 
-it('an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
+it.runIf(Boolean(env.LANGFUSE_BASE_URL))('Langfuse root: an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
   const w = await world();
   await w.pairAndActivate();
   await replyFor(w, 'Plan my afternoon');
@@ -527,7 +527,7 @@ it('an iMessage turn that answers exports one root, with its model and enqueue h
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 
-it('an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
+it.runIf(Boolean(env.LANGFUSE_BASE_URL))('Langfuse root: an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
   const w = await world();
   await w.pairAndActivate();
   modelDown();
