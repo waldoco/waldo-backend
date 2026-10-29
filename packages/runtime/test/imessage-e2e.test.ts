@@ -506,12 +506,14 @@ it('an iMessage turn the model fails tells the owner once, with the floor\'s pro
 }, 30_000);
 
 // Langfuse files a trace only once a root span arrives, so a turn without one never leaves the exporter's buffer.
+// Bound only by vitest.imessage-langfuse.config.ts; the connector suite's config leaves the exporter off.
+const langfuseBound = Boolean((env as unknown as Record<string, unknown>).LANGFUSE_BASE_URL);
 type OtlpSpan = { name: string; parentSpanId?: string; attributes: { key: string; value: { stringValue?: string } }[] };
 const exportedSpans = () => otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
 const keyOf = (span: OtlpSpan) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue;
 const rootsOf = (traceKey: string) => exportedSpans().filter(span => !span.parentSpanId && keyOf(span) === traceKey);
 
-it.runIf(Boolean(env.LANGFUSE_BASE_URL))('Langfuse root: an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
+it.runIf(langfuseBound)('Langfuse root: an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
   const w = await world();
   await w.pairAndActivate();
   await replyFor(w, 'Plan my afternoon');
@@ -527,7 +529,7 @@ it.runIf(Boolean(env.LANGFUSE_BASE_URL))('Langfuse root: an iMessage turn that a
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 
-it.runIf(Boolean(env.LANGFUSE_BASE_URL))('Langfuse root: an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
+it.runIf(langfuseBound)('Langfuse root: an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
   const w = await world();
   await w.pairAndActivate();
   modelDown();
