@@ -54,6 +54,16 @@ describe('modern account controls', () => {
     expect(multiple).toContain('Device names are not recorded');
   });
 
+  it('puts Connect Google in the Google accounts group: an empty group, and after the account list', () => {
+    const inGoogleGroup = (html: string, label: string) => { const at = html.indexOf(label); return at > html.indexOf('Google accounts') && at < html.indexOf('>Chat<'); };
+    const empty = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, google: { connectAvailable: true, accounts: [] } } }} busy={false} onAction={noop}/>);
+    expect(empty).toContain('>Connect Google<'); expect(inGoogleGroup(empty, '>Connect Google<')).toBe(true);
+    const listed = renderToStaticMarkup(<ConnectionsControls record={connections} busy={false} onAction={noop}/>);
+    expect(listed).toContain('>Add Google account<'); expect(inGoogleGroup(listed, '>Add Google account<')).toBe(true);
+    expect(listed.indexOf('>Add Google account<')).toBeGreaterThan(listed.indexOf('Disconnect work@test.invalid'));
+    expect(listed.match(/Add Google account/g)).toHaveLength(1);
+  });
+
   it('does not offer unavailable connect or unlink actions and honestly shows absent accounts', () => {
     const html = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, google: { connectAvailable: false, accounts: [] }, telegram: { linked: true, unlinkAvailable: false } } }} busy={false} onAction={noop}/>);
     expect(html).toContain('No Google accounts returned'); expect(html).toContain('connection is unavailable');
