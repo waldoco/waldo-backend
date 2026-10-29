@@ -51,9 +51,15 @@ const deferredGroups = (names: readonly string[]): Map<BrainNamespace, string[]>
 };
 
 // The tools a turn admitted beyond its function list, one line per group: the exact names, then what the group is for.
-// Empty when every admitted tool is core.
-export const toolCatalogue = (names: readonly string[]): string =>
-  [...deferredGroups(names)].map(([group, members]) => `- ${group}: ${members.join(', ')}. ${BRAIN_NAMESPACES[group]}`).join('\n');
+// Empty when every admitted tool is core. Groups follow BRAIN_NAMESPACES and names sort within a group, so the same admitted
+// set gives the same bytes in the cached system prefix whatever order the host assembled its handlers in.
+export const toolCatalogue = (names: readonly string[]): string => {
+  const groups = deferredGroups(names);
+  return (Object.keys(BRAIN_NAMESPACES) as BrainNamespace[]).flatMap((group) => {
+    const members = groups.get(group);
+    return members ? [`- ${group}: ${[...members].sort().join(', ')}. ${BRAIN_NAMESPACES[group]}`] : [];
+  }).join('\n');
+};
 
 export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
   const byName = new Map(tools.map((tool) => [tool.name, tool] as const));

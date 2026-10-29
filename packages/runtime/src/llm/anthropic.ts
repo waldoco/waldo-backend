@@ -66,7 +66,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     const startedAt = Date.now();
     // Declared outside the try: a search-only response was billed even when its continuation then fails.
     const searched: Anthropic.ContentBlock[] = [];
-    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0 };
     try {
       const body: Anthropic.MessageCreateParamsNonStreaming = {
         model: input.request.model,
@@ -85,17 +85,20 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         searchSpent.input_tokens += response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
         searchSpent.output_tokens += response.usage.output_tokens;
         searchSpent.cache_read_input_tokens += response.usage.cache_read_input_tokens ?? 0;
+        searchSpent.cache_write_input_tokens += response.usage.cache_creation_input_tokens ?? 0;
         response = await this.client.messages.create({ ...body, messages: [...messages, { role: 'assistant', content: searched as Anthropic.ContentBlockParam[] }] }, { signal: controller.signal });
       }
       const text = response.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n').trim();
       const toolCalls: LLMToolCall[] = response.content.flatMap((block) => block.type === 'tool_use'
         ? [{ call_id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) }]
         : []);
-      // Anthropic's input_tokens excludes cached tokens; the seam reports the whole prompt, cache reads inside it.
+      // Anthropic's input_tokens excludes cached tokens; the seam reports the whole prompt, cache reads and writes inside it.
+      const written = searchSpent.cache_write_input_tokens + (response.usage.cache_creation_input_tokens ?? 0);
       const spent = {
         input_tokens: searchSpent.input_tokens + response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0),
         output_tokens: searchSpent.output_tokens + response.usage.output_tokens,
         cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage.cache_read_input_tokens ?? 0),
+        ...(written > 0 ? { cache_write_input_tokens: written } : {}),
       };
       const truncated = response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded';
       if (text.length === 0 && toolCalls.length === 0) {
