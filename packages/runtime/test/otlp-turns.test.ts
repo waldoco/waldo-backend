@@ -191,6 +191,17 @@ describe('otlpTurnExporter', () => {
     expect(root!.traceId).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it('names a trace by the context\'s trace id when it knows the key, and by a random one otherwise', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, traceId: (key) => (key === 'app-8000000000001' ? 'a'.repeat(32) : undefined) }, send, () => 5_000);
+    await log({ trace: 'app-8000000000001', hop: 'respond', ms: 1, ok: true });
+    await log({ trace: 'app-8000000000001', hop: 'turn', ms: 2, ok: true });
+    await log({ trace: 'tg-9', hop: 'turn', ms: 2, ok: true });
+    expect(spans(0).map((span) => span.traceId)).toEqual(['a'.repeat(32), 'a'.repeat(32)]);
+    expect(spans(1)[0]!.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(spans(1)[0]!.traceId).not.toBe('a'.repeat(32));
+  });
+
   it('flushes machine traces on a machine_turn root: reminders, ticks and nightly stop being invisible', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
