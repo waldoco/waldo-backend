@@ -4,6 +4,8 @@ import { browsePageHandler } from '../src/tools/live/browser';
 import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
+import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
+import { readToolOutputHandler } from '../src/tools/read-tool-output';
 
 const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
@@ -527,4 +529,70 @@ it('only a typed reservation refusal is reported as rejected; any other reservat
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => failed.sdk as never, reserveAllocation: async () => { throw Error('private ledger detail'); } })(args as never, context))
     .toEqual({ ok: false, code: 'transient', error: 'The Cloudflare browser read failed or its source permission changed.', source_taint: 'external' });
   expect(refused.calls).toEqual([]); expect(failed.calls).toEqual([]);
+});
+
+// A long page: the model sees one window in reading order, the part the instruction asks about first, and pages the rest
+// from the stored copy by offset, without opening the browser again.
+it('in the tool loop, a long page comes back as one window led by what the instruction asks for, the rest paged by offset', async () => {
+  const filler = (label: string, n: number) => Array.from({ length: n }, (_, index) => `${label} block ${index}: navigation, promotions and the usual site chrome repeated on every page.`).join('\n\n');
+  const body = [filler('Top', 300), 'Vegetarian options\nMushroom risotto and a spinach lasagne, both available every day.', filler('Bottom', 100)].join('\n\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const offload = inMemoryToolOutputStore();
+  const outputs: string[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never, readToolOutputHandler(offload) as never], ctx, offload, maxSteps: 5, onTool: event => outputs.push(event.output), step: async tools => {
+    if (!tools || step > 1) return { text: 'Done' };
+    if (step++ === 0) return { text: '', tool_calls: [{ call_id: 'read-1', name: 'browse_page', arguments: JSON.stringify(args) }] };
+    const page = JSON.parse(outputs[0]!).data.data;
+    return { text: '', tool_calls: [{ call_id: 'read-2', name: 'read_tool_output', arguments: JSON.stringify({ id: page.stored_output, offset: page.next_offset, length: 2_000 }) }] };
+  } });
+  expect(outputs).toHaveLength(2);
+  const first = JSON.parse(outputs[0]!);
+  expect(first).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', total_chars: expect.any(Number), next_offset: expect.any(Number), stored_output: expect.any(String), read_with: 'read_tool_output' } } });
+  const page = first.data.data;
+  // One window inline, not the page and not a 4,000-character head of escaped JSON.
+  expect(outputs[0]!.length).toBeLessThan(9_000);
+  expect(page.text.length).toBeLessThanOrEqual(8_000);
+  expect(page.text.slice(0, 400)).toContain('Mushroom risotto');
+  expect(page.total_chars).toBeGreaterThan(body.length);
+  // The next read starts exactly where the window ended.
+  const second = JSON.parse(outputs[1]!);
+  expect(second).toMatchObject({ ok: true, data: { total: page.total_chars } });
+  expect(page.text + second.data.text).toBe(offload.read(page.stored_output, 0, page.next_offset + 2_000)!.text);
+  expect(f.calls.filter(call => call === 'acquire')).toHaveLength(1);
+});
+
+it('a page that fits the window comes back whole, in its own order when the instruction singles nothing out', async () => {
+  const f = fake();
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })({ ...args, instruction: 'zzzz' } as never, context);
+  expect(result).toMatchObject({ ok: true, data: { data: { title: 'Menu', text: 'Vegetarian pasta — £12' } } });
+  expect(result.ok && result.data.data).not.toHaveProperty('next_offset');
+});
+
+it('without an output store, a long page shows its first window and says how to reach another part', async () => {
+  const body = Array.from({ length: 400 }, (_, index) => `Line ${index} of an ordinary long page with nothing special in it.`).join('\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, note: expect.stringContaining('read the page again') } } });
+  expect(result.ok && result.data.data.text.length).toBeLessThanOrEqual(8_000);
+  expect(result.ok && result.data.data).not.toHaveProperty('stored_output');
+});
+
+it('a page longer than the store keeps says how much of it was kept', async () => {
+  const body = Array.from({ length: 2_000 }, (_, index) => `Row ${index}: an ordinary line of a very long table on the page.`).join('\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const store = inMemoryToolOutputStore();
+  const keepOutput = (text: string) => ({ stored: store.put(text, { call_id: 'c1' }), text });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, keepOutput } as never);
+  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, kept_chars: 65_536, stored_output: expect.any(String) } } });
+});
+
+it('a page the output guard refuses shows none of its text', async () => {
+  const body = 'x'.repeat(20_000);
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, keepOutput: () => null } as never);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  expect(JSON.stringify(result)).not.toContain('xxxx');
 });

@@ -3,10 +3,16 @@ import type { BrowsePageArgs, RungBlockedOutcome, ToolResult } from '@waldo/cont
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../hooks/egress-policy';
 import { browserBoundedJson } from './browser-bounded-body';
+import { pageWindow, readingOrder } from './page-reading';
 import { prepareGeneralPublicRead } from './general-browser-public-read';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 
-export type CloudflarePageReader = (args: BrowsePageArgs, context: ToolDispatcherContext) => Promise<ToolResult<Readonly<{ url: string; provider: 'cloudflare_playwright'; data: { title: string; text: string } }>>>;
+// A page longer than one window carries where its text continues: the rest is read with read_tool_output from stored_output
+// at next_offset, and total_chars counts the whole text in reading order. kept_chars is set when the store kept only that
+// much of it; note says when nothing past the window could be kept.
+export type PageText = Readonly<{ title: string; text: string; total_chars?: number; kept_chars?: number; next_offset?: number; stored_output?: string; read_with?: 'read_tool_output'; note?: string }>;
+const NOT_KEPT = 'Only this part of the page can be shown here. To see another part, read the page again with an instruction that names it: the matching sections come first.';
+export type CloudflarePageReader = (args: BrowsePageArgs, context: ToolDispatcherContext) => Promise<ToolResult<Readonly<{ url: string; provider: 'cloudflare_playwright'; data: PageText }>>>;
 // Existing 30s work, 10s cleanup and 10s provider idle expiry after disconnect.
 export const PUBLIC_READ_RESERVED_BROWSER_MS=50000;
 export type PublicReadReservation = Readonly<{ settle(durationMs: number): void }>;
@@ -209,7 +215,21 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
         }
         if (page.url() !== url) result = failure('rejected', 'The page moved during the read.');
         else if (!text.trim()) result = failure('not_found', 'The page returned no readable content.');
-        else result = { ok: true, data: { url, provider: 'cloudflare_playwright', data: { title, text } }, source_taint: 'external' };
+        else {
+          const ordered = readingOrder(text, args.instruction);
+          const first = pageWindow(ordered);
+          // The whole text in reading order is kept behind the offload guard, and the window is cut from what was kept, so an
+          // offset into it continues exactly. Without a store the rest cannot be read here, and the result says so.
+          const kept = first.next_offset === null ? undefined : context.keepOutput?.(ordered);
+          if (kept === null) result = failure('rejected', 'The page text did not pass the output guard, so none of it is shown. Use another source.');
+          else if (first.next_offset === null) result = { ok: true, data: { url, provider: 'cloudflare_playwright', data: { title, text: ordered } }, source_taint: 'external' };
+          else {
+            const shown = kept ? pageWindow(kept.text) : first;
+            const total = kept ? kept.stored.original_chars : ordered.length;
+            result = { ok: true, data: { url, provider: 'cloudflare_playwright', data: { title, text: shown.text, total_chars: total, ...(shown.next_offset === null ? {}
+              : kept ? { ...(kept.stored.truncated ? { kept_chars: kept.stored.stored_chars } : {}), next_offset: shown.next_offset, stored_output: kept.stored.id, read_with: 'read_tool_output' as const } : { note: NOT_KEPT }) } }, source_taint: 'external' };
+          }
+        }
       }
     } catch (cause) {
       result = cause instanceof PublicReadRefusal ? failure('rejected', cause.message)
