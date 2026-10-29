@@ -61,7 +61,9 @@ import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
-import {ownerDirectory} from '../identity/owner-directory';
+import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
+import { agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
+import { drainAgentMail } from './agent-mail/turn';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
@@ -2795,6 +2797,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
       await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
+      await lane('mail', () => this.drainAgentMail(appWithTelegramCopy ? 'app' : channel, alarmEnd));
       await lane('jobs', () => this.drainJobs(channel, alarmEnd));
       // Results the iMessage outbox already holds, including hand-offs that aged out there, reach the records waiting on them.
       observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now());
@@ -2953,6 +2956,41 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (state === 'waiting') { state = 'abandoned'; return false; }
     await run;
     return true;
+  }
+
+  // Agent mail ingress: the Worker resolved the handle to this owner through the directory. The inbox decides whether the
+  // mail is read; an admitted message runs on the next alarm pass.
+  async admitAgentMail(doName: string, delivery: AgentMailDelivery): Promise<AgentMailAdmission | 'not_routed'> {
+    if (!this.env.OWNER_DO || this.env.OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) return 'not_routed';
+    const admitted = await agentMailInbox(this.ctx.storage).admit(delivery);
+    if (admitted === 'admitted') await this.rearmEveryWake();
+    return admitted;
+  }
+  private readonly agentMailAttempts = new Set<string>();
+  // Mail turns run as the owner's job on the surface that takes their proactive work, as Mac reports do, and only while the
+  // handle still routes here: a handle released after its mail arrived closes that mail unread.
+  private async drainAgentMail(channel: ChannelKind, alarmEnd?: number): Promise<void> {
+    const inbox = agentMailInbox(this.ctx.storage);
+    if (!inbox.pending().length) { inbox.recover(this.agentMailAttempts); return; }
+    let runtime: OwnerRuntime | null = null;
+    try { runtime = this.setup(channel); } catch { runtime = null; }
+    if (!runtime || !this.macSurfaceBound(channel, runtime)) { inbox.retryLater(MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS); console.warn(JSON.stringify({ hop: 'agent_mail_turn', code: 'no_surface' })); return; }
+    await runtime.ready;
+    const doName = this.ctx.storage.kv.get<string>('do_name'), domain = this.env.AGENT_MAIL_DOMAIN ?? '';
+    const turnTools = () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task');
+    await drainAgentMail({
+      inbox, live: this.agentMailAttempts,
+      routesHere: async handle => doName !== undefined && (await agentMailRoute(this.env, handle))?.doName === doName,
+      address: handle => `${handle}@${domain}`,
+      canaries: newSessionCanaryTokens,
+      turn: (row, mail, current) => this.asOwnerJob('agent_mail', `mail:${row.id}`, () =>
+        runtime.macFollowup(`mail:${row.id}`, runtime.owner, mail.text, async (_hop, work) => work(), turnTools(), current, undefined, undefined, 'external', false, mail.attachments)),
+      deliver: (row, text, commit) => runtime.finalOutbox.enqueueFenced({ id: `mail:${row.id}`, trace: `mail:${row.id}`, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text },
+        ownerSubject: String(runtime.owner), doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => this.ctx.storage.transactionSync(() => { work(); commit(); })),
+      room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
+      log: code => console.log(JSON.stringify({ hop: 'agent_mail_turn', code })),
+    });
+    await this.rearmEveryWake();
   }
 
   async admitMacDelivery(value: unknown): Promise<boolean> {

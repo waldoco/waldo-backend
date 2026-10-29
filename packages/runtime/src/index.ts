@@ -26,6 +26,7 @@ import { readConsoleTicket } from './identity/console-ticket';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
+import { receiveAgentMail } from './channels/agent-mail/ingress';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -81,6 +82,8 @@ declare global {
       ANTHROPIC_API_KEY?: string;
       WALDO_ENV?: string;
       WALDO_RELEASE?: string;
+      AGENT_MAIL_INBOUND?: string;
+      AGENT_MAIL_DOMAIN?: string;
     }
   }
 }
@@ -213,6 +216,11 @@ const worker = {
         'vary': 'Authorization, Accept',
       },
     });
+  },
+  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It never calls setReject: a reject bounces
+  // to the sender, which for forged mail is backscatter.
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+    await receiveAgentMail(message, env);
   },
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

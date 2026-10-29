@@ -58,6 +58,9 @@ const TABLES: Record<string, Row> = {
   notify_issues: exempt('per-device notification identifiers and issuance times only'),
   mac_issues: exempt('per-device use_mac request identifiers and issue times for rate limits; no command text'),
   mac_deliveries: gap('per-device use_mac result and session-event bodies (status, exit code, up to 6 KB of command output tail) awaiting hand-off to the owner DO; admitted rows keep the body; isolated device custody, literal owner forget does not reach it; revoke clears storage after replay horizon'),
+  agent_mail_inbox: exempt('an agent mail row: id, a dedup digest, the handle, why it was read, state, attempt id and times; no mail text'),
+  agent_mail_threads: exempt('Message-IDs Waldo was sent, their direction, time and thread id; no bodies, subjects or names'),
+  agent_mail_raw: gap('the raw inbound mail (third-party text, the owner\'s forwarded words, attachments) from admission until its turn closes, then deleted; MIME encoding hides literals, so a literal owner forget does not reach the held bytes'),
   mac_result_inbox: gap('owner-side use_mac result and session-event bodies (status, exit code, up to 6 KB of command output tail) awaiting the Telegram follow-up; finished and quarantined rows keep the body; a literal owner forget does not reach it'),
   // Per iMessage bridge/account custody (IMessageBridgeDO). nonces/meta rows above also cover its replay nonces and bridge meta (ids, generation, cursor, heartbeat, capability report, quarantine reason).
   events: gap('per-bridge inbound event identity and raw digest; the message body is dropped once handed/acknowledged and those rows are pruned after 7 days; held events (media, revoked scope) keep their text as evidence until pruned after 30 days; a literal owner forget does not reach this isolated custody'),
