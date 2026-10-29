@@ -5,21 +5,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryActions, readMemoryControls } from './MemoryActions';
 
 const id = 'owner:claim:7';
-const wire = (actions: string[]) => ({ version: 1, view: 'memory', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64),
-  data: { id, status: 'active', review: { label: 'Likes tea', note: 'Writer note' }, actions } });
+const wire = (actions: string[], target = id) => ({ version: 1, view: 'memory', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64),
+  data: { id: target, status: 'active', review: { label: 'Likes tea', note: 'Writer note' }, actions } });
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; window.location.hash = ''; });
 
 // Renders the item's controls with the given actions, and keeps every POST the panel makes.
-const panel = async (actions: string[], answer: () => Response = () => Response.json({ duplicate: false, receipt: { state: 'recorded', message: 'Saved.' } })) => {
+const panel = async (actions: string[], answer: () => Response = () => Response.json({ duplicate: false, receipt: { state: 'recorded', message: 'Saved.' } }), target = id) => {
   const posts: FormData[] = [];
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('fetch', vi.fn(async (_input: string, init?: RequestInit) => {
     if (init?.method === 'POST') { posts.push(init.body as FormData); return answer(); }
-    return Response.json(wire(actions));
+    return Response.json(wire(actions, target));
   }));
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
-  await act(async () => root.render(<MemoryActions id={id}/>));
+  await act(async () => root.render(<MemoryActions id={target}/>));
   await flush();
   const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label);
   return { host, root, posts, button };
@@ -53,6 +53,23 @@ describe('pinning and editing a Spot from the dashboard', () => {
     await act(async () => view.button('Save edit')!.click());
     await flush();
     expect(view.posts.map(body => [body.get('action'), body.get('value')])).toEqual([['spot.edit', 'Likes green tea']]);
+    await act(async () => view.root.unmount());
+  });
+
+  it('confirms a pattern, and corrects it in the owner\'s words', async () => {
+    const node = 'owner:node:3';
+    const view = await panel(['node.confirm', 'node.correct', 'node.forget'], undefined, node);
+    const field = view.host.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(view.host.textContent).toContain('Correct this pattern in your words');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, ' Writes in the late morning ');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => view.button('Save edit')!.click());
+    await flush();
+    await act(async () => view.button('That’s right')!.click());
+    await flush();
+    expect(view.posts.map(body => [body.get('action'), body.get('value'), body.get('id')])).toEqual([['node.correct', 'Writes in the late morning', node], ['node.confirm', null, node]]);
     await act(async () => view.root.unmount());
   });
 

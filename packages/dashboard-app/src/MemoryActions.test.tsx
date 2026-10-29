@@ -6,6 +6,11 @@ const id='owner:claim:5';
 const wire={version:1,view:'memory',state:'available',csrf:'c'.repeat(64),revision:'a'.repeat(64),data:{id,status:'active',review:{label:'Current saved preference',note:'Writer note'},actions:['spot.confirm','spot.dismiss','spot.forget']}};
 afterEach(()=>vi.unstubAllGlobals());
 describe('Memory action review and transport',()=>{
+ it('accepts a pattern\'s confirm and correct, and nothing outside the Memory actions',()=>{
+  const node='owner:node:3',read={...wire,data:{id:node,status:'active',review:{label:'Deep work in the mornings',note:'Focused before noon'},actions:['node.confirm','node.correct','node.forget']}};
+  expect(readMemoryControls(read,node).data.actions).toEqual(['node.confirm','node.correct','node.forget']);
+  expect(()=>readMemoryControls({...read,data:{...read.data,actions:['node.promote']}},node)).toThrow();
+ });
  it('requires a current review and exact target, never accepts another owner or a hidden pending body',()=>{
   expect(()=>readMemoryControls({...wire,data:{...wire.data,id:'other:claim:5'}},id)).toThrow();
   expect(()=>readMemoryControls({...wire,data:{...wire.data,review:undefined}},id)).toThrow();

@@ -2492,7 +2492,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
-              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConsoleStart():null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin,action.id||undefined));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));

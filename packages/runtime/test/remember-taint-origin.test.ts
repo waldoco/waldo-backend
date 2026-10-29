@@ -3,7 +3,8 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { readThreadArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { claimStore, memoryPrompt, turnMemoryPrompt, type ClaimStore } from '../src/memory/claims';
-import { dashboardMemory } from '../src/channels/dashboard-memory';
+import { memoryControl } from '../src/channels/dashboard-memory-actions';
+import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 
@@ -72,8 +73,8 @@ it.each([
   expect(profile).not.toContain(PLANTED);
   expect(prompt).toContain('source="inferred" provenance="provisional"');
   expect(prompt).toContain('in a turn that read outside content');
-  expect(dashboardMemory({ now: NOW.getTime(), spots: claims, retired: [], forgetting: [], holds: [], profile: [] }).spots)
-    .toMatchObject([{ text: PLANTED, source_label: "Waldo's inference", provisional: true, provenance: 'unverified', allowed_actions: ['spot.confirm', 'spot.dismiss', 'spot.forget'] }]);
+  expect(memoryControl({ ...SAMPLE_CONSOLE_VIEW, spots: claims }, 'owner', `owner:claim:${claims[0]!.id}`))
+    .toMatchObject({ source: 'inferred', origin: 'agent', review: { label: PLANTED }, actions: expect.arrayContaining(['spot.confirm', 'spot.dismiss', 'spot.forget']) });
 });
 
 // A tainted turn cannot lift a claim from shared content into recall by saying it again.
