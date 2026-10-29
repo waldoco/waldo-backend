@@ -300,6 +300,7 @@ export const browsePageArgsSchema = z.strictObject({
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
+  escalate: z.enum(['blocked', 'login', 'verification_challenge', 'multi_step']).optional().describe('Opens a costlier hosted browser; the reason why.'),
 });
 export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 

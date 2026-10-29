@@ -308,6 +308,13 @@ describe('browsePageArgs', () => {
     expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: '' }).success).toBe(false);
     expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'x', act: 'click' }).success).toBe(false);
   });
+  it('carries the model\'s typed escalation decision as its reason', () => {
+    const page = { url: 'https://example.com', instruction: 'read', retain_session: true };
+    for (const escalate of ['blocked', 'login', 'verification_challenge', 'multi_step'] as const)
+      expect(browsePageArgsSchema.safeParse({ ...page, escalate }).success).toBe(true);
+    for (const invalid of [{ escalate: 'cheaper' }, { escalate: true }, { escalate: '' }, { browser: 'escalated' }])
+      expect(browsePageArgsSchema.safeParse({ ...page, ...invalid }).success).toBe(false);
+  });
 });
 
 describe('webSearchArgs', () => {

@@ -345,6 +345,12 @@ it('a POST form submit is refused with the typed native_submit_requires_card bef
  const text=JSON.stringify(refused);expect(text).toContain('native_submit_requires_card');expect(text).not.toContain('outcome is unknown');
  expect(commonBrowserFixture.effects).toBe(0);expect((f.rows.get('common-browser:fixture-task') as any).action).toBeUndefined();await host.cancel();
 });
+it('a dialog-method form is refused like any submit that is not a GET',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.form=true;commonBrowserFixture.formMethod='dialog' as never;commonBrowserFixture.formAction='https://public-pages.fixture.invalid/a';
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ const refused=await host.actionHandler.handle({url:first.data.url,task:'Close',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,key:'Enter',intent:'read'}},f.ctx);
+ expect(JSON.stringify(refused)).toContain('native_submit_requires_card');expect(commonBrowserFixture.effects).toBe(0);await host.cancel();
+});
 it('a GET form whose action leaves the granted origins is refused before dispatch',async()=>{
  const f=fixture(),host=f.host();commonBrowserFixture.form=true;commonBrowserFixture.formMethod='get';commonBrowserFixture.formAction='https://elsewhere.fixture.invalid/search';
  const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
@@ -363,4 +369,21 @@ it('a link-heavy long page is read and acted on: the checkpoint keeps only the s
  const unshown=first.data.elements[63].ref.replace(/:63$/,':200');
  expect(await host.actionHandler.handle({url:first.data.url,task:'Open an unshown link',max_actions:1,command:{operation:'click',element_ref:unshown}},f.ctx)).toMatchObject({ok:false});
  expect(commonBrowserFixture.effects).toBe(1);await host.cancel();
+});
+it('a vendor-configured host opens its session under that provider, and each cleanup touches only its own provider',async()=>{
+ const f=fixture(),vendor={...f.config,provider:'browserbase_cdp' as const},host=commonBrowserHost({storage:f.storage,config:vendor,ownerId:'fixture-owner',source:()=>({taskId:'fixture-task',revision:1,sources:['browser'],ready:true,startRef:'fixture-owner'}),assertCurrent:async()=>{},deadline:()=>Date.now()+60000,now:Date.now});
+ expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx)).toMatchObject({ok:true});
+ expect((f.rows.get('common-browser:fixture-task') as any).session.provider).toBe('browserbase_cdp');
+ const expired=Date.now()+120000;
+ await maintainCommonBrowsers(f.storage,{...f.config,ownsGrant:()=>true},expired);
+ expect(commonBrowserFixture.ends).toBe(0);expect((f.rows.get('common-browser:fixture-task') as any).cleanup).toBeUndefined();
+ await maintainCommonBrowsers(f.storage,{...vendor,ownsGrant:()=>true},expired);
+ expect(commonBrowserFixture.ends).toBe(1);expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed'});
+});
+it('owner sign-in on a vendor session is refused typed until its live-view handoff exists, and nothing is handed off',async()=>{
+ const f=fixture(),host=commonBrowserHost({storage:f.storage,config:{...f.config,provider:'browserbase_cdp' as const,assertHandoffCurrent:async()=>{}},ownerId:'fixture-owner',source:()=>({taskId:'fixture-task',revision:1,sources:['browser'],ready:true,startRef:'fixture-owner'}),assertCurrent:async()=>{},deadline:()=>Date.now()+60000,now:Date.now});
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ const refused=await host.actionHandler.handle({url:first.data.url,task:'Sign in',max_actions:1,command:{operation:'owner_login',reason:'Needs the owner account'}},{...(f.ctx as any),turnId:'owner-turn'});
+ expect(refused).toMatchObject({ok:false});expect(JSON.stringify(refused)).toContain('owner_login_unavailable');
+ expect((f.rows.get('common-browser:fixture-task') as any).handoff).toBeUndefined();await host.cancel();
 });
