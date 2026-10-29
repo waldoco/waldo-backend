@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { messagingSystemPrompt, type SurfacePresentation } from '../src/prompt/messaging-behavior';
-import { BRAIN_NAMESPACES, TOOL_RECORDS } from '../src/tools/records';
-import { toolCatalogue } from '../src/tools/loader';
+import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools } from '../src/tools/records';
+import { harnessToolLoader, toolCatalogue } from '../src/tools/loader';
 
 const presentation: SurfacePresentation = { surface: 'app', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: false } };
 const NAMES = Object.keys(TOOL_RECORDS);
@@ -40,5 +40,19 @@ describe('tool catalogue in the system prompt', () => {
     const without = NAMES.filter((name) => name !== 'browse_act');
     expect(messagingSystemPrompt(shuffled(without, 3), presentation, 'harness')).toBe(messagingSystemPrompt(shuffled(without, 4), presentation, 'harness'));
     expect(messagingSystemPrompt(without, presentation, 'harness')).not.toBe(messagingSystemPrompt(NAMES, presentation, 'harness'));
+  });
+});
+
+// The tool list leads the provider's cache prefix ahead of the system prompt, so it follows the same rule.
+describe('tool lists offered to the model', () => {
+  const tools = NAMES.map((name) => ({ name, description: `${name}.`, parameters: { type: 'object', properties: {} } }));
+  const orders = Array.from({ length: 20 }, (_, seed) => shuffled(NAMES, seed + 1).map((name) => tools.find((tool) => tool.name === name)!));
+
+  it('the harness loader offers the same core list for the same admitted set in any order', () => {
+    expect(new Set(orders.map((order) => JSON.stringify(harnessToolLoader(order).offered))).size).toBe(1);
+  });
+
+  it('the native tool list is the same for the same admitted set in any order, with tool search on or off', () => {
+    for (const toolSearch of [true, false]) expect(new Set(orders.map((order) => JSON.stringify(brainTools(order, toolSearch)))).size).toBe(1);
   });
 });
