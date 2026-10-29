@@ -125,6 +125,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
             </div></details></li>; })}
           {!google.accounts.length && <li className="branch broken"><p className="empty-line">No Google accounts returned.</p></li>}
         </ul>
+        <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
         <p className="tree-group label">Chat</p>
         <ul><li className={`branch${telegram.linked ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><ConnectorMark id="telegram" label="Telegram"/></span><span className="value">Telegram</span><span className={`access-label${telegram.linked ? '' : ' reconnect'}`}>{telegram.linked ? 'Linked' : 'Unlinked'}</span></summary>
           <div className="disclosure-body"><p><Explained about="Telegram" text="Chat, cards and reminders arrive in your Telegram DM. Instructions appear here once you ask to link."/></p>
@@ -144,7 +145,6 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           <div className="disclosure-body"><p>Pair Kennel on your Mac so Waldo can check on it and send it notifications you choose.</p>
             <div className="control-actions"><a className="quiet-link" href="#/connections/devices">Manage devices</a></div></div></details></li></ul>
       </div><Patch className="figure" label="A patch panel of ports, an interactive illustration. Decorative."/></div>
-      <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
     </section>}
     {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This browser stays signed in while you use it; left unused, it signs out at {sessions.until}.</p>
       <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, signs out {item.until} if unused</li>)}</ul>
@@ -217,7 +217,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
     <span className="receipt-mark" aria-hidden="true">{receipt.state === 'recorded' ? <svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></svg> : <Icon name="warning"/>}</span>
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
-    {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
+    {receipt.navigation && <a className="button-link" href={receipt.navigation}>{new URL(receipt.navigation, 'https://console.invalid').pathname.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
     {receipt.signed_out ? <a href={signInHref()}>Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }
