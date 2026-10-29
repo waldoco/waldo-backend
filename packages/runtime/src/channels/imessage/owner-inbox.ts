@@ -28,6 +28,8 @@ export type IMessageInboxRecord = {
   commandId: string; occurredAt: number; admittedAt: number;
   /** The owner's message this turn answers: the one message a tapback from Waldo may go on. Absent on older records. */
   messageRef?: Readonly<{ messageGuid: string; partIndex: number }>;
+  /** The owner wrote this message as an iMessage reply, to any message or inside a thread. Absent on older records. */
+  ownerThreaded?: true;
   /** The message's files as references: the turn fetches the bytes, and they are never stored. */
   media?: IMessageMedia;
   /** Tapback lines taken for this turn when it started; cleared with its text. */
