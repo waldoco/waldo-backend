@@ -25,6 +25,9 @@ vi.mock('../src/channels/telegram-turn', async load => {
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
+// The PDF renderer loads pdf-lib on first export, which takes seconds in this pool. Loaded here, so the test's second OwnerDO
+// instance cannot have its alarm mark the turn's attempt lost while that first load runs.
+await import('pdf-lib');
 
 const OWNER_ID = '4b3a2918-0f7e-4d6c-9b5a-4c3d2e1f0a9b';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
