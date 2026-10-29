@@ -217,7 +217,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
     <span className="receipt-mark" aria-hidden="true">{receipt.state === 'recorded' ? <svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></svg> : <Icon name="warning"/>}</span>
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
-    {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
+    {receipt.navigation && <a className="button-link" href={receipt.navigation}>{new URL(receipt.navigation, 'https://console.invalid').pathname.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
     {receipt.signed_out ? <a href={signInHref()}>Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }

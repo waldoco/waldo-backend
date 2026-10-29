@@ -71,6 +71,18 @@ describe('modern account controls', () => {
   });
 });
 
+describe('the connect receipt button', () => {
+  const label = (navigation: string) => /<a [^>]*>([^<]*)<\/a>/.exec(renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'recorded', message: 'Ready.', navigation }, duplicate: false }} onRefresh={noop} busy={false}/>))?.[1];
+  it('says sign in for an MCP start link and Google for a Google one, whether the href is absolute or not', () => {
+    const nonce = 'A'.repeat(43);
+    expect(label(`https://w.test/console/mcp/start/${nonce}`)).toBe('Continue to sign in');
+    expect(label(`/console/mcp/start/${nonce}`)).toBe('Continue to sign in');
+    expect(label(`https://w.test/console/google/start/${nonce}`)).toBe('Continue to Google');
+    expect(label('https://accounts.google.com/o/oauth2/v2/auth?state=s')).toBe('Continue to Google');
+    expect(label('https://w.test/c/ABCDEFGHIJKLMNOPQRSTUV')).toBe('Continue to Google');
+  });
+});
+
 describe('receipt and read recovery', () => {
   it('distinguishes loading, signed-out and failed reads without manufacturing empty records', () => {
     expect(renderToStaticMarkup(<ControlsFeedback state={{ kind: 'loading' }} onRefresh={noop}/>)).toContain('role="status"');
