@@ -135,11 +135,17 @@ describe('llmResponse metering', () => {
       'input_tokens',
       'output_tokens',
       'cache_read_input_tokens',
+      'cache_write_input_tokens',
       'latency_ms',
       'output_items',
       'truncated',
       'ttft_ms',
     ]);
+  });
+
+  it('may carry cache writes as a whole, non-negative count, and needs none', () => {
+    expect(llmResponseSchema.safeParse({ ...baseResponse, cache_write_input_tokens: 900 }).success).toBe(true);
+    for (const cache_write_input_tokens of [-1, 1.5, '900', null]) expect(llmResponseSchema.safeParse({ ...baseResponse, cache_write_input_tokens }).success, String(cache_write_input_tokens)).toBe(false);
   });
 
   it('a streamed response may carry its time to first token as a whole, non-negative number of ms', () => {
