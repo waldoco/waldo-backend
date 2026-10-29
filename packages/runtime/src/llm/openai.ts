@@ -241,7 +241,7 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
 
 // Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
 // the provider's attempt plan decides what follows.
-// Prompt tokens written to the cache, which GPT-5.6 and later bill at the write rate and report beside cached_tokens
+// Prompt tokens written to the cache, which the routed models bill at the write rate and report beside cached_tokens
 // (https://developers.openai.com/api/docs/guides/prompt-caching). The pinned SDK's types predate the field.
 const cacheWrites = (response: OpenAI.Responses.Response): number => {
   const written = (response.usage?.input_tokens_details as { cache_write_tokens?: unknown } | undefined)?.cache_write_tokens;
