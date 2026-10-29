@@ -245,15 +245,16 @@ const dropCutTail = (text: string): string => {
 // reads the same body, so it is never reported as transient.
 export class BodyWithheld extends Error {}
 export const WITHHELD_BODY = "[This message's body was withheld: it could not be checked safely, so it is not shown.]";
-export const scribedBody = (text: string, canaries: readonly string[]): string => {
-  const scribed = sanitise({ payload: { body: text }, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
+export const scribedExternal = <T extends Parameters<typeof sanitise>[0]['payload']>(payload: T, canaries: readonly string[]): T => {
+  const scribed = sanitise({ payload, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
   if (!scribed.ok) {
     // Which check refused it and why, nothing of the message: a canary, a secret and a health refusal stay distinguishable in traces.
     console.log(JSON.stringify({ hop: 'mail_body_withheld', ok: false, code: `${scribed.check}:${scribed.reason}` }));
     throw new BodyWithheld('mail body refused by the scribe');
   }
-  return (scribed.payload as { body: string }).body;
+  return scribed.payload as T;
 };
+export const scribedBody = (text: string, canaries: readonly string[]): string => scribedExternal({ body: text }, canaries).body;
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
 // A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the

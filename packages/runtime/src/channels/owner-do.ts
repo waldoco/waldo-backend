@@ -63,7 +63,7 @@ import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbo
 import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
 import { agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
-import { drainAgentMail } from './agent-mail/turn';
+import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
@@ -2977,14 +2977,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!runtime || !this.macSurfaceBound(channel, runtime)) { inbox.retryLater(MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS); console.warn(JSON.stringify({ hop: 'agent_mail_turn', code: 'no_surface' })); return; }
     await runtime.ready;
     const doName = this.ctx.storage.kv.get<string>('do_name'), domain = this.env.AGENT_MAIL_DOMAIN ?? '';
-    const turnTools = () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task');
     await drainAgentMail({
       inbox, live: this.agentMailAttempts,
       routesHere: async handle => doName !== undefined && (await agentMailRoute(this.env, handle))?.doName === doName,
       address: handle => `${handle}@${domain}`,
       canaries: newSessionCanaryTokens,
       turn: (row, mail, current) => this.asOwnerJob('agent_mail', `mail:${row.id}`, () =>
-        runtime.macFollowup(`mail:${row.id}`, runtime.owner, mail.text, async (_hop, work) => work(), turnTools(), current, undefined, undefined, 'external', false, mail.attachments)),
+        runtime.macFollowup(`mail:${row.id}`, runtime.owner, mail.text, async (_hop, work) => work(), AGENT_MAIL_TURN_TOOLS, current, undefined, undefined, 'external', false, mail.attachments)),
       deliver: (row, text, commit) => runtime.finalOutbox.enqueueFenced({ id: `mail:${row.id}`, trace: `mail:${row.id}`, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text },
         ownerSubject: String(runtime.owner), doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => this.ctx.storage.transactionSync(() => { work(); commit(); })),
       room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
