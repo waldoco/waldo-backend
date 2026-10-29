@@ -70,7 +70,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | Workers AI `AI`, Vectorize `VECTORIZE` (`waldo-recall`) | bound | none (guard forbids top level) | none. No source file reads them [source]. |
 | Assets | `../dashboard-app/dist` | same | same |
 | Observability | logs on, invocation logs off, query strings redacted, traces off | same | same (guarded) |
-| Routes / custom domain | none (`workers.dev`) | none | One host only, plus `workers_dev: false` (S6, P2). The owner DO stores the last request's origin and builds every link and OAuth redirect from it, so two live hosts flip it (`owner-do.ts:1219-1221`, `:2695`). |
+| Routes / custom domain | `staging.heywaldo.in` (custom domain) and `workers.dev`, which webhooks still post to; `WALDO_PUBLIC_ORIGIN` is `https://staging.heywaldo.in` | none | One custom domain with `WALDO_PUBLIC_ORIGIN` set to it (S6, P2). Every stored-origin writer goes through `publicOrigin()` (`connectors/public-origin.ts`), so a second live host cannot flip the owner DO's origin. Browser page loads on another host move to the configured one (`channels/canonical-host.ts`). |
 | Deploy path | `scripts/deploy-runtime.sh --env staging` from the Mac | **The same script with no flag deploys production** (`scripts/deploy-runtime.sh:5`) | An explicit `--env production`, with no argument refused (P2) |
 
 ### 1.2 Worker vars
