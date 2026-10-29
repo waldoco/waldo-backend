@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appHistoryResultV1Schema, appRatingResultV1Schema } from '../../contracts/src/app/core';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
@@ -21,9 +21,19 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '4b3a2918-0f7e-4d6c-9b5a-4c3d2e1f0a9b';
+// Langfuse as the API answers it: OTLP traces in, scores created and deleted. `refuse` answers every score call with a status.
+const langfuse = vi.hoisted(() => ({ calls: [] as { method: string; path: string; body: unknown }[], refuse: 0 }));
+const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging' };
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
+  langfuse.calls = []; langfuse.refuse = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.origin === 'https://langfuse.test') {
+      langfuse.calls.push({ method: init?.method ?? 'GET', path: url.pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (langfuse.refuse && url.pathname.startsWith('/api/public/scores')) return new Response('refused', { status: langfuse.refuse });
+      return url.pathname === '/api/public/scores' ? Response.json({ accepted: 1 }, { status: 202 }) : Response.json({});
+    }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
@@ -38,12 +48,12 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 type Owner = InstanceType<typeof OwnerDO>;
 // One owner with `exchanges` exchanges in main chat; `run` gets the owner object, its storage and the newest pair's ids.
-const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1) =>
+const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...config });
     try {
       for (let index = 1; index <= exchanges; index += 1) {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: `rating-client-0${index}`, text: 'hello there' }) }));
@@ -163,5 +173,68 @@ it('a rated reply carries its rating in history from chat=6, and an unrated row,
     expect((await history(owner, 'app-rating-history', 'chat=6')).messages.find(message => message.id === reply)?.rating).toBe('down');
     await rate(owner, 'app-rating-history', reply, { request_id: 'rating-req-0003', rating: null });
     expect((await history(owner, 'app-rating-history', 'chat=6')).messages.every(message => !('rating' in message))).toBe(true);
+  });
+});
+
+describe('Like and Dislike reach Langfuse as a score on the reply\'s turn trace', () => {
+  type Span = { traceId: string; name: string; attributes: { key: string; value: { stringValue?: string } }[] };
+  const spans = () => langfuse.calls.filter(call => call.path === '/api/public/otel/v1/traces').flatMap(call => (call.body as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  const scoreCalls = () => langfuse.calls.filter(call => call.path.startsWith('/api/public/scores'));
+  const turnTraceId = async (reply: string) => {
+    expect(reply).toMatch(/^app-\d+-reply$/);
+    const key = reply.slice(0, -'-reply'.length);
+    await vi.waitFor(() => expect(spans().some(span => span.name === 'app.turn' && span.attributes.some(a => a.key === 'langfuse.observation.metadata.trace_key' && a.value.stringValue === key))).toBe(true));
+    return spans().find(span => span.name === 'app.turn' && span.attributes.some(a => a.value.stringValue === key))!.traceId;
+  };
+
+  it('scores a Like on the turn trace, replaces it on a change, deletes it on a clear, and sends nothing but the value and its source', async () => {
+    await withExchange('app-rating-score', async (owner, _state, { reply }) => {
+      const traceId = await turnTraceId(reply);
+      await rate(owner, 'app-rating-score', reply, { request_id: 'rating-req-0001', rating: 'up' });
+      await vi.waitFor(() => expect(scoreCalls()).toHaveLength(1));
+      const [liked] = scoreCalls();
+      expect(liked).toEqual({ method: 'POST', path: '/api/public/scores', body: [{ id: expect.stringMatching(/^[0-9a-f-]{36}$/), traceId, name: 'reply_rating', value: 1, dataType: 'BOOLEAN', environment: 'staging', metadata: { source: 'app' } }] });
+      const first = (liked!.body as { id: string }[])[0]!.id;
+      // The same rating again, and a replayed request, reach Langfuse not at all.
+      await rate(owner, 'app-rating-score', reply, { request_id: 'rating-req-0002', rating: 'up' });
+      await rate(owner, 'app-rating-score', reply, { request_id: 'rating-req-0001', rating: 'up' });
+      await rate(owner, 'app-rating-score', reply, { request_id: 'rating-req-0003', rating: 'down' });
+      await vi.waitFor(() => expect(scoreCalls()).toHaveLength(3));
+      const [, removed, disliked] = scoreCalls();
+      expect(removed).toEqual({ method: 'DELETE', path: `/api/public/scores/${first}`, body: null });
+      const second = (disliked!.body as { id: string; value: number }[])[0]!;
+      expect([second.value, second.id === first]).toEqual([0, false]);
+      await rate(owner, 'app-rating-score', reply, { request_id: 'rating-req-0004', rating: null });
+      await vi.waitFor(() => expect(scoreCalls()).toHaveLength(4));
+      expect(scoreCalls()[3]).toEqual({ method: 'DELETE', path: `/api/public/scores/${second.id}`, body: null });
+      expect(JSON.stringify(scoreCalls())).not.toMatch(/quartz-heron|hello there|app-rating-score|4b3a2918/);
+    }, 1, LANGFUSE);
+  });
+
+  it('keeps the rating when Langfuse refuses, tries each score call once, and logs only the status', async () => {
+    langfuse.refuse = 500;
+    await withExchange('app-rating-refused', async (owner, state, { reply }) => {
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+      try {
+        expect((await rate(owner, 'app-rating-refused', reply, { request_id: 'rating-req-0001', rating: 'up' })).status).toBe(200);
+        await vi.waitFor(() => expect(lines.some(line => line.includes('rating_score'))).toBe(true));
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } finally { spy.mockRestore(); }
+      expect(stored(state)).toEqual([{ message_id: reply, rating: 'up', at: expect.any(Number) }]);
+      expect(scoreCalls()).toHaveLength(1);
+      const logged = lines.filter(line => line.includes('rating_score'));
+      expect(logged).toHaveLength(1);
+      expect(JSON.parse(logged[0]!)).toEqual({ hop: 'rating_score', ok: false, code: 'http_500' });
+    }, 1, LANGFUSE);
+  });
+
+  it('sends nothing to Langfuse when it is not configured', async () => {
+    await withExchange('app-rating-unscored', async (owner, state, { reply }) => {
+      expect((await rate(owner, 'app-rating-unscored', reply, { request_id: 'rating-req-0001', rating: 'up' })).status).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(langfuse.calls).toEqual([]);
+      expect(stored(state)).toHaveLength(1);
+    });
   });
 });

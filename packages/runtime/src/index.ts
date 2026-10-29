@@ -20,6 +20,7 @@ import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
 import { sweepHealthRetention } from './health/retention-sweep';
+import { langfuseSweepLogLine, sweepLangfuseRetention } from './observability/langfuse-retention';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
 import { consoleAuth, OWNER_COOKIE } from './identity/console-auth';
 import { readConsoleTicket } from './identity/console-ticket';
@@ -84,6 +85,10 @@ declare global {
       WALDO_RELEASE?: string;
       AGENT_MAIL_INBOUND?: string;
       AGENT_MAIL_DOMAIN?: string;
+      LANGFUSE_PUBLIC_KEY?: string;
+      LANGFUSE_SECRET_KEY?: string;
+      LANGFUSE_BASE_URL?: string;
+      LANGFUSE_RETENTION_SWEEP?: string;
     }
   }
 }
@@ -227,6 +232,9 @@ const worker = {
     // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
+    // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
+    // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
+    if (env.LANGFUSE_RETENTION_SWEEP === '1' || env.LANGFUSE_RETENTION_SWEEP === 'dry') ctx.waitUntil(sweepLangfuseRetention(env).then((outcome) => (outcome.overdue ? console.error : console.log)(langfuseSweepLogLine(outcome))));
   },
 } satisfies ExportedHandler<Env>;
 
