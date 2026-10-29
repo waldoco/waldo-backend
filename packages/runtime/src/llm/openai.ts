@@ -75,7 +75,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     const startedAt = Date.now();
     // Declared outside the try: a search-only response was billed even when its continuation then fails.
     const searched: OpenAI.Responses.ResponseOutputItem[] = [];
-    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0 };
     try {
       const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
@@ -109,6 +109,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
         searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
         searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
+        searchSpent.cache_write_input_tokens += cacheWrites(response);
         const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
         response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
       }
@@ -116,10 +117,12 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       const strictSent = strictParametersByTool(input.request);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
       const incomplete = response.status === 'incomplete';
+      const written = searchSpent.cache_write_input_tokens + cacheWrites(response);
       const spent = {
         input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
         output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
         cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
+        ...(written > 0 ? { cache_write_input_tokens: written } : {}),
       };
       if (incomplete && text.length === 0 && toolCalls.length === 0) {
         return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}`, spent };
@@ -238,6 +241,12 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
 
 // Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
 // the provider's attempt plan decides what follows.
+// Prompt tokens written to the cache, which the routed models bill at the write rate and report beside cached_tokens
+// (https://developers.openai.com/api/docs/guides/prompt-caching). The pinned SDK's types predate the field.
+const cacheWrites = (response: OpenAI.Responses.Response): number => {
+  const written = (response.usage?.input_tokens_details as { cache_write_tokens?: unknown } | undefined)?.cache_write_tokens;
+  return typeof written === 'number' && Number.isInteger(written) && written > 0 ? written : 0;
+};
 const SEARCH_CONTINUATIONS = 2;
 const onlySearched = (response: OpenAI.Responses.Response): boolean => response.status !== 'incomplete'
   && response.output.some((item) => (item.type as string) === 'tool_search_output')

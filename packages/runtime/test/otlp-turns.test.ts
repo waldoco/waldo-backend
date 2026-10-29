@@ -297,6 +297,19 @@ describe('otlpTurnExporter', () => {
     expect(attrs(root!)['langfuse.observation.type']).toBe('agent');
   });
 
+  it('reports cache writes as their own usage and cost, apart from uncached input and reads', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-w', hop: 'llm_reply', ms: 900, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1200, output: 80, cached: 200, cache_write: 900 } });
+    await log({ trace: 'tg-w', hop: 'turn', ms: 1000, ok: true });
+    const gen = attrs(spans(0)[1]!);
+    expect(JSON.parse(gen['langfuse.observation.usage_details'] as string)).toEqual({ input: 100, input_cached_tokens: 200, input_cache_write_tokens: 900, output: 80 });
+    const cost = JSON.parse(gen['langfuse.observation.cost_details'] as string);
+    expect(cost.cache_write).toBeCloseTo((900 * 0.125) / 1e6, 12);
+    expect(cost.total).toBeCloseTo((100 * 0.1 + 200 * 0.01 + 900 * 0.125 + 80 * 0.5) / 1e6, 12);
+    expect(JSON.parse(gen['langfuse.observation.metadata.price_source'] as string).usd_per_million.cache_write).toBeCloseTo(0.125, 10);
+  });
+
   it('carries input, output and reasoning only when text capture is on', async () => {
     const text = { input: '[{"role":"user","content":"hi"}]', output: 'hello', reasoning: 'greet back' };
     const off = capture();
