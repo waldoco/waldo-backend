@@ -195,6 +195,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
+  'node.correct.failed': 'Nothing was changed. The text must be 1 to 140 characters and hold no password, key or token.',
   'schedule.resume': 'Resumed. It runs now.',
   'card.retry': "Making it now. It shows here and in your chat when it's ready.",
   'card.retry.sent': 'That card already went out today.',

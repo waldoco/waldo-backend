@@ -3,6 +3,14 @@ import {projectMemoryControl,memoryControl,resolveMemoryAction} from '../src/cha
 import {controlRevision} from '../src/channels/dashboard-control-actions';
 import {SAMPLE_CONSOLE_VIEW} from './fixtures/console-sample';
 describe('owner Memory action resolution',()=>{
+ it('reads a node with a support that is no longer live as Waldo\'s read, and offers no confirm that would fail',()=>{
+  const node=SAMPLE_CONSOLE_VIEW.nodes.find(n=>n.id===1)!,ids=JSON.parse(node.supporting_spots) as number[];
+  const ground=(c:typeof SAMPLE_CONSOLE_VIEW.spots[number])=>ids.includes(c.id)?{...c,origin:'owner',verification_status:'owner-grounded'}:c;
+  const grounded={...SAMPLE_CONSOLE_VIEW,spots:SAMPLE_CONSOLE_VIEW.spots.map(ground),retiredSpots:SAMPLE_CONSOLE_VIEW.retiredSpots.map(ground)};
+  expect(memoryControl(grounded,'owner','owner:node:1')).toMatchObject({review:{confirmation:'confirmed'},actions:['node.correct','node.forget']});
+  const gap={...grounded,nodes:grounded.nodes.map(n=>n.id===1?{...n,supporting_spots:JSON.stringify([...ids,999])}:n)};
+  expect(memoryControl(gap,'owner','owner:node:1')).toMatchObject({review:{confirmation:'waldos_read'},actions:['node.correct','node.forget']});
+ });
  it('requires an exact owner-scoped authoritative target, never numeric or foreign-owner IDs',()=>{for(const id of ['5','other:claim:5','owner:claim:999','owner:node:5'])expect(resolveMemoryAction(SAMPLE_CONSOLE_VIEW,'owner',{action:'spot.confirm',id,value:''})).toBeNull();expect(resolveMemoryAction(SAMPLE_CONSOLE_VIEW,'owner',{action:'spot.confirm',id:'owner:claim:5',value:''})?.id).toBe('5');});
  it('preserves confirm only for inferred active Spots and incomplete forget retry only',()=>{expect(memoryControl(SAMPLE_CONSOLE_VIEW,'owner','owner:claim:4')?.actions).not.toContain('spot.confirm');expect(memoryControl(SAMPLE_CONSOLE_VIEW,'owner','owner:claim:7')?.actions).toEqual(['spot.forget']);expect(resolveMemoryAction(SAMPLE_CONSOLE_VIEW,'owner',{action:'spot.dismiss',id:'owner:claim:7',value:''})).toBeNull();});
  it('does not expose withheld text or source pointers from retry control reads',()=>{const read=JSON.stringify(memoryControl(SAMPLE_CONSOLE_VIEW,'owner','owner:claim:7'));expect(read).not.toContain('phone');expect(read).not.toContain('evidence');expect(read).not.toContain('source_ref');expect(read).toContain('purging');});

@@ -89,7 +89,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '../memory/claims';
-import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, recordSignupName } from '../onboarding/first-run';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -5233,9 +5233,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await this.forgetPurgeJob().track([node.label], 'history');
           if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
         } else if (action === 'node.confirm') {
-          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString()))) return false;
+          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:node.confirm'}`))) return false;
         } else if (action === 'node.correct') {
-          const corrected = storage.transactionSync(() => correctWelcomeNode(memory, spotId, value ?? '', new Date(now).toISOString()));
+          // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
+          // same scribe check a spot edit crosses, so a credential never enters memory.
+          const text = (value ?? '').trim();
+          if (text.length === 0 || text.length > APP_NODE_CORRECTION_MAX_V1) return 'node.correct.failed';
+          const checked = await sanitise({ payload: { text }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
+          if (!checked.ok) return 'node.correct.failed';
+          const corrected = storage.transactionSync(() => correctWelcomeNode(memory, spotId, text, new Date(now).toISOString(), `owner, ${made ?? 'console:node.correct'}`));
           if (!corrected) return false;
           if (corrected.purge.length) await this.forgetPurgeJob().track(memory.purge(corrected.purge, new Date(now).toISOString()).texts);
         } else if (action === 'file.remove') {

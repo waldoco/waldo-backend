@@ -43,6 +43,7 @@ describe('pinning and editing a Spot from the dashboard', () => {
     const view = await panel(['spot.edit', 'spot.dismiss']);
     const field = view.host.querySelector<HTMLTextAreaElement>('textarea')!;
     expect(field.value).toBe('Likes tea');
+    expect(field.maxLength).toBe(1000);
     const type = (text: string) => act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, text);
       field.dispatchEvent(new Event('input', { bubbles: true }));
@@ -61,6 +62,7 @@ describe('pinning and editing a Spot from the dashboard', () => {
     const view = await panel(['node.confirm', 'node.correct', 'node.forget'], undefined, node);
     const field = view.host.querySelector<HTMLTextAreaElement>('textarea')!;
     expect(view.host.textContent).toContain('Correct this pattern in your words');
+    expect(field.maxLength).toBe(140);
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, ' Writes in the late morning ');
       field.dispatchEvent(new Event('input', { bubbles: true }));

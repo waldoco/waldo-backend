@@ -62,6 +62,8 @@ describe('console pattern confirm and correct', () => {
     const after = await (await o.read(target)).json() as Read;
     expect(after.data.actions).toEqual(['node.correct', 'node.forget']);
     expect(after.data.review.confirmation).toBe('confirmed');
+    const evidence = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ evidence: string }>("SELECT evidence FROM claims WHERE source_ref LIKE 'welcome:gmail:%'").toArray().map((row) => row.evidence));
+    expect(evidence).toEqual([expect.stringContaining('confirmed: owner, console:node.confirm'), expect.stringContaining('confirmed: owner, console:node.confirm')]);
   });
 
   it('correct needs a recent email code, then rewrites both the label and the summary in the owner\'s words', async () => {
@@ -79,6 +81,20 @@ describe('console pattern confirm and correct', () => {
     const block = await o.turnBlock();
     expect(block).toContain(`[n${id} · their words · confirmed] Writes to investors after standup`);
     expect(block).not.toContain('Investor mornings');
+  });
+
+  it('correct takes the owner\'s words up to the app\'s 140 characters, and refuses longer text or a credential, changing nothing', async () => {
+    const o = await owner('console-node-correct-bounds');
+    const id = await o.seedRead(), target = await o.scoped(id);
+    await o.codeAge(60_000);
+    for (const value of ['   ', 'x'.repeat(141), 'My API key is sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij']) {
+      const refused = await o.act(target, 'node.correct', value);
+      expect(refused.status).toBe(409);
+      expect(await o.node(id)).toMatchObject({ label: 'Investor mornings', summary: 'Clears investor mail first thing' });
+    }
+    expect(await o.turnBlock()).not.toContain('sk-proj');
+    expect((await o.act(target, 'node.correct', 'y'.repeat(140))).status).toBe(200);
+    expect(await o.node(id)).toMatchObject({ label: 'y'.repeat(140), summary: 'y'.repeat(140) });
   });
 
   it('a node that is not active offers neither confirm nor correct, and a confirm sent anyway changes nothing', async () => {
