@@ -171,3 +171,13 @@ it('without a spend reader nothing changes', async () => {
   await responder(gateway).respond(turn('cap-none'), time);
   expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
 });
+
+// The ceiling sums each call's logged usage through modelCost, so a call's cache writes must reach the log line it sums.
+it('a reply call\'s cache writes reach its logged usage, and its cost counts them at the write rate', async () => {
+  const entries: Parameters<NonNullable<Args[3]>>[0][] = [];
+  const gateway: LLMGatewayAdapter = { complete: async (input) => ({ ok: true, data: { model: input.request.model, text: 'Your day is clear.', input_tokens: 10_000, output_tokens: 5, cache_read_input_tokens: 2_000, cache_write_input_tokens: 7_000, latency_ms: 1 } }) };
+  await responder(gateway, at(4), [], (entry) => { entries.push(entry); }).respond(turn('cap-writes'), time);
+  const reply = entries.find((entry) => entry.hop === 'llm_reply' && entry.usage);
+  expect(reply?.usage).toMatchObject({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 10_000, cached: 2_000, cache_write: 7_000 });
+  expect(modelCost(reply!.usage!)!.total).toBeCloseTo((1_000 * 1 + 2_000 * 0.05 + 7_000 * 1.25 + 5 * 5) / 1e6, 12);
+});
