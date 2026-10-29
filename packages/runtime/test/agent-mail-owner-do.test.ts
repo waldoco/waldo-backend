@@ -191,11 +191,11 @@ describe('agent mail inbound', () => {
   it('a code or a health reading in the subject or a file name never reaches the model or storage', async () => {
     await withOwner(async ({ state, passes }) => {
       proof.replies.push('A mail with a code arrived.');
-      const files = [{ name: 'Average HRV 52 ms report.pdf', type: 'application/pdf', bytes: new TextEncoder().encode('%PDF') }];
+      const files = [{ name: 'Average HRV 52 ms, code 731546.pdf', type: 'application/pdf', bytes: new TextEncoder().encode('%PDF') }];
       expect(await deliver({ subject: 'Your verification code is 482913', body: 'Average HRV 52 ms this week. Your code is 482913.', files })).toBe('admitted');
       await passes();
       expect(mailText()).toContain('Waldo address');
-      for (const secret of ['482913', 'HRV 52']) {
+      for (const secret of ['482913', '731546', 'HRV 52']) {
         expect(mailText()).not.toContain(secret);
         expect(await everythingStored(state)).not.toContain(secret);
       }
