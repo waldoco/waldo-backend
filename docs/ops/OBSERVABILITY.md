@@ -84,6 +84,38 @@ A Like or Dislike on one of Waldo's replies in the app's main chat becomes a Lan
 - **What is not scored.** A rating on a reply that did not come from an app owner turn scores nothing (`unlinked`). That includes Brief and day-card rows, and iMessage or Telegram rows shown in the app.
 - **Retention.** Deleting a trace deletes its scores.
 
+### Retention (built, off)
+
+The privacy notice promises that traces are deleted after 30 days, and the Langfuse Hobby plan has no retention setting. `packages/runtime/src/observability/langfuse-retention.ts` enforces it from the daily cron (`17 3 * * *`, staging only; production has no cron trigger until the owner turns this on).
+
+- **Selection.**
+  - A trace is aged by its root observation's start: `GET /api/public/v2/observations` with `isRootObservation=true` and `toStartTime` set to now minus 29 days.
+  - Before deleting, one guard read per batch (`filter`: `traceId` any of the batch, `startTime >= cutoff`) keeps any trace with activity after the cutoff.
+  - Only traces in the project the keys belong to (`GET /api/public/projects`) are touched.
+  - Langfuse retired the trace list: `GET /api/public/traces` is served only until 16 Nov 2026 ([migration](https://langfuse.com/faq/all/deprecated-api-migration)). That is why the sweep uses the observation list.
+- **Rating scores.** `reply_rating` scores older than the cutoff are deleted on their own (`GET /api/public/v3/scores`, then `DELETE /api/public/scores/{id}`), because a score can outlive a trace that never reached Langfuse.
+- **Deletion.** `DELETE /api/public/traces` with 40 ids at a time. Langfuse deletes the observations and scores too, usually within 15 minutes ([Data Deletion](https://langfuse.com/docs/administration/data-deletion)).
+- **Limits** ([API limits](https://langfuse.com/faq/all/api-limits), Hobby plan):
+  - The general bucket allows 30 requests a minute. Every request is paced 2.1 s apart.
+  - Deletion allows 50 requests a day per organization, and the same bucket covers trace and score deletes. A run's trace and score deletes together use at most 40, about 1,600 traces, which leaves 10 a day for people and for rating changes (each change of a Like or Dislike deletes the score it replaces). Scores take at most 5, and only what the traces left.
+  - Metrics API v2 allows 100 requests a day. A run makes three.
+  - A 429 waits for its `Retry-After` and is retried three times. If it still holds, the run ends `incomplete` and the next day resumes.
+- **Modes.** `LANGFUSE_RETENTION_SWEEP` is absent by default.
+  - `dry` makes every read and deletes nothing.
+  - `1` deletes.
+  - Any other value is off.
+- **Backlog.** Before deleting, the sweep counts root traces through `GET /api/public/v2/metrics`:
+  - `backlog`: older than the cutoff;
+  - `overdue`: already past the 30 days promised;
+  - `daily_new`: arrived in the last day.
+
+  From those it works out `days_to_clear`. The value is `never` when one day's arrivals alone fill a run's 1,600-trace budget. A run with `overdue` above zero logs at error level, because the promise is already broken. The repo has no alerting (see the production runbook, S10), so the Worker log is where this shows.
+- **Log.** One line with counts and status codes only, never a trace id:
+
+  `langfuse retention sweep <mode> <state> backlog= overdue= daily_new= days_to_clear= candidates= deleted= would_delete= skipped_recent= skipped_project= scores_deleted= would_delete_scores= requests= last_status=`
+
+  States are `complete`, `incomplete` (budget or rate limit; resumes next run), `partial` (a failure after some deletes) and `failed`.
+
 ### Context size per model call
 
 Each `llm_*` generation carries numeric metadata (bytes, UTF-8) describing what filled that call, never text: `context_system_bytes`, `context_request_bytes`, `context_tools_count`, `context_tools_bytes` (the tool definitions sent), `context_tool_turns_bytes`, `context_history_messages`, `context_history_bytes`, `context_current_bytes`, `context_attachments`, and on the owner reply one `context_system_<section>_bytes` per system-prompt section (`reasons`, `behavior`, `health`, `clock`, `memory`, `orders`, `loops`, `skill_catalog`, `task_context`, `skill_procedures`). The sections plus their joins equal `context_system_bytes`. What rides the owner's message as the turn context is sized per section as `context_turn_<section>_bytes`. Calls whose system prompt carries the voice block (`llm_reply`, `llm_background_decision`) also carry `voice_version`. Trace schema version 6.
