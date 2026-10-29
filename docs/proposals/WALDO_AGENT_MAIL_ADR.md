@@ -5,7 +5,60 @@ Status: proposed. It carries the owner's three rulings of 24 Oct 2026:
 - Every send to another person is approved on a card.
 - The Mac drafts this design.
 
-It is not accepted. It should be published in waldo-brain and numbered there, and no code cites it by number until then. Building waits on #1494 and on decision A below.
+It is not accepted. It should be published in waldo-brain and numbered there, and no code cites it by number until then.
+
+**Update, 29 Oct 2026.**
+- #1494 merged on 25 Oct.
+- Decision A is done: `heywaldo.in` moved to Cloudflare nameservers. The zone went Active at 12:46Z, and the apex MX is still `smtp.google.com`.
+- The owner answered "yes, start it" to:
+  - B = no;
+  - C = "Waldo, <first name>'s assistant";
+  - D = drop cold mail and show a count;
+  - E = add a privacy paragraph.
+
+  The section "Cloudflare as found on 29 Oct" changes how inbound routing and sending work. Read it before the build.
+
+## Cloudflare as found on 29 Oct (docs and the zone's dashboard, read-only)
+
+1. **No catch-all on a subdomain.**
+   - The Email Routing subdomain page says "Catch-all rules are only available for the apex domain".
+   - So `*@mail.heywaldo.in` can't go to the Worker with one rule. Each handle needs its own literal rule, with the action "send to Worker".
+   - Limits are 200 rules per domain and 30 routing/sending domains per zone.
+   - That's enough for the staging cohort, and Google already caps the unverified app at 100 users.
+   - The 200-rule ceiling is a named limit. Before it's reached, the choices are:
+     - shard across more `mailN.` subdomains;
+     - move inbound to SES;
+     - use a domain whose apex is only for agent mail.
+2. **Rules are provisioned through the API.**
+   - Claiming a handle creates its rule through the Cloudflare API, using a token scoped to Email Routing rules on this zone only.
+   - The token secret is `CLOUDFLARE_EMAIL_ROUTING_TOKEN`.
+   - The flow is intent-before-I/O: record the claim, then make the API call outside the transaction, then reconcile.
+   - A handle with no live rule isn't shown to the owner as working.
+   - Releasing a handle deletes its rule.
+3. **Never use the zone's "Add missing records" button.**
+   - Email Routing is enabled on the zone, but its apex records are "Missing": three `route*.mx.cloudflare.net` MX records and an SPF record at `heywaldo.in`.
+   - Adding them would put Cloudflare MX next to Google's and split the owner's Workspace mail.
+   - Only the `mail` subdomain is added, from the Settings "Subdomains" form. The docs say Cloudflare then adds records "to the subdomain".
+   - [inference] It leaves the apex alone. The apex MX is checked again right after the change.
+4. **Sending needs Workers Paid.**
+   - The account is on Workers Free. Sending to any recipient needs Workers Paid ($5/month), which is the owner's payment.
+   - On Free, mail can go only to "verified destination addresses" in the account, up to 200, and each address confirms by email.
+   - So a reply to the owner can work on Free once the owner's address is verified. A send to a third party can't.
+5. **Where sending records go.**
+   - The Email Sending onboarding page lists only the `heywaldo.in` zone so far. It adds MX and SPF on a `cf-bounce` name, DKIM, and DMARC at `_dmarc.<domain>`.
+   - If it can't onboard `mail.heywaldo.in` itself, its DMARC would collide with the existing `_dmarc.heywaldo.in`.
+   - Whether `mail.` appears there once it's a routing subdomain is checked before onboarding.
+   - Send limits: 5 MiB per message (attachments included), 50 recipients, and an unstated daily quota for new accounts.
+6. **The binding.**
+   - Sending: `"send_email": [{ "name": "EMAIL", "remote": true }]`, then `env.EMAIL.send({ to, from, subject, html, text })`, which returns a `messageId`.
+   - Inbound: the Worker exports an `email` handler.
+
+**Gate allocations:**
+- Migration: `20261029160000_waldo_agent_mail_handles.sql`.
+- Flags: `AGENT_MAIL_INBOUND`, default `"0"`, and `AGENT_MAIL_SEND`, default `"0"`.
+- Var: `AGENT_MAIL_DOMAIN` = `mail.heywaldo.in` on staging, empty by default.
+- Secret: `CLOUDFLARE_EMAIL_ROUTING_TOKEN`.
+- Testers' mail stays off until the privacy paragraph (E) is live on heywaldo.in/privacy.
 
 ## Problem and decision
 
@@ -113,9 +166,9 @@ Nobody can write to Waldo, and Waldo can't write as itself.
     - `postmaster@` and `abuse@` reach the team, not an owner.
     - A released handle isn't reissued for 180 days, so mail meant for its old owner can't reach a new one.
 
-## Open decisions for the owner
+## Owner decisions (all answered; A done 29 Oct, B–E "yes, start it" 29 Oct)
 
-**A. DNS and provider. This blocks build PR 1.**
+**A. DNS and provider. Answered (a); the nameserver move was done 29 Oct.**
 - `heywaldo.in` is served by GoDaddy (`ns65/ns66.domaincontrol.com`).
 - Cloudflare Email Routing and Email Sending need a Cloudflare zone, and "you can send only from routing domains" (limits page).
 - A subdomain-only Cloudflare zone is Enterprise-only (subdomain setup page).
@@ -132,27 +185,27 @@ The choices:
 
 Recommendation: (a), if a nameserver move is acceptable. Otherwise (b) with SES.
 
-**B. Should mail ever count as the owner?** Recommendation: no for v1 (limit 3).
+**B. Should mail ever count as the owner?** Answered: no for v1 (limit 3).
 
-**C. The display name on Waldo's mail.** Proposed: "Waldo, <owner first name>'s assistant". It must never read as the owner.
+**C. The display name on Waldo's mail.** Answered: "Waldo, <owner first name>'s assistant". It must never read as the owner.
 
-**D. Cold mail.** Recommendation: drop it silently and show the owner a count (limit 2). The alternative is holding it for the owner to admit one by one.
+**D. Cold mail.** Answered: drop it silently and show the owner a count (limit 2). The alternative is holding it for the owner to admit one by one.
 
-**E. Privacy notice.** Waldo will process mail from third parties who never signed up. The privacy and terms draft needs a paragraph on this before the first outside tester uses mail.
+**E. Privacy notice.** Answered: yes. Waldo will process mail from third parties who never signed up. The privacy and terms draft needs a paragraph on this before the first outside tester uses mail.
 
 **DNS for `mail.` under either choice:**
 - The provider's SPF and DKIM records.
 - Its own `_dmarc.mail.heywaldo.in`. The apex record is `p=quarantine; adkim=r; aspf=r` with no `sp=`, so the subdomain inherits it.
 - Start the subdomain at `p=quarantine`. Move to `p=reject` once DMARC reports are clean.
 
-## Build (after #1494 merges and decision A)
+## Build (#1494 merged; decision A done)
 
-Three bounded PRs, each with red tests first, the full wall, and "Ready for gate review at <sha>". They go to a build account; the gate reviews.
+Four bounded PRs, each with red tests first, the full wall, and "Ready for gate review at <sha>". They go to a build session; the gate reviews. PR 1 and PR 1b may land in either order; nothing is switched on until both land.
 
-1. **Inbound.**
+1. **Inbound core** (behind `AGENT_MAIL_INBOUND`, default off).
    - Changes:
-     - The handle table and directory lookup (migration).
-     - The ingress: an Email Worker for (a), or a signed provider webhook for (b).
+     - The handle table and directory lookup (migration `20261029160000`).
+     - The ingress: the Worker's `email` handler. It routes by envelope recipient only.
      - The OwnerDO inbox keyed by Message-ID; the alarm-run turn with external taint; the thread map; the caps.
    - Red tests:
      - A forged owner `From` stays external, and a change it asks for becomes a card.
@@ -162,7 +215,14 @@ Three bounded PRs, each with red tests first, the full wall, and "Ready for gate
      - Oversize and over-cap mail.
      - An attachment reaches the model only within `LLM_ATTACHMENTS_MAX`.
      - Logs carry fixed codes only.
-2. **Outbound identity.**
+1b. **Rule provisioning.**
+   - Changes: claiming a handle records the intent. Then, outside the transaction, the claim creates the literal Email Routing rule (`<handle>@mail.heywaldo.in` → this Worker) through `CLOUDFLARE_EMAIL_ROUTING_TOKEN`. A keyed reconcile follows. Releasing a handle deletes the rule.
+   - Red tests:
+     - An API timeout leaves the handle "not live", with no duplicate rule on retry.
+     - A released handle's rule is deleted.
+     - The 200-rule ceiling refuses a new claim with an honest error.
+     - The token never appears in logs.
+2. **Outbound identity** (behind `AGENT_MAIL_SEND`, default off; needs Workers Paid for third-party sends).
    - Changes:
      - `send_email` gains an additive optional sender (owner's Gmail, or Waldo). Report the tool-definition token change, because the core budget is near 4,000.
      - The card's `From` line is an additive `app.v1`/approvals field. Tell the app lane before adding it.
