@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [cloudflareTest({
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', WALDO_ENVIRONMENT: 'test',
+      LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.fixture.invalid',
       OPENAI_API_KEY: 'fictional-imessage-model-key', COMMON_OWNER_TASKS: '0', WALDO_TOOL_OFFLOAD: '0', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_EGRESS_ALLOWLIST: '',
       SUPABASE_PROJECT_URL: 'https://imessage-directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-imessage-publishable',
       WALDO_ROUTER_HMAC_SECRET: 'fictional-imessage-router-secret-0000000000',

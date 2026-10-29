@@ -60,13 +60,14 @@ const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
+const otlp: string[] = [];
 let addresses = 0;
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; proof.moved = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
-  forbiddenEgress.length = 0;
+  forbiddenEgress.length = 0; otlp.length = 0;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
@@ -78,6 +79,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     const handled = await fx.fetcher(input as RequestInfo, init);
     if (handled) return handled;
     const url = String(input instanceof Request ? input.url : input);
+    if (url === 'https://langfuse.fixture.invalid/api/public/otel/v1/traces') { otlp.push(String(init?.body)); return Response.json({}); }
     // Google is down here: the scheduled watch upkeep of an owner with a seeded account fails closed without leaving the isolate.
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ error: 'temporarily_unavailable' }, { status: 503 });
     forbiddenEgress.push(url);
@@ -500,6 +502,41 @@ it('an iMessage turn the model fails tells the owner once, with the floor\'s pro
   expect(sentTexts(w).slice(1)).toEqual(['Scripted owner reply.']);
   expect(await failureRows(w)).toEqual([]);
   expect((await retryRows(w))).toHaveLength(1);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+// Langfuse files a trace only once a root span arrives, so a turn without one never leaves the exporter's buffer.
+type OtlpSpan = { name: string; parentSpanId?: string; attributes: { key: string; value: { stringValue?: string } }[] };
+const exportedSpans = () => otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+const keyOf = (span: OtlpSpan) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue;
+const rootsOf = (traceKey: string) => exportedSpans().filter(span => !span.parentSpanId && keyOf(span) === traceKey);
+
+it('an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Plan my afternoon');
+  const [record] = await inbox(w.ownerStub);
+  const traceKey = `imessage-${record!.updateId}`;
+  await vi.waitFor(() => expect(rootsOf(traceKey)).toHaveLength(1));
+  const [root] = rootsOf(traceKey);
+  expect(root!.name).toBe('imessage.turn');
+  const children = exportedSpans().filter(span => span.parentSpanId && keyOf(span) === traceKey).map(span => span.name);
+  expect(children).toEqual(expect.arrayContaining(['respond', 'outbox_enqueue']));
+  const wire = otlp.join('\n');
+  for (const said of ['Plan my afternoon', proof.reply]) expect(wire, said).not.toContain(said);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+it('an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  modelDown();
+  await replyFor(w, 'Plan my afternoon');
+  const [record] = await inbox(w.ownerStub);
+  const traceKey = `imessage-${record!.updateId}`;
+  await vi.waitFor(() => expect(rootsOf(traceKey)).toHaveLength(1));
+  await w.pump(2);
+  expect(rootsOf(traceKey)).toHaveLength(1);
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 

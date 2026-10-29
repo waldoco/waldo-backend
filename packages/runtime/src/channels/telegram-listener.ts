@@ -172,6 +172,8 @@ export class TelegramOwnerListener {
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
         await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
         this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        // Telegram and WhatsApp close the trace when their outbox settles the record; iMessage's outbox settles no hop, so the turn closes here.
+        if (this.options.surface === 'imessage') this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, detail: 'reply_frozen', text: { input: turn.text, output: text } });
         return 'queued';
       }
       // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
