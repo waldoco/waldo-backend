@@ -65,7 +65,7 @@ staging flag flip, which happens in a named deploy.
 - **The privacy changes are approved by the owner.** The orchestrator is opening the waldo-landing PR for the two notice sentences: embeddings (O1) and daytime notes from mail and calendar content (O9). Each staging flag flip is still a deploy the owner names.
 - **The backlog tracks everything.** Waldo keeps every backlog item and open loop, with no limit. "At most 3" limits only what one card or suggestion batch *shows*.
 - **Memory must not be restrictive.** It follows current best practice (the survey in §12). What to remember is the model's judgment.
-- **K0 extended.** The model picks which skill to load in **any** turn, chat or proactive, as other agents do. The owner never has to name a skill. Skills still grant no tools.
+- **K0 extended.** The model picks which skill to load in **any** turn, chat or proactive, as other agents do. The owner never has to name a skill. Skills still grant no tools. K0 also makes `skills_load` a core tool under the harness loader, and K1 (iMessage and WhatsApp) joins wave 1 as the next PR after K0 (orchestrator, 30 Oct).
 - **The top 5 new skills (S-1 to S-5) are approved.**
 - **#1463 is agreed:** iMessage chat turns carry the owner's derived health context.
 
@@ -826,9 +826,9 @@ demand), applied to Waldo:
 - **The owner never has to name a skill.** That already holds in chat. The catalogue line tells the model to load a skill
   "if an enabled skill fits the current task" (`skills/curated-host.ts:42`). K0 and K1 extend the same rule to every turn.
 - **Skills grant no tools.** Tool admission stays per trigger, and every effect keeps its approval gate.
-- **One possible follow-up for the harness lane, outside K0's scope:** make `skills_load` a core tool under the harness
-  loader. Today it is one `use_tool` hop away (`tools/records.ts:132`, brain `skills`). This would change the cached
-  prefix once, at deploy. It is raised with the gate, not folded into K0.
+- **`skills_load` becomes a core tool under the harness loader, as part of K0** (the orchestrator's ruling, 30 Oct). Today
+  it is one `use_tool` hop away (`tools/records.ts:132`, brain `skills`). The change alters the cached prefix once, at
+  deploy.
 
 ### 8.3 New skills: rules every one follows [proposed]
 
@@ -906,7 +906,7 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's `observed` emit (#1701) |
 | **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes; a card shows at most 3, and every item stays tracked (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 shown per card, and the rest shown in later cards; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
 
-| **K0** (waldoco/waldo-backend#1705) | Proactive turns can load reviewed skills (§8) | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (a skill-book envelope for machine turns), `skills/curated-host.ts` | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; a tainted machine turn gains no tool or approval by loading a skill; owner scoping | a tool-permission map change under ADR-0033; the gate decides whether it needs an ADR note |
+| **K0** (waldoco/waldo-backend#1705) | The model can load a reviewed skill in any turn (§8.2a): proactive turns get the skill book, and `skills_load` is core under the harness loader | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (a skill-book envelope for machine turns), `skills/curated-host.ts`, `tools/records.ts` (`skills_load` core) | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; a tainted machine turn gains no tool or approval by loading a skill; owner scoping | a tool-permission map change under ADR-0033; the gate decides whether it needs an ADR note |
 | **K1** (waldoco/waldo-backend#1711) | iMessage and WhatsApp turns get the owner's skill book (§8.1) | `channels/owner-do.ts` (a skill host bound to the iMessage and WhatsApp turn records) | the skill book (unchanged writer) | an iMessage turn loads an enabled skill; a stale record fails closed; the same book and custody as the app; owner scoping | none |
 | **S-1 to S-5** (waldoco/waldo-backend#1706–#1710) | New skills: intention-to-plan, relationship-upkeep, overload-day, renewals-and-bills, recovery-day (§8.4) | each a reviewed `packages/runtime/skills/<name>/SKILL.md`, plus nightly scenarios | none (procedures) | happy, null, hostile and quiet paths per skill; health and consent rules (S-5) | none |
 
@@ -918,7 +918,8 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 - S7 waits on the harness's `observed` emit (#1701).
 - S8 waits on #1587's carry-over.
 - S9 (entities) can start after S5 lands its `area` column, and is not in wave 1.
-- K0 can start at once. S-1 and S-2 follow it in parallel; S-3, S-4 (after #1587 and S7) and S-5 come after.
+- **Wave 1** (the orchestrator, 30 Oct): S1, S2, S3, S5 and K0, with K1 as w1-skills' next PR after K0.
+- K0 can start at once, then K1. S-1 and S-2 follow K0 in parallel; S-3, S-4 (after #1587 and S7) and S-5 come after.
 
 **m14** (real time) joins S0: a mail at 09:00, then a question at 15:00 whose answer needs it, with the consolidator on. Outside content reaches the turn live, as data. The consolidator makes it a candidate the owner can confirm; it does not put it in `core`.
 
