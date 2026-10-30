@@ -537,4 +537,14 @@ Things this proposal never touches: `WaldoCoordinator`, the trusted RunLoop and 
 
 ## Issues
 
-The issue numbers are filled in after the issues are created.
+One issue per slice, in `waldoco/waldo-backend`:
+
+| Slice | Issue |
+|---|---|
+| S0 eval parity | #1684 |
+| S1 cost truth | #1685 |
+| S2 `read_tool_output` handle | #1686 |
+| S3 loader carry-over | #1687 |
+| S4 compaction for iMessage | #1688 |
+| S5 tool-result instrumentation | #1689 |
+| S6 router on #1639 | #1690 |
