@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
+import { lifeAreaSchema } from '../../memory/area';
 import { sourceTaintSchema } from '../../memory/sanitise';
 import { connectIntentSchema } from '../connect-intent';
 
@@ -226,6 +227,8 @@ export const readMemoryArgsSchema = z.strictObject({
   hall: hallTypeSchema.optional(),
   limit: z.int().min(1).max(50).default(10),
   query: z.string().min(1).max(500).optional(),
+  // Only claims filed under this part of the owner's life; unsorted reads what is not filed yet.
+  area: lifeAreaSchema.optional(),
 });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
@@ -241,6 +244,7 @@ export const readMemoryClaimSchema = z.strictObject({
   verification_status: z.string(),
   supersedes_id: z.int().positive().nullable(),
   last_seen_at: z.string(),
+  area: lifeAreaSchema.optional(),
 });
 export const readMemoryResultSchema = z.strictObject({
   claims: z.array(readMemoryClaimSchema),
