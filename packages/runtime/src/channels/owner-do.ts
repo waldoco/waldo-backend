@@ -3585,6 +3585,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const tapbackTools = ({ imessage: () => [reactToMessageHandler(iMessageTapbacks(this.imessageHost, () => this.activeIMessage))], whatsapp: () => [reactToMessageHandler(whatsappTapbacks)] } as Partial<Record<ChannelKind, () => ReturnType<typeof reactToMessageHandler>[]>>)[channel]?.() ?? [];
+    // What a surface adds around a turn's reply. WhatsApp: the owner's reactions since their last turn, each one line the turn
+    // reads beside their words; the reply's quote of the owner's message where that helps (a later message of theirs came in
+    // after it, or it was itself a swipe-reply) and the mark that it is the turn's own reply; and the reaction the model chose,
+    // sent after the reply.
+    type InboundTurn = import('./telegram-polling').TelegramInboundTurn;
+    type TurnHooks = Readonly<{ notes(turn: InboundTurn): readonly string[]; listener: Pick<import('./telegram-listener').TelegramOwnerListenerOptions, 'replyFields' | 'deliverReaction'> }>;
+    const runningWhatsApp = (turn: InboundTurn) => { const active = this.activeWhatsApp; return active?.wamid && active.scope.runId === turn.runScope?.runId ? active : null; };
+    const whatsappTurnHooks: TurnHooks = {
+      notes: turn => { const take = () => takeWhatsAppReactionNotes(identity, Date.now()); return turn.runScope ? turn.runScope.commit(take) : take(); },
+      listener: {
+        replyFields: turn => {
+          const active = runningWhatsApp(turn);
+          const quote = active && (active.threaded || identity.get<string>(WA_LAST_INBOUND_ID_KEY) !== active.wamid) ? { quote_message_id: active.wamid } : {};
+          return { ...quote, turn_reply: true };
+        },
+        deliverReaction: async turn => {
+          const active = runningWhatsApp(turn);
+          if (!active?.reaction) return;
+          turn.runScope?.admit();
+          await routedCall('sendReaction', { message_id: active.wamid, emoji: active.reaction });
+        },
+      },
+    };
+    const turnHooks = ({ whatsapp: whatsappTurnHooks } as Partial<Record<ChannelKind, TurnHooks>>)[channel];
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
     // The app and iMessage carry no connect button, so there nothing is minted or sent: the model is told where the owner connects.
@@ -4358,12 +4382,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
         const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
-        // The owner's WhatsApp reactions since their last turn, each one line this turn reads beside their words.
-        if (channel === 'whatsapp') {
-          const take = () => takeWhatsAppReactionNotes(identity, Date.now());
-          const notes = turn.runScope ? turn.runScope.commit(take) : take();
-          if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
-        }
+        const notes = turnHooks?.notes(turn) ?? [];
+        if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
       // Freeze the reply text, stable commandId and exact target together with the turn's closure.
@@ -4399,21 +4419,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } } : {}),
       ...(replyDraft ? { streamReply: (turn: import('./telegram-polling').TelegramInboundTurn) => probeCapture.current === null ? replyDraft(turn) : undefined } : {}),
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
-      // A WhatsApp reply quotes the owner's message only where that helps: a later message of theirs came in after it, or it
-      // was itself a swipe-reply.
-      ...(channel === 'whatsapp' ? {
-        quoteTarget: (turn: import('./telegram-polling').TelegramInboundTurn) => {
-          const active = this.activeWhatsApp;
-          if (!active?.wamid || active.scope.runId !== turn.runScope?.runId) return undefined;
-          return active.threaded || identity.get<string>(WA_LAST_INBOUND_ID_KEY) !== active.wamid ? active.wamid : undefined;
-        },
-        deliverReaction: async (turn: import('./telegram-polling').TelegramInboundTurn) => {
-          const active = this.activeWhatsApp;
-          if (!active?.reaction || active.scope.runId !== turn.runScope?.runId) return;
-          turn.runScope.admit();
-          await routedCall('sendReaction', { message_id: active.wamid, emoji: active.reaction });
-        },
-      } : {}),
+      ...turnHooks?.listener,
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
         trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,
         ...(runScope ? { admit: () => runScope.admit() } : {}),
