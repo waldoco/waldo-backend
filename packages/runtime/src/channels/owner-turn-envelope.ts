@@ -53,10 +53,13 @@ export type OwnerResponder = Readonly<{
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
   // answers the owner's own message late, never for one Waldo starts itself.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean): Promise<string>;
+  // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[]): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
+  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.

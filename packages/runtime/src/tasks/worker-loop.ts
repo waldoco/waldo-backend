@@ -248,7 +248,7 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
     }
     return {
       response: result.response,
-      event: { ...base, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens, web_searches: 0 } },
+      event: { ...base, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}), web_searches: 0 } },
     };
   };
 };

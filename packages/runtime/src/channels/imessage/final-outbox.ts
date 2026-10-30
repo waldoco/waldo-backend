@@ -1,5 +1,5 @@
 import { iMessageResultSchema, type IMessageResult, type IMessageStandardReaction } from '@waldo/contracts';
-import type { IMessageInboxRecord } from './owner-inbox';
+import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 
 // Owner-DO frozen reply outbox. The reply text, exact target (via binding digest + revision) and
 // stable commandId are frozen in the same transaction that closes the owner turn. Handoff to the
@@ -59,10 +59,11 @@ export class IMessageFinalOutbox {
   /**
    * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console or connect link
    * sent for the same inbound message is its own record, under its own commandId, so the reply still sends after it. The reply
-   * carries the owner's message it answers as its thread target; nothing the model chose names it.
+   * carries the owner's message it answers as its thread target only where a thread helps (see threadHelps); nothing the model
+   * chose names it.
    */
   freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' | 'connect' = 'reply'): IMessageOutboxRecord {
-    const ref = kind === 'reply' ? record.messageRef : undefined;
+    const ref = kind === 'reply' && this.threadHelps(record) ? record.messageRef : undefined;
     return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text,
       ref ? { replyTo: { chatGuid: record.binding.chatGuid, messageGuid: ref.messageGuid, partIndex: ref.partIndex } } : {});
   }
@@ -98,6 +99,15 @@ export class IMessageFinalOutbox {
     if (!record.messageRef) throw new Error('imessage_reaction_untargeted');
     return this.put(`react:${record.id}`, { ...targetOf(record), commandId: `wrx_${type}_${record.commandId}` }, '',
       { reaction: { chatGuid: record.binding.chatGuid, messageGuid: record.messageRef.messageGuid, partIndex: record.messageRef.partIndex, type } });
+  }
+  /**
+   * A reply threads onto the owner's message only where a plain one could read as answering something else, or where the
+   * owner threaded first: they wrote this message as a reply themselves, or wrote again in this chat before Waldo answered.
+   * A reply to the owner's latest message, written plainly, goes out plain. Read once, when the reply freezes.
+   */
+  private threadHelps(record: IMessageInboxRecord): boolean {
+    return record.ownerThreaded === true
+      || new IMessageOwnerInbox(this.storage).records().some((r) => r.updateId > record.updateId && r.conversationRef === record.conversationRef);
   }
   /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   messageWaiting(bridgeDoName: string): boolean {

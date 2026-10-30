@@ -67,7 +67,7 @@ export type PhoneRecord = Base<'phone', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -250,8 +250,8 @@ const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a
 export function allowedControlNavigation(value: string, origin: string): string {
   let url: URL;
   try { url = new URL(value, origin); } catch { throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true); }
-  // An MCP connect continues on this deployment's own start link, which redirects only for the signed-in owner.
-  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
+  // An MCP or Google connect continues on this deployment's own start link, which redirects only for the signed-in owner.
+  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/(mcp|google)\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
   const google = url.hostname === 'accounts.google.com' && url.port === '' && url.pathname === '/o/oauth2/v2/auth' && !url.hash;
   if (url.protocol !== 'https:' || url.username || url.password || (!localTicket && !google)) throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true);
   return url.href;

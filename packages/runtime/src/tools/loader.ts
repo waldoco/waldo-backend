@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { toolError, toolNameSchema, type LLMTool, type LLMToolCall, type ToolError } from '@waldo/contracts';
 import type { LoopToolResult } from '../conversation/tool-loop';
-import { BRAIN_NAMESPACES, TOOL_RECORDS, type BrainNamespace, type ToolRecord } from './records';
+import { BRAIN_NAMESPACES, TOOL_RECORDS, byToolName, type BrainNamespace, type ToolRecord } from './records';
 
 // The harness's own tool search, for any function-calling model. A round offers the core tools and two meta tools:
 // find_tools, whose result is the definitions asked for, and use_tool, which calls one of them by name. The system prompt
@@ -51,14 +51,20 @@ const deferredGroups = (names: readonly string[]): Map<BrainNamespace, string[]>
 };
 
 // The tools a turn admitted beyond its function list, one line per group: the exact names, then what the group is for.
-// Empty when every admitted tool is core.
-export const toolCatalogue = (names: readonly string[]): string =>
-  [...deferredGroups(names)].map(([group, members]) => `- ${group}: ${members.join(', ')}. ${BRAIN_NAMESPACES[group]}`).join('\n');
+// Empty when every admitted tool is core. Groups follow BRAIN_NAMESPACES and names sort within a group, so the same admitted
+// set gives the same bytes in the cached system prefix whatever order the host assembled its handlers in.
+export const toolCatalogue = (names: readonly string[]): string => {
+  const groups = deferredGroups(names);
+  return (Object.keys(BRAIN_NAMESPACES) as BrainNamespace[]).flatMap((group) => {
+    const members = groups.get(group);
+    return members ? [`- ${group}: ${[...members].sort().join(', ')}. ${BRAIN_NAMESPACES[group]}`] : [];
+  }).join('\n');
+};
 
 export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
   const byName = new Map(tools.map((tool) => [tool.name, tool] as const));
   const groups = deferredGroups(tools.map((tool) => tool.name));
-  const core = tools.filter((tool) => placement(tool.name) === 'core');
+  const core = tools.filter((tool) => placement(tool.name) === 'core').sort(byToolName);
   if (groups.size === 0) return { offered: core, route: (call) => ({ call }), definition: (name) => byName.get(name) };
   const offered: LLMTool[] = [
     ...core,

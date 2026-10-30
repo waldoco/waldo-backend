@@ -33,6 +33,8 @@ const TABLES: Record<string, Row> = {
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),
   app_write_requests: exempt('request id, route, body digest and the stored answer: ids, states and times, never owner text'),
   reply_ratings: exempt('a reply\'s message id, up or down, and a time; never the reply\'s text'),
+  reply_rating_scores: exempt('a reply\'s message id and the random id of its Langfuse score; no owner text'),
+  app_row_traces: exempt('a chat row id and the trace key of the job that wrote it, kept only in the shape `<schedule id>:<time>` or `<surface>-<n>`; no owner text'),
   onboarding_runs: exempt('run id, step states, the first-look client id, a clock time and times; the answers live as claims'),
   welcome_builds: exempt('stage states, times and a node count; the nodes and their support live in constellation_nodes and claims'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
@@ -58,6 +60,9 @@ const TABLES: Record<string, Row> = {
   notify_issues: exempt('per-device notification identifiers and issuance times only'),
   mac_issues: exempt('per-device use_mac request identifiers and issue times for rate limits; no command text'),
   mac_deliveries: gap('per-device use_mac result and session-event bodies (status, exit code, up to 6 KB of command output tail) awaiting hand-off to the owner DO; admitted rows keep the body; isolated device custody, literal owner forget does not reach it; revoke clears storage after replay horizon'),
+  agent_mail_inbox: exempt('an agent mail row: id, a dedup digest, the handle, why it was read, state, attempt id and times; no mail text'),
+  agent_mail_threads: exempt('Message-IDs Waldo was sent, their direction, time and thread id; no bodies, subjects or names'),
+  agent_mail_raw: gap('the raw inbound mail (third-party text, the owner\'s forwarded words, attachments) from admission until its turn closes, then deleted; MIME encoding hides literals, so a literal owner forget does not reach the held bytes'),
   mac_result_inbox: gap('owner-side use_mac result and session-event bodies (status, exit code, up to 6 KB of command output tail) awaiting the Telegram follow-up; finished and quarantined rows keep the body; a literal owner forget does not reach it'),
   // Per iMessage bridge/account custody (IMessageBridgeDO). nonces/meta rows above also cover its replay nonces and bridge meta (ids, generation, cursor, heartbeat, capability report, quarantine reason).
   events: gap('per-bridge inbound event identity and raw digest; the message body is dropped once handed/acknowledged and those rows are pruned after 7 days; held events (media, revoked scope) keep their text as evidence until pruned after 30 days; a literal owner forget does not reach this isolated custody'),

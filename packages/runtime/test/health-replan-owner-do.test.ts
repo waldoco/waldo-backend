@@ -126,6 +126,11 @@ beforeEach(() => {
       if (!world.scoresAccess) return Response.json({ unavailable: 'consent_withdrawn' });
       return Response.json(row ? { scores: { day, timezone: TZ, compiled_at: new Date().toISOString(), freshness: 'fresh', ...row } } : { unavailable: 'no_readings' });
     }
+    if (fn === 'health_scores_history') {
+      world.trace.push(`history_read:${String(body.p_payload)}`);
+      const days = [...world.rows.keys()].sort().map(day => ({ day }));
+      return Response.json(days.length ? { history: { from: addDays(TODAY, -89), to: TODAY, days } } : { unavailable: 'no_readings' });
+    }
     if (fn === 'health_context_write') {
       const row = payload as Record<string, Record<string, unknown>> & { day: string };
       const old = world.rows.get(row.day) ?? world.rows.get(newestBefore(row.day) ?? '');
@@ -157,7 +162,7 @@ const dump = (state: DurableObjectState) => JSON.stringify([
 type Desk = { propose(args: Record<string, unknown>, turnKey?: string): Promise<string>; decide(id: string, action: 'a', trace: string, via?: { surface: string }): Promise<{ toast: string }> };
 type Runtime = { ready: Promise<unknown>; updateCheck(trace: string): Promise<void>; desk: Desk };
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): Runtime };
-const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>; pass(): Promise<void>; upload(): Promise<void>; desk(): Desk }) => Promise<void>, google = true) => {
+const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>; pass(): Promise<void>; upload(): Promise<void>; desk(): Desk }) => Promise<void>, google = true, config: Record<string, unknown> = CONFIG) => {
   const doName = `health-replan-do-${sequence++}`;
   let sweeps = 0;
   world.trace = [];
@@ -167,7 +172,7 @@ const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>
     await state.storage.put('origin', 'https://fixture.invalid');
     if (google) await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
       scopes: [`${AUTH}calendar.events`, `${AUTH}calendar.events.freebusy`, `${AUTH}calendar.calendarlist.readonly`] }]);
-    const owner = new OwnerDO(state, CONFIG as never) as unknown as Owner;
+    const owner = new OwnerDO(state, config as never) as unknown as Owner;
     world.recorded = () => state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'update_cards'").toArray().length
       ? state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM update_cards').one().n : 0;
     const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
@@ -208,6 +213,19 @@ const offsiteAdded = () => {
   world.changed = [{ ...OFFSITE, status: 'confirmed', created: new Date(Date.now() - 60_000).toISOString() }];
   world.busy.push(block(TODAY, 13, 6));
 };
+
+describe('the owner object backfills from one read of the stored days', () => {
+  it('asks which days hold a row once a recompute, as ninety days in a number, and reads no older day one by one', async () => {
+    await withOwner(async o => {
+      await o.upload();
+      vi.setSystemTime(NOW + HEALTH_RECOMPUTE_WINDOW_MS);
+      await o.pass();
+      expect(world.trace.filter(step => step.startsWith('history_read:'))).toEqual(['history_read:{"days":90}']);
+      expect(world.trace.filter(step => step.startsWith('scores_read:') && step.slice('scores_read:'.length) < addDays(TODAY, -1))).toEqual([]);
+      expect(world.trace.filter(step => step.startsWith('context_write:')).length).toBeGreaterThan(2);
+    }, true, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1' });
+  });
+});
 
 describe('Weight follows the day', () => {
   it('turns a meeting added to today into one recompute, a Weight band change, one evaluation and at most one approval card', async () => {

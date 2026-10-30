@@ -27,7 +27,12 @@ export const dayPlanBook = (sql: Sql) => {
     PRIMARY KEY (day, card))`);
   sql.exec('CREATE TABLE IF NOT EXISTS card_pins (card TEXT PRIMARY KEY, time TEXT NOT NULL)');
   // Whether a finished card went out or was skipped. Cards finished before the column existed have none.
-  if (!sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().some(column => column.name === 'outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
+  const columns = new Set(sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().map(column => column.name));
+  if (!columns.has('outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
+  // The Main chat row the card was last delivered to, and when: ids and times only, so the day's history reads the words
+  // from the chat as it is now, and a forgotten or deleted row takes them with it.
+  if (!columns.has('delivered_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_message_id TEXT');
+  if (!columns.has('delivered_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_at INTEGER');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -43,6 +48,20 @@ export const dayPlanBook = (sql: Sql) => {
         const state = row.sent === 1 ? outcome ?? undefined : row.sent === 2 ? 'held' : row.sent === 3 ? 'waiting_on_model' : 'pending';
         return { ...row, sent: row.sent === 1, ...(state ? { state } : {}) };
       });
+    },
+    // A card's delivery to the app, on the card's own day. It may come before the card is recorded sent, and a Try again's
+    // delivery replaces the earlier one.
+    delivered(day: string, card: CardId, messageId: string, at: number): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, delivered_message_id, delivered_at) VALUES (?, ?, NULL, 'sent', ?, ?)
+         ON CONFLICT (day, card) DO UPDATE SET delivered_message_id = excluded.delivered_message_id, delivered_at = excluded.delivered_at`,
+        day, card, messageId, at,
+      );
+    },
+    deliveries(day: string): ReadonlyMap<string, CardDelivery> {
+      return new Map(sql.exec<{ card: string; message_id: string; delivered_at: number }>(
+        'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
+      ).toArray().map(({ card, ...delivery }) => [card, delivery]));
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));
@@ -362,22 +381,17 @@ export const composeDayCard = async (
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
 
-// The Main chat row each of today's cards was delivered to in the app, and when. Only ids and times are kept, for one
-// day: the excerpt is cut from the row when it is read, so a forgotten or deleted row takes its text with it.
-const CARD_DELIVERY_KEY = 'day_card_delivery_v1';
+// The Main chat row each card was delivered to is kept on its day_plan row. A build before that kept today's in one KV
+// entry, which is still read for its own day, so the day it deploys keeps the cards delivered before it.
+const LEGACY_CARD_DELIVERY_KEY = 'day_card_delivery_v1';
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type CardDelivery = Readonly<{ message_id: string; delivered_at: number }>;
-type CardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
+type LegacyCardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
 export type CardLatest = CardDelivery & Readonly<{ excerpt: string }>;
 
-export const recordCardDelivery = (kv: Kv, day: string, card: string, messageId: string, at: number): void => {
-  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
-  kv.put(CARD_DELIVERY_KEY, { day, cards: { ...(kept?.day === day ? kept.cards : {}), [card]: { message_id: messageId, delivered_at: at } } });
-};
-
-export const cardDeliveries = (kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
-  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
-  return new Map(kept?.day === day ? Object.entries(kept.cards) : []);
+export const cardDeliveries = (book: DayPlanBook, kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
+  const legacy = kv.get<LegacyCardDeliveries>(LEGACY_CARD_DELIVERY_KEY);
+  return new Map([...(legacy?.day === day ? Object.entries(legacy.cards) : []), ...book.deliveries(day)]);
 };
 
 // The card's latest delivery as the app shows it: a prefix of the row's text, never splitting a surrogate pair. A row

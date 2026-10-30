@@ -522,7 +522,7 @@ const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[
   }
   return listed.length ? `\n\nLinks:\n${listed.join('\n')}` : '';
 };
-const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
+export const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
   const cells = new Set(['td', 'th']);

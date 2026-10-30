@@ -53,6 +53,8 @@ export type FinalRecord = {
   // An update card written by a sweep job: its update_cards row, recorded sent once the card is delivered.
   update?: { recordId: number };
   calendarPrep?: CalendarPrepReceipt;
+  // A health-only note: it goes out only while the owner still shares health and has health proposals on.
+  healthNotice?: { day: string };
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
   // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates

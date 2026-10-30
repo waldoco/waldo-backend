@@ -62,6 +62,15 @@ describe('OpenAIResponsesAdapter', () => {
     if (apiKey) expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 
+  // The routed models bill cache writes apart from reads and report them in input_tokens_details.cache_write_tokens.
+  it('reports cache writes apart from cache reads, inside the whole prompt count', async () => {
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => ({
+      id: 'resp_write', output_text: 'ok', output: [],
+      usage: { input_tokens: 100, output_tokens: 3, input_tokens_details: { cached_tokens: 30, cache_write_tokens: 60 } },
+    } as never)) });
+    await expect(adapter.complete(gatewayRequest())).resolves.toMatchObject({ ok: true, data: { input_tokens: 100, cache_read_input_tokens: 30, cache_write_input_tokens: 60 } });
+  });
+
   it('maps Responses API output and usage metadata', async () => {
     let metadata: unknown;
     const adapter = new OpenAIResponsesAdapter({
