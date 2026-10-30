@@ -12,6 +12,9 @@ import type { CalendarPrepReceipt } from './telegram-final-outbox';
 // A prep job not done five minutes before the meeting is dropped: a note after that arrives too late to use.
 const MEETING_PREP_LEAD_MS = 5 * 60_000;
 
+// The documents linked to the event that the worker can open by id.
+const linked = (event: PrepJob['event']) => (event.attachments ?? []).flatMap(({ title, file_id }) => file_id ? [{ title, file_id }] : []);
+
 // One open job per occurrence, keyed per sweep: a job that settled without reaching the owner (held, parked, dropped) leaves
 // the next sweep free to ask again. A prep that was decided is recorded on its digest, so the sweep writes no job for it.
 export const meetingPrepSpec = (prep: PrepJob & Readonly<{ surface: string }>): MachineSpec => ({
@@ -19,6 +22,7 @@ export const meetingPrepSpec = (prep: PrepJob & Readonly<{ surface: string }>): 
   items: [
     { ref: prep.event.id, detail: prepProjection(prep.event, prep.timezone) },
     { ref: 'mail_query', detail: prep.query ?? '(the meeting has no usable title or other attendee to search by)' },
+    ...(linked(prep.event).length ? [{ ref: 'attachments', detail: JSON.stringify(linked(prep.event)) }] : []),
   ],
   timezone: prep.timezone, now: prep.now, deadlineAt: Date.parse(prep.event.start) - MEETING_PREP_LEAD_MS,
   source: { connection_id: prep.connectionId }, inputDigest: prep.inputDigest,

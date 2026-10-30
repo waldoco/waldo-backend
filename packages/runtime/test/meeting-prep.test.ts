@@ -73,6 +73,17 @@ describe('the prep sweep writes a machine job for an accepted meeting', () => {
     });
   });
 
+  it('the reader is asked for a Granola-shaped brief, and is given the linked documents\' file ids to open', async () => {
+    await withPrep(event => ({ ...event, attachments: [{ title: 'Q4 plan', file_id: 'file_q4_plan_0001' }, { title: 'Untracked link' }] }), async (h) => {
+      await h.sweep();
+      const brief = taskBrief(h.jobs()[0]!);
+      for (const part of ['who is attending', 'last thread', 'linked documents', 'open tasks or promises', 'have ready']) expect(brief.goal).toContain(part);
+      expect(brief.context).toContain('file_q4_plan_0001');
+      expect(brief.context).not.toContain('Untracked link\\",\\"file_id');
+      expect(taskBrief(h.jobs()[0]!).machine!.refs).toEqual(['e1', 'mail_query', 'attachments']);
+    });
+  });
+
   it('an event already prepped on the same digest writes no job and asks no model', async () => {
     await withPrep(event => event, async (h) => {
       expect(await meetingPrepDecideAndSettle(h, FOUND)).toBe('delivered');
