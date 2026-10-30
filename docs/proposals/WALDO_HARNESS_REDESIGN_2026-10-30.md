@@ -593,10 +593,19 @@ I haven't seen these traces myself. They are a teammate's reading, cited as such
 - **H6b.** Luna doesn't prompt-cache on this route, or doesn't report it in `input_tokens_details.cached_tokens`.
   - **Now the leading hypothesis** [inference].
   - Falsifier: any luna call ever showing cached tokens.
-  - Cheapest checks:
-    - OpenAI's model page and prompt-caching guide for `gpt-6-luna`;
-    - if the docs are silent, an owner-approved two-call probe with an identical prefix of about 2k tokens (cost well under $0.01).
-    - This session runs no paid calls.
+  - **Docs, read by the orchestrator in the OpenAI prompt-caching guide on 30 Oct:**
+    - GPT-5.6 and later default to implicit mode, with the breakpoint at the latest eligible user message.
+    - Developer messages after the first block are not boundaries.
+    - Luna has published cache-write rates, so it supports caching.
+  - **Weakened: "Luna can't cache" is out.** "Caching happens but isn't reported" stays open.
+- **H7, no implicit breakpoint on jobs** (the orchestrator's lead: no user-role message, or the trigger sits in later developer messages). **Not supported by source** [verified]:
+  - The adapter sends only user and assistant roles (`src/llm/openai.ts:297`). The system text goes in `instructions` (`openai.ts:82`), so no developer messages are sent at all.
+  - A job's text is a tree entry with no explicit role (`owner-turn.ts:781` and the `userEntry` that follows). It defaults to `user` (`conversation-entry.ts:168`) and is the last message of the request.
+  - Reasoning effort is fixed per model: luna `low` (`packages/contracts/src/model/roster.ts:56`; `openai.ts:60-61`, `:86`). `parallel_tool_calls`, verbosity and `context_management` are never set.
+- **What is left [inference]:**
+  - The bytes of the latest user message differ between a job's rounds, which moves the implicit breakpoint.
+  - Or a provider-side behaviour on this model.
+  - A's digests, extended to the latest user message, split these two. If the digests are equal across rounds and the misses continue, the paid two-call probe needs owner approval (well under $0.01). This session runs no paid calls.
 
 **Terra round 1, refined by the same grouping:**
 
@@ -618,7 +627,7 @@ Per call, the chat first round is the bigger lever. Which matters more overall d
 ### Options
 
 - **A. Measure first.**
-  - Log a short digest of the tools bytes and of the instructions bytes on each `llm_*` hop.
+  - Log a short digest of the tools bytes, of the instructions bytes and of the latest user message (the implicit cache breakpoint) on each `llm_*` hop.
   - Log the gap since the owner's previous model call on the same model.
   - Digests are a trace field, never a metric label (security checklist).
   - A read-only analysis then sorts each miss into H1–H6.
