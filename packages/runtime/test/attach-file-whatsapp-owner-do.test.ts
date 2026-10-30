@@ -68,7 +68,9 @@ const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => voi
         return Response.json({ id: 'media.1' });
       }
       if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
-        const body = JSON.parse(String(init?.body)) as { type: string; text?: { body: string }; document?: { id: string; filename: string } };
+        const body = JSON.parse(String(init?.body)) as { type: string; status?: string; text?: { body: string }; document?: { id: string; filename: string } };
+        // The read receipt with the typing indicator carries no content, so it is not one of the deliveries checked here.
+        if (body.status === 'read') return Response.json({ success: true });
         graph.push({ type: body.type, ...(body.text ? { text: body.text.body } : {}), ...(body.document ? { document: body.document } : {}) });
         return Response.json({ messages: [{ id: `wamid.out.${graph.length}` }] });
       }
