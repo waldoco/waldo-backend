@@ -8,6 +8,7 @@ import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkCo
 import { whatsappLinkDirectory, whatsappLinkToken, whatsappLinkTokenHash, type WhatsAppLinkDirectory } from '../src/identity/whatsapp-link';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { chatChannelLinks } from '../src/channels/chat-channel-links';
 
 const SECRET = 'fictional-app-secret';
 const SENDER = '15550001111';
@@ -61,6 +62,13 @@ describe('the reply to an unlinked sender', () => {
     expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link');
   });
 
+  it('a sender no single owner has on file is pointed at the app and console link flow as well as the waitlist', async () => {
+    const { sent } = await run(await inbound('hi'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true });
+    expect(sent[0]!.text.body).toContain('Already on Waldo?');
+    expect(sent[0]!.text.body).toContain('Waldo app');
+    expect(sent[0]!.text.body).toContain('https://waldo.example/console#/connections');
+  });
+
   it('a throttled sender, one whose earlier link is still live, or one that became linked meanwhile, gets no reply', async () => {
     const throttled = links(async () => 'opened');
     expect((await run(await inbound('again'), unlinked, { links: throttled, throttle: async () => false })).sent).toEqual([]);
@@ -85,6 +93,29 @@ describe('the reply to an unlinked sender', () => {
     expect(redeem).toHaveBeenCalledWith('whatsapp', SENDER, 'ABCDEFGH23');
     expect(directory.open).not.toHaveBeenCalled();
     expect(sent.map((body) => body.text.body)).toEqual(['Linked. This chat now talks to your Waldo.']);
+  });
+
+  it('a code that did not link points at the app and console for a new one', async () => {
+    const { sent } = await run(await inbound('waldo ABCDEFGH23'), unlinked, { links: links(async () => 'opened'), throttle: async () => true });
+    expect(sent.map((body) => body.text.body)).toEqual(['That code did not work. Get a new one from the Waldo app or your console.']);
+  });
+
+  it('Verify with WhatsApp: the code the app issues, sent as the wa.me link fills it in, redeems from the number on file in one message', async () => {
+    const CODE = 'ABCDEFGHJK';
+    const OWN = '919800000101';
+    const chat = chatChannelLinks({ env: { WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1', WHATSAPP_WALDO_NUMBER: '919226067544' }, kv: { get: () => undefined }, doName: 'do-a',
+      auth: { issueLinkCode: async () => CODE, issueProviderLinkCode: async () => CODE, whatsAppHandleHint: async () => null } as unknown as ConsoleAuth });
+    const issued = await chat.issue('whatsapp');
+    const prefilled = new URL(issued!.send_url!);
+    expect(prefilled.origin + prefilled.pathname).toBe('https://wa.me/919226067544');
+    const redeem = vi.fn(async () => ({ doName: 'do-a', subject: OWN, timezone: null }));
+    const throttle = vi.fn(async () => true);
+    const { response, sent, logs } = await run(await inbound(prefilled.searchParams.get('text')!, OWN), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle });
+    expect(response.status).toBe(200);
+    expect(redeem).toHaveBeenCalledWith('whatsapp', OWN, CODE);
+    expect(throttle.mock.calls.map(call => (call as unknown as [string, number, number]).slice(1))).toEqual([[5, 3600]]);
+    expect(sent.map((body) => body.text.body)).toEqual(['Linked. This chat now talks to your Waldo.']);
+    expect(logs.join('\n')).not.toContain(CODE);
   });
 
   it('without a directory an unlinked sender gets no reply at all', async () => {
