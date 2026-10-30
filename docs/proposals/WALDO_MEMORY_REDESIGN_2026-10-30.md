@@ -28,6 +28,7 @@ These are open. None is decided here. Each recommendation's reasoning is in the 
 | **O4** | A pattern left resting on a note that was replaced or dismissed is shown again in the app and console, marked *incomplete*, so you can correct or forget it. The alternative is deleting such patterns automatically. | Show it, with correct and forget only (§3). |
 | **O5** | The life-area list: #1587's **work, personal, health**, plus unsorted, shared by backlog items and notes. Or a longer list, such as people, home, money? | #1587's three, extended only when a real item will not fit (§5). |
 | **O6** | An area Waldo sets on a note is a **label you can change**. It is not a fact that waits for your yes. | A label (§5). The note it sits on keeps its own confirmation state. |
+| **O7** | Patterns you already confirmed before the fix in O3: keep those you confirmed with the pattern's own Confirm, or ask you to confirm them all again? Patterns confirmed only note by note go back to "Waldo's read" either way. | Keep the ones confirmed with the pattern's Confirm (§2.4). |
 | — | #1587's own questions. They are not answered here. **Q1** cohort scope: (a) backlog with chat and mail capture, app fields, console Backlog, Close carry-over; (b) Google Tasks link and completion; (c) calendar and meeting capture. **Q2** weekly review, yes or no. **Q3** which capture sources need your confirmation. | See #1587. |
 
 ## Re-baseline at `7e6bce8a`
@@ -142,8 +143,9 @@ the tool contract in `packages/contracts`.
 
 ### 1.6 The memory-selection interface [proposed]
 
-This doc owns the interface. The harness redesign consumes it. Its terms were sent to the harness-redesign session at
-06:30Z on 30 Oct and are unconfirmed. This section is amended to match its answer before the gate's Ready.
+This doc owns the interface. The harness redesign consumes it. The terms below were sent to the harness-redesign session
+on 30 Oct and are **unconfirmed**. They stay open here. The gate reconciles them with the harness design doc, and S4 does
+not start until both docs agree.
 
 ```ts
 selectMemory(input: {
@@ -239,19 +241,43 @@ mail-derived support puts `[… · gmail · confirmed]` into turns, still in Wal
 
 | Option | Mechanism | Persistence | Verdict |
 |---|---|---|---|
-| **A. The node's own statement claim** (recommended) | `node.confirm` adds one owner claim, kind `pattern`, whose text is the node's current `label: summary`, with `source_ref = owner, <surface>:node.confirm`, and cites it in `supporting_spots`. It no longer grounds the other supports. A node with any **outside-born** support is "confirmed", and enters turns, only while it cites a live owner statement claim whose text equals its current wording. Outside-born means `origin = 'untrusted'`, or `source_ref` names an app source (`refSource(...) !== null`, `node-sources.ts:12-16`), which survives `ownerGround`. | None: claims stay the one truth | Generalises D5-b A. A nightly rewrite of the label silently drops the node back to Waldo's read. |
+| **A. The node's own statement claim** (recommended) | `node.confirm` adds one claim of a new kind, `node_statement`. Its text is the node's current `label: summary`; it has `source = 'confirmed'` (Waldo's words that the owner accepted), `origin = 'owner'` and `source_ref = node:<id>:<surface>:node.confirm`. The node cites it in `supporting_spots`. `node.confirm` no longer grounds the other supports. A node with any **outside-born** support is "confirmed", and enters turns, only while it cites a live `node_statement` whose text equals its current wording. Outside-born means `origin = 'untrusted'`, or `source_ref` names an app source (`refSource(...) !== null`, `node-sources.ts:12-16`), which survives `ownerGround`. | None: claims stay the one truth | Generalises D5-b A. A nightly rewrite of the label silently drops the node back to Waldo's read. |
 | B. Node columns `confirmed_at` and `confirmed_wording_hash` | `node.confirm` sets them; the turn block and the projection read them | Additive DO columns | A second home for "confirmed". Forget must also clear it. Works, but splits truth. |
 | C. Refuse `spot.confirm` on supports of an outside-born node | The console hides the claim confirm; the owner uses `node.confirm` | None | Takes away a legitimate per-claim act, and does not catch a later nightly rewrite. Rejected. |
 
 ### 2.4 Recommendation [proposed]: A
 
-- **Kind.** `pattern` is not in `PROFILE_KINDS` (`claims.ts:29`), so the statement never pins or fills the profile. It
-  rides only with its node.
+- **The statement is a confirmation record, not a memory fact.** A `node_statement` reaches a model only through its
+  node's line. It is excluded from:
+  - recall: the `claims.recall` SQL (`claims.ts:461-469`), `read_memory`'s lexical query (`tools/live/memory.ts:133`) and
+    `nearClaims`;
+  - the semantic sweep's `RECALLABLE` set;
+  - promotion evidence (the "two owner claims on different days" rule, `claims.ts:1503`). This one needs no new code: the
+    eligible set takes only `observation` and `pattern` (`:1541-1543`), and a statement of kind `pattern` would have
+    qualified;
+  - `PROFILE_KINDS`, so it never pins or fills the profile;
+  - the claims list in the graph and the app (it shows as the node's confirmation).
+- **Why that exclusion matters.** A `pattern` claim with an `owner, …` ref would carry a health node's wording past
+  `outsideSafe`, which fences on kind, digits and a `welcome:` health ref (`memory/outside-view.ts:10-11`). A mail job could
+  then recall it. As specified, the statement is never recalled, and its node stays fenced by `outsideView` through the
+  node's `health` domain and its unchanged health-sourced supports (`outside-view.ts:13-17`). It would also be a second
+  laundering path: a confirmed statement could count as owner evidence for promoting further nodes.
 - **Forget.** Forgetting the statement claim, or the node, removes the node as today. The barrier on the label is
   unchanged.
-- **Correct.** `node.correct` already writes an owner claim and re-points the node to it (`welcome.ts:256-265`). Under A
-  that claim *is* the statement claim, so correct and confirm share one shape.
+- **Correct.** `node.correct` is unchanged. It already replaces the node with one owner-stated claim and purges Waldo's
+  supports (`welcome.ts:256-265`), so a corrected node rests only on the owner's words and needs no statement.
 - **Turn block.** Nodes resting only on owner supports are unchanged: they need no statement claim.
+- **Nodes already confirmed when S1 deploys (O7).** They have no statement claim. Two choices:
+  - **backfill** a `node_statement` for each node whose outside-born supports all carry a `node.confirm` marker in their
+    evidence (`owner, app:node.confirm` or `console:node.confirm`, written by `ownerGround`, `claims.ts:492`). The owner
+    saw a wording then; it may have been rewritten by a nightly since, and that cannot be checked;
+  - or **revert** them: they read Waldo's read until the owner confirms again.
+
+  Nodes confirmed only through per-claim `spot.confirm` (`owner, console`) revert either way. Their count on staging has
+  not been read [unverified].
+- **Proof.** S1's tests below, plus a metric: zero nodes in any turn block with an outside-born support and no matching
+  live `node_statement`. This is checkable from the turn trace's `shown.nodes` once S4 lands, and by a DO query before
+  then.
 - **Contract.** The app's `confirmation` keeps its two values. Its documented meaning changes from "every supporting
   claim is the owner's own word" (`controls.ts:243-244`) to "the owner confirmed this node's wording". Fewer nodes read
   `confirmed`, never more. **Ask the gate:** does a doc-comment change on an existing field need a controls revision?
@@ -260,7 +286,9 @@ mail-derived support puts `[… · gmail · confirmed]` into turns, still in Wal
 - each support of a mail-born node is confirmed one at a time and the node enters the turn block or reads `confirmed`;
 - `node.confirm` grounds a mail support;
 - after `node.confirm`, a nightly promotion rewrites the label and the node still reads `confirmed`;
-- a node resting only on owner claims loses `confirmed` (a regression).
+- a node resting only on owner claims loses `confirmed` (a regression);
+- an outside-content job receives a health node's `node_statement` through recall or `read_memory({ ids })`;
+- a `node_statement` counts as promotion evidence.
 
 **Privacy and authority.** This tightens the trust fence. A stranger's mail can no longer reach every turn as the owner's
 confirmed words through per-claim confirms.
@@ -268,9 +296,11 @@ confirmed words through per-claim confirms.
 **ADR and migration.** No migration. It amends D5-b in CROSS_DOMAIN and WELCOME_CONSTELLATION §3/§4.3: a docs change
 inside the S1 PR. No new ADR [inference: it decides within the welcome design's existing scope].
 
-**Rollback.** A code revert. Statement claims written meanwhile stay as owner `pattern` claims that cite nothing and harm
-nothing. A reverted Worker counts the node `confirmed` only if every support is owner-grounded, which it will not be under
-A, so it falls back to the safe side.
+**Rollback.** A code revert, with one cost. Old code already leaves `node_statement` out of promotion, because promotion
+reads only `observation` and `pattern` (`claims.ts:1541-1543`). But it would recall those rows as ordinary owner claims,
+which reopens the outside-turn path above. The revert PR therefore also sets them to `dismissed` in the same deploy, with
+a one-line `UPDATE` in the DO's setup. A reverted Worker counts a node `confirmed` only if every support is
+owner-grounded, which it will not be under A, so the nodes fall back to Waldo's read.
 
 ## 3. The unreachable node
 
@@ -316,6 +346,8 @@ They are reachable for removal, never promoted back into context.
 - an incomplete node offers `node.confirm`;
 - an incomplete node enters a turn.
 
+**Proof.** S2's tests, plus a metric: zero active nodes that are absent from the graph while their missing supports are only superseded or dismissed (a DO query).
+
 **App.** The app must render `incomplete` honestly. That goes to the app lane as a brief line, not code (§6).
 
 **Rollback.** A code revert. No data changes.
@@ -350,6 +382,8 @@ C now (app brief), then A. A is low priority: the main missed writer runs at nig
 
 **Falsifiers.** A fails if a `seen` bump changes the revision (the app would refresh on every turn), or if any memory
 writer changes rows without bumping it. The test enumerates the writers.
+
+**Proof.** S3's writer-enumeration test, plus app evidence: after a nightly run, an open Constellation screen shows the new node without a manual refresh.
 
 **Privacy.** A counter, no content.
 
@@ -434,7 +468,7 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | Slice | What | Files | Single writer | Tests (adversarial included) | Migration / ADR / contract |
 |---|---|---|---|---|---|
 | **S0** (waldoco/waldo-backend#1693) | Relevance evals m07–m13 and the `shown`-ids receipt | `evals/nightly/state-memory-scenarios.ts`, `evals/nightly/receipts.ts`, `test/nightly-eval-state-memory.test.ts` (one failing scripted trial per receipt), `docs/evals/STATE_AND_MEMORY_EVALS.md` | none (eval) | receipts can fail; m12 held and forgotten; m13 outside job and health | none |
-| **S1** (waldoco/waldo-backend#1694) | Node confirmation by statement claim (§2) | `onboarding/welcome.ts` (`confirmWelcomeNode`, `correctWelcomeNode`), `memory/node-sources.ts`, `memory/claims.ts` (`constellationLines`), `channels/dashboard-memory-actions.ts`, `channels/memory-graph.ts`; docs: D5-b and the welcome note | `ClaimStore` in the owner DO | per-support `spot.confirm` keeps the node out (red at base); `node.confirm` grounds no mail support; a nightly label rewrite drops `confirmed`; owner-only nodes unchanged; forget of the statement removes the node; owner scoping (another DO's ids refused) | none; ask the gate whether the `confirmation` doc-comment needs a controls revision |
+| **S1** (waldoco/waldo-backend#1694) | Node confirmation by statement claim (§2) | `onboarding/welcome.ts` (`confirmWelcomeNode`, `correctWelcomeNode`), `memory/node-sources.ts`, `memory/claims.ts` (`constellationLines`), `channels/dashboard-memory-actions.ts`, `channels/memory-graph.ts`; docs: D5-b and the welcome note | `ClaimStore` in the owner DO | per-support `spot.confirm` keeps the node out (red at base); `node.confirm` grounds no mail support; a nightly label rewrite drops `confirmed`; owner-only nodes unchanged; forget of the statement removes the node; an outside-content job never gets a health node's `node_statement` by recall or `read_memory({ ids })`; a statement is never promotion evidence; the O7 backfill matches only `node.confirm` markers; owner scoping (another DO's ids refused) | none; ask the gate whether the `confirmation` doc-comment needs a controls revision |
 | **S2** (waldoco/waldo-backend#1695) | Incomplete nodes reachable (§3) | `channels/memory-graph.ts`, `channels/dashboard-memory-actions.ts`, `packages/dashboard-app` (console render) | `ClaimStore` (no new writes) | superseded and dismissed supports surface; purging, forgotten and held still dropped; no `node.confirm` offered; the turn block still excludes them; console forget removes and barriers | none (`incomplete` is already in app.v1) |
 | **S3** (waldoco/waldo-backend#1696) | `memory_revision` (§4 A) | `memory/claims.ts` (triggers, `revision()`), `channels/app-controls.ts` and the day projection, `packages/contracts/src/app/controls.ts` | the triggers, inside each writer's own transaction | each writer bumps; `seen` does not; old revisions never get the field; owner scoping | DO table plus triggers; **controls revision requested from the gate** |
 | **S4** (waldoco/waldo-backend#1697) | `selectMemory` and option B (§1), **only if S0 is red for recency** | new `memory/select-memory.ts`, `memory/claims.ts` (`turnMemoryPrompt` delegates), `memory/turn-recall.ts`, `channels/owner-turn.ts` (the two call sites, `:386` and `:613`), `tools/live/memory.ts` (`ids`), `packages/contracts` (the `read_memory` schema) | none (read path) | S0 green; m03 and m04 unchanged; held, forgotten and untrusted ids refused by `read_memory({ ids })`; outside turn gets no health by id or stub; budget never exceeds `room`; a fresh remember is on the next turn | additive tool-schema field (valid + invalid pair); no ADR |
