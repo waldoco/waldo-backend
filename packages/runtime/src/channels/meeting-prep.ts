@@ -6,8 +6,8 @@ import { calendarPrepDigest, calendarPrepPrompt, checkedMail, parseCalendarPrep,
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 
 // Meeting prep as a machine job, for a meeting the owner organized or accepted: the worker reads their mail for it off the
-// owner's alarm pass, and the brain's existing prep decision runs on what it found, with the delivery admission in the
-// commit that queues the note.
+// owner's alarm pass, and the brain's prep decision runs on what it found, or on its saying it found nothing, with the
+// delivery admission in the commit that queues the note.
 
 // A prep job not done five minutes before the meeting is dropped: a note after that arrives too late to use.
 const MEETING_PREP_LEAD_MS = 5 * 60_000;
@@ -56,25 +56,17 @@ export const meetingPrepApplier = (deps: MeetingPrepApplyDeps): MachineHandler =
       return { held: 'held_stale' };
     }
     const now = deps.now();
-    const text = parseCalendarPrep(await deps.decide(io.trace, calendarPrepPrompt(latest, now, deps.timezone, checkedMail(result)), async () => { await io.current(); await deps.current(connectionId); }));
+    const decision = parseCalendarPrep(await deps.decide(io.trace, calendarPrepPrompt(latest, now, deps.timezone, checkedMail(result)), async () => { await io.current(); await deps.current(connectionId); }));
+    // A reply that is no decision is no note: the job settles unrecorded rather than paying for the same reply again.
+    if (decision.kind === 'malformed') { deps.transaction(io.settle); return { held: 'malformed_reply' }; }
     const commit = () => { deps.briefs.commitPrep(identity, now, machine.input_digest); io.settle(); };
-    if (text === null) { deps.transaction(commit); return 'skipped'; }
+    if (decision.kind === 'no_op') { deps.transaction(commit); return 'skipped'; }
     const receipt: CalendarPrepReceipt = { connectionId, calendarId: 'primary', eventId: latest.id, occurrence: identity.occurrence, start: identity.canonicalStart,
       revision: latest.etag ?? latest.updated ?? null, sourceDigest: machine.input_digest, timezone: deps.timezone };
-    if (await deps.enqueue(identity.id, text, receipt, commit)) return 'delivered';
+    if (await deps.enqueue(identity.id, decision.text, receipt, commit)) return 'delivered';
     deps.transaction(io.settle);
     return { held: 'held_budget' };
   },
-  // The worker found nothing that makes a note worth sending: the occurrence counts as prepped on this digest, once the
-  // event still reads as the job's. A calendar that does not answer settles the job unrecorded, so the next sweep asks again.
-  noNews: async (row, settle) => {
-    const machine = taskBrief(row).machine!;
-    const client = await deps.client().catch(() => null);
-    const latest = client ? await client.event(machine.refs[0]!).catch(() => null) : null;
-    const identity = latest ? await prepIdentity(machine.source!.connection_id, latest) : null;
-    deps.transaction(() => {
-      if (identity?.id === machine.scope) deps.briefs.commitPrep(identity, deps.now(), machine.input_digest);
-      settle();
-    });
-  },
+  // A reader that found nothing in the mail still leaves the calendar and what Waldo knows about the people: the model judges.
+  decidesOnEmpty: true,
 });

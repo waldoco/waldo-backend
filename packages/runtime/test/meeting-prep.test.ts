@@ -22,7 +22,7 @@ const NOTHING: TaskResult = { status: 'done', summary: 'A routine sync; nothing 
 
 type Harness = Readonly<{
   sql: SqlStorage; storage: DurableObjectStorage; book: JobBook; now: number; event: CalendarItem; latest: { event: CalendarItem }; client: GoogleClient;
-  gate: { code: PrepGate | null }; decisions: string[]; enqueued: string[]; jobs(): JobRow[]; briefed(): unknown[];
+  gate: { code: PrepGate | null }; decisions: string[]; enqueued: string[]; checked: [string, string, boolean][]; jobs(): JobRow[]; briefed(): unknown[];
   sweep(over?: Partial<Parameters<ReturnType<typeof eventBriefs>['groundedSweep']>[0]>): Promise<number>;
 }>;
 let seq = 0;
@@ -41,7 +41,7 @@ const withPrep = <T,>(shape: (event: CalendarItem) => CalendarItem, work: (h: Ha
       event: async () => latest.event,
       searchMail: async () => { throw new Error('the brain reads no mail for prep'); },
     } as unknown as GoogleClient;
-    const gate = { code: null as PrepGate | null }, decisions: string[] = [], enqueued: string[] = [];
+    const gate = { code: null as PrepGate | null }, decisions: string[] = [], enqueued: string[] = [], checked: [string, string, boolean][] = [];
     const briefs = eventBriefs(sql, 'UTC');
     const sweep = (over: Partial<Parameters<ReturnType<typeof eventBriefs>['groundedSweep']>[0]> = {}) => briefs.groundedSweep({
       client, now, timezone: 'UTC', current: async () => undefined, known: () => false,
@@ -49,9 +49,10 @@ const withPrep = <T,>(shape: (event: CalendarItem) => CalendarItem, work: (h: Ha
       machine: prep => state.storage.transactionSync(() => enqueueMachine(book, meetingPrepSpec({ ...prep, surface: 'app' }), []).code),
       decide: async (_id, prompt) => { decisions.push(prompt); return JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }); },
       enqueue: async (id, _text, _receipt, commit) => { state.storage.transactionSync(commit); enqueued.push(id); return true; },
+      checked: (code, id, decided) => { checked.push([code, id, decided]); },
       ...over,
     });
-    return work({ sql, storage: state.storage, book, now, event, latest, client, gate, decisions, enqueued, sweep,
+    return work({ sql, storage: state.storage, book, now, event, latest, client, gate, decisions, enqueued, checked, sweep,
       jobs: () => sql.exec<JobRow>('SELECT * FROM task_jobs ORDER BY created_at').toArray(),
       briefed: () => sql.exec('SELECT * FROM event_briefs').toArray() });
   });
@@ -177,27 +178,30 @@ describe('applying a prep job', () => {
     });
   });
 
-  it('the worker found nothing worth a note: no decision, and the digest is recorded', async () => {
+  it('the worker found nothing in the mail: the decision still runs, told so, and its note goes out', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
-      report(h, NOTHING);
+      const job = report(h, NOTHING);
       const a = applying(h);
       await a.lane();
-      expect([a.decided, a.delivered]).toEqual([[], []]);
+      expect(a.decided).toHaveLength(1);
+      expect(a.decided[0]).toContain('found nothing in the owner\'s mail');
+      expect(a.delivered).toHaveLength(1);
       expect(h.briefed()).toHaveLength(1);
+      expect(h.book.get(job.id)!.status).toBe('applied');
     });
   });
 
-  it('the worker found nothing and the calendar cannot be read: the job settles, nothing is recorded, and the next sweep asks again', async () => {
+  it('the worker found nothing and the calendar cannot be read: the apply waits like any apply, with no decision and nothing recorded', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
       const job = report(h, NOTHING);
       const a = applyingWith(h, { client: async () => { throw new Error('calendar connection unavailable'); } });
       await a.lane();
-      expect(h.book.get(job.id)!.status).toBe('applied');
+      expect(a.decided).toEqual([]);
+      expect(a.log.find(entry => entry.hop === 'machine_apply_deferred')).toBeDefined();
+      expect(h.book.get(job.id)!.status).toBe('reported');
       expect(h.briefed()).toEqual([]);
-      await h.sweep({ now: h.now + 10 * 60_000 });
-      expect(h.jobs()).toHaveLength(2);
     });
   });
 
@@ -293,6 +297,100 @@ describe('applying a prep job', () => {
       const a = applying(h);
       await a.lane();
       expect(a.decided[0]).not.toContain('slept 5 hours');
+    });
+  });
+});
+
+describe('the model judges the prep, and every outcome has a code', () => {
+  const invite = ({ owner_status: _status, ...event }: CalendarItem) => event;
+
+  it('the decision prompt carries no bias toward sending nothing, and asks for a Granola-shaped brief', async () => {
+    await withPrep(invite, async (h) => {
+      await h.sweep();
+      expect(h.decisions[0]).not.toMatch(/prefer no_op/i);
+      for (const part of ['who is attending', 'last thread', 'linked documents', 'open loops', 'have ready']) expect(h.decisions[0]).toContain(part);
+    });
+  });
+
+  it('a malformed reply is no note for that event: the sweep goes on to the next event, and the event is asked about again', async () => {
+    await withPrep(invite, async (h) => {
+      const second = { ...h.event, id: 'e2', title: 'Hiring sync' };
+      const page = { events: [h.event, second], next_page_token: null, fetched_count: 2, account: { connection_id: 'c', email: OWNER }, observed_at: new Date(h.now).toISOString() };
+      const replies = ['{"kind":"notify"', JSON.stringify({ kind: 'notify', text: 'Prep: hiring.' })];
+      const client = { ...h.client, calendarPage: async () => page, event: async (id: string) => id === 'e2' ? second : h.event } as unknown as GoogleClient;
+      expect(await h.sweep({ client, decide: async () => replies.shift()! })).toBe(1);
+      expect(h.checked.map(([code, , decided]) => [code, decided])).toEqual([['malformed_reply', true], ['queued', true]]);
+      expect(h.briefed()).toHaveLength(1);
+      await h.sweep({ client, decide: async (_id, prompt) => { h.decisions.push(prompt); return JSON.stringify({ kind: 'no_op', text: '' }); } });
+      expect(h.decisions).toHaveLength(1);
+    });
+  });
+
+  it('every skipped event logs why: already decided, or held by its gate', async () => {
+    await withPrep(invite, async (h) => {
+      await h.sweep({ decide: async () => JSON.stringify({ kind: 'no_op', text: '' }) });
+      await h.sweep();
+      h.gate.code = 'held_quiet';
+      await h.sweep({ now: h.now + 60_000 });
+      expect(h.checked.map(([code]) => code)).toEqual(['no_note', 'already_decided', 'already_decided']);
+    });
+  });
+
+  it('a note already in the outbox is not asked about again, and says so', async () => {
+    await withPrep(invite, async (h) => {
+      await h.sweep({ known: () => true });
+      expect([h.decisions.length, h.checked.map(([code, , decided]) => [code, decided])]).toEqual([0, [['known', false]]]);
+    });
+  });
+
+  it('when the owner\'s day changed since an event was judged to need no note, the event is judged again', async () => {
+    await withPrep(invite, async (h) => {
+      const quiet = async () => JSON.stringify({ kind: 'no_op', text: '' });
+      await h.sweep({ decide: quiet });
+      const since: number[] = [];
+      await h.sweep({ decide: quiet, dayChangedSince: at => { since.push(at); return false; } });
+      expect(h.checked.at(-1)![0]).toBe('already_decided');
+      expect(since).toEqual([h.now]);
+      await h.sweep({ now: h.now + 10 * 60_000, dayChangedSince: () => true });
+      expect(h.decisions).toHaveLength(1);
+      expect(h.enqueued).toHaveLength(1);
+    });
+  });
+
+  it('a changed day writes a new reader job for an accepted meeting whose last job found nothing worth sending', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, NOTHING);
+      await applying(h, JSON.stringify({ kind: 'no_op', text: '' })).lane();
+      await h.sweep({ now: h.now + 10 * 60_000, dayChangedSince: () => true });
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+
+  it('a malformed apply reply settles the job with a code instead of retrying it, and records nothing', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const a = applying(h, 'not json');
+      await a.lane();
+      expect(h.book.get(job.id)!.status).toBe('applied');
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'malformed_reply' });
+      expect([a.delivered, h.briefed()]).toEqual([[], []]);
+    });
+  });
+
+  it('a prep job closes its traces with machine_turn roots that carry its outcome code', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const a = applying(h);
+      await a.lane();
+      const roots = a.log.filter(entry => entry.hop === 'machine_turn');
+      expect(roots.map(entry => [entry.trace, entry.code, entry.detail])).toEqual([
+        [`task:${job.id}`, 'machine_applied', 'meeting_prep'],
+        [`task:${job.id}:1`, 'machine_applied', 'meeting_prep'],
+        [`task:${job.id}:apply`, 'machine_applied', 'meeting_prep'],
+      ]);
     });
   });
 });
