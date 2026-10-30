@@ -124,6 +124,11 @@ export const APP_CONTROLS_CARD_STATE_REVISION = 3;
 // the account view carries the sign-in `email` and, once verified, the `phone`, and `google.disconnect` is an app action.
 // Each field is absent when Waldo does not hold it, and revisions below 7 never receive any of them.
 export const APP_CONTROLS_IDENTITY_REVISION = 7;
+// Controls revision 8 (`controls=8`): the day view carries memory_revision, a per-owner count that moves whenever the owner's
+// memory changes, from chat or not (the nightly pass, the welcome build, the console). Re-reading a claim does not move it.
+// It carries no content and is not part of the day view's revision, so it never makes a day action stale; an open screen
+// re-reads memory when it differs. Revisions below 8 never receive it.
+export const APP_CONTROLS_MEMORY_SIGNAL_REVISION = 8;
 const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
@@ -152,7 +157,7 @@ const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW
   .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
-  timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(),
+  timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(), memory_revision: count.optional(),
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
     state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
     retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
