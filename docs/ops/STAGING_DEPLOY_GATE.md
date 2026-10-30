@@ -39,7 +39,7 @@ so nothing ties it to a commit.
 | `worker-version` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Each live version id, its traffic share and the `WALDO_RELEASE` it was stamped with |
 | `browser-binding` | same | Whether every live version binds `BROWSER` |
 | `healthz-matches-version` | same | `/healthz` and the version's binding agree (single-version deployments only) |
-| `edge-function <slug>` | `SUPABASE_ACCESS_TOKEN` | Version, status, JWT setting and update time of each function in `supabase/functions/` (except `_`-prefixed helpers) |
+| `edge-function <slug>` | `SUPABASE_ACCESS_TOKEN` | Version, status, JWT setting and update time of each function in `supabase/functions/` (except `_`-prefixed helpers). `mint-agent-jwt` is the exception: it passes while it is not deployed and fails if it is, because the production alpha runbook keeps it off |
 | `migrations` | `SUPABASE_ACCESS_TOKEN` | Last applied migration, and how many in this checkout are pending |
 
 Only these fields are printed. Version bindings carry other vars, and deployments carry the deployer's
