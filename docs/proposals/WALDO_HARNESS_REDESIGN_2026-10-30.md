@@ -5,6 +5,7 @@ Design only. This document changes no runtime code, flag, deploy or migration. I
 - **Baseline:** `beta-mvp` at `7e6bce8a` (merge of #1683). All file:line citations are at that SHA.
 - **Written:** 2026-10-30, starting 06:25Z (`date -u`).
 - **Tags:** [verified] means read in source at the baseline or observed in a command. [inference] means concluded but not observed. [proposed] means a design choice or number this document puts forward. [blocked] means evidence I could not get, with the reason.
+- **Citations:** a script printed every cited `file:line` at the baseline and I checked each one against its claim. That includes the citations that came from two read-only subagent audits.
 - **Companion:** the memory-redesign session designs memory selection. It owns the memory-selection interface. This document states only what the harness needs from that interface (§Seam).
 
 ## Owner decisions
@@ -47,7 +48,7 @@ Every path below is under `packages/runtime/` unless it starts with `packages/`,
 | Audit gap | Status at 7e6bce8a | Where |
 |---|---|---|
 | Compaction covers app threads only | **Confirmed, with a sharper split.** See below. | `src/channels/owner-do.ts:4292`, `:4298`, `:4181`, `:1957-1964` |
-| Loader costs extra rounds; nothing carries over | **Confirmed.** History between turns holds only user and assistant text. `find_tools` results are kept out of the next turn's earlier results on purpose. | `packages/contracts/src/runtime/conversation-entry.ts:167-172`; `src/channels/owner-turn.ts:666-672` |
+| Loader costs extra rounds; nothing carries over | **Confirmed.** History between turns holds only user and assistant text. `find_tools` results are kept out of the next turn's earlier results on purpose. | `packages/contracts/src/runtime/conversation-entry.ts:167-172`; `src/channels/owner-turn.ts:673-679` |
 | About 160k characters of tool results within a turn | **Confirmed as a constant. Cost question only.** | `src/conversation/tool-loop.ts:85` (`TOOL_RESULTS_KEEP_CHARS = 160_000`), `:90` (`COLD_CACHE_KEEP_ROUNDS = 3`) |
 | Evals don't match staging | **Confirmed, and worse than listed.** The live suite has never run. | §S0 |
 | Monthly ceiling prices writes; check the rollup | **Prices are right on successful calls. The rollup has gaps.** | §S1 |
@@ -78,14 +79,17 @@ How compaction differs by surface [verified]:
 - I could not confirm `cache_write > 0` on a real staging turn.
   - The Langfuse web UI showed a sign-in page in the built-in browser, and I did not sign in.
   - No Langfuse keys are present in this checkout or environment.
-- I asked the orchestrator (06:3xZ) whether it can read one `llm_reply` usage block from after 05:29Z.
+- Before 06:38Z, I asked the orchestrator whether it can read one `llm_reply` usage block from after 05:29Z. No answer by the time of this commit.
 - What the code shows [verified]:
   - Both adapters read write tokens:
     - OpenAI: `input_tokens_details.cache_write_tokens`, through a cast because SDK 5.12.2 lacks the field (`src/llm/openai.ts:246-249`).
     - Anthropic: `cache_creation_input_tokens` (`src/llm/anthropic.ts:85-101`).
   - The per-call log carries `cache_write` (`owner-turn.ts:342-343`).
   - The cost function prices it at the write rate (`src/llm/pricing.ts:27-37`).
-- **Command for the gate** (read-only, needs a Langfuse key): `node scripts/cost-report.mjs` over `llm_reply` observations since 2026-10-30T05:29Z. Count those with `cache_write > 0`, by model.
+- **Check for the gate** (read-only):
+  - In the Langfuse UI, open any `llm_reply` generation on the staging environment that started after 2026-10-30T05:29Z, and read its usage details for `cache_write`.
+  - For a count, export the generations and count those with `cache_write > 0`, by model.
+  - `scripts/cost-report.mjs` at this SHA can't do this: it never reads `cache_write`, and its windows are whole days.
 - **Every threshold below that depends on write billing is provisional** until there are at least 7 days of write data [proposed].
 
 ### The cost rollup, end to end
@@ -142,7 +146,7 @@ See §S6 for the action threshold.
 - **The pinned memory block** is a `sized` part:
   - built at `owner-turn.ts:613`;
   - placed into `turnContext` by `assembleTurnPrompt` (`src/prompt/turn-prompt.ts:60-66`);
-  - appended to the newest owner message as the frozen per-turn suffix (`owner-turn.ts:625-644`).
+  - appended to the newest owner message as the frozen per-turn suffix (`owner-turn.ts:625-655`).
 - **Per-message recall** is `RECALL_MAX_CHARS = 3_000` (`src/memory/turn-recall.ts:10`), in the same suffix (`owner-turn.ts:586`, `:626`).
 
 What this placement means:
@@ -338,8 +342,10 @@ It is the smallest change that removes the guess.
 - **Within a turn:** the offered list is fixed (`loader.ts:9-11`).
 - **Across turns:** loaded definitions don't carry over.
   - History between turns is user and assistant text only (`conversation-entry.ts:167-172`).
-  - `find_tools` results are kept out of the earlier-results context on purpose (`owner-turn.ts:666-672`).
-- **Calling without finding:** `use_tool` can call any admitted tool without `find_tools` (`loader.ts:94-104`). Only the argument shape is unknown to the model.
+  - `find_tools` results are kept out of the earlier-results context on purpose (`owner-turn.ts:673-679`).
+- **Calling without finding:** `use_tool` can call any admitted tool without `find_tools` (`loader.ts:94-104`).
+  - A `use_tool` call that fails the schema already gets the tool's definition back (`src/conversation/tool-loop.ts:366-370`, shipped with the loader in `f502c7c7b`). So a guess costs at most the round a `find_tools` would have cost.
+  - The prompt doesn't tell the model this. It says "find_tools loads their definitions… Load the one you need" (`messaging-behavior.ts:129`), so the model is steered to `find_tools` first [inference: no trace of what it actually does].
 
 ### Cited failure
 
@@ -355,20 +361,23 @@ Caveat: the measured rounds in that note (`:7-11`) were on hosted tool search wi
 | **B. Data-driven core promotion** | Move the most-loaded deferred tools into core | Static bytes, so the cache prefix stays byte-stable. Every round of every turn pays their definitions as cached input. Each promotion is a gate decision (owner decision 6). |
 | **C. Carry the last turn's loaded definitions into the next turn's frozen suffix** | Those definitions arrive with the owner message, so `use_tool` works with no `find_tools` round | The definitions are paid once per turn as uncached input. That's only worth it when the next turn reuses them. The tools array never changes, so the cache prefix stays byte-stable. Needs a small "loaded last turn" record per chain. |
 | **D. Carry them into `offered`** | Grow the tools array with what was loaded | **Rejected.** The tools array leads the cached prefix. Changing it re-bills everything after it as writes (terra 1.25× input), on every turn the set changes. |
-| **E. Self-repair on `use_tool`** | When `use_tool` fails schema validation for an admitted tool, return the tool's definition in the error | The model can skip `find_tools` and guess. A wrong guess costs one round, the same as today; a right guess saves one. No state. |
+| **E. Say what already works** | The harness line says `use_tool` may be called directly and a wrong-argument call returns the definition. The mechanism exists (`tool-loop.ts:366-370`); this changes only the prompt. | Whether to guess stays the model's call. A wrong guess costs one round, the same as `find_tools` today; a right guess saves one. One system-prompt string, so the cached prefix changes once, at deploy. |
 
 ### Recommendation [proposed]
 
-1. Measure first, in S0: `find_tools` calls per owner turn and the groups loaded.
-2. Then ship **E**: no state, it never costs more than today, and it is local to `loader.ts`.
+1. Measure first, in S0:
+   - `find_tools` calls per owner turn and the groups loaded;
+   - direct `use_tool` calls, and how many of them come back `invalid_args`.
+2. Then ship **E**: no state, one string, and it never costs more than today.
 3. Then **B** for any tool loaded in at least 15% of owner turns over 7 days.
 4. Ship **C** only if a run of follow-up turns keeps reloading the same group.
 
-- **Falsifier:** fewer than 10% of owner turns call `find_tools` [proposed]. In that case stop after E.
+- **Falsifier:** fewer than 10% of owner turns call `find_tools` [proposed]. In that case close S3 without changes.
+- **Falsifier for E:** after E, more than half of direct `use_tool` calls come back `invalid_args` [proposed]. Guessing doesn't pay; revert the string.
 - **Threshold for B:** a tool loaded in at least 15% of owner turns, with the definition-size cost under 25% of the round time it saves. Price it with S1's real write and read rates.
 - **Metric:** the S0 subset's rounds per scenario and `find_tools` count, and p50 turn latency for turns with `find_tools` against turns without it (from the `llm_reply` hops).
 - **Rollback:**
-  - E: revert in `loader.ts`.
+  - E: revert the string.
   - B: move the tool's `brain:` back.
   - C: a flag. The loader still works without the record.
 
@@ -376,9 +385,9 @@ Caveat: the measured rounds in that note (`:7-11`) were on hosted tool search wi
 
 | | |
 |---|---|
-| **Files** | `src/tools/loader.ts`, `src/conversation/tool-loop.ts` (route answer only), `src/tools/records.ts` (B only), tests |
+| **Files** | E: `src/prompt/messaging-behavior.ts` (`HARNESS_TOOLS_LINE`) plus a test. B: `src/tools/records.ts` plus tests. |
 | **Single writer** | the S3 owner. `records.ts` is a hot file, so coordinate with any open tool PR. |
-| **Tests** | E: a `use_tool` with bad args for an admitted tool returns that tool's definition; for an unadmitted tool, or a meta tool, it returns `unknown_tool` and never echoes the name (`loader.ts:103`); every gate still runs (ACL, held, taint, approval). Adversarial: an argument payload that names another tool or embeds `find_tools` can't escalate; the definition returned is the admitted one only. B: the byte-stability test of the tools array across two turns. |
+| **Tests** | E: the line names direct `use_tool` and the definition-on-error behaviour; a trace where a direct `use_tool` with bad args gets the definition and the next call succeeds (the existing behaviour, now pinned); an unadmitted or meta name still gets `unknown_tool` without echo (`loader.ts:103`); every gate still runs (ACL, held, taint, approval). Adversarial: an argument payload naming another tool or embedding `find_tools` can't escalate. B: the tools array is byte-stable across two turns. |
 | **Migration / ADR** | none / none (C would need a DO table and a short contract note) |
 | **Flag** | E: none. B: none (a gate decision). C: yes, `WALDO_LOADER_CARRY` [proposed]. |
 
