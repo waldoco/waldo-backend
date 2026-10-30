@@ -21,14 +21,18 @@ this doc.
 | Not rigid: the model reasons | No code-scored importance (§1); no decay formula (§6.2); areas are model-set labels (§5); evals measure instead of blocking (§1.4, §1.5) |
 | Prompt caching and spend discipline still hold | Hard memory budgets agreed with the harness (§1.6); at most 6 daytime consolidator passes a day (§6.2); embedding cost in the ledger (§1.5) |
 | Earlier recommendations are approved | All of O1–O11 were approved by the owner on 30 Oct (the decisions below) |
-| Skills that make Waldo proactive across the seven areas | §8: an inventory of the 17 skills, the gap (no skill runs proactively), and a ranked top 5 plus the enabler K0 |
+| Skills that make Waldo proactive across the seven areas | §8: an inventory of the 17 skills, the gap (no skill runs proactively), and a ranked top 5 plus the enabler K0. The model picks which skill to load in any turn (§8.2a). |
+| Memory is not restrictive and follows current best practice | §12: a primary-source survey of seven memory systems, and what Waldo adopts from each |
+| Semantic recall on, embeddings in our own stack | §1.5: Workers AI embeddings, stored in the owner's DO SQLite `claim_vectors`, chosen over Vectorize |
+| Connect the dots across people, places, organisations and projects, with time | §13: entities with claims as the edges, bi-temporal through the claims' own columns, and what the Constellation, Spots and Patrol show |
+| The backlog tracks everything | No tracking cap anywhere. "At most 3" limits only what one card or batch shows (§5, §6.4, §8.3). |
 
 This doc builds on the designs before it rather than replacing them:
 
 | Earlier design | Status at `7e6bce8a` | How this doc relates |
 |---|---|---|
 | [`MEMORY_V2_2026-10-25.md`](MEMORY_V2_2026-10-25.md) and its ADR draft | Proposed, not accepted, not built. `notebook_sections` and `journal_days` have no runtime hit [verified: grep of `packages/runtime/src`]. | **Extends.** *About you* stays the target for the stable page. MEMORY_V2's journal is one possible later home for "learned today". |
-| [`docs/planning/semantic-recall.md`](../planning/semantic-recall.md) | A tracer behind `MEMORY_SEMANTIC_RECALL`, off everywhere. A candidate design, not an ADR. | **Turns it on** for the staging cohort, with four gates (§1.5) |
+| [`docs/planning/semantic-recall.md`](../planning/semantic-recall.md) | A tracer behind `MEMORY_SEMANTIC_RECALL`, off everywhere. A candidate design, not an ADR. | **Turns it on** for the staging cohort, with four gates; the store stays DO SQLite, chosen over Vectorize (§1.5) |
 | [`WELCOME_CONSTELLATION_2026-10-25.md`](WELCOME_CONSTELLATION_2026-10-25.md), [`CROSS_DOMAIN_CONSTELLATION_2026-10-28.md`](CROSS_DOMAIN_CONSTELLATION_2026-10-28.md) | Merged designs. D5-b is open. | **Generalises** D5-b option A to every node (§2). Gives the weave named axes (§5). |
 | Draft waldoco/waldo-backend#1587, `OWNER_BACKLOG_2026-10-26.md` at `070eea7e` | A draft that waits on its own Q1–Q3 | **Extends.** One shared `LIFE_AREAS` constant replaces its three areas (§5.3). Its Close carry-over gains look-up findings (§7). |
 | waldoco/waldo-backend#1692, the harness redesign | A draft | It consumes `selectMemory` (§1.6) and owns event ingestion and the day's working state; the seam is §6.3. |
@@ -50,15 +54,30 @@ staging flag flip, which happens in a named deploy.
 | O7 | Patterns confirmed with the pattern's own Confirm before the O3 fix stay confirmed. Those confirmed note by note go back to Waldo's read. | **Approved** (owner, 30 Oct, in chat) |
 | O8 | Up to 6 daytime consolidation passes a day, about $0.01 per owner-day at the cap, logged and skipped at the spend cap. | **Approved** (owner, 30 Oct, in chat) |
 | O9 | The source pass learns from mail and calendar content during the day. Outside content stays a candidate. | **Approved** (owner, 30 Oct, in chat), after the notice sentence. The flag flip is owner-only. |
-| O10 | The Close offers up to 3 look-up findings a day, through the new `decide_owner_finding` tool. | **Approved** (owner, 30 Oct, in chat) |
+| O10 | The Close shows look-up findings, at most 3 per card with the rest in later cards, through the new `decide_owner_finding` tool. | **Approved** (owner, 30 Oct, in chat) |
 | O11 | The `mind` area holds patterns in words, never a diagnosis or a reading. It is fenced from mail and web jobs. | **Approved** (owner, 30 Oct, in chat) |
 | #1587 Q1 | Cohort scope | **(a), (b) and (c)** (owner, 30 Oct, in chat). Calendar capture joins now and feeds daytime consolidation (§6). The consequence, from #1587 §7: the app.v1 `open_loops.source` enum is closed to `gmail` and `chat`. `calendar` and `meeting` must be added before the Worker emits such items. That revision is the gate's to allocate. |
 | #1587 Q2 | Weekly review | **Yes, folded into a Close** (owner, 30 Oct, in chat). The goal check-ins in §8.4, rank 6, ride it. |
 | #1587 Q3 | Which captures need the owner's yes | **As proposed** (owner, 30 Oct, in chat). Captures from mail and calendar need the owner's yes; the owner's own words do not. |
 
-**Privacy-notice placeholders.** The orchestrator drafts these for the owner; the wording is not decided here.
-- **[NOTICE-SENTENCE-O1]:** embeddings by Cloudflare Workers AI, kept in Waldo's storage and deleted with the note.
-- **[NOTICE-SENTENCE-O9]:** notes Waldo makes during the day from mail and calendar content, which wait for the owner's yes.
+**Final rulings (owner, 30 Oct, in chat; relayed by the orchestrator at about 17:10Z):**
+- **O1–O11 are final.** Semantic recall is **on** (O1). Embeddings are computed inside our own stack, on Cloudflare Workers AI. The vector store is decided in §1.5.
+- **The privacy changes are approved by the owner.** The orchestrator is opening the waldo-landing PR for the two notice sentences: embeddings (O1) and daytime notes from mail and calendar content (O9). Each staging flag flip is still a deploy the owner names.
+- **The backlog tracks everything.** Waldo keeps every backlog item and open loop, with no limit. "At most 3" limits only what one card or suggestion batch *shows*.
+- **Memory must not be restrictive.** It follows current best practice (the survey in §12). What to remember is the model's judgment.
+- **K0 extended.** The model picks which skill to load in **any** turn, chat or proactive, as other agents do. The owner never has to name a skill. Skills still grant no tools.
+- **The top 5 new skills (S-1 to S-5) are approved.**
+- **#1463 is agreed:** iMessage chat turns carry the owner's derived health context.
+
+**Gate allocations.**
+- S3 `memory_revision` is app.v1 **`controls=8`**. The stale #1282 once claimed 8 and loses it.
+- `area` on app.v1 gets its revision later, when it is built.
+
+**The "not too rigid" line** (owner ruling, 30 Oct, verbatim from the gate's relay):
+
+> Product rules move to the model. Hard boundaries stay: auth and owner scoping, credentials never in prompts or logs,
+> egress, schema validation, and ADR-0081's rules for where raw health values may go. Changing a hard boundary needs an ADR
+> amendment in Brain. Notice or copy claims that hinder usefulness get changed.
 
 ## Re-baseline at `7e6bce8a`
 
@@ -163,9 +182,9 @@ Each is small.
 | Gate | State at 30 Oct | What closes it |
 |---|---|---|
 | Workers AI terms | **Closed** [verified]. Cloudflare's *Data usage* page for Workers AI says Cloudflare "does not use Customer Content processed by Workers AI to train AI models". It also says standard inference keeps no inputs or outputs once the response is delivered (developers.cloudflare.com/workers-ai/platform/data-usage, read 30 Oct). | Nothing. Cite it in the ADR. |
-| Privacy notice | **Open** [verified]. Notice v1 (heywaldo.in/privacy, effective 27 Oct) names Cloudflare as the processor for "conversations, memory, files and service logs". It does not mention embeddings or Workers AI. | One sentence in §8 of the notice: Cloudflare's Workers AI turns memory notes and messages into search vectors, which are kept in your Waldo storage and deleted with the note. That is a waldo-landing edit plus the owner's yes. |
+| Privacy notice | **Approved by the owner (30 Oct).** The orchestrator opens the waldo-landing PR. Before that [verified]: Notice v1 (heywaldo.in/privacy, effective 27 Oct) names Cloudflare as the processor for "conversations, memory, files and service logs". It does not mention embeddings or Workers AI. | One sentence in §8 of the notice: Cloudflare's Workers AI turns memory notes and messages into search vectors, which are kept in your Waldo storage and deleted with the note. That is a waldo-landing edit plus the owner's yes. |
 | Cost ledger | **Open** [verified]. `llm/pricing.ts` has no entry for `@cf/baai/bge-m3`. The sweep logs counts only (`semantic-recall.ts:133-134`). | One code PR: price the embedding calls and count them in the ledger and the owner spend ceiling. Cost is about $0.0118 per million tokens (`semantic-recall.md`), well under a cent per owner per month [inference]. |
-| ADR for `claim_vectors` | **Open.** The tracer note says it is "a candidate design, not an ADR". | A short ADR: the store (DO SQLite, no text), egress (Workers AI, numbers redacted, secrets withheld), forget (triggers in the writer's transaction) and rollback (flag to 0). `semantic-recall.md` already has every section, so this is a conversion, not new design. |
+| ADR for `claim_vectors` | **Open.** The tracer note says it is "a candidate design, not an ADR". | A short ADR: the store (DO SQLite, no text, chosen over Vectorize below), egress (Workers AI, numbers redacted, secrets withheld), forget (triggers in the writer's transaction) and rollback (flag to 0). `semantic-recall.md` already has every section, so this is a conversion, not new design. |
 
 Then flip `MEMORY_SEMANTIC_RECALL` to `"1"` in `env.staging.vars`, in a deploy the owner names. The harness passes
 `deadlineMs = 1,500` while it is on (§1.6).
@@ -176,6 +195,27 @@ m08's data. Rollback is the flag.
 **Not gates** (they were listed before, and the direction drops them as blockers): a red m08 before the switch, and
 waiting for S4. Semantic matches join recall as candidates through `ClaimStore.recall`'s existing `near` input
 (`claims.ts:461`), with or without S4.
+
+#### Vector store: the owner's DO SQLite (`claim_vectors`), not Vectorize [proposed; owner ruling: O1 on, embeddings in our own stack]
+
+Embeddings are computed on Cloudflare Workers AI (`@cf/baai/bge-m3`), inside our own stack. Where the vectors live was
+compared from Cloudflare's own docs (read 30 Oct 2026):
+
+| | **DO SQLite `claim_vectors`** (built, behind the flag) | **Vectorize** |
+|---|---|---|
+| Forget | The vector is deleted by a trigger **in the same transaction** as the claim's delete or redaction (`semantic-recall.ts:79-84`). `transactionSync` is all or nothing (Durable Objects SQLite storage API). | Insert, upsert and delete are **asynchronous** and return a `mutationId`. The index is "eventually consistent" (Cloudflare blog, *Building Vectorize*). Deletes "typically" take "a few seconds" (client API), with no stated worst case. Forget would need an outbox, a retry owner and a `processedUpToMutation` poll, and until that settles a forgotten item can still come back in search. |
+| Owner isolation | Structural: one owner's vectors live in that owner's object | A namespace per owner (50,000 namespaces per index on Workers Paid, by the limits page; the insert page says 1,000). A query that omits its namespace searches the whole index. |
+| Limits | 10 GB per object; 2 MB per row (DO limits). 1024 × float32 is 4 KB a vector. | 1,536 dims at most; 20M vectors per index; 10 metadata indexes, which must exist before insert; topK at most 100 (Vectorize limits) |
+| Cost at 5,000 owners × 5,000 vectors, 20 queries per owner per day | Rows read: 15B a month, inside the 25B included, so $0. Storage: about 102 GB, so about **$19.50 a month** (DO pricing: $0.20 per GB-month over 5 GB). | Queried dims (28.7B) about $286, plus stored dims about $12.80, so about **$299 a month** (Vectorize pricing formula, checked against the page's own example) |
+| Search | A brute-force cosine scan over one owner's rows | ANN; median about 30 ms on Cloudflare's own benchmark |
+| Risk | CPU and memory per scan. The DO memory limit is not documented; a Worker isolate has 128 MB. At about 30,000 vectors one owner's set nears 120 MB, so the scan must stream rows. Above that, store int8 vectors. | A second home for claim-derived (possibly health-adjacent) data, with eventual deletes |
+
+**Decision: DO SQLite.** Forget in the writer's own transaction and structural owner isolation are hard boundaries (the
+"not too rigid" line). It is also about 15 times cheaper at cohort scale and already built.
+
+- **Revisit trigger:** any owner over about 30,000 claims, or a measured p95 scan time over 100 ms [proposed thresholds; the harness's `deadlineMs` is 1,500 while the leg is on].
+- **S6** measures the scan time on staging.
+- **Embeddings:** bge-m3 at $0.0118 per million input tokens (Workers AI model page). Its 1024 dimensions come from the BAAI model card, not Cloudflare's docs. The tracer already stores `dims` per row and refuses a response of the wrong shape (`semantic-recall.md`).
 
 ### 1.6 The memory-selection interface [proposed; terms agreed with harness-redesign]
 
@@ -613,7 +653,7 @@ observed(event: {
 | Chat (every surface) | The next turn's `selectMemory` reads the current store. `revision` lets the harness log whether `core` changed. | S4 |
 | App | Re-read on focus, and after a reply whose receipt part has `memory_stored` or `memory_forgotten` (works today). Then the `memory_revision` field on the day projection, which the app already polls. | S3 and the app brief |
 | Console | The same `memory_revision`, on the console's day and memory reads | S3 |
-| Notifications | No new push for memory. A pattern Waldo formed, or a finding or candidate waiting for a yes, is offered in the next Close card (at most 3, per #1587's carry-over). A change that matters for today is the harness's update-card decision, as now. | S8 |
+| Notifications | No new push for memory. A pattern Waldo formed, or a finding or candidate waiting for a yes, is shown in the next Close card. A card *shows* at most 3 at a time; everything stays tracked and comes up again in later cards, with no limit on what Waldo keeps. A change that matters for today is the harness's update-card decision, as now. | S8 |
 
 **Falsifiers:**
 - a mail item seen in the morning is not a candidate claim by the afternoon, with the consolidator on;
@@ -678,7 +718,7 @@ How kept findings appear in prompts:
 1. **Area.** A finding is classified by its own `category` (`findings.ts:89`). When a finding becomes a claim on keep or correct, the model also sets its life `area` (§5), so a kept finding lands in work, people or goals. The area is a label (O6). It is not a trust change.
 2. **Offer, don't wait (O10).**
    - Today an unconfirmed finding waits in the app's *What Waldo knows* until the owner happens to look, or until it expires.
-   - Proposed: the Close card offers up to 3 unconfirmed findings a day ("Waldo found these about you on the public web; keep or let go?"). This reuses #1587's Close carry-over and its "up to 3 candidates" rule. There is no new push.
+   - Proposed: the Close card shows up to 3 unconfirmed findings at a time ("Waldo found these about you on the public web; keep or let go?"). The rest stay tracked and come up in later cards until the owner decides or they expire. This reuses #1587's Close carry-over. There is no new push.
    - The owner answers in words. **No model tool can keep a finding today** [verified]: `tools/records.ts:172-173` has only `record_owner_finding` and `list_owner_findings`, and keep and correct are app actions (`findingStore.decide`, `findings.ts:121`).
    - S8 adds one tool, `decide_owner_finding({ finding_id, action: keep | correct | forget, text? })`. It is `ownerTurnOnly`, refused in a turn that read outside content, and calls the same `decide` and `forget`. This is an additive tool-schema contract (a valid + invalid pair).
 3. **Connecting the dots.**
@@ -776,6 +816,20 @@ document-signing-preparation, ride-preparation, trusted-person-coordination. Eac
 | `goals` | weekly-review, project-catch-up | Turning intentions into plans (S-1); progress check-ins in the weekly Close (#1587 Q2: yes) |
 | all | memory-correction, reminders-and-watches | Planning every open loop when it is captured (S-1) |
 
+### 8.2a The model picks the skill, in any turn (owner ruling, 30 Oct)
+
+The pattern other agents use (for example, a skill's name and description listed in the prompt, with the body loaded on
+demand), applied to Waldo:
+- **Any turn.** Every owner turn on every surface (K1 adds iMessage and WhatsApp), and every proactive turn (K0: the Brief,
+  Check-in, Close, pre-meeting jobs, the harness's day-update judge), carries the catalogue's metadata. The model calls
+  `skills_load` when a skill fits.
+- **The owner never has to name a skill.** That already holds in chat. The catalogue line tells the model to load a skill
+  "if an enabled skill fits the current task" (`skills/curated-host.ts:42`). K0 and K1 extend the same rule to every turn.
+- **Skills grant no tools.** Tool admission stays per trigger, and every effect keeps its approval gate.
+- **One possible follow-up for the harness lane, outside K0's scope:** make `skills_load` a core tool under the harness
+  loader. Today it is one `use_tool` hop away (`tools/records.ts:132`, brain `skills`). This would change the cached
+  prefix once, at deploy. It is raised with the gate, not folded into K0.
+
 ### 8.3 New skills: rules every one follows [proposed]
 
 - **Model-judged.** No fixed significance rules or thresholds. The skill is a reviewed procedure the model chooses to load. It is not a code path keyed to an event type.
@@ -785,7 +839,7 @@ document-signing-preparation, ride-preparation, trusted-person-coordination. Eac
   - Missing data is never a signal.
   - Outside content becomes a candidate, never the owner's word.
   - Effects (calendar changes, sends) go through the existing approvals.
-- **Few at a time, at breaks.** At most 3 suggestions a card (Cowan; Iqbal and Bailey). Choices, not directives (Ryan and Deci).
+- **Few at a time, at breaks.** A card *shows* at most 3 suggestions (Cowan; Iqbal and Bailey). This limits what one card shows, never what is tracked: the backlog and every open loop are kept in full, with no cap. Choices, not directives (Ryan and Deci).
 - **Shared with the backlog.** What a skill proposes lands as a #1587 backlog item or candidate with an `area`, so the Close and the console show it.
 
 ### 8.4 Ranking [proposed]
@@ -795,7 +849,7 @@ is the build size, with existing tools reused.
 
 | Rank | Slice | Area / cluster | Value | Cost | Why this rank |
 |---|---|---|---|---|---|
-| **0 (enabler)** | **K0: proactive turns can load skills** (waldoco/waldo-backend#1705) | all | Very high: it makes the 17 existing skills proactive | **Medium.** A machine turn needs its own skill-book envelope: today's capability binds to an owner turn's trigger, text, turn id and run scope (`owner-do.ts:4108-4109`). Widening a trigger's tool list touches the ADR-0033 permission map (`permissions.ts:123-126`). | Without it, every new skill below is on request only. In a machine turn that read outside content, a mail could steer *which* procedure loads. Skills grant no tools, and every tool keeps its own taint and approval gates; K0 adds a taint test for this. |
+| **0 (enabler)** | **K0: the model can load a skill in any turn, chat or proactive** (waldoco/waldo-backend#1705) | all | Very high: it makes the 17 existing skills proactive | **Medium.** A machine turn needs its own skill-book envelope: today's capability binds to an owner turn's trigger, text, turn id and run scope (`owner-do.ts:4108-4109`). Widening a trigger's tool list touches the ADR-0033 permission map (`permissions.ts:123-126`). | Without it, every new skill below is on request only. In a machine turn that read outside content, a mail could steer *which* procedure loads. Skills grant no tools, and every tool keeps its own taint and approval gates; K0 adds a taint test for this. |
 | **0b (enabler)** | **K1: skills on iMessage and WhatsApp** (waldoco/waldo-backend#1711) | all | High: iMessage is a main owner surface and has no skills today | Low–medium: a skill host bound to the iMessage and WhatsApp turn records, like `appSkillHost` | Same owner, same book, any surface (one Waldo across surfaces) |
 | **1** | **S-1 intention-to-plan** (waldoco/waldo-backend#1706) | all / H5, H6 | High: when-then plans have the strongest evidence (d ≈ .65) and apply to every archetype | Low | A procedure over #1587's loops and reminders |
 | **2** | **S-2 relationship-upkeep** (waldoco/waldo-backend#1707) | `people` / H9, H2 | High: today there is no coverage | Low–medium | Memory plus observed mail, in a Brief or Close turn. A reply debt becomes a candidate through the loop tools in that turn, never from the consolidator. |
@@ -820,18 +874,19 @@ None needs a migration or an app.v1 change, except the areas the backlog already
 
 ## 9. App brief additions (for Suyash's lane, not code here)
 
-Added to `APP_MEMORY_SYNC_BRIEF_2026-10-30.md` items 1–9:
+The full brief, with items 10–15 appended, is in this PR as [`handoff/APP_MEMORY_SYNC_BRIEF_2026-10-30.md`](../../handoff/APP_MEMORY_SYNC_BRIEF_2026-10-30.md). The orchestrator opens it as a waldo-app issue. Items 10–15 in short:
 
 - **10.** Render nodes with `support.state: 'incomplete'`. Show "a note under this changed", and offer correct and forget
   only (§3).
 - **11.** After S1, `confirmation: 'confirmed'` means the owner confirmed the wording. App-side "Confirm" calls
   `node.confirm` as today.
 - **12.** For gap 9, re-read memory on focus and after a reply whose receipt part has a `memory_stored` or
-  `memory_forgotten` item. That works today. The day-projection `memory_revision` (S3) comes later.
+  `memory_forgotten` item. That works today. The day-projection `memory_revision` (S3, app.v1 `controls=8`) comes later.
 - **13.** When S5 lands, group notes and backlog items by the seven life areas, and let the owner change an item's area.
   Show `area` only once the gate has allocated its app.v1 revision.
 - **14.** *What Waldo knows* already lists look-up findings with keep, correct and forget (`findings.ts`). Show their
   30-day expiry, and treat a finding the owner keeps from the Close card (S8) the same as one kept in the app.
+- **15.** When S9 and its app.v1 revision land, show entity nodes and relation edges on the Constellation, and entity chips, area and validity on Spots. Patrol shows background memory runs with counts-only summaries (§13.5).
 
 ## 10. Build slices
 
@@ -844,31 +899,184 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | **S0** (waldoco/waldo-backend#1693) | Relevance evals m07–m13 and the `shown`-ids receipt | `evals/nightly/state-memory-scenarios.ts`, `evals/nightly/catalogue.ts`, `evals/nightly/gate.ts` (`min_scenarios`), `evals/nightly/receipts.ts`, `test/nightly-eval-state-memory.test.ts` (one failing scripted trial per receipt), `docs/evals/STATE_AND_MEMORY_EVALS.md` | none (eval) | receipts can fail; m12 held and forgotten; m13 outside job and health | none |
 | **S1** (waldoco/waldo-backend#1694) | Node confirmation by statement claim (§2) | `onboarding/welcome.ts` (`confirmWelcomeNode`, `correctWelcomeNode`), `memory/node-sources.ts`, `memory/claims.ts` (`constellationLines`), `channels/dashboard-memory-actions.ts`, `channels/memory-graph.ts`; docs: D5-b and the welcome note | `ClaimStore` in the owner DO | per-support `spot.confirm` keeps the node out (red at base); `node.confirm` grounds no mail support; a nightly label rewrite drops `confirmed`; owner-only nodes unchanged; forget of the statement removes the node; an outside-content job never gets a health node's `node_statement` by recall or `read_memory({ ids })`; a statement is never promotion evidence; the O7 backfill matches only `node.confirm` markers; owner scoping (another DO's ids refused) | none; ask the gate whether the `confirmation` doc-comment needs a controls revision |
 | **S2** (waldoco/waldo-backend#1695) | Incomplete nodes reachable (§3) | `channels/memory-graph.ts`, `channels/dashboard-memory-actions.ts`, `packages/dashboard-app` (console render) | `ClaimStore` (no new writes) | superseded and dismissed supports surface; purging, forgotten and held still dropped; no `node.confirm` offered; the turn block still excludes them; console forget removes and barriers | none (`incomplete` is already in app.v1) |
-| **S3** (waldoco/waldo-backend#1696) | `memory_revision` (§4 A) | `memory/claims.ts` (triggers, `revision()`), `channels/app-controls.ts` and the day projection, `packages/contracts/src/app/controls.ts` | the triggers, inside each writer's own transaction | each writer bumps; `seen` does not; old revisions never get the field; owner scoping | DO table plus triggers; **controls revision requested from the gate** |
+| **S3** (waldoco/waldo-backend#1696) | `memory_revision` (§4 A) | `memory/claims.ts` (triggers, `revision()`), `channels/app-controls.ts` and the day projection, `packages/contracts/src/app/controls.ts` | the triggers, inside each writer's own transaction | each writer bumps; `seen` does not; old revisions never get the field; owner scoping | DO table plus triggers; app.v1 **`controls=8`** (allocated by the gate) |
 | **S4** (waldoco/waldo-backend#1697) | `selectMemory` and option B (§1), **behind a flag; S0 decides whether it goes on** | new `memory/select-memory.ts`, `memory/claims.ts` (`turnMemoryPrompt` delegates), `memory/turn-recall.ts`, `channels/owner-turn.ts` (the two call sites, `:386` and `:613`), `tools/live/memory.ts` (`ids`), `packages/contracts` (the `read_memory` schema) | none (read path) | S0 green; m03 and m04 unchanged; held, forgotten and untrusted ids refused by `read_memory({ ids })`; outside turn gets no health by id or stub; budget never exceeds `room`; a fresh remember is on the next turn | additive tool-schema field (valid + invalid pair); no ADR |
 | **S5** (waldoco/waldo-backend#1698) | `LIFE_AREAS` and claim `area` (§5). The constant can land at once; #1587's loops adopt it when they are built. | `packages/contracts` (`LIFE_AREAS`), `memory/claims.ts` (column, claim-ops schema), `tools/live/memory.ts` (`remember.area`, `read_memory.area`), #1587's ADR draft | `ClaimStore` | a kind-`health` claim in any area, and any claim in area `body` or `mind`, stays out of outside turns; an eval case for the residual risk (a mood pattern filed as `observation` under `work`); forget; the owner's change wins over the nightly; no area without a claim | DO column; tool-schema fields; app.v1 area later (gate) |
 | **S6** (waldoco/waldo-backend#1699) | Semantic recall on for the staging cohort (§1.5, O1) | `llm/pricing.ts` and the cost ledger (embedding price, spend ceiling); a short ADR for `claim_vectors` in waldo-brain; one privacy-notice sentence (waldo-landing, with the owner's yes); then `MEMORY_SEMANTIC_RECALL = "1"` in `env.staging.vars` in a deploy the owner names | `semanticRecall.sync()` (unchanged) | a priced embedding call reaches the ledger; the spend ceiling counts it; m08 with the leg on and off (measured, not gating); health redaction, secrets and forget triggers (already tested) | ADR; no migration (`claim_vectors` is a DO table created by the flag) |
 | **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's `observed` emit (#1701) |
-| **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes, at most 3 a day (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 offered; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
+| **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes; a card shows at most 3, and every item stays tracked (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 shown per card, and the rest shown in later cards; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
 
 | **K0** (waldoco/waldo-backend#1705) | Proactive turns can load reviewed skills (§8) | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (a skill-book envelope for machine turns), `skills/curated-host.ts` | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; a tainted machine turn gains no tool or approval by loading a skill; owner scoping | a tool-permission map change under ADR-0033; the gate decides whether it needs an ADR note |
 | **K1** (waldoco/waldo-backend#1711) | iMessage and WhatsApp turns get the owner's skill book (§8.1) | `channels/owner-do.ts` (a skill host bound to the iMessage and WhatsApp turn records) | the skill book (unchanged writer) | an iMessage turn loads an enabled skill; a stale record fails closed; the same book and custody as the app; owner scoping | none |
 | **S-1 to S-5** (waldoco/waldo-backend#1706–#1710) | New skills: intention-to-plan, relationship-upkeep, overload-day, renewals-and-bills, recovery-day (§8.4) | each a reviewed `packages/runtime/skills/<name>/SKILL.md`, plus nightly scenarios | none (procedures) | happy, null, hostile and quiet paths per skill; health and consent rules (S-5) | none |
+
+| **S9** (waldoco/waldo-backend#1717) | Entity and relationship graph (§13) | `memory/claims.ts` (the `entities` and `claim_links` tables; `remember` and claim-ops `entities`), `tools/live/memory.ts` (`read_memory({ entity })`), `memory/outside-view.ts`, the forget inventory, `packages/contracts` (tool schemas) | `ClaimStore` | m15–m18; an entity known only from untrusted mail is hidden; a body or mind entity is fenced from outside turns; forget deletes names and links; two people with one first name stay apart; owner scoping | two additive DO tables; a short ADR (or a MEMORY_V2 ADR section); app.v1 entity revision later (gate) |
 
 **Order:**
 - S0, S1, S2, S3, S5 (the constant) and S6 can start in parallel. S1 and S2 share `dashboard-memory-actions.ts`, so they go one after the other.
 - S4 ships with S0 measuring it.
 - S7 waits on the harness's `observed` emit (#1701).
 - S8 waits on #1587's carry-over.
+- S9 (entities) can start after S5 lands its `area` column, and is not in wave 1.
 - K0 can start at once. S-1 and S-2 follow it in parallel; S-3, S-4 (after #1587 and S7) and S-5 come after.
 
 **m14** (real time) joins S0: a mail at 09:00, then a question at 15:00 whose answer needs it, with the consolidator on. Outside content reaches the turn live, as data. The consolidator makes it a candidate the owner can confirm; it does not put it in `core`.
 
+**m15–m18** (entities, §13.6) join S0 when S9 lands: who the owner knows at an organisation, a superseded job, two people with one first name, and forgetting a person.
+
 ## 11. Fixed, and not redesigned
 
-`WaldoCoordinator`, the trusted RunLoop and physical-effect path, the existing `ContextComposer`, one durable writer per
-aggregate (`ClaimStore` for claims and nodes, the loop book for loops), memory as correctable context and not permission,
-and ADR-0081: no raw health values in DO memory, transcripts or traces. Forget stays topic-only (25 Oct ruling).
+These follow the current `CLAUDE.md` on `beta-mvp`:
+- **One brain.** The per-owner `OwnerDO` is the only authority root and the only writer of memory, chats and approvals. The second brain (`WaldoCoordinator`, RunLoopDO) was deleted in B-1, and nothing here reintroduces it. Task workers hold no memory.
+- **Keep the existing `ContextComposer` and the intent-before-I/O effect path.**
+- **One durable writer per aggregate:** `ClaimStore` for claims, nodes, entities and links; the loop book for loops.
+- **Memory is correctable context, not permission.**
+- **ADR-0081, as amended by `docs/app/HEALTH_PLANE_AMENDMENT.md`:**
+  - synced wearable readings are read live and never copied into memory;
+  - what the owner says about their own health may be kept, numbers included, as a dated statement;
+  - a health number arriving in outside content is never written to memory from that path.
+- **Forget stays topic-only** (25 Oct ruling).
+
+The "not too rigid" line above says which of these are hard boundaries.
+
+## 12. Current best practice: a survey of agent memory systems
+
+The owner's ruling (30 Oct): memory must not be restrictive, and should follow current best practice; what to remember is
+the model's judgment.
+
+These systems were read at primary sources on 30 Oct 2026: papers on arXiv, official docs and the official repo.
+- Benchmark numbers come from different judges (J, F1, accuracy) and are mostly vendor-run or competitor-run. They are
+  quoted only as context, never compared across rows.
+- Two common beliefs were out of date:
+  - Mem0's current write path only appends (since April 2026). The paper's ADD/UPDATE/DELETE/NOOP step is gone.
+  - Letta's current model is MemFS: git-backed markdown files, with background "dreaming".
+
+| System (source) | Stores | Retrieves | Updates and forgets | What Waldo adopts |
+|---|---|---|---|---|
+| **Letta / MemGPT** (Packer et al. 2023, arXiv 2310.08560; Letta docs: memory blocks, archival memory, MemFS, sleep-time) | Core memory blocks in the prompt (label, description, value, a character limit). Archival storage is a vector database; recall storage holds the full message history. MemFS keeps memories as markdown files in git: root files load every turn, folders on demand. | The core is always in the prompt. Archives and recall are searched by the agent through tools. | The agent edits memory through tool calls. At memory pressure the queue warns, then evicts and summarises; evicted messages stay searchable. Every MemFS edit is a commit. "Dreaming" subagents consolidate every N steps or at compaction. | **Adopted.** A small, capped core every turn (`core`, 5,200 characters, §1.6), with deep reach through tools (`read_memory`, `search_episodes`). A background consolidator (§6). **Next:** versioned edits. Claims already keep a `supersedes_id` chain; owner-visible history of a claim's versions is a follow-up. |
+| **Mem0** (Chhikara et al. 2025, arXiv 2504.19413; Mem0 docs) | Extracted facts, scoped by user, agent or app. The graph variant Mem0g stores entity triples. | Semantic, keyword and entity signals, fused and reranked toward what is current | **Paper:** an LLM chose ADD, UPDATE, DELETE or NOOP against the top 10 similar memories. **Since April 2026:** append only, with staleness handled at retrieval; `expiration_date` hides a memory. **Mem0g** marks an obsolete relation invalid instead of deleting it. | **Adopted:** extract salient facts per exchange and check them against near-duplicates before writing. Claims already dedupe by kind and text, and corrections supersede. Entity fusion in recall (§13). **Not adopted:** append-only. Waldo needs deterministic forget and correction (CLAUDE.md; the topic-forget ruling), so it supersedes instead. |
+| **Zep / Graphiti** (Rasmussen et al. 2025, arXiv 2501.13956; getzep/graphiti) | Episodes (raw, as provenance), entities with fact edges, communities (cluster summaries) | Cosine, BM25 and graph breadth-first search, fused with RRF, MMR or a cross-encoder. Context is built from facts with their validity dates. | **Bi-temporal edges:** when a fact held (`t_valid`/`t_invalid`) and when it was recorded (`t'_created`/`t'_expired`). A contradiction closes the old edge; nothing is deleted. Graph writes use fixed queries, never LLM-written ones. | **Adopted:** the bi-temporal model on claims, which already have `valid_from`/`valid_to` and `learned_at`/`created_at`. Entities, with claims as the edges (§13). Hybrid retrieval: bm25 plus vectors with RRF (§1.5), plus one entity hop. **Not adopted:** a separate edge store, which would be a second truth. |
+| **A-MEM** (Xu et al., NeurIPS 2025, arXiv 2502.12110) | Notes with LLM-written keywords, tags, a context description, an embedding, and links | Top-k cosine | LLM-chosen links among the 10 nearest notes. "Memory evolution" rewrites neighbours' descriptions when a new note arrives. No forgetting described. | **Adopted in spirit:** model-written aliases on claims (already built), and the nightly weave linking patterns. **Not adopted:** silently rewriting neighbouring notes. A rewrite of an owner's note goes through correction, so the owner can see it. |
+| **LangMem** (LangChain docs: conceptual guide, delayed processing) | Semantic memory as a collection and a profile; episodic examples; procedural prompt refinements; LangGraph store namespaces | Key lookup, semantic search, metadata filters. Recall weighs similarity, importance and strength (recency and use). | Hot-path tools during the conversation, plus a debounced background manager (30–60 minutes suggested). Outdated items are deleted, invalidated or merged. | **Adopted:** hot-path `remember` plus the debounced daytime consolidator (§6, every 15 minutes at most, 6 a day), and the profile-versus-collection split (*About you* versus claims). |
+| **Anthropic memory tool** (`memory_20250818`, platform docs; context editing) | A `/memories` directory of files on storage the client owns | The model reads what it chooses (`view`) | The model writes with `create`, `str_replace`, `insert`, `delete` and `rename`. The handler, not the prompt, enforces path safety, size caps, expiry and sensitive-data rules. Pairs with context clearing, which warns the model to save before old tool results are cleared. | **Adopted:** model-curated memory through tools, on storage we own, with safety enforced in the handler. That is Waldo's `ClaimStore` admission gate: grounding, barriers, health and secret checks. The compaction flush saves before clearing (harness S4). |
+| **ChatGPT memory** (OpenAI Help Center, *Memory in ChatGPT*) | Saved memories, plus reference to chat history (a running summary under "improved memory") | Only "when it is likely to improve a response". A *Sources* view shows what shaped a reply. | The owner can correct, choose "don't mention this again", or delete. Deleting a chat does not delete a memory made from it. Temporary chats write nothing. | **Adopted:** show what shaped an answer. `shown` ids (§1.6) and Spots' entity chips let the app show which notes a reply used [follow-up for the app]. Correct, suppress and forget stay separate controls. **Not adopted:** the gap where a chat delete leaves derived memory. Waldo's forget reaches every derived store (the owner-approved forget redesign, `FORGET_REDESIGN_2026-10-22.md`, ADR 0085 in draft). |
+| Generative Agents (Park et al. 2023, arXiv 2304.03442; historical) | A memory stream with reflections | A fixed score: recency + importance + relevance | Reflection when summed importance passes a threshold | **Not adopted as a fixed score.** CLAUDE.md keeps "what matters" with the model, so Waldo shows recency and importance as *information* (dates, pins) rather than computing a fixed score. |
+
+**What this changes in the design** [proposed]:
+1. **Tiers.** The core every turn; recall per message; deep reach by tool. This is §1, and it matches Letta and LangMem.
+2. **Stale facts.** Close them with validity windows and keep the history. This is §13, and it matches Zep and Mem0g. It is easier to audit and correct than append-only.
+3. **Retrieval.** bm25 plus vectors with RRF, plus one entity hop, with the model choosing. This is §1.5 and §13.
+4. **Two write paths.** Hot-path `remember` plus the debounced consolidator (§6).
+5. **Deletion and privacy in code.** Forget in the writer's transaction (DO SQLite, §1.5), and admission checks in the handler.
+6. **Not restrictive.** What to remember, how to phrase it, which entity a name means, which area it belongs to and which skill to load are all the model's calls. Code holds only the hard boundaries in the "not too rigid" line.
+
+## 13. People, places, organisations and projects: the entity and relationship graph
+
+### 13.1 Current state [verified]
+
+- Claims are sentences. Nothing records that "Priya" in one claim is the same Priya in another, or that she works at Acme.
+- Claims are already **bi-temporal**:
+  - `valid_from` and `valid_to` say when a fact held;
+  - `learned_at` and `created_at` say when Waldo learned it;
+  - `supersedes_id` chains a correction to the fact it replaced (`claims.ts:365-372`).
+- Constellation nodes are interpretations (patterns) in a free-text `domain`, resting on claims (`claims.ts:442-447`). They are not entities: a node needs owner claims from two days (`claims.ts:1503`), which is the wrong rule for "who is Priya".
+- The only way to reach "everything about Priya" today is shared words (bm25), or meaning once semantic recall is on.
+
+### 13.2 Cited failure
+
+The owner's ruling of 30 Oct asks Waldo to "connect the dots across the seven areas and the owner's relationships", with
+temporal validity. Today Waldo can't answer:
+- "who do I know at Acme";
+- "when did Priya move";
+- "what's going on with my sister";
+
+except by word overlap. And nothing on screen shows a person as one thing.
+
+### 13.3 Options
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| **A. Entities, with claims as the edges** (recommended) | An `entities` table plus a `claim_links` table. A claim about two entities *is* the edge between them, with a model-written relation phrase. Its validity is the claim's existing bi-temporal columns. | Claims stay the one truth. Forget, confirm, correct and taint all work unchanged, because an edge *is* a claim. |
+| B. Graphiti-style edge store | Edges carry their own fact text and `valid_at`/`invalid_at` (Zep, arXiv 2501.13956) | A second home for facts, with a second forget and a second trust model. Rejected. We adopt its *temporal model* through the claims' existing columns instead. |
+| C. Constellation nodes as entities | — | Wrong semantics, as §13.1 shows. Rejected. |
+| D. No entities (today) | Word and meaning recall only | It cannot connect the dots or show a person as one thing. |
+
+### 13.4 Recommendation [proposed]: A
+
+**Shape** (additive DO tables, written only by `ClaimStore`):
+
+```sql
+entities   (id INTEGER PRIMARY KEY, kind TEXT NOT NULL,  -- 'person' | 'org' | 'place' | 'project' | 'other'
+            name TEXT NOT NULL, aliases TEXT, area TEXT,  -- area: LIFE_AREAS (§5), model-set, owner-changeable
+            created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)
+claim_links(claim_id INTEGER NOT NULL, entity_id INTEGER NOT NULL,
+            role TEXT NOT NULL,          -- 'subject' | 'object' | 'mention'
+            relation TEXT,               -- the model's phrase on the subject link: "works at", "sister of", "lives in"
+            PRIMARY KEY (claim_id, entity_id, role))
+```
+
+- **The owner is the implicit subject** of claims about themselves. They have no row.
+- **Temporal validity is the claim's.** "Priya works at Acme" (valid from March) supersedes "Priya works at Initech". The old claim keeps its links, so the graph answers both "where does she work" and "where did she work before".
+  - This is Graphiti's bi-temporal model: event time is `valid_from`/`valid_to`, ingestion time is `learned_at`/`created_at`. It lives on the one truth instead of a second edge store.
+- **Writes are model-judged.**
+  - `remember` and the claim ops (nightly, consolidator) gain an optional `entities: [{ ref | name, kind, role, relation? }]`.
+  - The model is shown candidate entities: the names, aliases and ids that recall returns for the turn.
+  - It decides whether "P." is the existing Priya (`ref`) or a new person (`name`). There is no fuzzy-match rule.
+  - Code checks only that a `ref` exists for this owner, and that the link's claim was admitted.
+- **Reads.**
+  - `read_memory({ entity })` returns an entity's live claims, with their validity and relation phrases.
+  - `selectMemory` (§1.6) can add one hop: a message that names an entity pulls that entity's linked claims as recall *candidates*. That is retrieval mechanics; the model judges what matters.
+- **Connecting the dots.**
+  - Entities carry an `area`, so the weave (CROSS_DOMAIN) and the nightly promotion can cite entities and see cross-area links: "Thursdays with the Acme team precede short nights" links `work` and `body`.
+  - Pattern nodes may list the entities they concern (a node-to-entity link, written by the promotion call).
+
+**Trust, privacy and forget.**
+- **An entity is visible in a view only if at least one of its linked claims is visible there.**
+  - An entity known only from an untrusted mail claim stays out of turns until the owner confirms a claim, exactly like the claim (the #1650 fence).
+  - In `outsideView`, an entity linked only through health-fenced claims is hidden, and so is one with area `body` or `mind` (§5.5).
+- **Forget.**
+  - Forgetting a topic bars the entity's name and aliases and purges its claims.
+  - An entity with no live claim left is deleted, because it is derived.
+  - `entities.name` and `aliases` join the forget inventory as derived text.
+- **Third parties.** Names and relationships are normal owner context (CLAUDE.md). Another person's health is not kept unless the owner asks (`HEALTH_MEMORY_RULES`).
+
+### 13.5 What each UI object shows from it
+
+The frontend has three memory objects:
+- **the Constellation** (the app's Constellation screen, and the console's memory graph);
+- **Spots** (the owner's notes, which are claims);
+- **the Patrol** (the app's "What he ran in the background, and his checks": the activity view of runs and checks).
+
+| UI object | Today | What it shows from the graph [proposed] | Contract |
+|---|---|---|---|
+| **Constellation** | Pattern nodes (`type: 'interpretation'`) and associations (`controls.ts:247-249`) | **Entity nodes** (person, org, place, project), each with its area, beside the pattern nodes. **Relation edges** between entities, labelled with the relation phrase and its validity ("works at Acme · since Mar 2026"). Pattern nodes link to the entities they concern. Grouping or filtering by the seven areas. A past relation (superseded or `valid_to` set) is drawn as history. | An additive app.v1 revision: a node type `entity` and an association kind `relation` with `valid_from`/`valid_to`. The gate allocates it. |
+| **Spots** (notes) | The claims list, with source and confirmation | Each note shows **entity chips** (who or what it is about), its **area**, and its **validity** ("since…", "until…", "replaced by…"). Tapping a chip filters the notes to that entity. Confirm, correct and forget act on the note, and therefore on the edge. | The same revision (`entities` on a claim) |
+| **Patrol** | Runs and end-to-end checks; a run's `summary` is the runner's fixed outcome line (`controls.ts:182-184`) | Background memory runs (the nightly pass, the daytime consolidator, the weave) appear as runs. Their summary line holds **counts only**: "3 new notes, 2 waiting for your yes; 1 new person". Never note text. Opening one goes to the Spots or Constellation it changed. | None: an existing run kind with a counts-only summary |
+
+### 13.6 Falsifiers, proof, ADR, rollback
+
+**Falsifiers:**
+- an entity known only from untrusted mail appears in a turn or on the Constellation as confirmed;
+- a forgotten person's name survives in `entities` after the purge settles;
+- the model's entity resolution merges two different people more than rarely (an eval case with two Priyas);
+- a body or mind entity reaches an outside-content turn.
+
+**Proof (S0 additions):**
+- m15, "who do I know at Acme": linked claims are in `shown`.
+- m16, a superseded job: the answer gives the current one, and the history when asked.
+- m17, two people with one first name, kept apart.
+- m18, forget a person: name, claims and links are gone.
+
+**ADR and migration.**
+- Two additive DO tables, so no Supabase migration.
+- This is new persistence of relationship structure, with no new kind of content (names already live in claim text). It needs a short ADR, or a section in MEMORY_V2's ADR draft, for the gate: the store, the writer, forget, and visibility.
+
+**Rollback.** Old code ignores both tables. A revert leaves the claims as they are.
+
+**Slice.** S9 (waldoco/waldo-backend#1717) builds the store, the writer and the reads. The Constellation and Spots additions are app brief
+item 15 plus the gate's app.v1 revision. **Wave 1's slices are unchanged:**
+- S5's `area` on claims is the same column the entity's area mirrors;
+- S1's node statements and S2's incomplete nodes don't touch entities.
 
 ## Evidence
 
@@ -885,8 +1093,10 @@ and ADR-0081: no raw health values in DO memory, transcripts or traces. Forget s
   - `llm/pricing.ts` has no embedding price.
   - `onboarding/findings.ts` and `APP_FINDING_UNCONFIRMED_DAYS_V1 = 30`.
   - The research sources listed in the companion file.
+- **Observed (30 Oct, final pass):** Cloudflare docs on Vectorize limits, pricing and consistency, and on Durable Objects limits, pricing and SQLite transactions (§1.5); the primary sources in §12; waldo-app `origin/main` `e935d649` for the Patrol screen (`app/(app)/patrol.tsx`, `settings.tsx:143`).
 - **Inference:**
   - the latency of the lexical path;
+  - the CPU cost of the brute-force scan (measured in S6);
   - that the nightly exposes a usable last-run mark;
   - that no ADR is needed for S1;
   - the embedding cost per owner.
