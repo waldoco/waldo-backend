@@ -2,7 +2,6 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { applyClaimOps, claimStore, memoryPrompt, profile, type Claim } from '../src/memory/claims';
-import { dashboardMemory } from '../src/channels/dashboard-memory';
 import { memoryControl } from '../src/channels/dashboard-memory-actions';
 import { renderConsole } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
@@ -83,9 +82,8 @@ describe('a claim Waldo confirmed from words the owner wrote', () => {
 describe('what the owner sees', () => {
   const spot = (source: string): Claim => ({ id: 1, kind: 'preference', text: 'Prefers the Brief before 9am', source, evidence: 'opened at 08:40', origin: 'agent', status: 'active', created_at: AT, last_seen_at: AT, seen_count: 1, verification_status: 'provisional' });
   it('labels each writer, and still offers "That\'s right" on what Waldo confirmed', () => {
-    const out = dashboardMemory({ now: Date.parse(AT), spots: [spot('waldo_confirmed'), { ...spot('confirmed'), id: 2 }], retired: [], forgetting: [], holds: [], profile: [] });
-    expect(out.spots.map((row) => [row.source_label, row.provisional, row.allowed_actions.includes('spot.confirm')]))
-      .toEqual([['Waldo confirmed', true, true], ['You confirmed this', false, false]]);
+    const offersConfirm = (row: Claim) => memoryControl({ ...SAMPLE_CONSOLE_VIEW, spots: [row] }, 'owner', `owner:claim:${row.id}`)?.actions.includes('spot.confirm');
+    expect([offersConfirm(spot('waldo_confirmed')), offersConfirm({ ...spot('confirmed'), id: 2 })]).toEqual([true, false]);
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: SAMPLE_CONSOLE_VIEW.spots.map((row) => row.id === 5 ? { ...row, source: 'waldo_confirmed' } : row) };
     const html = renderConsole(view, 'spots');
     expect(html).toContain('Waldo confirmed');

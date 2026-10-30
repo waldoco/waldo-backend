@@ -232,10 +232,10 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // A chunk fits one tool result without offloading, and one read's bodies fit the tool-output store, so no
 // message is cut silently; the rest of each body is read by offset.
 const BODY_CHUNK = 12_000;
-const READ_BODY_BUDGET = 40_000;
+export const READ_BODY_BUDGET = 40_000;
 const RUN_MAX = 2_048;
 const CUT_GUARD = 256;
-const omitLongRuns = (text: string): string => text.replace(/[^\s"'<>)\]]+/g, (run) => run.length > RUN_MAX ? `[${run.length} characters of unbroken text omitted]` : run);
+export const omitLongRuns = (text: string): string => text.replace(/[^\s"'<>)\]]+/g, (run) => run.length > RUN_MAX ? `[${run.length} characters of unbroken text omitted]` : run);
 const dropCutTail = (text: string): string => {
   let end = text.length;
   while (end > 0 && !/\s/.test(text[end - 1]!)) end--;
@@ -243,17 +243,18 @@ const dropCutTail = (text: string): string => {
 };
 // A body the scribe will not pass (health markers can grow a dense one past its size limit) is withheld whole. Retrying
 // reads the same body, so it is never reported as transient.
-class BodyWithheld extends Error {}
-const WITHHELD_BODY = "[This message's body was withheld: it could not be checked safely, so it is not shown.]";
-const scribedBody = (text: string, canaries: readonly string[]): string => {
-  const scribed = sanitise({ payload: { body: text }, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
+export class BodyWithheld extends Error {}
+export const WITHHELD_BODY = "[This message's body was withheld: it could not be checked safely, so it is not shown.]";
+export const scribedExternal = <T extends Parameters<typeof sanitise>[0]['payload']>(payload: T, canaries: readonly string[]): T => {
+  const scribed = sanitise({ payload, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
   if (!scribed.ok) {
     // Which check refused it and why, nothing of the message: a canary, a secret and a health refusal stay distinguishable in traces.
     console.log(JSON.stringify({ hop: 'mail_body_withheld', ok: false, code: `${scribed.check}:${scribed.reason}` }));
     throw new BodyWithheld('mail body refused by the scribe');
   }
-  return (scribed.payload as { body: string }).body;
+  return scribed.payload as T;
 };
+export const scribedBody = (text: string, canaries: readonly string[]): string => scribedExternal({ body: text }, canaries).body;
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
 // A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the

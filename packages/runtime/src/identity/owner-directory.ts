@@ -112,3 +112,14 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
     },
   };
 };
+
+// The owner one agent mail handle routes to, with the confirmed sign-in address route_presence trusts (null when there is
+// none). Null: no live handle, or no directory. A directory that cannot answer throws, so an outage is never read as an
+// unknown handle and dropped.
+export type AgentMailRoute = Readonly<{ doName: string; ownerEmail: string | null }>;
+export const agentMailRoute = async (env: OwnerDirectoryEnv, handle: string, fetcher: typeof fetch = fetch, now = () => Date.now()): Promise<AgentMailRoute | null> => {
+  const call = signedRpc(env, fetcher, now);
+  if (!call) return null;
+  const [row] = (await call('route_agent_mail', `mailroute.${handle}`, { p_handle: handle })) as { do_name: string; owner_email: string | null }[];
+  return row ? { doName: row.do_name, ownerEmail: row.owner_email } : null;
+};

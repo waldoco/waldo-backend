@@ -28,6 +28,7 @@
     "htmlparser2": "10.0.0",
     "openai": "5.12.2",
     "pdf-lib": "1.17.1",
+    "postal-mime": "4.0.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
