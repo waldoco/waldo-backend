@@ -29,7 +29,9 @@ export type Step =
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
   | Readonly<{ card: CardId }>
-  | Readonly<{ mail_arrives: SeedMail }>;
+  | Readonly<{ mail_arrives: SeedMail }>
+  // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
+  | Readonly<{ outside_job: string }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
 // call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave.
 export type TrialMetrics = Readonly<{
@@ -149,6 +151,11 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
           transcript.push({ role: 'world', text: `The reminder "${reminder.note}" fires.` });
           transcript.push({ role: 'waldo', surface: 'notification', text: await responder.remind(`${scenario.id}-${reminder.id}`, 1, reminder.note, time) });
         }
+      } else if ('outside_job' in step) {
+        turn += 1;
+        transcript.push({ role: 'world', text: `A background job reads this outside text: ${step.outside_job}` });
+        const said = await responder.prompt(`${scenario.id}-outside-${turn}`, 1, step.outside_job, time, undefined, undefined, undefined, undefined, 'external');
+        transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });

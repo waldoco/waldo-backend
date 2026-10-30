@@ -66,8 +66,8 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 | Trigger | Runs | Trials | Cap on calls |
 | --- | --- | --- | --- |
 | Nightly schedule (02:00 IST) | the live-judged subset | 2 | 600 |
-| Weekly schedule (Sunday 03:00 IST) | the whole catalogue | 3 | 4,000 |
-| Dispatch, `subset` = `all` | the whole catalogue | 3 | 4,000 |
+| Weekly schedule (Sunday 03:00 IST) | the whole catalogue | 3 | 4,400 |
+| Dispatch, `subset` = `all` | the whole catalogue | 3 | 4,400 |
 | Dispatch, any other `subset` | what it names | 2 | 600 |
 
 The `subset` input reaches the workflow only through an environment variable. The plan step checks it against `[a-z0-9,-]` before writing it anywhere, and the runner checks it against the catalogue before it builds a model. A run that exhausts its cap fails the gate, so a long id list under the 600 cap fails loudly rather than spending more.

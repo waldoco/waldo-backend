@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
 import { callPlan } from '../evals/nightly/plan';
 import { selectScenarios } from '../evals/nightly/subset';
-import { gateScorecard, thresholdsFor } from '../evals/nightly/gate';
+import { gateScorecard, NIGHTLY_THRESHOLDS, thresholdsFor } from '../evals/nightly/gate';
 import { scorecard } from '../evals/nightly/scorecard';
 
 const live = NIGHTLY_SCENARIOS.filter((scenario) => scenario.live_subset);
@@ -58,7 +58,7 @@ describe('WALDO_EVAL_SUBSET', () => {
   it('holds a subset card to the size of its subset, not the catalogue', () => {
     const rows = live.map((scenario) => ({ id: scenario.id, pain: scenario.pain, outcomes: ['pass' as const] }));
     const card = scorecard(rows, { candidate: 'x', judge: 'y', trials: 1, usage: { candidate_calls: 1, judge_calls: 1, budget: 600, exhausted: false, candidate_tokens: 1, judge_tokens: 1 }, subset: 'live' });
-    expect(gateScorecard(card, thresholdsFor('live')).failures).toEqual([`scenarios ${live.length} < 103`]);
+    expect(gateScorecard(card, thresholdsFor('live')).failures).toEqual([`scenarios ${live.length} < ${NIGHTLY_THRESHOLDS.live.min_scenarios}`]);
     expect(gateScorecard(card, thresholdsFor('live', live.length))).toEqual({ ok: true, failures: [] });
   });
 });
@@ -132,10 +132,10 @@ describe('evals-live.yml', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   };
 
-  it('runs the subset at two trials under a 600-call cap, and the weekly run on everything at three trials under 4,000', () => {
+  it('runs the subset at two trials under a 600-call cap, and the weekly run on everything at three trials under 4,400', () => {
     expect(plan({ EVENT: 'schedule', SCHEDULE: '30 20 * * *' })).toMatchObject({ status: 0, outputs: { subset: 'live', trials: '2', cap: '600' } });
-    expect(plan({ EVENT: 'schedule', SCHEDULE: '30 21 * * 0' })).toMatchObject({ status: 0, outputs: { subset: 'all', trials: '3', cap: '4000' } });
-    expect(plan({ INPUT_SUBSET: 'all' })).toMatchObject({ status: 0, outputs: { subset: 'all', trials: '3', cap: '4000' } });
+    expect(plan({ EVENT: 'schedule', SCHEDULE: '30 21 * * 0' })).toMatchObject({ status: 0, outputs: { subset: 'all', trials: '3', cap: '4400' } });
+    expect(plan({ INPUT_SUBSET: 'all' })).toMatchObject({ status: 0, outputs: { subset: 'all', trials: '3', cap: '4400' } });
     expect(plan({ INPUT_SUBSET: 't03-reminder,r3-long-conversation' })).toMatchObject({ status: 0, outputs: { subset: 't03-reminder,r3-long-conversation', trials: '2', cap: '600' } });
     expect(plan({})).toMatchObject({ status: 0, outputs: { subset: 'live' } });
   });

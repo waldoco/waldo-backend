@@ -130,3 +130,42 @@ export const lastInputCarries = (needles: readonly string[], why: string): Recei
     return needles.every((needle) => last.includes(needle.toLowerCase()));
   },
 });
+
+// The claims a request showed the model, by the c<id> tag that leads each memory line (memory.ts claimTag). Read from what the model
+// was sent, so it holds for any way the lines got there: a pinned block, recent facts or per-message recall.
+const shownClaimIds = (trial: TrialEvidence, turn: number): ReadonlySet<number> =>
+  new Set((trial.model_inputs ?? []).filter((input) => input.turn === turn).flatMap((input) => [...input.text.matchAll(/\bc(\d+) · /g)].map((match) => Number(match[1]))));
+const readMemoryOutputs = (trial: TrialEvidence) => trial.toolOutputs.filter((entry) => entry.name === 'read_memory').map((entry) => entry.output.toLowerCase());
+
+// On this owner turn the model was shown the claim, or read it with read_memory (the claim's words in a read_memory result):
+// the answer could rest on it. Whether the reply then uses it is the judge's.
+export const reaches = (claimId: number, needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => shownClaimIds(trial, turn).has(claimId) || readMemoryOutputs(trial).some((output) => output.includes(needle.toLowerCase())),
+});
+
+// A claim that was written this trial and is active: the one a turn later must reach. Matches by its words, since its id is the store's.
+export const reachesWritten = (needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const rows = ((trial.final_state as { memory?: { id: number; text: string; status: string; seeded: boolean }[] }).memory ?? []).filter((claim) => !claim.seeded && (claim.status === 'active' || claim.status === 'promoted') && claim.text.toLowerCase().includes(needle.toLowerCase()));
+    return rows.some((claim) => shownClaimIds(trial, turn).has(claim.id));
+  },
+});
+
+// None of these claims or their words reached the model on any turn or came back from a memory read, and no reply carries them:
+// a forgotten or held claim is not shown and is not readable.
+export const neverReaches = (claims: readonly Readonly<{ id: number; needle: string }>[], why: string, turns?: readonly number[]): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const inputs = (trial.model_inputs ?? []).filter((input) => turns === undefined || turns.includes(input.turn));
+    const needles = claims.map((claim) => claim.needle.toLowerCase());
+    return claims.every((claim) => inputs.every((input) => !shownClaimIds(trial, input.turn).has(claim.id)))
+      && inputs.every((input) => needles.every((needle) => !input.text.toLowerCase().includes(needle)))
+      && trial.toolOutputs.every((entry) => needles.every((needle) => !entry.output.toLowerCase().includes(needle)))
+      && trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => needles.every((needle) => !turn.text.toLowerCase().includes(needle)));
+  },
+});

@@ -80,7 +80,7 @@ jobs:
           cap=600
           if [ "$subset" = all ]; then
             trials=3
-            cap=4000
+            cap=4400
           fi
           {
             echo "subset=$subset"
