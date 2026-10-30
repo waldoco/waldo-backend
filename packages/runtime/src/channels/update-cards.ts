@@ -98,6 +98,11 @@ export const updateBook = (sql: Sql) => {
       return sql.exec<{ at: number; changes: string }>("SELECT at, changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT ?", at, limit).toArray()
         .map((row) => ({ at: row.at, changes: JSON.parse(row.changes) as Change[] }));
     },
+    // Whether the owner's day moved after `at`: new mail, or a calendar change that touches `day`.
+    changedSince(at: number, day: string, timezone: string): boolean {
+      return sql.exec<{ changes: string }>("SELECT changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT 50", at).toArray()
+        .some(row => (JSON.parse(row.changes) as Change[]).some(change => change.source === 'mail' || touchesDay(change, day, timezone)));
+    },
     fold(upTo: number): void {
       sql.exec('UPDATE update_cards SET folded = 1 WHERE at <= ?', upTo);
     },
