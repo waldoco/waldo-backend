@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
+import { DevicesControls, IMessageControls, PhoneControls, RevealedValue, qrModules } from './ChannelSetup';
 import type { DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
 
 const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repeat(64), revision: 'a'.repeat(64) };
@@ -54,6 +54,16 @@ describe('iMessage setup', () => {
     expect(html).not.toContain('sms:'); expect(html).not.toContain('iPhone');
     const bare = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' }}/>);
     expect(bare).not.toContain('wa.me'); expect(bare).not.toContain('Open Messages'); expect(bare).toContain('WhatsApp');
+  });
+  it('draws the WhatsApp link as a QR to scan from a computer, in the page, carrying exactly that link', () => {
+    const url = 'https://wa.me/919226067544?text=waldo%20ABCDEFGHJK';
+    const html = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544', app: 'whatsapp' }}/>);
+    expect(html).toContain('aria-label="QR code that opens WhatsApp with the code filled in"');
+    expect(html).toContain(`d="${qrModules(url).d}"`);
+    expect(qrModules(url).d).not.toBe(qrModules('https://wa.me/919226067544?text=waldo%20ABCDEFGHJL').d);
+    expect(html).not.toMatch(/<img|https:\/\/(?!wa\.me\/919226067544\?text=waldo%20ABCDEFGHJK")/);
+    for (const reveal of [{ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' }, { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100' }] as const)
+      expect(renderToStaticMarkup(<RevealedValue reveal={reveal}/>)).not.toContain('QR code');
   });
   it('disables every control while a request is pending', () => {
     const html = renderToStaticMarkup(<IMessageControls record={imessage({ bridges: [bridge()] })} busy onAction={noop}/>);
