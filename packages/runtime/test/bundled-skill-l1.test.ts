@@ -58,8 +58,8 @@ it('a disabled procedure does not block an unrelated tool', async () => {
     const { CuratedOwnerSkills }=await import('../src/skills/curated-owner');
     const turn={owner:'owner-a',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills disable day-brief',assertCurrent:async()=>{}};
     const book=new CuratedOwnerSkills(state.storage.sql,turn.owner);
-    expect(book.disable('day-brief',2,turn).ok).toBe(true);
-    expect(book.load('day-brief',2,turn).ok).toBe(false);
+    expect(book.disable('day-brief',3,turn).ok).toBe(true);
+    expect(book.load('day-brief',3,turn).ok).toBe(false);
     expect(await book.prompt(turn,[])).toBe('');
     const { dispatchTool }=await import('../src/tools/dispatcher');
     const result=await dispatchTool({id:'read',name:'read_memory',args:{}},{trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['0123456789abcdef','fedcba9876543210','0011223344556677'],started_at:1}),canaryTokens:['0123456789abcdef','fedcba9876543210','0011223344556677'],authenticatedUserId:turn.owner,hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never,{handlers:[{name:'read_memory',description:'Read fixture memory',schema:skillsListArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(t=>TOOL_PERMISSIONS[t].includes('read_memory')),autonomy_gated:false,handle:async()=>({ok:true,source_taint:null,data:{claims:[]}})}]});

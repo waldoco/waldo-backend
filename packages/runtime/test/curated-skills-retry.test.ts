@@ -15,7 +15,7 @@ for(const kind of ['physical_retry'] as const){
    const trace=`curated-${kind}`;const name=CURATED_PREPARATION_SKILL.name;const body=CURATED_PREPARATION_SKILL.body_markdown;
    const scope={runId:'run',attempt:'attempt',deadline:Date.now()+15*60_000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
    const writer=new CuratedOwnerSkills(state.storage.sql,owner);
-   expect(writer.install(name,1,{owner,turnId:trace,trigger:'user_message',ownerText:`/skills install ${name}@1`,assertCurrent:async()=>{}}).ok).toBe(true);
+   expect(writer.install(name,3,{owner,turnId:trace,trigger:'user_message',ownerText:`/skills install ${name}@3`,assertCurrent:async()=>{}}).ok).toBe(true);
    const physical:Array<{containsBody:boolean;status:string;context:string}>=[];
    const archive=()=>state.storage.sql.exec("UPDATE skills SET status='archived' WHERE name=?",name);
    const gateway:LLMGatewayAdapter={complete:async({request,context})=>{
@@ -23,7 +23,7 @@ for(const kind of ['physical_retry'] as const){
     physical.push({containsBody:request.system?.includes(body)??false,status,context});
     if(kind==='physical_retry'&&index===1){archive();return {ok:false,code:'transient',error:'Synthetic transient after disable'};}
     return {ok:true,data:{model:request.model,text:index===0?'':'Ask a physician.',input_tokens:1,output_tokens:1,cache_read_input_tokens:0,latency_ms:1,
-     ...(index===0?{tool_calls:[{call_id:'load',name:'skills_load',arguments:JSON.stringify({name,version:1})}]}:{})}};
+     ...(index===0?{tool_calls:[{call_id:'load',name:'skills_load',arguments:JSON.stringify({name,version:3})}]}:{})}};
    }};
    const args:Parameters<typeof createOwnerResponder>=['fixture'];
     

@@ -72,7 +72,7 @@ export type ToolRecord = Readonly<{
 //  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
 //                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
 //                 Any other operation, or a call with no typed command, is carded.
-export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card'; reason: string }>;
+export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
 const unknown = (basis: string): ToolReplayRow => ({ replay: 'non_replayable_uncertain', basis });
@@ -129,7 +129,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim: loading selects ephemeral catalog metadata; it does not certify instruction admission.
   skills_install: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_enabled', replay: unknown(NOT_INSPECTED) },
   skills_disable: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_disabled', replay: unknown(NOT_INSPECTED) },
-  skills_load: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', replay: unknown(NOT_INSPECTED) },
+  skills_load: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', tainted: { exempt: 'instructions_only', reason: 'it selects reviewed instructions for this turn and grants no tool; each effect those instructions describe still meets its own gate' }, replay: unknown(NOT_INSPECTED) },
   // claim: verified against each handler (mutates_state, and the result says what happened). Proposals are labelled as
   // proposals: the owner-channel handlers only request an approval card.
   send_message: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'message_send_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('proposal only, but each call inserts a fresh ledger row and card; the model-supplied idempotency_key collapses only at approval after status done (approvals.ts). A crash after the send and before done can resend. No lookup reconciles it') },
