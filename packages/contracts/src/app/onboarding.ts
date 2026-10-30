@@ -91,17 +91,22 @@ export const appOnboardingChannelsV1Schema = z.strictObject({
 });
 // A one-time code the owner sends from their own phone, which links that account to their own Waldo. It has no request_id: it
 // is a secret that is never stored for a replay, and a repeat just issues another code. text is what to send; address and
-// send_url are set only where Waldo knows the number to open (iMessage). Linking is the owner's act in the app, never Waldo's:
-// no tool issues a code, and one that did would have to go through an approval card.
+// send_url are set only where Waldo knows the number to open: an sms: link that opens Messages for iMessage, a wa.me
+// click-to-chat link that opens WhatsApp for WhatsApp, each with the code filled in. Linking is the owner's act in the app,
+// never Waldo's: no tool issues a code, and one that did would have to go through an approval card.
 export const appChannelLinkRequestV1Schema = z.strictObject({ provider: appChatProviderV1Schema });
 export const appChannelLinkCodeV1Schema = z.strictObject({
   provider: appChatProviderV1Schema,
   code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/),
   text: z.string().max(64),
   address: z.string().min(3).max(320).nullable(),
-  send_url: z.string().startsWith('sms:').max(512).nullable(),
+  send_url: z.string().max(512).regex(/^(sms:|https:\/\/wa\.me\/[1-9]\d{7,14}\?text=waldo%20[A-HJ-NP-Z2-9]{10}$)/).nullable(),
   expires_in_seconds: z.literal(600),
-}).refine(link => link.text.endsWith(link.code), { error: 'the text to send carries the code', path: ['text'] });
+}).refine(link => link.text.endsWith(link.code), { error: 'the text to send carries the code', path: ['text'] })
+  .refine(link => link.send_url === null
+    || (link.provider === 'imessage' && link.send_url.startsWith('sms:'))
+    || (link.provider === 'whatsapp' && link.send_url.endsWith(`?text=waldo%20${link.code}`) && link.send_url.startsWith('https://wa.me/')),
+  { error: 'the link opens this provider with this code', path: ['send_url'] });
 
 const steps = z.strictObject({
   agreements: appOnboardingStepStateV1Schema, name: appOnboardingStepStateV1Schema, google: appOnboardingStepStateV1Schema,

@@ -48,6 +48,13 @@ describe('iMessage setup', () => {
     expect(html).toContain('href="sms:+16285550100&amp;body=waldo%20ABCDEFGHJK"'); expect(html).toContain('Open Messages');
     expect(renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK' }}/>)).not.toContain('Open Messages');
   });
+  it('opens WhatsApp to the Waldo number for a WhatsApp link code, never Messages', () => {
+    const html = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544', app: 'whatsapp' }}/>);
+    expect(html).toContain('href="https://wa.me/919226067544?text=waldo%20ABCDEFGHJK"'); expect(html).toContain('Open WhatsApp');
+    expect(html).not.toContain('sms:'); expect(html).not.toContain('iPhone');
+    const bare = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' }}/>);
+    expect(bare).not.toContain('wa.me'); expect(bare).not.toContain('Open Messages'); expect(bare).toContain('WhatsApp');
+  });
   it('disables every control while a request is pending', () => {
     const html = renderToStaticMarkup(<IMessageControls record={imessage({ bridges: [bridge()] })} busy onAction={noop}/>);
     expect(html.match(/<button[^>]*>/g)!.every(button => button.includes('disabled'))).toBe(true);
