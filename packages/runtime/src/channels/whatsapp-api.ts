@@ -81,6 +81,10 @@ export class WhatsAppPartialSend extends Error {
 // quote is the wamid of an earlier message the text answers, which WhatsApp shows quoted above it.
 export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false, quote?: string) =>
   call({ to, ...(quote ? { context: { message_id: quote } } : {}), type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
+// Waldo's own contact card, so the owner saves the number as Waldo in one tap. Until Meta verifies the display name,
+// WhatsApp shows an unsaved business by its number.
+export const sendWhatsAppWaldoCard = (call: WhatsAppCall, to: string, waldoNumber: string) =>
+  call({ to, type: 'contacts', contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${waldoNumber}`, type: 'WORK', wa_id: waldoNumber }] }] });
 const ackId = (ack: unknown): string | null => {
   const id = (ack as { messages?: { id?: unknown }[] } | undefined)?.messages?.[0]?.id;
   return typeof id === 'string' && id !== '' ? id : null;
@@ -123,6 +127,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       const { message_id, emoji } = body as { message_id: string; emoji: string };
       return call({ to, type: 'reaction', reaction: { message_id, emoji } });
     }
+    if (method === 'sendWaldoCard') return sendWhatsAppWaldoCard(call, to, (body as { number: string }).number);
     if (method === 'sendDocument') {
       const { file } = body as { file: WhatsAppOutboundFile };
       const kind = whatsappOutboundKind(file);
