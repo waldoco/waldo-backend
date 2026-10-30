@@ -32,13 +32,15 @@ export const createTelegramFileDownloader = (token: string, fetcher: typeof fetc
   return new Uint8Array(await file.arrayBuffer());
 };
 
-export const readableAs = (media: TelegramMedia): Omit<LLMAttachment, 'data_base64'> | null => {
-  if (media.kind === 'photo') return { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg' };
-  const filename = media.fileName ?? 'file';
-  if (media.mimeType && IMAGE_TYPES.has(media.mimeType)) return { kind: 'image', mime_type: media.mimeType, filename };
+// A file the model can read: an image by its declared type, any other file by its extension.
+export const readableFile = (mimeType: string | null, filename: string): Omit<LLMAttachment, 'data_base64'> | null => {
+  if (mimeType && IMAGE_TYPES.has(mimeType)) return { kind: 'image', mime_type: mimeType, filename };
   const mime = FILE_EXTENSIONS[filename.split('.').pop()?.toLowerCase() ?? ''];
   return mime ? { kind: 'file', mime_type: mime, filename } : null;
 };
+
+export const readableAs = (media: TelegramMedia): Omit<LLMAttachment, 'data_base64'> | null =>
+  media.kind === 'photo' ? { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg' } : readableFile(media.mimeType, media.fileName ?? 'file');
 
 const label = (media: TelegramMedia): string =>
   media.kind === 'photo' ? 'photo' : media.kind === 'voice' ? 'voice note' : media.kind === 'audio' ? `audio file "${media.fileName ?? 'unnamed'}"` : `file "${media.fileName ?? 'unnamed'}"`;

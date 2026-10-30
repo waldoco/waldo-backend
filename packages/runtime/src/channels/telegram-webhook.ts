@@ -61,6 +61,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
+  // The domain of each owner's Waldo address (<handle>@AGENT_MAIL_DOMAIN); agent mail is off without it.
+  AGENT_MAIL_DOMAIN?: string;
   // '0' turns off progress notes on long iMessage turns.
   WALDO_IMESSAGE_PROGRESS?: string;
   GOOGLE_CLIENT_ID?: string;
