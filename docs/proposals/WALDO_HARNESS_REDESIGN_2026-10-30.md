@@ -161,7 +161,7 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 
 | # | Need | Why | Number |
 |---|---|---|---|
-| M1 | An explicit character budget for the pinned block (`core`), passed in by the harness as `room`. It is a hard cap, never derived from leftover system-prompt room. | It is uncached input on every turn and has no limit today | ≤ 5,200 characters (agreed with memory-redesign: profile 1,500 + facts 2,500 + constellation 1,200) |
+| M1 | An explicit character budget for the pinned block (`core`), passed in by the harness as `room.core`. It is a hard cap, never derived from leftover system-prompt room. | It is uncached input on every turn and has no limit today | ≤ 5,200 characters (agreed with memory-redesign: profile 1,500 + facts 2,500 + constellation 1,200) |
 | M2 | An explicit character budget for per-message recall (`recalled`) | Same reason | ≤ 3,000 (the existing constant). Total 8,200. |
 | M3 | Deterministic output for the same view, message and `revision`: stable order, no wall-clock text | S0 evals compare runs | — |
 | M4 | Bounded latency through `deadlineMs`, degrading to empty recall plus a bounded logged hop (leg and code only), never a failed turn | Selection runs before the first model call | Lexical path p95 ≤ 250 ms (`deadlineMs` 250). The semantic leg (one embed call, 1.5 s, fail-open) only while `MEMORY_SEMANTIC_RECALL` is on, which staging has off, and only after an S0 run shows it helps. |
@@ -177,12 +177,12 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 
 **Agreed terms.** memory-redesign proposed the interface below, and the harness confirmed it on 30 Oct. Its doc (`docs/proposals/WALDO_MEMORY_REDESIGN_2026-10-30.md`) owns the detail:
 
-- **Call:** `selectMemory({ view, text, previous?, turn, room, deadlineMs }) -> { core, recalled, shown, failed, revision }`.
+- **Call:** `selectMemory({ view, text, previous?, turn, room: { core, recalled }, deadlineMs }) -> { core, recalled, shown, failed, revision }`. Both `room` fields are hard caps, defaulting to 5,200 and 3,000 characters.
   - `view` is the store the caller already filtered: barrier, outside view or owner-only. Selection never widens it.
   - `shown` carries ids only, for traces.
 - **Placement:** memory stays in the per-message suffix. No harness slice moves it.
 - **`revision`:** used for the "core changed vs the previous turn" metric and for freezing within the turn. It is not used for the cross-turn cache.
-- **Scenarios:** memory scenarios m07–m11 are added in the `state-memory-scenarios.ts` shape.
+- **Scenarios:** memory-redesign adds its scenarios in the `state-memory-scenarios.ts` shape and proposes m08, m09, m10, m12 and m13 for `live_subset` once S0 (#1684) lands. Its doc (PR #1691, §1.6) records the same terms.
 
 ## S0: eval parity (do first)
 
