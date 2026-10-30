@@ -244,20 +244,20 @@ export const welcomeSupportIds = (claims: ClaimStore, nodeId: number): number[] 
 };
 
 // The owner's yes: every support becomes their own word. An answer that already is stays as the owner wrote it.
-export const confirmWelcomeNode = (claims: ClaimStore, nodeId: number, at: string): boolean => {
+export const confirmWelcomeNode = (claims: ClaimStore, nodeId: number, at: string, how = 'owner, app:node.confirm'): boolean => {
   const node = claims.nodes().find((row) => row.id === nodeId && row.status === 'active');
   if (!node) return false;
   const supports = nodeSupports(claims.allClaims(), node).filter((claim) => claim.status === 'active' || claim.status === 'promoted');
-  return supports.length > 0 && supports.filter((claim) => claim.verification_status !== 'owner-grounded').map((claim) => claims.ownerGround(claim.id, at, 'owner, app:node.confirm')).every(Boolean);
+  return supports.length > 0 && supports.filter((claim) => claim.verification_status !== 'owner-grounded').map((claim) => claims.ownerGround(claim.id, at, how)).every(Boolean);
 };
 
 // The owner's correction replaces the node with their words, resting on one owner-stated claim. Waldo's old read is barred
 // so a rerun cannot write it back, and its supports are handed back for the caller to purge outside this transaction.
-export const correctWelcomeNode = (claims: ClaimStore, nodeId: number, text: string, at: string): Readonly<{ purge: number[]; barred: string }> | null => {
+export const correctWelcomeNode = (claims: ClaimStore, nodeId: number, text: string, at: string, ref = 'owner, app:node.correct'): Readonly<{ purge: number[]; barred: string }> | null => {
   const node = claims.nodes().find((row) => row.id === nodeId && row.status === 'active');
   const words = text.trim();
   if (!node || !words) return null;
-  const purge = welcomeSupportIds(claims, nodeId), ref = 'owner, app:node.correct';
+  const purge = welcomeSupportIds(claims, nodeId);
   claims.add({ kind: 'observation', text: words, source: 'stated', evidence: words, origin: 'owner', source_ref: ref }, at);
   const said = claims.allClaims().filter((claim) => claim.source_ref === ref && claim.text === words).at(-1);
   if (!said) throw new Error('correction not stored');

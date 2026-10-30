@@ -4,6 +4,12 @@ import {SignInRequired} from './model';
 import {response} from './memory-test-fixtures';
 afterEach(()=>vi.unstubAllGlobals());
 describe('owner Memory read client',()=>{
+ it('keeps each pattern\'s sources and confirmation, and refuses a pattern without them',()=>{
+  const page=readMemory(response('view=interpretations&limit=25'));
+  expect(page.view==='interpretations'&&page.items.map(item=>'label' in item?[item.sources,item.confirmation]:null)).toEqual([[['gmail','calendar'],'waldos_read'],[[],'confirmed']]);
+  const raw=response('view=interpretations&limit=25') as {items:Record<string,unknown>[]};
+  for(const broken of [{confirmation:'maybe'},{confirmation:undefined},{sources:'gmail'},{sources:[1]}])expect(()=>readMemory({...raw,items:[{...raw.items[0],...broken}]})).toThrow();
+ });
  it('reads the actual server list/detail/pattern shape, drops unrelated fields and withholds source pointers',()=>{
   const list=readMemory({...response('view=claims&limit=25'),secret:'never retain'});
   expect(list.view).toBe('claims');expect(list).not.toHaveProperty('secret');

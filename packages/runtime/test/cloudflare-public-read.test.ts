@@ -4,6 +4,8 @@ import { browsePageHandler } from '../src/tools/live/browser';
 import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
+import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
+import { readToolOutputHandler } from '../src/tools/read-tool-output';
 
 const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
@@ -527,4 +529,96 @@ it('only a typed reservation refusal is reported as rejected; any other reservat
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => failed.sdk as never, reserveAllocation: async () => { throw Error('private ledger detail'); } })(args as never, context))
     .toEqual({ ok: false, code: 'transient', error: 'The Cloudflare browser read failed or its source permission changed.', source_taint: 'external' });
   expect(refused.calls).toEqual([]); expect(failed.calls).toEqual([]);
+});
+
+// A long page: the model sees the page's first window in its own order and an outline of where its sections start, and
+// pages to whatever part it wants from the stored copy by offset, without opening the browser again.
+it('in the tool loop, a long page comes back as its first window with an outline, the rest paged by offset', async () => {
+  const filler = (label: string, n: number) => Array.from({ length: n }, (_, index) => `${label} block ${index}: navigation, promotions and the usual site chrome repeated on every page.`).join('\n\n');
+  const body = [filler('Top', 300), 'Vegetarian options\nMushroom risotto and a spinach lasagne, both available every day.', filler('Bottom', 100)].join('\n\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const offload = inMemoryToolOutputStore();
+  const outputs: string[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never, readToolOutputHandler(offload) as never], ctx, offload, maxSteps: 5, onTool: event => outputs.push(event.output), step: async tools => {
+    if (!tools || step > 1) return { text: 'Done' };
+    if (step++ === 0) return { text: '', tool_calls: [{ call_id: 'read-1', name: 'browse_page', arguments: JSON.stringify(args) }] };
+    const page = JSON.parse(outputs[0]!).data.data;
+    const at = Number(/^at (\d+): Vegetarian options$/m.exec(page.outline)?.[1] ?? page.next_offset);
+    return { text: '', tool_calls: [{ call_id: 'read-2', name: 'read_tool_output', arguments: JSON.stringify({ id: page.stored_output, offset: at, length: 2_000 }) }] };
+  } });
+  expect(outputs).toHaveLength(2);
+  const first = JSON.parse(outputs[0]!);
+  expect(first).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', total_chars: expect.any(Number), next_offset: expect.any(Number), stored_output: expect.any(String), read_with: 'read_tool_output' } } });
+  const page = first.data.data;
+  // One window inline, in the page's own order, not the page and not a 4,000-character head of escaped JSON.
+  expect(outputs[0]!.length).toBeLessThan(9_500);
+  expect(body.startsWith(page.text)).toBe(true);
+  expect(page.total_chars).toBe(body.length);
+  // Every outline offset is where its line starts in the stored copy, so a read from it lands on that section.
+  const stored = offload.read(page.stored_output, 0, page.total_chars)!.text;
+  const entries = (page.outline as string).split('\n').map((line) => /^at (\d+): (.*)$/.exec(line)!);
+  expect(entries.length).toBeGreaterThan(10);
+  for (const [, offset, line] of entries) expect(stored.startsWith(line!, Number(offset))).toBe(true);
+  const second = JSON.parse(outputs[1]!);
+  expect(second).toMatchObject({ ok: true, data: { total: page.total_chars } });
+  expect(second.data.text).toBe(stored.slice(second.data.next_offset - 2_000, second.data.next_offset));
+  expect(f.calls.filter(call => call === 'acquire')).toHaveLength(1);
+});
+
+it('a page that fits the window comes back whole, as the page has it, with no outline', async () => {
+  const f = fake();
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: true, data: { data: { title: 'Menu', text: 'Vegetarian pasta — £12' } } });
+  expect(result.ok && result.data.data).not.toHaveProperty('next_offset');
+  expect(result.ok && result.data.data).not.toHaveProperty('outline');
+});
+
+it('without an output store, a long page shows its first window and says the rest was not kept', async () => {
+  const body = Array.from({ length: 400 }, (_, index) => `Line ${index} of an ordinary long page with nothing special in it.`).join('\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, note: expect.stringContaining('could not be kept') } } });
+  expect(result.ok && result.data.data.text.length).toBeLessThanOrEqual(7_000);
+  expect(result.ok && result.data.data).not.toHaveProperty('stored_output');
+});
+
+it('a page longer than the store keeps says how much of it was kept', async () => {
+  const body = Array.from({ length: 2_000 }, (_, index) => `Row ${index}: an ordinary line of a very long table on the page.`).join('\n');
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const store = inMemoryToolOutputStore();
+  const keepOutput = (text: string) => ({ stored: store.put(text, { call_id: 'c1' }), text });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, keepOutput } as never);
+  expect(result).toMatchObject({ ok: true, data: { data: { total_chars: body.length, kept_chars: 65_536, stored_output: expect.any(String) } } });
+});
+
+it('a page the output guard refuses shows none of its text', async () => {
+  const body = 'x'.repeat(20_000);
+  const f = fake(); f.page.locator = () => ({ innerText: async () => body });
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, keepOutput: () => null } as never);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  expect(JSON.stringify(result)).not.toContain('xxxx');
+});
+
+// Every round resends the turn's tool results, so their size sets the turn's context. Ten reads of ~15K-character pages
+// used to resend up to ~140K characters of results; one window and outline per read keeps the peak near ten of them.
+it('a ten-round browse-heavy turn resends at most one window per read', async () => {
+  const f = fake(); let url = args.url;
+  f.page.goto = async (...input: unknown[]) => { url = input[0] as string; f.calls.push('navigate'); return { status: () => 200, headers: () => ({}) }; };
+  f.page.url = () => url;
+  f.page.locator = () => ({ innerText: async () => Array.from({ length: 160 }, (_, index) => `${url} line ${index}: an ordinary line of listing text on this page.`).join('\n') });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const sizes: number[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never], ctx, offload: inMemoryToolOutputStore(), maxSteps: 12, step: async (tools, turns) => {
+    sizes.push((turns ?? []).reduce((sum, turn) => sum + turn.output.length, 0));
+    if (!tools || step >= 10) return { text: 'Done' };
+    step += 1;
+    return { text: '', tool_calls: [{ call_id: `read-${step}`, name: 'browse_page', arguments: JSON.stringify({ url: `https://example.com/listing-${step}`, instruction: 'compare the listings' }) }] };
+  } });
+  expect(sizes).toHaveLength(11);
+  expect(Math.max(...sizes)).toBeLessThan(10 * 9_500);
 });

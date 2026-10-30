@@ -119,6 +119,9 @@ importers:
       pdf-lib:
         specifier: 1.17.1
         version: 1.17.1
+      postal-mime:
+        specifier: 4.0.6
+        version: 4.0.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2004,6 +2007,10 @@ packages:
   picomatch@4.0.4:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
+
+  postal-mime@4.0.6:
+    resolution: {integrity: sha512-3ULO4UkSkxNURlfq4M8GvFotyJjMtuKT87sYu3OXUy+b/XEFhXne4mNVgcHLoUM6BGGFc8wAUFVchplOIhgV/g==}
+    engines: {node: '>=20'}
 
   postcss@8.5.15:
     resolution: {integrity: sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A==}
@@ -4010,6 +4017,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.4: {}
+
+  postal-mime@4.0.6: {}
 
   postcss@8.5.15:
     dependencies:

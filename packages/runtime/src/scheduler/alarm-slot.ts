@@ -33,7 +33,7 @@ export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
-  'mac_results_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
+  'mac_results_due_v1', 'agent_mail_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
@@ -47,6 +47,7 @@ export const ALARM_LANES = {
   app: [APP_INBOX_DUE_KEY],
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
+  mail: ['agent_mail_due_v1'],
   whatsapp: [WHATSAPP_PENDING_DUE_KEY],
   jobs: [TASK_JOBS_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
