@@ -581,9 +581,28 @@ I haven't seen these traces myself. They are a teammate's reading, cited as such
 **Luna jobs at 0:**
 
 - **H5.** Most jobs are one model call, hours apart, so nothing can be reused by construction.
-  - Falsifier: a multi-round luna job whose round 2+ is still at 0.
-- **H6.** Caching on luna is not happening on this route at all.
+  - **Falsified.** The orchestrator's grouping by `trace_key` shows multi-round luna jobs at 0 cached tokens in every round: `card:brief` 5 rounds, `card:close` 4 rounds, `card:midday` 3 rounds.
+- **H6a.** The jobs path builds its request differently from chat (cache key, adapter, or prefix order).
+  - **Not supported by source.** I compared the two paths at the baseline and found no jobs-only difference [verified for the items listed]:
+    - Both use one cache key, `waldo:<ownerId>` (`owner-turn.ts:188`, `:300`).
+    - Both use one OpenAI adapter. Only the model differs (`src/llm/owner-routes.ts:50-75`).
+    - Both run one tool loop with `stableMenu: true` (`owner-turn.ts:533-536`).
+    - The system instructions are the composer's stable layers: identity, approach, tools, voice and safety (`src/context-composer/prompt.ts:165`).
+    - The per-round snapshot id and time (`src/context-composer/owner-turn.ts:131`) feed health provenance, not the instructions.
+  - [inference] If something in a job's prefix changed every round, the same path would also break chat rounds 2+. They hit 85–99.7%.
+- **H6b.** Luna doesn't prompt-cache on this route, or doesn't report it in `input_tokens_details.cached_tokens`.
+  - **Now the leading hypothesis** [inference].
   - Falsifier: any luna call ever showing cached tokens.
+  - Cheapest checks:
+    - OpenAI's model page and prompt-caching guide for `gpt-6-luna`;
+    - if the docs are silent, an owner-approved two-call probe with an identical prefix of about 2k tokens (cost well under $0.01).
+    - This session runs no paid calls.
+
+**Terra round 1, refined by the same grouping:**
+
+- Two turns had a partial round-1 hit (`app-…172`, `app-…169`), as expected when the previous turn's prefix is still cached up to the owner's earlier words.
+- Three had none (`app-…171`, `…170`, `…168`).
+- That mix fits H1 (expiry between turns) better than H2: an unstable head would miss on every turn [inference]. A's gap field decides it.
 
 ### Weighing it
 
@@ -607,13 +626,17 @@ Per call, the chat first round is the bigger lever. Which matters more overall d
   - It only helps if H1 holds.
   - Verify the parameter against the pinned SDK and the current docs first.
 - **C. Fix whatever H2 finds varies.** Move per-turn text behind the stable head. This may need a `VOICE_VERSION` decision.
-- **D. For jobs:** if H5 holds, nothing to fix. A one-call job has no reusable prefix. If H6 holds, it's a provider or route question.
+- **D. For jobs:** first settle H6b with the docs check, or the probe the owner approves.
+  - If luna can cache, the digests in A find what changes per round.
+  - If it can't, caching is off the table for jobs. The lever is then job input size: one Brief had about 79k bytes of conversation history (`context_history_bytes`). Cut what the job doesn't need.
+  - At luna's price ($0.10 per 1M input), that lever is worth about a cent per large call. Weigh it against call counts from S1.
 
 ### Recommendation [proposed]
 
 - A now: it is small and decides B, C and D.
-- Then exactly one of B or C, depending on which hypothesis survives.
-- D: no work unless H6 is confirmed.
+- The H6b docs check now, at no cost. The probe only with owner approval.
+- Then exactly one of B or C for chat, depending on which hypothesis survives.
+- D only after H6b is settled.
 
 ### Threshold
 
