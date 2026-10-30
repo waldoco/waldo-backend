@@ -211,7 +211,7 @@ import { linkingAppRows, proactiveSurface, proactiveTargets, refusingUnreachable
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
-import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -2020,7 +2020,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the
   // equivalent callback_query. Voice/audio notes ride the same transcriber path as Telegram
   // (W4): file_id carries the WhatsApp media id and the per-channel downloader in setup()
-  // resolves it through the Graph two-step. Other non-text messages are skipped.
+  // resolves it through the Graph two-step; images and documents take the shared media path the same way. Types Waldo
+  // cannot open get the shared unsupported reply (whatsappIngressUpdates).
   private async runWhatsappClaimed(pendingKey: string, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
@@ -2154,6 +2155,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
       recordWhatsAppInbound(kv, claimed, Date.now());
+      const latestId = [...claimed].reverse().find(m => typeof m.id === 'string' && m.id !== '')?.id;
+      if (latestId) kv.put(WA_LAST_INBOUND_ID_KEY, latestId);
       kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
@@ -3481,7 +3484,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       : channel === 'imessage'
         ? appCaller(() => null, () => this.activeIMessage !== null)
       : channel === 'whatsapp'
-        ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? ''),
+        ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '', fetch,
+          { lastInbound: () => identity.get<string>(WA_LAST_INBOUND_ID_KEY) ?? null }),
           { kv: identity, template: whatsappTemplateConfig(this.env), log: event => console.log(JSON.stringify(event)) })
         : createTelegramCaller(token!);
     const egressDoName = identity.get<string>('do_name');
