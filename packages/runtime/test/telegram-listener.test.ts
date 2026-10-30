@@ -230,7 +230,8 @@ it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML
     const listener=new TelegramOwnerListener({ownerTelegramId:OWNER,surface:'whatsapp',api,respond:async()=>text,saveOffset:async()=>undefined,...(queued?{queueFinal}:{})});
     await listener.handle(ownerTyped({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'}));
     const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
-    expect(payload).toEqual({chat_id:OWNER,text});
+    // A direct WhatsApp reply is marked as the turn's own reply, the words a later reaction or swipe-reply can name.
+    expect(payload).toEqual(queued?{chat_id:OWNER,text}:{chat_id:OWNER,text,turn_reply:true});
   }
 });
 it('a queued turn closes its own trace with one turn root only where the surface declares its outbox settles no hop', async () => {
