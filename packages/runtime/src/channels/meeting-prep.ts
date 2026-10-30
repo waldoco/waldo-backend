@@ -66,7 +66,7 @@ export const meetingPrepApplier = (deps: MeetingPrepApplyDeps): MachineHandler =
     const commit = () => { deps.briefs.commitPrep(identity, now, machine.input_digest); io.settle(); };
     if (decision.kind === 'no_op') { deps.transaction(commit); return 'skipped'; }
     const receipt: CalendarPrepReceipt = { connectionId, calendarId: 'primary', eventId: latest.id, occurrence: identity.occurrence, start: identity.canonicalStart,
-      revision: latest.etag ?? latest.updated ?? null, sourceDigest: machine.input_digest, timezone: deps.timezone };
+      revision: latest.etag ?? latest.updated ?? null, sourceDigest: machine.input_digest, timezone: deps.timezone, title: latest.title };
     if (await deps.enqueue(identity.id, decision.text, receipt, commit)) return 'delivered';
     deps.transaction(io.settle);
     return { held: 'held_budget' };

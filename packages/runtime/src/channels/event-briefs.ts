@@ -1,7 +1,8 @@
 import type { TaskResult } from '@waldo/contracts';
 import { calendarPromptProjection, sha256Hex, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { quoted } from '../prompt/turn-prompt';
-import { sanitise } from '../scribe/sanitiser';
+import { numericHealthIn, sanitise } from '../scribe/sanitiser';
+import { PUSHES } from './expo-push';
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from './reminders';
@@ -112,6 +113,14 @@ export type PrepGate = 'held_quiet' | 'held_budget';
 // Why the sweep did what it did with one event, as a fixed code for traces: never event text.
 export type PrepCode = 'queued' | 'no_note' | 'malformed_reply' | 'stale' | 'not_admitted' | 'known' | 'already_decided' | 'too_large'
   | PrepGate | 'enqueued' | 'existing' | 'held_open_job' | 'held_topic' | 'held_breaker';
+// The app push for a prep note. While names are off it is the fixed line. With them on, it names the meeting and its local
+// start; a title carrying a health value, or nothing left once email addresses are taken out, falls back to the fixed line.
+const PREP_PUSH_TITLE_CHARS = 60;
+export const prepPushBody = (prep: Readonly<{ title: string | undefined; start: string; timezone: string; named: boolean }>): string => {
+  const title = (prep.title ?? '').replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, PREP_PUSH_TITLE_CHARS).trim();
+  if (!prep.named || !title || numericHealthIn(title) || !Number.isFinite(Date.parse(prep.start))) return PUSHES.prep.body;
+  return `Prep: ${title} at ${localIso(Date.parse(prep.start), prep.timezone).slice(11, 16)}`;
+};
 // One meeting occurrence's identity: its outbox key, and the event_briefs row that records the digest it was prepped on.
 export type PrepIdentity = Readonly<{ id: string; occurrence: string; key: string; startKey: string; canonicalStart: string }>;
 export const prepIdentity = async (connectionId: string, event: CalendarItem): Promise<PrepIdentity> => {
@@ -184,7 +193,7 @@ export const eventBriefs = (sql: SqlStorage, timezone: string) => {
         if (latest.status === 'cancelled' || await calendarPrepDigest(latest) !== inputDigest || Date.now() >= start) { checked('stale', true); continue; }
         const commit = () => commitPrep(identity, now, inputDigest);
         if (decision.kind === 'no_op') { commit(); checked('no_note', true); continue; }
-        const receipt: CalendarPrepReceipt = { connectionId, calendarId: 'primary', eventId: event.id, occurrence: identity.occurrence, start: identity.canonicalStart, revision: event.etag ?? event.updated ?? null, sourceDigest: inputDigest, timezone };
+        const receipt: CalendarPrepReceipt = { connectionId, calendarId: 'primary', eventId: event.id, occurrence: identity.occurrence, start: identity.canonicalStart, revision: event.etag ?? event.updated ?? null, sourceDigest: inputDigest, timezone, title: event.title };
         const admitted = await options.enqueue(identity.id, decision.text, receipt, commit);
         if (admitted) queued++;
         checked(admitted ? 'queued' : 'not_admitted', true);
