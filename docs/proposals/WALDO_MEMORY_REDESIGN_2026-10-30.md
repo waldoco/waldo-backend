@@ -1,7 +1,8 @@
 # Memory redesign: a whole-life memory the model chooses from, updated in real time (30 October 2026)
 
 Status: **design proposal, docs only.** There are no runtime, flag, migration or contract changes in this PR. The owner
-answers the decision list below in one pass; then each slice is built under its own issue. The orchestrator gate reviews
+approved every decision on 30 Oct (in chat, relayed by the orchestrator). Each slice is built under its own issue, once the
+gate assigns it. The privacy-notice sentences and the staging flag flips stay with the owner. The orchestrator gate reviews
 this doc.
 
 - Base: `beta-mvp` `7e6bce8a` (the QoL merge train, staging Worker at the same SHA).
@@ -19,7 +20,8 @@ this doc.
 | Memory updates in real time, and every surface reflects it | Today → learned today → lasting (§6); the daytime consolidator; `memory_revision` (§4) |
 | Not rigid: the model reasons | No code-scored importance (§1); no decay formula (§6.2); areas are model-set labels (§5); evals measure instead of blocking (§1.4, §1.5) |
 | Prompt caching and spend discipline still hold | Hard memory budgets agreed with the harness (§1.6); at most 6 daytime consolidator passes a day (§6.2); embedding cost in the ledger (§1.5) |
-| Earlier recommendations are approved | O3, O4, O6 and O7 stand, recorded as approved. O1, O2 and O5 are revised per the direction. |
+| Earlier recommendations are approved | All of O1–O11 were approved by the owner on 30 Oct (the decisions below) |
+| Skills that make Waldo proactive across the seven areas | §8: an inventory of the 17 skills, the gap (no skill runs proactively), and a ranked top 5 plus the enabler K0 |
 
 This doc builds on the designs before it rather than replacing them:
 
@@ -31,24 +33,32 @@ This doc builds on the designs before it rather than replacing them:
 | Draft waldoco/waldo-backend#1587, `OWNER_BACKLOG_2026-10-26.md` at `070eea7e` | A draft that waits on its own Q1–Q3 | **Extends.** One shared `LIFE_AREAS` constant replaces its three areas (§5.3). Its Close carry-over gains look-up findings (§7). |
 | waldoco/waldo-backend#1692, the harness redesign | A draft | It consumes `selectMemory` (§1.6) and owns event ingestion and the day's working state; the seam is §6.3. |
 
-## Owner decisions: one pass
+## Owner decisions: all approved
 
-Each row has a recommendation that follows the 30 Oct direction. **Approved** rows are recorded, not re-asked.
+**Source:** owner, 30 Oct, in chat. The orchestrator relayed it. All eleven recommendations were approved as written. The
+owner also answered #1587's three questions. Two actions remain the owner's own: the privacy-notice sentences, and each
+staging flag flip, which happens in a named deploy.
 
-| # | Decision | Recommendation |
+| # | Decision | Status |
 |---|---|---|
-| **O1** | **Semantic recall: on for the staging cohort.** Close the four real gates first: a privacy-notice sentence, embedding cost in the ledger, a short ADR for `claim_vectors`, and the Workers AI terms (already closed). Then switch it on in a deploy you name. The eval measures it afterwards and does not block it. | **Yes** (§1.5). This needs your yes to the privacy-notice sentence, and "deploy ok" for the flip. |
-| **O2** | **Model-chosen memory.** The every-turn block stops filling with the newest facts. It shows the model's pins, a *not yet reviewed* tail and a count per area; recall gives full lines, then stubs the model can open. It ships behind a flag, and the S0 eval decides whether the flag goes on. | **Yes** (§1.4). MEMORY_V2's *About you* page stays the later step. |
-| O3 | A pattern counts as confirmed only when you confirmed its own wording. | **Approved** (§2) |
-| O4 | A pattern resting on a replaced or dismissed note is shown as *incomplete*, with correct and forget. | **Approved** (§3) |
-| **O5** | **Seven life areas**, shared by notes and backlog items: `body`, `mind`, `home`, `work`, `people`, `goals`, `money`, plus unsorted. They replace #1587's work, personal and health. | **Yes** (§5.3). Each area maps to clusters of help in the research. |
-| O6 | An area is a label Waldo sets and you can change, not a fact awaiting your yes. | **Approved** (§5) |
-| O7 | Patterns confirmed before the O3 fix with the pattern's own Confirm stay confirmed. Those confirmed only note by note go back to Waldo's read. | **Approved** (§2.4) |
-| **O8** | **Real-time memory.** Up to 6 daytime consolidation passes a day, after mail, calendar or chat activity, on top of the nightly pass. Each pass is one aux-model call (gpt-6-luna: $0.10 per million input tokens and $0.50 per million output, `llm/pricing.ts:10`). That is about $0.01 per owner-day at the cap [inference: 6 passes × 40,000 characters]. The cost is counted in the ledger, and passes are skipped at the spend cap. This is a new envelope on top of #1653's nightly bound. | **Yes** (§6.2) |
-| **O9** | **Mail and calendar into memory during the day.** Turn on the source pass (`MEMORY_NIGHTLY_SOURCE_UPDATES`) for the cohort, so the consolidator can learn from them. Everything it learns from outside content waits for your yes. **Gate: the privacy notice.** Notice v1 says notes from mail are made from metadata, "Never the body of an email", and only for the welcome picture. Learning from a mail's content needs one notice sentence first. | **Yes** (§6), after the notice sentence. A staging flag; the deploy is yours to name. |
-| **O10** | **Look-up findings offered in the Close card.** Up to 3 a day: "Waldo found these about you on the public web; keep or let go?" Unconfirmed findings still expire after 30 days. | **Yes** (§7.4) |
-| **O11** | **The `mind` area holds energy, focus, mood and stress as patterns in words.** It never holds a diagnosis or a reading. Mind and body notes are fenced from mail and web jobs. | **Yes** (§5.3, §5.5). This is not a new class of storage: memory already keeps "how they feel" from the owner's own words (`health-rules.ts:5`). Because GDPR Art-9 applies, a one-line ADR-0081 note in MEMORY_V2's ADR draft records the `mind` label and its fence for the gate. No ingress classifier for mood text exists today [verified: none found]; the fence is the kind and area check. |
-| — | **#1587's own questions.** Q1 cohort scope: (a) the backlog with chat and mail capture, app fields, console Backlog and Close carry-over; (b) Google Tasks link and completion; (c) calendar and meeting capture. Q2 a weekly review, yes or no. Q3 which capture sources need your confirmation. | #1587 recommends (a) and (b) now, no weekly review, and Q3 as proposed. Under this direction, (c) calendar capture feeds the same consolidator (§6), so it could join (a) if you want ahead-of-you help sooner. |
+| O1 | Semantic recall on for the staging cohort, after four gates. The eval measures it afterwards and does not block it. | **Approved** (owner, 30 Oct, in chat). The notice sentence and the flag flip are owner-only (§1.5). |
+| O2 | Model-chosen memory: pins, a *not yet reviewed* tail, area counts, and stubs the model opens. It ships behind a flag that S0 measures. | **Approved** (owner, 30 Oct, in chat) |
+| O3 | A pattern counts as confirmed only when the owner confirmed its own wording. | **Approved** (owner, 30 Oct, in chat) |
+| O4 | A pattern resting on a replaced or dismissed note shows as *incomplete*, with correct and forget. | **Approved** (owner, 30 Oct, in chat) |
+| O5 | Seven life areas, `body`, `mind`, `home`, `work`, `people`, `goals` and `money`, plus unsorted. Shared with the backlog. | **Approved** (owner, 30 Oct, in chat) |
+| O6 | An area is a label Waldo sets and the owner can change. | **Approved** (owner, 30 Oct, in chat) |
+| O7 | Patterns confirmed with the pattern's own Confirm before the O3 fix stay confirmed. Those confirmed note by note go back to Waldo's read. | **Approved** (owner, 30 Oct, in chat) |
+| O8 | Up to 6 daytime consolidation passes a day, about $0.01 per owner-day at the cap, logged and skipped at the spend cap. | **Approved** (owner, 30 Oct, in chat) |
+| O9 | The source pass learns from mail and calendar content during the day. Outside content stays a candidate. | **Approved** (owner, 30 Oct, in chat), after the notice sentence. The flag flip is owner-only. |
+| O10 | The Close offers up to 3 look-up findings a day, through the new `decide_owner_finding` tool. | **Approved** (owner, 30 Oct, in chat) |
+| O11 | The `mind` area holds patterns in words, never a diagnosis or a reading. It is fenced from mail and web jobs. | **Approved** (owner, 30 Oct, in chat) |
+| #1587 Q1 | Cohort scope | **(a), (b) and (c)** (owner, 30 Oct, in chat). Calendar capture joins now and feeds daytime consolidation (§6). |
+| #1587 Q2 | Weekly review | **Yes, folded into a Close** (owner, 30 Oct, in chat). The goal check-ins in §8.4, rank 6, ride it. |
+| #1587 Q3 | Which captures need the owner's yes | **As proposed** (owner, 30 Oct, in chat). Captures from mail and calendar need the owner's yes; the owner's own words do not. |
+
+**Privacy-notice placeholders.** The orchestrator drafts these for the owner; the wording is not decided here.
+- **[NOTICE-SENTENCE-O1]:** embeddings by Cloudflare Workers AI, kept in Waldo's storage and deleted with the note.
+- **[NOTICE-SENTENCE-O9]:** notes Waldo makes during the day from mail and calendar content, which wait for the owner's yes.
 
 ## Re-baseline at `7e6bce8a`
 
@@ -688,7 +698,116 @@ How kept findings appear in prompts:
 - `area` on kept claims comes with S5.
 - Rollback: a code revert.
 
-## 8. App brief additions (for Suyash's lane, not code here)
+## 8. Skills across the seven areas
+
+The owner's ask (30 Oct): skills that make Waldo more useful and proactive across the seven areas, shared with the backlog.
+The help taxonomy (research §4) is the frame.
+
+### 8.1 Inventory at `7e6bce8a` [verified]
+
+**How skills work today.**
+- Seventeen reviewed skills ship in `packages/runtime/skills/*/SKILL.md`. Each has a name, a description and the tools it uses.
+- Every owner gets all seventeen **enabled by default**: `ensureDefaults` inserts any missing catalogue name as active (`skills/curated-owner.ts:80-92`).
+- The model picks one with `skills_load`, from the metadata-only catalogue in its prompt (`skills/curated-host.ts:33-42`).
+- A skill grants no tools.
+- **`skills_load` is permitted only on the `user_message` trigger** (`contracts/src/tools/permissions.ts:291`).
+- The owner object builds the skill book with `trigger: 'user_message'` (`channels/owner-do.ts:4108-4109`), on every surface.
+
+**So every skill is on request today, and none is proactive.** Proactive help comes from separate code paths, listed after
+the table. Usage counts per owner (`skills.invocations`) were not read [unverified].
+
+| Skill | What it does (its description) | Tools (all have handlers [verified]) | Trigger | Reachable on staging | Clusters / areas |
+|---|---|---|---|---|---|
+| day-brief | Prepare a current day brief and ordered priorities | `query_calendar`, `get_communication`, `get_tasks` | On request | Yes | H1, H3 / work, home |
+| meeting-prep | Prepare for an identified meeting from its event and threads | `query_calendar`, `read_thread`, `workspace_read` | On request | Yes. Proactive pre-meeting notes are a separate path (below). | H3 / work, people |
+| follow-up-prep | Prepare a follow-up from the latest thread | `read_thread`, `get_tasks`, `draft_email` | On request | Yes | H5, H2 / work, people |
+| travel-prep | Research travel options and preparation, without booking | `web_search`, `browse_page`, `query_calendar` | On request | Yes | H4 / home |
+| weekly-review | Review the past week and prepare next-week priorities | `query_calendar`, `get_tasks`, `read_memory` | On request | Yes | H5, H10 / goals, work |
+| inbox-triage-reply-draft | Review an inbox and prepare replies for review | `get_communication`, `read_thread`, `draft_email` | On request | Yes | H2 / work, people |
+| reminders-and-watches | Set or inspect reminders and watched commitments | `get_context`, `set_reminder`, `list_reminders` | On request | Yes | H6 / all |
+| meal-activity-log-and-planning | Record owner-stated meals or activity, and plan | `log_meal`, `log_workout`, `list_health_logs` | On request | Yes | H8 / body |
+| decision-brief | Compare options; a source-backed recommendation | `web_search`, `browse_page`, `read_memory` | On request | Yes | H3 / any |
+| project-catch-up | Recover project state and the next step | `get_tasks`, `workspace_list`, `workspace_read` | On request | Yes | H5 / work, goals |
+| sourced-research-brief | A brief backed by original sources | `web_search`, `browse_page` | On request | Yes | H3 / any |
+| document-email-preparation | Prepare a document or email from owner facts | none | On request (also `brief`, `bundled-file.ts:30`) | Yes | H2 / work |
+| calendar-focus-proposal | Plan focus time, or a calendar change for review | `query_calendar`, `query_availability`, `propose_calendar_change` | On request | Yes | H1, H7 / work, mind |
+| artifact-revision-delivery | Revise a saved artifact and deliver a link | `workspace_*` | On request | Yes | — (tooling) |
+| reviewed-outbound-message | A message with exact recipients, reviewed before sending | `read_thread`, `draft_email`, `send_email` | On request | Yes | H2 / people, work |
+| memory-correction | Inspect and correct a remembered fact | `read_memory` | On request | Yes | H12 / all |
+| owner-lookup | Look the owner up and keep findings for their decision | `list_owner_findings`, `web_search`, `browse_page`, `record_owner_finding` | On request | Yes (`OWNER_LOOKUP = "1"` on staging) | H12 / all |
+
+**Blocked, text only** (`docs/skills/blocked-v1`, not loaded): rich-artifact-export, browser-task,
+document-signing-preparation, ride-preparation, trusted-person-coordination. Each is blocked on a missing tool or design
+(README).
+
+**Proactive paths that are not skills** [verified]:
+
+| Path | File | What it does | Gated by |
+|---|---|---|---|
+| Day cards | `prompt/day-cards.ts:9-35` | The Brief (08:00), Check-in (14:00) and Close (21:30), written by the model | Owner card settings |
+| Pre-meeting notes | `channels/event-briefs.ts`, `channels/meeting-prep.ts` | One short brief per timed event, plus a mail-reading prep job for meetings the owner organised or accepted | `CALENDAR_GROUNDED_PREP` (`"1"` on staging), the owner's proactivity, quiet hours and volume (`owner-do.ts:4787-4880`). Whether it fires on staging is being diagnosed by the orchestrator [unverified here]. |
+| Update cards | `channels/update-cards.ts`, Gmail and Calendar push | A changed meeting or new mail that moves the day | The update sweep |
+| Mail follow-ups | `owner-do.ts:4916` | Waldo's loops on observed mail | `MAIL_SOURCE_FOLLOWUPS` and the owner's follow-ups switch (`proactive-gate.ts:14`) |
+| Loop nudges and check-back | `channels/heartbeat.ts`, `channels/check-back.ts` | Due loops | Proactivity |
+| Reminders and watches | `channels/reminders.ts`, `watch-upkeep.ts` | What the owner asked | — |
+
+**The gap.**
+- The seventeen skills are the reviewed *procedures*. The proactive paths are the *moments*.
+- The two never meet: a Brief cannot load `day-brief`, and a pre-meeting job cannot load `meeting-prep`.
+- So the procedures run only when the owner thinks to ask. That defeats "act ahead of them".
+
+### 8.2 Coverage by area and cluster
+
+| Area | Covered by a skill today | Gap (no skill) |
+|---|---|---|
+| `work` | day-brief, meeting-prep, follow-up-prep, inbox-triage, project-catch-up, calendar-focus-proposal | Overload days (S-3) |
+| `people` | inbox-triage, reviewed-outbound-message, meeting-prep (partly) | Birthdays, reply debts, reaching out, person context (S-2) |
+| `home` | travel-prep, reminders-and-watches | Errand batching; household logistics; jet lag on arrival (extend travel-prep) |
+| `money` | none | Bills, renewals, subscriptions, deadlines (S-4) |
+| `body` | meal-activity-log-and-planning | Recovery and illness days, sleep, training check-ins (S-5) |
+| `mind` | calendar-focus-proposal (partly) | Overload and stress days, protecting focus (S-3) |
+| `goals` | weekly-review, project-catch-up | Turning intentions into plans (S-1); progress check-ins in the weekly Close (#1587 Q2: yes) |
+| all | memory-correction, reminders-and-watches | Planning every open loop when it is captured (S-1) |
+
+### 8.3 New skills: rules every one follows [proposed]
+
+- **Model-judged.** No fixed significance rules or thresholds. The skill is a reviewed procedure the model chooses to load. It is not a code path keyed to an event type.
+- **Reads the day's working state and memory.** It uses the harness's read view (#1701) and `selectMemory` (§1.6), and grants itself no tools.
+- **Consent and health.**
+  - Health is used only from shared sources, live, per ADR-0081.
+  - Missing data is never a signal.
+  - Outside content becomes a candidate, never the owner's word.
+  - Effects (calendar changes, sends) go through the existing approvals.
+- **Few at a time, at breaks.** At most 3 suggestions a card (Cowan; Iqbal and Bailey). Choices, not directives (Ryan and Deci).
+- **Shared with the backlog.** What a skill proposes lands as a #1587 backlog item or candidate with an `area`, so the Close and the console show it.
+
+### 8.4 Ranking [proposed]
+
+Value is the owner-visible help per research cluster, and how often it applies across the archetypes in research §2. Cost
+is the build size, with existing tools reused.
+
+| Rank | Slice | Area / cluster | Value | Cost | Why this rank |
+|---|---|---|---|---|---|
+| **0 (enabler)** | **K0: proactive turns can load skills** (waldoco/waldo-backend#1705) | all | Very high: it makes the 17 existing skills proactive | Low: permissions and the skill book for machine turns | Without it, every new skill below is on request only |
+| **1** | **S-1 intention-to-plan** (waldoco/waldo-backend#1706) | all / H5, H6 | High: when-then plans have the strongest evidence (d ≈ .65) and apply to every archetype | Low | A procedure over #1587's loops and reminders |
+| **2** | **S-2 relationship-upkeep** (waldoco/waldo-backend#1707) | `people` / H9, H2 | High: today there is no coverage | Low–medium | Memory plus observed mail; reply debts reuse `observed_mail` |
+| **3** | **S-3 overload-day** (waldoco/waldo-backend#1708) | `mind`, `work` / H7 | High for founders, clinicians and parents | Medium | Calendar proposals already exist |
+| **4** | **S-4 renewals-and-bills** (waldoco/waldo-backend#1709) | `money`, `home` / H11 | Medium–high: today there is no coverage | Low | Rides the consolidator (S7) and #1587's candidates |
+| **5** | **S-5 recovery-day** (waldoco/waldo-backend#1710) | `body` / H8, H4 | High under the health ruling | Medium: health evals | Shared health only; no clinical advice |
+| 6 | Goal check-ins in the weekly Close | `goals` / H10 | Medium | Low | Folds into #1587's weekly review (Q2: yes); reuses weekly-review |
+| 7 | Travel arrival plan (jet lag, time zones) | `home`, `body` / H4 | Medium for frequent travellers | Low | Extends travel-prep with the CDC rates |
+| 8 | Errand batching and household logistics | `home` | Medium | Medium | Needs location and opening hours; later |
+
+**Build order.** K0 first. Then S-1 and S-2 in parallel. Then S-3, S-4 (after #1587 and S7) and S-5.
+
+**Per skill:**
+- a reviewed SKILL.md;
+- scenario evals added to the nightly catalogue: a happy path, a null path (no data or no consent), a hostile path (instructions in a mail), and a quiet path (nothing to suggest);
+- K0's permission tests.
+
+None needs a migration or an app.v1 change, except the areas the backlog already brings (S5).
+
+## 9. App brief additions (for Suyash's lane, not code here)
 
 Added to `APP_MEMORY_SYNC_BRIEF_2026-10-30.md` items 1–9:
 
@@ -703,7 +822,7 @@ Added to `APP_MEMORY_SYNC_BRIEF_2026-10-30.md` items 1–9:
 - **14.** *What Waldo knows* already lists look-up findings with keep, correct and forget (`findings.ts`). Show their
   30-day expiry, and treat a finding the owner keeps from the Close card (S8) the same as one kept in the app.
 
-## 9. Build slices
+## 10. Build slices
 
 Each slice is its own PR, red tests first, with one issue each. "DO column" means an additive column in the owner DO's
 SQLite via the guarded `ADD COLUMN` pattern. None of these slices needs a Supabase migration, so no migration timestamp is
@@ -721,15 +840,19 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's `observed` emit (#1701) |
 | **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes, at most 3 a day (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 offered; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
 
+| **K0** (waldoco/waldo-backend#1705) | Proactive turns can load reviewed skills (§8) | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (the skill book for machine turns), `skills/curated-host.ts` | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; owner scoping | a tool-permission change (internal) |
+| **S-1 to S-5** (waldoco/waldo-backend#1706–#1710) | New skills: intention-to-plan, relationship-upkeep, overload-day, renewals-and-bills, recovery-day (§8.4) | each a reviewed `packages/runtime/skills/<name>/SKILL.md`, plus nightly scenarios | none (procedures) | happy, null, hostile and quiet paths per skill; health and consent rules (S-5) | none |
+
 **Order:**
 - S0, S1, S2, S3, S5 (the constant) and S6 can start in parallel. S1 and S2 share `dashboard-memory-actions.ts`, so they go one after the other.
 - S4 ships with S0 measuring it.
 - S7 waits on the harness's `observed` emit (#1701).
 - S8 waits on #1587's carry-over.
+- K0 can start at once. S-1 and S-2 follow it in parallel; S-3, S-4 (after #1587 and S7) and S-5 come after.
 
 **m14** (real time) joins S0: a mail at 09:00, then a question at 15:00 whose answer needs it, with the consolidator on. Outside content reaches the turn live, as data. The consolidator makes it a candidate the owner can confirm; it does not put it in `core`.
 
-## 10. Fixed, and not redesigned
+## 11. Fixed, and not redesigned
 
 `WaldoCoordinator`, the trusted RunLoop and physical-effect path, the existing `ContextComposer`, one durable writer per
 aggregate (`ClaimStore` for claims and nodes, the loop book for loops), memory as correctable context and not permission,
