@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { skillsListArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type ToolName } from '@waldo/contracts';
+import { skillSchema, skillsListArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type ToolName } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
@@ -119,7 +119,7 @@ it('the skill index is byte-stable across machine and owner turns and in name or
 
 it('an owner whose book was seeded before every trigger could load keeps every skill loadable', async () => {
   await inDo('upgrade-trigger-types', async state => {
-    const before = CURATED_SKILLS.map(s => Object.freeze({ ...s, version: s.name === 'document-email-preparation' ? 1 : 2, trigger_types: s.name === 'document-email-preparation' ? ['user_message' as const, 'brief' as const] : ['user_message' as const], created_at: s.name === 'document-email-preparation' ? '2026-10-01T00:00:00Z' : '2026-10-03T00:00:00Z' }));
+    const before = CURATED_SKILLS.map(s => skillSchema.parse({ ...s, version: s.name === 'document-email-preparation' ? 1 : 2, trigger_types: s.name === 'document-email-preparation' ? ['user_message' as const, 'brief' as const] : ['user_message' as const], created_at: s.name === 'document-email-preparation' ? '2026-10-01T00:00:00Z' : '2026-10-03T00:00:00Z' }));
     new CuratedOwnerSkills(state.storage.sql, PRINCIPAL, undefined, PRINCIPAL, before);
     state.storage.sql.exec("UPDATE skills SET status='archived' WHERE name='weekly-review'");
     const book = new CuratedOwnerSkills(state.storage.sql, PRINCIPAL);
