@@ -132,6 +132,23 @@ describe('console pattern confirm and correct', () => {
     expect(read.data.actions).toEqual(['node.confirm', 'node.correct', 'node.forget']);
   });
 
+  it('the owner\'s yes to a pattern\'s words is not a claim any claim action can reach', async () => {
+    const o = await owner('console-node-statement-actions');
+    const id = await o.seedRead(), target = await o.scoped(id);
+    await o.codeAge(60_000);
+    expect((await o.act(target, 'node.confirm')).status).toBe(200);
+    const statement = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ id: number; text: string; status: string }>("SELECT id, text, status FROM claims WHERE kind = 'node_statement'").one());
+    const ref = await o.claimRef(statement.id);
+    expect((await o.read(ref)).status).toBe(404);
+    for (const [action, value] of [['spot.confirm'], ['spot.edit', 'Owner wording'], ['spot.dismiss'], ['spot.pin', 'profile'], ['spot.forget']] as const) {
+      const sent = await o.stub.fetch(root + CONTROL_ACTION_PATH, { method: 'POST', headers: { cookie: `waldo_console=${o.token}`, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf: (await (await o.read(target)).json() as Read).csrf, revision: 'a'.repeat(64), view: 'memory', action, id: ref, request_id: `${action.replace('.', '-')}-${crypto.randomUUID()}`, ...(value === undefined ? {} : { value }) }) });
+      expect(sent.status).not.toBe(200);
+    }
+    expect(await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ id: number; text: string; status: string }>("SELECT id, text, status FROM claims WHERE kind = 'node_statement'").one())).toEqual(statement);
+    expect((await (await o.read(target)).json() as Read).data.review.confirmation).toBe('confirmed');
+  });
+
   it('forgetting a confirmed pattern takes the owner\'s yes to its words with it', async () => {
     const o = await owner('console-node-forget-statement');
     const id = await o.seedRead(), target = await o.scoped(id);

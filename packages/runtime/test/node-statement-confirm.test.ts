@@ -185,6 +185,25 @@ describe('forgetting', () => {
     });
   });
 
+  it('a forget whose words are in a confirmed pattern\'s wording leaves no copy of them, by topic or by id', async () => {
+    await withStore((store) => {
+      const { id } = mailNode(store);
+      confirmWelcomeNode(store, id, AT);
+      expect(store.purge([], AT, ['Investor mornings']).ready).toBe(true);
+      expect(store.nodes().map((node) => node.id)).not.toContain(id);
+      expect(store.allClaims().filter((claim) => claim.text.includes('Investor mornings'))).toEqual([]);
+    });
+    await withStore((store) => {
+      const { id } = mailNode(store);
+      confirmWelcomeNode(store, id, AT);
+      const said = owned(store, 'Investor mornings');
+      expect(store.purge([said], AT).ready).toBe(true);
+      expect(store.allClaims().filter((claim) => claim.id !== said && claim.text.includes('Investor mornings'))).toEqual([]);
+      expect(statements(store)).toEqual([]);
+      expect(confirmation(store, id)).toBe('waldos_read');
+    });
+  });
+
   it('forgetting the pattern removes its statement', async () => {
     await withStore((store) => {
       const { id } = mailNode(store);

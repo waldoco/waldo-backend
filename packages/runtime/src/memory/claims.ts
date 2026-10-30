@@ -917,7 +917,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (removes && (carries(row.label) || carries(row.summary))) {
               dropNode(row.id);
               tally('deleted', 'constellation_nodes');
-            } else if (!removes) sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', ci(row.label), ci(row.summary), row.id);
+            } else if (!removes) {
+              // Words the owner said yes to are no longer the node's words.
+              sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', ci(row.label), ci(row.summary), row.id);
+              dropStatements(row.id);
+            }
           }
         });
       }
