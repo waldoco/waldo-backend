@@ -20,7 +20,7 @@ import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
 import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
-import { reactToMessageHandler } from '../tools/live/react-to-message';
+import { reactToMessageHandler, type TapbackPort } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -211,7 +211,8 @@ import { linkingAppRows, proactiveSurface, proactiveTargets, refusingUnreachable
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
-import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
+import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -571,6 +572,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
+  // The WhatsApp turn running now: the owner's message it answers (its wamid), whether that message was itself a swipe-reply,
+  // and the emoji the model chose for it, which goes out after the reply.
+  private activeWhatsApp: { scope: RunEffectScope; wamid: string; threaded: boolean; reaction?: string } | null = null;
   private activeAbort: AbortController | undefined;
   // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
   private compactionAbort: AbortController | undefined;
@@ -1587,6 +1591,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'calendar_prep', run: (texts) => redactCalendarPrepEntries(kv, texts, FORGOTTEN).remaining },
       { name: 'job_reports', run: (texts) => redactJobReportEntries(kv, texts, FORGOTTEN).remaining },
       { name: 'whatsapp_held', run: (texts) => forgetHeldWhatsApp(kv, texts).remaining },
+      { name: 'whatsapp_context', run: (texts) => forgetWhatsAppContext(kv, texts).remaining },
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
@@ -2022,7 +2027,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // (W4): file_id carries the WhatsApp media id and the per-channel downloader in setup()
   // resolves it through the Graph two-step; images and documents take the shared media path the same way. Types Waldo
   // cannot open get the shared unsupported reply (whatsappIngressUpdates).
-  private async runWhatsappClaimed(pendingKey: string, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
+  private async runWhatsappClaimed(pendingKey: string, claimed: readonly WaIngressMessage[], subject: string): Promise<void> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
@@ -2031,12 +2036,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event)), this.ctx.storage.kv.get<string>('whatsapp_subject') ?? ''); } catch { console.error('whatsapp held delivery unavailable'); }
       try { await releaseWhatsAppOutbox(this.setup('whatsapp').finalOutbox, this.outboxRoute('whatsapp'), this.setup('whatsapp').settleFinal); } catch { console.error('whatsapp outbox release unavailable'); }
       try { await this.setup('whatsapp').desk.ownerWrote(); } catch { console.error('whatsapp waiting approval cards unavailable'); }
-      const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+      const { updates, seq, sources } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0, id => whatsappSentText(this.ctx.storage.kv, id, Date.now()));
       // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
       // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
       let failure: { error: unknown } | null = null;
       let started = 0;
-      for (const update of updates) {
+      for (const [index, update] of updates.entries()) {
         try { await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE); }
         catch (error) {
           // The turn never started. Release this payload's claims so a redelivery is processed, and tell the owner.
@@ -2044,7 +2049,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           failure ??= { error }; break;
         }
         started += 1;
-        try { await this.whatsappTurn(update, pendingKey, subject); } catch (error) { failure ??= { error }; }
+        try { await this.whatsappTurn(update, pendingKey, subject, sources[index] ?? ''); } catch (error) { failure ??= { error }; }
       }
       try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
       if (failure) {
@@ -2069,7 +2074,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // deletes it), the admitted sender is still the bound, linked subject, the owner name is unchanged, and the run is neither
   // aborted nor past its deadline. The scope is aborted when its turn ends, so a turn that outlived its race cannot commit
   // after the next one starts, and an unlink or rebind mid-turn closes every later tool effect and the final send.
-  private async whatsappTurn(update: unknown, pendingKey: string, subject: string): Promise<void> {
+  private async whatsappTurn(update: unknown, pendingKey: string, subject: string, wamid: string): Promise<void> {
     const { kv } = this.ctx.storage;
     const run = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: Date.now() + TURN_TIMEOUT_MS };
     const doName = kv.get<string>('do_name');
@@ -2086,6 +2091,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }),
     };
     this.activeScope = scope; this.activeAbort = abort;
+    const active = this.activeWhatsApp = { scope, wamid, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const expired = new Promise<never>((_, reject) => {
@@ -2096,6 +2102,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     } finally {
       clearTimeout(timeout); abort.abort();
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+      if (this.activeWhatsApp === active) this.activeWhatsApp = null;
     }
   }
 
@@ -2130,7 +2137,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!owned) return new Response('forbidden', { status: 403 });
       reconciled = true;
     }
-    let value: { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
+    let value: { messages?: WaIngressMessage[] };
     try { value = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
     // The same origin and timezone persistence the other owner paths do after the identity checks: a WhatsApp-only owner's
     // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
@@ -2155,7 +2162,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
       recordWhatsAppInbound(kv, claimed, Date.now());
-      const latestId = [...claimed].reverse().find(m => typeof m.id === 'string' && m.id !== '')?.id;
+      for (const m of claimed) if (m.from === subject && m.type === 'reaction' && typeof m.reaction?.message_id === 'string') noteWhatsAppReaction(kv, m.reaction.message_id, m.reaction.emoji, Date.now());
+      const latestId = [...claimed].reverse().find(m => whatsappTurnMessage(m) && typeof m.id === 'string' && m.id !== '')?.id;
       if (latestId) kv.put(WA_LAST_INBOUND_ID_KEY, latestId);
       kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
@@ -3485,7 +3493,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? appCaller(() => null, () => this.activeIMessage !== null)
       : channel === 'whatsapp'
         ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '', fetch,
-          { lastInbound: () => identity.get<string>(WA_LAST_INBOUND_ID_KEY) ?? null }),
+          { lastInbound: () => identity.get<string>(WA_LAST_INBOUND_ID_KEY) ?? null, onSent: (id, text) => recordWhatsAppSent(identity, id, text, Date.now()) }),
           { kv: identity, template: whatsappTemplateConfig(this.env), log: event => console.log(JSON.stringify(event)) })
         : createTelegramCaller(token!);
     const egressDoName = identity.get<string>('do_name');
@@ -3566,7 +3574,44 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const progressNoteRoute = progressNoteRoutes[channel];
     const progressNoteTools = progressNoteRoute ? [progressNoteHandler({ log, deliver: progressNoteRoute })] : [];
     // A tapback goes only where a host sends one: iMessage, while the turn's bridge reports tapbacks verified.
-    const tapbackTools = ({ imessage: () => [reactToMessageHandler(iMessageTapbacks(this.imessageHost, () => this.activeIMessage))] } as Partial<Record<ChannelKind, () => ReturnType<typeof reactToMessageHandler>[]>>)[channel]?.() ?? [];
+    // On WhatsApp the reaction, any one emoji, is held for the running turn and sent after its reply, on the owner's message it
+    // answers.
+    const whatsappTapbacks: TapbackPort = {
+      anyEmoji: true,
+      ready: async () => !!this.activeWhatsApp?.wamid,
+      freeze: (reaction: string, scope: RunEffectScope) => {
+        const active = this.activeWhatsApp;
+        if (!active || active.scope.runId !== scope.runId || active.scope.attempt !== scope.attempt) throw new ClosedRunError();
+        if (active.reaction && active.reaction !== reaction) return 'conflict';
+        active.reaction = reaction;
+        return 'queued';
+      },
+    };
+    const tapbackTools = ({ imessage: () => [reactToMessageHandler(iMessageTapbacks(this.imessageHost, () => this.activeIMessage))], whatsapp: () => [reactToMessageHandler(whatsappTapbacks)] } as Partial<Record<ChannelKind, () => ReturnType<typeof reactToMessageHandler>[]>>)[channel]?.() ?? [];
+    // What a surface adds around a turn's reply. WhatsApp: the owner's reactions since their last turn, each one line the turn
+    // reads beside their words; the reply's quote of the owner's message where that helps (a later message of theirs came in
+    // after it, or it was itself a swipe-reply) and the mark that it is the turn's own reply; and the reaction the model chose,
+    // sent after the reply.
+    type InboundTurn = import('./telegram-polling').TelegramInboundTurn;
+    type TurnHooks = Readonly<{ notes(turn: InboundTurn): readonly string[]; listener: Pick<import('./telegram-listener').TelegramOwnerListenerOptions, 'replyFields' | 'deliverReaction'> }>;
+    const runningWhatsApp = (turn: InboundTurn) => { const active = this.activeWhatsApp; return active?.wamid && active.scope.runId === turn.runScope?.runId ? active : null; };
+    const whatsappTurnHooks: TurnHooks = {
+      notes: turn => { const take = () => takeWhatsAppReactionNotes(identity, Date.now()); return turn.runScope ? turn.runScope.commit(take) : take(); },
+      listener: {
+        replyFields: turn => {
+          const active = runningWhatsApp(turn);
+          const quote = active && (active.threaded || identity.get<string>(WA_LAST_INBOUND_ID_KEY) !== active.wamid) ? { quote_message_id: active.wamid } : {};
+          return { ...quote, turn_reply: true };
+        },
+        deliverReaction: async turn => {
+          const active = runningWhatsApp(turn);
+          if (!active?.reaction) return;
+          turn.runScope?.admit();
+          await routedCall('sendReaction', { message_id: active.wamid, emoji: active.reaction });
+        },
+      },
+    };
+    const turnHooks = ({ whatsapp: whatsappTurnHooks } as Partial<Record<ChannelKind, TurnHooks>>)[channel];
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
     // The app and iMessage carry no connect button, so there nothing is minted or sent: the model is told where the owner connects.
@@ -4341,6 +4386,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
         const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
+        const notes = turnHooks?.notes(turn) ?? [];
+        if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
       // Freeze the reply text, stable commandId and exact target together with the turn's closure.
@@ -4376,6 +4423,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } } : {}),
       ...(replyDraft ? { streamReply: (turn: import('./telegram-polling').TelegramInboundTurn) => probeCapture.current === null ? replyDraft(turn) : undefined } : {}),
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
+      ...turnHooks?.listener,
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
         trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,
         ...(runScope ? { admit: () => runScope.admit() } : {}),

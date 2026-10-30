@@ -317,6 +317,17 @@ describe('the voice block', () => {
     expect(messagingSystemPrompt(HOTEL_TURN_TOOLS)).toMatchSnapshot('direct');
     for (const surface of SURFACES) expect(surfacePresentationPrompt(surface)).toMatchSnapshot(surface.surface);
   });
+
+  // The line and the tool list come from one fact: a surface whose turn offers react_to_message is never told reactions
+  // are unavailable, and one that does not is never told they are available.
+  it('says reactions are available exactly when the host reacts or the reaction tool is offered', () => {
+    for (const surface of SURFACES) {
+      const host = surface.delivery.reactions;
+      expect(surfacePresentationPrompt(surface, ['react_to_message']), surface.surface).toContain('Reactions: available.');
+      expect(surfacePresentationPrompt(surface, ['send_message']), surface.surface).toContain(host ? 'Reactions: available.' : 'Reactions: unavailable.');
+      expect(messagingSystemPrompt(['react_to_message'], surface), surface.surface).toContain('Reactions: available.');
+    }
+  });
 });
 
 describe('ownerClockLine', () => {
