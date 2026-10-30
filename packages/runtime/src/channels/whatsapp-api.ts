@@ -87,10 +87,26 @@ export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, p
 // Unsupported Telegram operations return no receipt, never a fabricated successful result.
 export type TelegramShimCall = (method: string, body: object) => Promise<unknown>;
 
-export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch): TelegramShimCall => {
+// Meta shows the typing indicator for up to 25 seconds or until the reply, and each call also marks the message read, so the
+// listener's 4-second typing ticks are thinned to one call per 20 seconds for the same message.
+export const WHATSAPP_TYPING_REFRESH_MS = 20_000;
+// The owner DO keeps the id of the owner's latest admitted message here, for the read receipt and typing indicator.
+export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
+export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number }>;
+
+export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch, options: WhatsAppShimOptions = {}): TelegramShimCall => {
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
   const upload = createWhatsAppMediaUploader(token, phoneNumberId, fetcher);
+  const now = options.now ?? Date.now;
+  let typed: { id: string; at: number } | null = null;
   return async (method, body) => {
+    // Typing marks the owner's latest message read (blue ticks) and shows "typing…". It needs that message's id.
+    if (method === 'sendChatAction') {
+      const id = options.lastInbound?.() ?? null;
+      if (!id || (typed?.id === id && now() - typed.at < WHATSAPP_TYPING_REFRESH_MS)) return undefined;
+      typed = { id, at: now() };
+      return call({ status: 'read', message_id: id, typing_indicator: { type: 'text' } });
+    }
     // An approved template with no variables: agent text never rides in a template.
     if (method === 'sendTemplate') {
       const { name, language } = body as { name: string; language: string };
@@ -262,7 +278,13 @@ export const WA_UPDATE_BASE = 9_000_000_000_000;
 // The Cloud API marks a forward in a message's context, which can also carry reply context: only the two flags are read.
 const waForwardContextSchema = z.object({ forwarded: z.boolean().optional(), frequently_forwarded: z.boolean().optional() });
 
-export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; context?: Readonly<z.infer<typeof waForwardContextSchema>>; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string } }>;
+type WaLocation = { latitude?: unknown; longitude?: unknown; name?: unknown; address?: unknown };
+type WaContactCard = { name?: { formatted_name?: unknown }; phones?: { phone?: unknown }[]; emails?: { email?: unknown }[] };
+export type WaIngressMessage = Readonly<{
+  id?: string; from?: string; type?: string; context?: Readonly<z.infer<typeof waForwardContextSchema>>; text?: { body?: string };
+  audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string };
+  document?: { id?: string; filename?: string; mime_type?: string; caption?: string }; location?: WaLocation; contacts?: WaContactCard[];
+}>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
 // A context that does not match the schema counts as a forward: text Waldo cannot vouch for is never the owner's command.
@@ -279,8 +301,36 @@ export const whatsappForwarded = (message: WaIngressMessage): boolean => {
 // An audio message becomes the voice/audio media update the shared transcriber path already
 // reads (file_id carries the WhatsApp media id; the owner DO's per-channel downloader resolves
 // it through the Graph two-step). An image message becomes the photo update the shared media
-// path reads (A6); its caption is owner text, so it gets the same artifact quarantine as a
-// text body. Other types and any foreign sender are skipped.
+// path reads (A6), and a document the document update (PDFs, office files and the rest go through the shared file path's
+// own type and size checks); a caption is owner text, so it gets the same artifact quarantine as a text body. A shared
+// location or contact card becomes text in the sender's words. A type Waldo cannot open (video, sticker, anything new)
+// becomes a bare message the shared parser classes as unsupported, so the owner gets the honest unsupported reply rather
+// than silence. A reaction, a system notice and a welcome request need no answer; they and any foreign sender are skipped.
+const SILENT_TYPES = new Set(['reaction', 'system', 'request_welcome']);
+const quarantined = (text: string): string => {
+  const q = quarantineArtifacts(text);
+  return q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
+};
+const captionOf = (caption: string | undefined) => {
+  const text = (caption ?? '').trim();
+  return text ? { caption: quarantined(text).slice(0, 1024) } : {};
+};
+const fieldText = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value.trim() : null;
+const locationText = (location: WaLocation | undefined): string | null => {
+  const { latitude, longitude } = location ?? {};
+  if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  const label = [fieldText(location?.name), fieldText(location?.address)].filter(Boolean).join(', ');
+  return `Shared a location: ${label ? `${label} ` : ''}(${latitude}, ${longitude})`;
+};
+const contactsText = (contacts: readonly WaContactCard[] | undefined): string | null => {
+  const cards = (Array.isArray(contacts) ? contacts : []).map(card => [
+    fieldText(card?.name?.formatted_name),
+    ...(Array.isArray(card?.phones) ? card.phones.map((phone: { phone?: unknown } | undefined) => fieldText(phone?.phone)) : []),
+    ...(Array.isArray(card?.emails) ? card.emails.map((email: { email?: unknown } | undefined) => fieldText(email?.email)) : []),
+  ].filter(Boolean).join(', ')).filter(Boolean);
+  return cards.length === 0 ? null : `${cards.length === 1 ? 'Shared a contact' : 'Shared contacts'}: ${cards.join('; ')}`;
+};
+
 export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number): { updates: WaSyntheticUpdate[]; seq: number } => {
   let seq = seqStart;
   const ownerNum = Number(subject);
@@ -292,31 +342,31 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // sent: the origin is a hidden user, and the time Waldo received it stands in.
     const forwarded = whatsappForwarded(message);
     const origin = forwarded ? { forward_origin: { type: 'hidden_user', date: Math.floor(Date.now() / 1000) } } : {};
-    if (message.type === 'audio' && message.audio?.id) {
-      seq += 1;
-      const audio = message.audio;
-      const media = audio.voice === false
-        ? { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
-        : { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
-      updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...media } });
+    const push = (content: object) => { seq += 1; updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...content } }); };
+    if (message.type === 'audio' || message.type === 'image' || message.type === 'document') {
+      if (message.type === 'audio' && message.audio?.id) {
+        const { id, mime_type, voice } = message.audio;
+        push({ [voice === false ? 'audio' : 'voice']: { file_id: id, ...(mime_type ? { mime_type } : {}) } });
+      } else if (message.type === 'image' && message.image?.id) {
+        push({ photo: [{ file_id: message.image.id }], ...captionOf(message.image.caption) });
+      } else if (message.type === 'document' && message.document?.id) {
+        const { id, filename, mime_type, caption } = message.document;
+        push({
+          document: { file_id: id, ...(fieldText(filename) ? { file_name: fieldText(filename)!.slice(0, 256) } : {}), ...(fieldText(mime_type) ? { mime_type: fieldText(mime_type)!.slice(0, 128) } : {}) },
+          ...captionOf(caption),
+        });
+      }
       continue;
     }
-    if (message.type === 'image' && message.image?.id) {
-      seq += 1;
-      const image = message.image;
-      const caption = (image.caption ?? '').trim();
-      const q = caption ? quarantineArtifacts(caption) : null;
-      updates.push({
-        update_id: WA_UPDATE_BASE + seq,
-        message: {
-          from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin,
-          photo: [{ file_id: image.id }],
-          ...(q === null ? {} : { caption: q.kinds.length === 0 ? caption : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text }),
-        },
-      });
+    if (message.type === 'location' || message.type === 'contacts') {
+      const text = message.type === 'location' ? locationText(message.location) : contactsText(message.contacts);
+      push(text ? { text: quarantined(text).slice(0, 4096) } : { whatsapp_type: message.type });
       continue;
     }
-    if (message.type !== 'text') continue;
+    if (message.type !== 'text') {
+      if (!SILENT_TYPES.has(message.type ?? '')) push({ whatsapp_type: message.type ?? 'unknown' });
+      continue;
+    }
     const text = (message.text?.body ?? '').trim();
     if (!text) continue;
     seq += 1;
@@ -328,9 +378,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
-    const q = quarantineArtifacts(text);
-    const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
-    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, text: clean } });
+    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, text: quarantined(text) } });
   }
   return { updates, seq };
 };
