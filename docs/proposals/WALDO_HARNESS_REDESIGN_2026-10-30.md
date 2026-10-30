@@ -79,7 +79,7 @@ How compaction differs by surface [verified]:
 - I could not confirm `cache_write > 0` on a real staging turn.
   - The Langfuse web UI showed a sign-in page in the built-in browser, and I did not sign in.
   - No Langfuse keys are present in this checkout or environment.
-- Before 06:38Z, I asked the orchestrator whether it can read one `llm_reply` usage block from after 05:29Z. No answer by the time of this commit.
+- Before 06:38Z, I asked the orchestrator whether it can read one `llm_reply` usage block from after 05:29Z. It could not check either (no Langfuse secret key), and asked the owner to.
 - What the code shows [verified]:
   - Both adapters read write tokens:
     - OpenAI: `input_tokens_details.cache_write_tokens`, through a cast because SDK 5.12.2 lacks the field (`src/llm/openai.ts:246-249`).
@@ -90,7 +90,8 @@ How compaction differs by surface [verified]:
   - In the Langfuse UI, open any `llm_reply` generation on the staging environment that started after 2026-10-30T05:29Z, and read its usage details for `cache_write`.
   - For a count, export the generations and count those with `cache_write > 0`, by model.
   - `scripts/cost-report.mjs` at this SHA can't do this: it never reads `cache_write`, and its windows are whole days.
-- **Every threshold below that depends on write billing is provisional** until there are at least 7 days of write data [proposed].
+- **Precondition P0 for every cost-driven slice** (S1's per-attempt half, S3's B, S4, S5's follow-ups, S6): one staging `llm_reply` usage block after 05:29Z on 30 Oct shows `cache_write > 0`. The owner was asked to check this in Langfuse. Until someone does, P0 is [blocked].
+- **Every threshold number in this document is provisional.** That covers each percentage, character size and day count. They are set again once P0 holds and there are at least 7 days of write data.
 
 ### The cost rollup, end to end
 
@@ -159,10 +160,10 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 
 | # | Need | Why | Number |
 |---|---|---|---|
-| M1 | An explicit character budget for the pinned block, passed in by the harness | It is uncached input on every turn and has no limit today | [proposed] default 12,000 characters |
-| M2 | An explicit character budget for per-message recall | Same reason | 3,000 (the existing constant) |
-| M3 | Deterministic output for the same store state and message: stable order, no wall-clock text | S0 evals compare runs | — |
-| M4 | Bounded latency, degrading to empty recall plus a logged hop, never a failed turn | Selection runs before the first model call | [proposed] p95 ≤ 250 ms on the DO |
+| M1 | An explicit character budget for the pinned block (`core`), passed in by the harness as `room`. It is a hard cap, never derived from leftover system-prompt room. | It is uncached input on every turn and has no limit today | ≤ 5,200 characters (agreed with memory-redesign: profile 1,500 + facts 2,500 + constellation 1,200) |
+| M2 | An explicit character budget for per-message recall (`recalled`) | Same reason | ≤ 3,000 (the existing constant). Total 8,200. |
+| M3 | Deterministic output for the same view, message and `revision`: stable order, no wall-clock text | S0 evals compare runs | — |
+| M4 | Bounded latency through `deadlineMs`, degrading to empty recall plus a bounded logged hop (leg and code only), never a failed turn | Selection runs before the first model call | Lexical path p95 ≤ 250 ms (`deadlineMs` 250). The semantic leg (one embed call, 1.5 s, fail-open) only while `MEMORY_SEMANTIC_RECALL` is on, which staging has off, and only after an S0 run shows it helps. |
 | M5 | One interface for every surface (app, iMessage, Telegram, WhatsApp) and for jobs. The compaction flush keeps `SpanMemory` (`compaction.ts:45-50`). | S4 extends compaction beyond the app | — |
 | M6 | Output stays `owner_store` parts that pass `applyForgetBarrier`. No numeric health. | Forget barrier and ADR-0081 | — |
 | M7 | Bounded metrics: characters emitted per block, and whether the budget was hit (yes/no). No content, no IDs as labels. | Attribute per-turn input cost | — |
@@ -173,7 +174,14 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 - Mark up to 5 cases with S0's `live_subset: true` so they run in the nightly live-judged subset.
 - Raise `min_scenarios` (`evals/nightly/gate.ts:28-29`) in the same PR.
 
-Both points went to the memory-redesign session as messages (the second one corrects the placement in the first). Delivery was queued and is not confirmed read, so this section is the record.
+**Agreed terms.** memory-redesign proposed the interface below, and the harness confirmed it on 30 Oct. Its doc (`docs/proposals/WALDO_MEMORY_REDESIGN_2026-10-30.md`) owns the detail:
+
+- **Call:** `selectMemory({ view, text, previous?, turn, room, deadlineMs }) -> { core, recalled, shown, failed, revision }`.
+  - `view` is the store the caller already filtered: barrier, outside view or owner-only. Selection never widens it.
+  - `shown` carries ids only, for traces.
+- **Placement:** memory stays in the per-message suffix. No harness slice moves it.
+- **`revision`:** used for the "core changed vs the previous turn" metric and for freezing within the turn. It is not used for the cross-turn cache.
+- **Scenarios:** memory scenarios m07–m11 are added in the `state-memory-scenarios.ts` shape.
 
 ## S0: eval parity (do first)
 
