@@ -141,11 +141,11 @@ the tool contract in `packages/contracts`.
 - **B is ready for it:** semantic matches join recall as candidates through `ClaimStore.recall`'s existing `near` input
   (`claims.ts:461`), unchanged.
 
-### 1.6 The memory-selection interface [proposed]
+### 1.6 The memory-selection interface [proposed; terms agreed with harness-redesign]
 
-This doc owns the interface. The harness redesign consumes it. The terms below were sent to the harness-redesign session
-on 30 Oct and are **unconfirmed**. They stay open here. The gate reconciles them with the harness design doc, and S4 does
-not start until both docs agree.
+This doc owns the interface; the harness redesign consumes it. The harness-redesign session confirmed the shape and the
+terms below on 30 Oct. Its design doc records them in `WALDO_HARNESS_REDESIGN_2026-10-30.md` §Seam (PR
+waldoco/waldo-backend#1692). The gate checks that the two docs still agree before S4 starts.
 
 ```ts
 selectMemory(input: {
@@ -153,39 +153,54 @@ selectMemory(input: {
   text: string;                // the owner's message, or the machine turn's prompt
   previous?: string;           // the previous owner message, joined when text is short (today's RECALL_MIN_TERMS rule)
   turn: 'owner' | 'machine' | 'outside';  // episodes join only 'owner' (today's rule); 'outside' implies view = outsideView
-  room: number;                // characters the harness grants memory this turn
-  deadlineMs: number;          // wall-clock cap for the optional semantic leg; the lexical path is synchronous
+  room: { core: number; recalled: number };  // hard character caps passed by the harness (defaults 5,200 and 3,000)
+  deadlineMs: number;          // 250 with the lexical path only; 1,500 only while MEMORY_SEMANTIC_RECALL is on
   episodes?: RecallEpisodes;   // the owner turn's search_episodes adapter, as today
 }): Promise<{
-  core: string;                // pins + not-yet-reviewed tail + area counts + constellation; stable while `revision` is unchanged
+  core: string;                // pins + not-yet-reviewed tail + area counts + constellation
   recalled: string;            // per-message candidates: full lines, then stubs
   shown: { claims: number[]; nodes: number[] };  // ids only, for the turn trace and the S0 receipt; never text
   failed: ('claims' | 'episodes' | 'semantic')[];  // fail-open legs, as today
-  revision: number;            // the owner's memory revision (§4); a cache and freeze key for core
+  revision: number;            // the owner's memory revision (§4)
 }>
 ```
 
-**Contract terms**
-- **Budget.** `core` is at most min(`room`, 4,000 + 1,200) characters. `recalled` is at most min(`room` − `core`,
-  3,000). These are today's numbers. The harness may lower `room`; selection never exceeds it.
-- **Ranking.** `core` follows the model's pin order, then the tail's arrival order. `recalled` follows retrieval rank (bm25,
-  or RRF once vectors are on). No code-scored "importance", no keyword rules, no area weighting.
-- **Latency.** The lexical path is synchronous SQLite: milliseconds [inference; measure in S4]. The semantic leg, when on,
-  is one embedding call capped at `deadlineMs` (1.5 s today) and fails open.
-- **Placement.** Both strings are data in the current message, as today (`turn-prompt.ts:60`), not system text. Per-turn
-  variation therefore costs no cross-turn cache. Within a turn the harness freezes them, as `reuseSuffix` does today.
-- **Trust.** Every line keeps its `c<id>` / `n<id>` tag and its origin label, so the model can correct what it reads with
+**Contract terms (agreed)**
+- **Budget.**
+  - `core` is at most `room.core` and `recalled` at most `room.recalled`. These are hard caps.
+  - The defaults are 5,200 (today's 4,000 for the two pinned blocks plus 1,200 for the constellation) and 3,000 (today's
+    `RECALL_MAX_CHARS`), so 8,200 characters in all.
+  - The harness passes them in. They are never derived from leftover system-prompt room. Today the pinned block's room is
+    `systemRoom`, the system prompt's limit minus everything else (`owner-turn.ts:693-694`), which in practice is
+    unbounded [verified]. That is what this replaces.
+- **Determinism.** The same `view`, `text` and `revision` give byte-identical `core` and `recalled`: stable order, no
+  wall-clock text. This keeps S0 runs comparable.
+- **Ranking.**
+  - `core` follows the model's pin order, then the tail's arrival order.
+  - `recalled` follows retrieval rank: bm25 today, or RRF fusion once vectors are on.
+  - There is no code-scored "importance", no keyword rule and no area weighting.
+- **Latency.**
+  - With the lexical path only: p95 ≤ 250 ms on the DO before the first model call (`deadlineMs = 250`).
+  - The semantic leg runs only while `MEMORY_SEMANTIC_RECALL` is on. It is one embedding call with `deadlineMs = 1,500`.
+  - A failed or late leg gives an empty `recalled` and a bounded logged hop (leg name and code only), never a failed turn.
+- **Placement.** Both strings stay data in the current message (`turn-prompt.ts:60-66`), which `owner-turn.ts` appends as
+  the frozen per-turn suffix. History drops that suffix on the next turn, so cross-turn byte stability does not matter for
+  caching. What matters is size: the whole block bills once per turn as uncached input. Within a turn the suffix is frozen,
+  as `reuseSuffix` does today.
+- **Same seam everywhere.** App, iMessage, Telegram, WhatsApp and jobs call it the same way. The compaction flush keeps its
+  own path.
+- **Forget and health.** Both outputs still cross `applyForgetBarrier` as `owner_store` parts. Neither carries a numeric
+  health value.
+- **Metrics.** These are bounded and carry no text:
+  - characters per block;
+  - whether a budget was hit (yes or no);
+  - whether `core` changed from the previous turn (yes or no, from `revision`).
+- **Trust.** Every line keeps its `c<id>` or `n<id>` tag and its origin label, so the model can correct what it reads with
   `remember(replaces_id)`.
-
-**Asked of the harness session (open):**
-1. the per-turn memory budget;
-2. the p95 allowance before the first model call;
-3. whether memory stays in the per-message suffix;
-4. the slice-0 eval format.
 
 ### 1.7 Evals that show whether relevance beats recency (S0)
 
-The new scenarios join `evals/nightly/state-memory-scenarios.ts` and the harness's slice-0 eval-parity suite. Each runs in
+The new scenarios join `evals/nightly/state-memory-scenarios.ts`, spread into `evals/nightly/catalogue.ts:14`, with `min_scenarios` in `gate.ts` raised in the same PR. Once the harness's slice 0 (waldoco/waldo-backend#1684) lands, at most five of them carry `live_subset: true` (proposed: m08, m09, m10, m12, m13). Each runs in
 three modes:
 - **recency**: today's code;
 - **B**: the selection above;
@@ -467,7 +482,7 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 
 | Slice | What | Files | Single writer | Tests (adversarial included) | Migration / ADR / contract |
 |---|---|---|---|---|---|
-| **S0** (waldoco/waldo-backend#1693) | Relevance evals m07–m13 and the `shown`-ids receipt | `evals/nightly/state-memory-scenarios.ts`, `evals/nightly/receipts.ts`, `test/nightly-eval-state-memory.test.ts` (one failing scripted trial per receipt), `docs/evals/STATE_AND_MEMORY_EVALS.md` | none (eval) | receipts can fail; m12 held and forgotten; m13 outside job and health | none |
+| **S0** (waldoco/waldo-backend#1693) | Relevance evals m07–m13 and the `shown`-ids receipt | `evals/nightly/state-memory-scenarios.ts`, `evals/nightly/catalogue.ts`, `evals/nightly/gate.ts` (`min_scenarios`), `evals/nightly/receipts.ts`, `test/nightly-eval-state-memory.test.ts` (one failing scripted trial per receipt), `docs/evals/STATE_AND_MEMORY_EVALS.md` | none (eval) | receipts can fail; m12 held and forgotten; m13 outside job and health | none |
 | **S1** (waldoco/waldo-backend#1694) | Node confirmation by statement claim (§2) | `onboarding/welcome.ts` (`confirmWelcomeNode`, `correctWelcomeNode`), `memory/node-sources.ts`, `memory/claims.ts` (`constellationLines`), `channels/dashboard-memory-actions.ts`, `channels/memory-graph.ts`; docs: D5-b and the welcome note | `ClaimStore` in the owner DO | per-support `spot.confirm` keeps the node out (red at base); `node.confirm` grounds no mail support; a nightly label rewrite drops `confirmed`; owner-only nodes unchanged; forget of the statement removes the node; an outside-content job never gets a health node's `node_statement` by recall or `read_memory({ ids })`; a statement is never promotion evidence; the O7 backfill matches only `node.confirm` markers; owner scoping (another DO's ids refused) | none; ask the gate whether the `confirmation` doc-comment needs a controls revision |
 | **S2** (waldoco/waldo-backend#1695) | Incomplete nodes reachable (§3) | `channels/memory-graph.ts`, `channels/dashboard-memory-actions.ts`, `packages/dashboard-app` (console render) | `ClaimStore` (no new writes) | superseded and dismissed supports surface; purging, forgotten and held still dropped; no `node.confirm` offered; the turn block still excludes them; console forget removes and barriers | none (`incomplete` is already in app.v1) |
 | **S3** (waldoco/waldo-backend#1696) | `memory_revision` (§4 A) | `memory/claims.ts` (triggers, `revision()`), `channels/app-controls.ts` and the day projection, `packages/contracts/src/app/controls.ts` | the triggers, inside each writer's own transaction | each writer bumps; `seen` does not; old revisions never get the field; owner scoping | DO table plus triggers; **controls revision requested from the gate** |
@@ -492,10 +507,10 @@ and ADR-0081: no raw health values in DO memory, transcripts or traces. Forget s
   - #1587's design note at `070eea7e`;
   - `docs/evals/STATE_AND_MEMORY_EVALS.md`, `M0_BASELINE_2026-10-20.md`, `LIVE_BASELINE_RUNBOOK.md`;
   - the orchestrator's `APP_MEMORY_SYNC_BRIEF_2026-10-30.md` and `WALKTHROUGH_E1_2026-10-28.md`.
+- **Observed (added):** the harness-redesign session confirmed the interface terms in §1.6 (its PR waldoco/waldo-backend#1692).
 - **Inference:** the latency of the lexical path; that the nightly exposes a usable last-run mark; that no ADR is needed
   for S1.
 - **Unverified:**
-  - the harness session's answer on the interface terms;
   - whether the live privacy notice already names embeddings;
   - Workers AI's current training terms;
   - any live memory eval score (none exists).
