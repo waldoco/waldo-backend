@@ -93,10 +93,10 @@ describe('whatsapp locations and contacts', () => {
 });
 
 describe('whatsapp types Waldo cannot open', () => {
-  it('a video, sticker or unknown type gets the honest unsupported reply instead of silence', async () => {
+  it('a video, an animated sticker or an unknown type gets the honest unsupported reply instead of silence', async () => {
     const { accepted, unsupported } = await poll([
       { id: 'wamid.v1', from: OWNER, type: 'video', video: { id: 'media-v1' } },
-      { id: 'wamid.s1', from: OWNER, type: 'sticker', sticker: { id: 'media-s1' } },
+      { id: 'wamid.s1', from: OWNER, type: 'sticker', sticker: { id: 'media-s1', animated: true } },
       { id: 'wamid.u1', from: OWNER, type: 'unsupported' },
     ]);
     expect(accepted).toEqual([]);
