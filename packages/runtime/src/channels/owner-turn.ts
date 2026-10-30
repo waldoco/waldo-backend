@@ -104,7 +104,8 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; taken
 // once that reply is saved.
-// skills: one book that serves every turn this responder runs, for a host that admits no turn of its own (the eval world).
+// skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
+// capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
 export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'> }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
