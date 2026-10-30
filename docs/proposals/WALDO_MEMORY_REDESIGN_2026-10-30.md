@@ -44,10 +44,10 @@ Each row has a recommendation that follows the 30 Oct direction. **Approved** ro
 | **O5** | **Seven life areas**, shared by notes and backlog items: `body`, `mind`, `home`, `work`, `people`, `goals`, `money`, plus unsorted. They replace #1587's work, personal and health. | **Yes** (§5.3). Each area maps to clusters of help in the research. |
 | O6 | An area is a label Waldo sets and you can change, not a fact awaiting your yes. | **Approved** (§5) |
 | O7 | Patterns confirmed before the O3 fix with the pattern's own Confirm stay confirmed. Those confirmed only note by note go back to Waldo's read. | **Approved** (§2.4) |
-| **O8** | **Real-time memory.** Up to 6 daytime consolidation passes a day, after mail, calendar or chat activity, on top of the nightly pass. Each pass costs one aux-model call and is counted in the ledger. | **Yes** (§6.2) |
-| **O9** | **Mail and calendar into memory during the day.** Turn on the source pass (`MEMORY_NIGHTLY_SOURCE_UPDATES`) for the cohort, so the consolidator can learn from them. Everything it learns from outside content waits for your yes. | **Yes** (§6). A staging flag; the deploy is yours to name. |
+| **O8** | **Real-time memory.** Up to 6 daytime consolidation passes a day, after mail, calendar or chat activity, on top of the nightly pass. Each pass is one aux-model call (gpt-6-luna: $0.10 per million input tokens and $0.50 per million output, `llm/pricing.ts:10`). That is about $0.01 per owner-day at the cap [inference: 6 passes × 40,000 characters]. The cost is counted in the ledger, and passes are skipped at the spend cap. This is a new envelope on top of #1653's nightly bound. | **Yes** (§6.2) |
+| **O9** | **Mail and calendar into memory during the day.** Turn on the source pass (`MEMORY_NIGHTLY_SOURCE_UPDATES`) for the cohort, so the consolidator can learn from them. Everything it learns from outside content waits for your yes. **Gate: the privacy notice.** Notice v1 says notes from mail are made from metadata, "Never the body of an email", and only for the welcome picture. Learning from a mail's content needs one notice sentence first. | **Yes** (§6), after the notice sentence. A staging flag; the deploy is yours to name. |
 | **O10** | **Look-up findings offered in the Close card.** Up to 3 a day: "Waldo found these about you on the public web; keep or let go?" Unconfirmed findings still expire after 30 days. | **Yes** (§7.4) |
-| **O11** | **The `mind` area holds energy, focus, mood and stress as patterns in words.** It never holds a diagnosis. Like `body`, it never holds a reading. | **Yes** (§5.3) |
+| **O11** | **The `mind` area holds energy, focus, mood and stress as patterns in words.** It never holds a diagnosis or a reading. Mind and body notes are fenced from mail and web jobs. | **Yes** (§5.3, §5.5). This is not a new class of storage: memory already keeps "how they feel" from the owner's own words (`health-rules.ts:5`). Because GDPR Art-9 applies, a one-line ADR-0081 note in MEMORY_V2's ADR draft records the `mind` label and its fence for the gate. No ingress classifier for mood text exists today [verified: none found]; the fence is the kind and area check. |
 | — | **#1587's own questions.** Q1 cohort scope: (a) the backlog with chat and mail capture, app fields, console Backlog and Close carry-over; (b) Google Tasks link and completion; (c) calendar and meeting capture. Q2 a weekly review, yes or no. Q3 which capture sources need your confirmation. | #1587 recommends (a) and (b) now, no weekly review, and Q3 as proposed. Under this direction, (c) calendar capture feeds the same consolidator (§6), so it could join (a) if you want ahead-of-you help sooner. |
 
 ## Re-baseline at `7e6bce8a`
@@ -459,7 +459,7 @@ The set comes from the help taxonomy in [`docs/research/PERSONAL_ASSISTANT_HELP_
 | Area | Covers | Why it is its own area (research) | Health and safety rule |
 |---|---|---|---|
 | `body` | Sleep, movement, food, illness, appointments, cycles, recovery | Recovery and sleep are the body's side of allostatic load. Shift work and travel move the body clock. | ADR-0081 applies in full: patterns in words only, never a reading. A device reading lives in Supabase and is read live. |
-| `mind` | Energy, focus, mood, stress, cognitive load, rest | Working memory is small and interruptions cost time. Unfinished goals intrude until they are planned. Waldo protects focus as an EA protects time. | The same as `body`: patterns in words. It is not a clinical record. Whether something is clinical stays a model judgment (CLAUDE.md), with the existing clinical evals. |
+| `mind` | Energy, focus, mood, stress, cognitive load, rest | Working memory is small and interruptions cost time. Unfinished goals intrude until they are planned. Waldo protects focus as an EA protects time. | The same as `body`: patterns in words, filed as kind `health`, and fenced from outside-content turns (§5.5). It is not a clinical record, and never holds a diagnosis (`HEALTH_MEMORY_RULES`, `memory/health-rules.ts:8`). Whether something is clinical stays a model judgment (CLAUDE.md). |
 | `home` | Daily life, household, errands, logistics, travel, admin | The EA's travel and logistics tasks. The parent's school and daycare windows. | — |
 | `work` | Job, meetings, projects, colleagues as work context | The EA's core tasks: calendar, inbox, briefing, follow-through | — |
 | `people` | Family, friends, relationships, birthdays, what each person cares about | Relatedness (self-determination theory). The EA's relationship-management tasks. | — |
@@ -492,13 +492,19 @@ area records where it *mainly* belongs, and the weave's edges carry the rest.
 - the weave (CROSS_DOMAIN D5), which now has named axes. Patterns that connect `body` to `work`, or `mind` to `people`, are the "connect the dots" the owner asked for.
 
 **Hard rules** [proposed]:
-- **`area` never drives a safety fence.** `outsideView`, the health filters, `statedReading` and taint stay on `kind`, `source_ref` and the numeric checks (`memory/outside-view.ts:10-11`, `claims.ts:1097`). A health claim the model files under `work` must still be kept out of an outside-content turn. S5 tests this.
+- **`area` can tighten a fence, never loosen one.**
+  - Today `outsideSafe` fences on three things: kind `health`, a numeric health value, and a `welcome:` health ref (`memory/outside-view.ts:10-11`). They stay.
+  - S5 adds one more exclusion: area `body` or `mind`. A model-set label can therefore only make an outside-content turn see *less*.
+  - A body or mind pattern the model mislabels `work` still falls back to the kind check. Its writers are told to file energy, mood, stress, focus and sleep patterns as kind `health`, the same set `HEALTH_NOTES_OFF` already names (`claims.ts:1290`).
+  - **Residual risk:** a mood pattern filed as kind `observation` **and** labelled outside `body`/`mind` reaches an outside-content turn. S5 measures this with an eval case; it is not assumed away.
 - **No keyword rules pick an area.** The model sets it and the owner corrects it (O6).
 - **Inferred items stay candidates.** An inferred claim stays `inferred` until the owner confirms it, and an inferred loop is a `candidate` (#1587 §5). The area is a label on either. It changes neither one's confirmation state.
 - **Forget** redacts claim text, as today. `area` is an enum and carries no free text.
 
 **Falsifiers:**
-- a `body` or `mind` claim labelled `work` reaches an outside-content turn;
+- a kind-`health` claim, in any area, reaches an outside-content turn;
+- a claim in area `body` or `mind`, of any kind, reaches an outside-content turn;
+- the S5 eval shows the model filing mood or stress patterns as `observation` with a non-health area more than rarely (the residual risk above) [threshold set from the first run];
 - the owner reports a wrong area more than about one time in five over a week [proposed threshold];
 - area grouping changes which loops become candidates;
 - the model files under `mind` something that reads as a diagnosis. The clinical evals catch that.
@@ -547,7 +553,7 @@ There are three layers. Each has one owner and one writer.
   - episodes for chat the model did not save.
 - **Model and writes.** It uses the aux model and writes through `ClaimStore` only. Owner-grounding stays with the admission gate (`ground()`), never with the consolidator.
 - **No text in the event.** The consolidator reads content itself. Nothing is copied into a new store.
-- **Spend.** At most 6 aux calls a day, plus today's nightly calls. Each pass is bounded the way the nightly source pass already is (at most 40,000 input characters a call; the gate's conditions on #1653). Each pass records its cost in the ledger.
+- **Spend.** At most 6 aux calls a day, plus today's nightly calls. Each pass is bounded the way the nightly source pass already is (at most 40,000 input characters a call; the gate's conditions on #1653). Each pass logs through `llm_*`, so it counts in the ledger and the spend ceiling, and passes are skipped once the owner is at the cap. About $0.01 per owner-day at the cap [inference, O8].
 - **Promotion stays nightly** [proposed]. A pattern needs owner claims on two different days (`claims.ts:1503`), so a daytime promotion pass could rarely admit anything new. The weave stays nightly too.
 
 **Decay** [proposed]. No fixed formula decides what fades. That would be a code rule making a judgment call (CLAUDE.md).
@@ -561,7 +567,10 @@ There are three layers. Each has one owner and one writer.
 
 ### 6.3 The event seam with harness-redesign
 
-Proposed to the harness session on 30 Oct. Its answer is recorded here when it arrives, and the gate reconciles the two docs.
+**Agreed** with the harness session on 30 Oct (about 07:10Z). It is recorded in `WALDO_HARNESS_REDESIGN_2026-10-30.md` §Seam and §F (#1692 at `fc36c7fc`). The harness emits the event in its slice S8 (#1701).
+- The day's working state is a **read view over existing tables**. There is no new day-state store.
+- The event is a **wake hint, not a record**. Each consumer reads by its own watermark, so a lost hint costs latency, not data.
+- It has two consumers: the harness's day-update judge, and this consolidator.
 
 ```ts
 // Emitted by the harness in the owner DO after an ingestion commits; never inside the SQLite transaction.
@@ -601,7 +610,7 @@ observed(event: {
 **Privacy and authority.**
 - The consolidator moves the existing nightly source pass to daytime. It inherits every fence that pass has: `outsideView`, untrusted writes, no health readings, forget barriers.
 - It needs `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O9).
-- The privacy notice already covers mail and calendar reads for the owner's day [inference: the notice v1 lists what Waldo reads; check its wording when O9 is decided].
+- **The privacy notice does not cover it yet** [verified, 30 Oct]. Notice v1 §4 says notes from mail are made for the welcome picture from metadata, "Never the body of an email", and calendar notes exclude descriptions and attendees. The consolidator reading content therefore needs one notice sentence first (O9). Google's Limited Use rules allow it as a user-facing feature [inference: confirm against Google's policy text in the notice PR].
 
 **ADR, migration, rollback:**
 - A KV watermark and no new table. The source pass's design and ADR scope stay as they are (#1653).
@@ -651,7 +660,8 @@ How kept findings appear in prompts:
 2. **Offer, don't wait (O10).**
    - Today an unconfirmed finding waits in the app's *What Waldo knows* until the owner happens to look, or until it expires.
    - Proposed: the Close card offers up to 3 unconfirmed findings a day ("Waldo found these about you on the public web; keep or let go?"). This reuses #1587's Close carry-over and its "up to 3 candidates" rule. There is no new push.
-   - The owner answers in words. The model calls the existing keep, correct or forget path only in an owner turn that has not read outside content.
+   - The owner answers in words. **No model tool can keep a finding today** [verified]: `tools/records.ts:172-173` has only `record_owner_finding` and `list_owner_findings`, and keep and correct are app actions (`findingStore.decide`, `findings.ts:121`).
+   - S8 adds one tool, `decide_owner_finding({ finding_id, action: keep | correct | forget, text? })`. It is `ownerTurnOnly`, refused in a turn that read outside content, and calls the same `decide` and `forget`. This is an additive tool-schema contract (a valid + invalid pair).
 3. **Connecting the dots.**
    - Kept findings are owner claims, so the nightly promotion can already use them as evidence for nodes.
    - Unconfirmed findings never can: they are not claims, and the eligible set requires owner origin (`claims.ts:1541-1543`). This is the boundary that keeps a stranger's page out of the owner's patterns, and it stays.
@@ -665,7 +675,7 @@ How kept findings appear in prompts:
 
 **Migration, contract and rollback:**
 - No migration.
-- The Close card offer is a prompt and ledger change inside #1587's carry-over (slice S8).
+- The Close card offer is a prompt and ledger change inside #1587's carry-over, plus the new `decide_owner_finding` tool (slice S8). The tool is an additive tool-schema contract.
 - `area` on kept claims comes with S5.
 - Rollback: a code revert.
 
@@ -697,15 +707,15 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | **S2** (waldoco/waldo-backend#1695) | Incomplete nodes reachable (§3) | `channels/memory-graph.ts`, `channels/dashboard-memory-actions.ts`, `packages/dashboard-app` (console render) | `ClaimStore` (no new writes) | superseded and dismissed supports surface; purging, forgotten and held still dropped; no `node.confirm` offered; the turn block still excludes them; console forget removes and barriers | none (`incomplete` is already in app.v1) |
 | **S3** (waldoco/waldo-backend#1696) | `memory_revision` (§4 A) | `memory/claims.ts` (triggers, `revision()`), `channels/app-controls.ts` and the day projection, `packages/contracts/src/app/controls.ts` | the triggers, inside each writer's own transaction | each writer bumps; `seen` does not; old revisions never get the field; owner scoping | DO table plus triggers; **controls revision requested from the gate** |
 | **S4** (waldoco/waldo-backend#1697) | `selectMemory` and option B (§1), **behind a flag; S0 decides whether it goes on** | new `memory/select-memory.ts`, `memory/claims.ts` (`turnMemoryPrompt` delegates), `memory/turn-recall.ts`, `channels/owner-turn.ts` (the two call sites, `:386` and `:613`), `tools/live/memory.ts` (`ids`), `packages/contracts` (the `read_memory` schema) | none (read path) | S0 green; m03 and m04 unchanged; held, forgotten and untrusted ids refused by `read_memory({ ids })`; outside turn gets no health by id or stub; budget never exceeds `room`; a fresh remember is on the next turn | additive tool-schema field (valid + invalid pair); no ADR |
-| **S5** (waldoco/waldo-backend#1698) | `LIFE_AREAS` and claim `area` (§5). The constant can land at once; #1587's loops adopt it when they are built. | `packages/contracts` (`LIFE_AREAS`), `memory/claims.ts` (column, claim-ops schema), `tools/live/memory.ts` (`remember.area`, `read_memory.area`), #1587's ADR draft | `ClaimStore` | a `body` or `mind` claim labelled `work` stays out of outside turns; forget; the owner's change wins over the nightly; no area without a claim | DO column; tool-schema fields; app.v1 area later (gate) |
+| **S5** (waldoco/waldo-backend#1698) | `LIFE_AREAS` and claim `area` (§5). The constant can land at once; #1587's loops adopt it when they are built. | `packages/contracts` (`LIFE_AREAS`), `memory/claims.ts` (column, claim-ops schema), `tools/live/memory.ts` (`remember.area`, `read_memory.area`), #1587's ADR draft | `ClaimStore` | a kind-`health` claim in any area, and any claim in area `body` or `mind`, stays out of outside turns; an eval case for the residual risk (a mood pattern filed as `observation` under `work`); forget; the owner's change wins over the nightly; no area without a claim | DO column; tool-schema fields; app.v1 area later (gate) |
 | **S6** (waldoco/waldo-backend#1699) | Semantic recall on for the staging cohort (§1.5, O1) | `llm/pricing.ts` and the cost ledger (embedding price, spend ceiling); a short ADR for `claim_vectors` in waldo-brain; one privacy-notice sentence (waldo-landing, with the owner's yes); then `MEMORY_SEMANTIC_RECALL = "1"` in `env.staging.vars` in a deploy the owner names | `semanticRecall.sync()` (unchanged) | a priced embedding call reaches the ledger; the spend ceiling counts it; m08 with the leg on and off (measured, not gating); health redaction, secrets and forget triggers (already tested) | ADR; no migration (`claim_vectors` is a DO table created by the flag) |
-| **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's event seam (§6.3) |
-| **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes, at most 3 a day (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), `onboarding/findings.ts` (read only), the existing keep, correct and forget paths | the existing finding and claim writers | at most 3 offered; never an expired finding; keep only in an owner turn with no outside content; the offer's text is fenced as external data | none; it rides on #1587's carry-over |
+| **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's `observed` emit (#1701) |
+| **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes, at most 3 a day (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 offered; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
 
 **Order:**
 - S0, S1, S2, S3, S5 (the constant) and S6 can start in parallel. S1 and S2 share `dashboard-memory-actions.ts`, so they go one after the other.
 - S4 ships with S0 measuring it.
-- S7 waits on the harness's event seam.
+- S7 waits on the harness's `observed` emit (#1701).
 - S8 waits on #1587's carry-over.
 
 **m14** (real time) joins S0: a mail at 09:00, then a question at 15:00 whose answer needs it, with the consolidator on. Outside content reaches the turn live, as data. The consolidator makes it a candidate the owner can confirm; it does not put it in `core`.
@@ -738,5 +748,4 @@ and ADR-0081: no raw health values in DO memory, transcripts or traces. Forget s
   - the embedding cost per owner.
 - **Unverified:**
   - any live memory eval score (none exists);
-  - the harness's answer on the event seam (§6.3);
   - the staging count of nodes affected by O7.
