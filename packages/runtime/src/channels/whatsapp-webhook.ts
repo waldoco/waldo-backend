@@ -50,7 +50,7 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   // pending: the link sent earlier still works, so the sender is not sent a second one.
   if (opened === 'linked' || opened === 'pending') return null;
   const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
-  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from the Waldo app or your console (${origin}${CONSOLE_PATH}#/connections). It gives you a code that opens this chat ready to send.`;
+  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
 };
 
 export const WHATSAPP_WEBHOOK_PATH = '/whatsapp/webhook';
@@ -232,7 +232,7 @@ export const handleWhatsAppWebhook = async (
       if (textFirst && !(await textFirst.throttle(`walinkcode.${await senderKeyOf(sender)}`, LINK_CODE_TRIES, LINK_CODE_WINDOW_SECONDS))) return;
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
-      await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from the Waldo app or your console.');
+      await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error, debug) }))));
   }
   for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));

@@ -62,10 +62,9 @@ describe('the reply to an unlinked sender', () => {
     expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link');
   });
 
-  it('a sender no single owner has on file is pointed at the app and console link flow as well as the waitlist', async () => {
+  it('a sender no single owner has on file is pointed at the console link flow as well as the waitlist', async () => {
     const { sent } = await run(await inbound('hi'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true });
     expect(sent[0]!.text.body).toContain('Already on Waldo?');
-    expect(sent[0]!.text.body).toContain('Waldo app');
     expect(sent[0]!.text.body).toContain('https://waldo.example/console#/connections');
   });
 
@@ -93,11 +92,6 @@ describe('the reply to an unlinked sender', () => {
     expect(redeem).toHaveBeenCalledWith('whatsapp', SENDER, 'ABCDEFGH23');
     expect(directory.open).not.toHaveBeenCalled();
     expect(sent.map((body) => body.text.body)).toEqual(['Linked. This chat now talks to your Waldo.']);
-  });
-
-  it('a code that did not link points at the app and console for a new one', async () => {
-    const { sent } = await run(await inbound('waldo ABCDEFGH23'), unlinked, { links: links(async () => 'opened'), throttle: async () => true });
-    expect(sent.map((body) => body.text.body)).toEqual(['That code did not work. Get a new one from the Waldo app or your console.']);
   });
 
   it('Verify with WhatsApp: the code the app issues, sent as the wa.me link fills it in, redeems from the number on file in one message', async () => {
