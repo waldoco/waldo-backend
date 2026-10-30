@@ -35,6 +35,7 @@ None of these is decided here. Each one is needed before the slice it names.
 | **S4** | Compaction beyond the app (iMessage first) | No trace yet. The mechanism is verified: a plain window that slides once full re-bills the history every turn. | S0 + trace threshold + decision 7 |
 | **S5** | In-turn tool results | No change. Modelled only; needs write-billing data. | ≥7 days of write data + instrumentation |
 | **S6** | Router (#1639) | No per-turn cache data exists yet. | S0 + S1 + decision 5 |
+| **S7** | Diagnose prompt-cache misses | The first round of each Terra chat turn is uncached (about 36k tokens); Luna jobs never cache. Langfuse metadata, read by the orchestrator. | None for the measurement; P0 for any fix |
 
 Dropped from the 776489078 audit after re-checking at `7e6bce8a`:
 
@@ -539,10 +540,111 @@ Run `scripts/cost-report.mjs --turns` (from #1639) over at least 7 days of stagi
 | **Migration / ADR** | none / **yes**: a model-routing ADR or amendment, because it adds a tier and a provider egress |
 | **Flag** | yes, default off |
 
+## S7: prompt-cache misses (first round of each chat turn; jobs)
+
+### Cited failure
+
+The orchestrator read about 48 staging `llm_reply` observations in Langfuse on releases `ea00689d3`, `2c96be452` and `eafe888`. It read metadata only, no content, and relayed the results on 30 Oct.
+
+- **Terra chat:**
+  - The first round of each turn is uncached: about 35–37k input tokens, `cached_share` 0.
+  - Later rounds in the same turn hit 85–99.7%.
+  - One later round hit only about 35–37%.
+- **Luna jobs (Brief and card jobs):** `input_cached_tokens` is 0 on every call, at inputs from about 10k to 114k tokens.
+- **No observation yet on `7e6bce8a`.** The newest is at 02:30Z, before the 05:29Z deploy, so P0 is still [blocked].
+
+I haven't seen these traces myself. They are a teammate's reading, cited as such.
+
+### Current state [verified]
+
+- The request carries `prompt_cache_key: waldo:<ownerId>` (`src/llm/openai.ts:87`; `owner-turn.ts:188`, `:300`). It sets no `prompt_cache_retention`.
+- Owner turns and machine jobs share one `runToolLoop` call with `stableMenu: true` (`owner-turn.ts:533-536`). So a job's tool list is stable across its own rounds too.
+- The 26 Oct probe found tools and instructions byte-identical across two consecutive app turns. That was in a test, not on staging (`docs/planning/agnostic-tool-loading.md:91-97`).
+- No per-call digest of the tools bytes or the instructions bytes exists, so a trace can't show which part of the prefix changed.
+
+### Hypotheses [inference]
+
+**First round of a chat turn uncached, even the stable instructions and tools:**
+
+- **H1, retention.** The gap since the previous call on that prefix exceeded the cache lifetime.
+  - Falsifier: a first round at `cached_share` 0 that comes less than 5 minutes after the previous turn.
+- **H2, prefix instability.** Something per turn sits inside the instructions or the tools array: the admitted tool set, the catalogue, standing orders, the skill catalogue, the surface text.
+  - Falsifier: equal instructions and tools digests across consecutive turns while the miss persists.
+- **H3, model or route change** (fallback or the spend clamp).
+  - Falsifier: the same model on both turns.
+
+**Mid-turn round at about 35%:**
+
+- **H4.** The frozen suffix was rebuilt mid-turn, which it does on a steer, a landed forget, or a health change (`owner-turn.ts:525-528`).
+  - Falsifier: no steer, forget or health change in that turn.
+
+**Luna jobs at 0:**
+
+- **H5.** Most jobs are one model call, hours apart, so nothing can be reused by construction.
+  - Falsifier: a multi-round luna job whose round 2+ is still at 0.
+- **H6.** Caching on luna is not happening on this route at all.
+  - Falsifier: any luna call ever showing cached tokens.
+
+### Weighing it
+
+Cost per miss, using `src/llm/pricing.ts:10-12` [inference]:
+
+| Miss | Cost |
+|---|---|
+| Terra first round, about 36k tokens | about $0.036 uncached, or about $0.045 if billed as a write |
+| Luna call, 114k tokens | about $0.011 |
+
+Per call, the chat first round is the bigger lever. Which matters more overall depends on how many calls each path makes. S1's ledger, with the write column, gives those counts.
+
+### Options
+
+- **A. Measure first.**
+  - Log a short digest of the tools bytes and of the instructions bytes on each `llm_*` hop.
+  - Log the gap since the owner's previous model call on the same model.
+  - Digests are a trace field, never a metric label (security checklist).
+  - A read-only analysis then sorts each miss into H1–H6.
+- **B. Set `prompt_cache_retention`** to the long tier on chat. Terra's write rate goes from $1.25 to $2.50 per 1M.
+  - It only helps if H1 holds.
+  - Verify the parameter against the pinned SDK and the current docs first.
+- **C. Fix whatever H2 finds varies.** Move per-turn text behind the stable head. This may need a `VOICE_VERSION` decision.
+- **D. For jobs:** if H5 holds, nothing to fix. A one-call job has no reusable prefix. If H6 holds, it's a provider or route question.
+
+### Recommendation [proposed]
+
+- A now: it is small and decides B, C and D.
+- Then exactly one of B or C, depending on which hypothesis survives.
+- D: no work unless H6 is confirmed.
+
+### Threshold
+
+- **Act on B** if at least 50% of uncached first rounds fall after gaps longer than 30 minutes and the digests are stable.
+- **Act on C** if any consecutive-turn pair shows a changed instructions or tools digest without a change in tools admitted for the owner.
+
+Both numbers are provisional.
+
+### Metric and rollback
+
+- **Metric:**
+  - first-round `cached_share` per chat turn;
+  - luna `cached_share` on multi-round jobs;
+  - write tokens per turn (S1).
+- **Rollback:** A is log fields. B is one request parameter.
+
+### Build slice (A)
+
+| | |
+|---|---|
+| **Files** | `src/channels/owner-turn.ts` (log site), `src/llm/provider.ts` or `src/llm/openai.ts` (where the request bytes are final), `src/observability/otlp-turns.ts` (trace field), tests |
+| **Single writer** | the S7 owner. Serialize with S1 and S5, which touch the same `owner-turn.ts` log sites. |
+| **Tests** | the digest is stable for identical bytes and changes when one tools byte changes; it is not a metric label; no content enters the trace field; the gap is computed per model. Adversarial: an instructions block with owner text produces only a digest, never the text. |
+| **Migration / ADR** | none / none |
+| **Flag** | none |
+| **Precondition** | none for A. B and C need P0. |
+
 ## Order and dependencies
 
 1. **S0** first, then **S2** (independent and small).
-2. **S1** next. S1 and S5 both touch `owner-turn.ts` log sites, so serialize them.
+2. **S1** next. S1 and S5 both touch `owner-turn.ts` log sites, so serialize them. S7 (A) touches the same log sites, so it joins that queue. It goes ahead of S5, because it has cited evidence.
 3. **S3 (E)** needs S0's `find_tools` metric.
 4. **S4** needs S0, a trace query (decision 3) and decision 7.
 5. **S5** needs S1's write data.
@@ -565,3 +667,4 @@ One issue per slice, in `waldoco/waldo-backend`:
 | S4 compaction for iMessage | #1688 |
 | S5 tool-result instrumentation | #1689 |
 | S6 router on #1639 | #1690 |
+| S7 cache-miss diagnosis | #1700 |
