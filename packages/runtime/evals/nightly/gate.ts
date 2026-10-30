@@ -29,6 +29,10 @@ export const NIGHTLY_THRESHOLDS: Readonly<Record<'recorded' | 'live', GateThresh
   live: { min_scenarios: 103, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
 };
 
+// A subset run is held to the size of its own subset, not the catalogue's.
+export const thresholdsFor = (mode: 'recorded' | 'live', subsetScenarios?: number): GateThresholds =>
+  subsetScenarios === undefined ? NIGHTLY_THRESHOLDS[mode] : { ...NIGHTLY_THRESHOLDS[mode], min_scenarios: subsetScenarios };
+
 export const SCORECARD_MARKER = '<!-- waldo-eval-scorecard -->';
 
 const rate = (value: number) => String(Number(value.toFixed(3)));
@@ -74,6 +78,30 @@ const checkLines = (card: Scorecard): string[] => {
   return lines.length ? [...lines, ''] : [];
 };
 
+const usd = (value: number) => value.toFixed(4);
+// What each scenario cost and how the model reached its answer, per trial that ran: counts and dollars, never text. Empty when no
+// trial carried metrics (a card from before the meter, or one where every trial stopped early).
+const costLines = (card: Scorecard): string[] => {
+  const rows = card.scenarios.flatMap((row) => (row.metrics ? [{ id: row.id, ...row.metrics }] : []));
+  if (rows.length === 0) return [];
+  const per = (total: number, trials: number) => String(Number((total / trials).toFixed(1)));
+  const total = rows.reduce((sum, row) => sum + row.usd, 0);
+  const fallback = rows.reduce((sum, row) => sum + row.fallback_calls, 0);
+  const unpriced = rows.reduce((sum, row) => sum + row.unpriced_calls, 0);
+  return [
+    `Cost: $${usd(total)} over ${rows.length} scenarios${fallback ? `; ${fallback} calls were answered by the fallback model` : ''}${unpriced ? `; ${unpriced} calls had no price and are not in the total` : ''}.`,
+    '',
+    '<details><summary>Cost and rounds per trial</summary>',
+    '',
+    '| Scenario | Rounds | find_tools | Groups | use_tool | Peak result chars | Input | Cached | Cache write | Output | USD |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...rows.map((row) => `| ${row.id} | ${per(row.rounds, row.trials)} | ${per(row.find_tools, row.trials)} | ${per(row.groups_loaded, row.trials)} | ${per(row.use_tool, row.trials)} | ${row.peak_result_chars} | ${per(row.input_tokens, row.trials)} | ${per(row.cached_tokens, row.trials)} | ${per(row.cache_write_tokens, row.trials)} | ${per(row.output_tokens, row.trials)} | ${usd(row.usd / row.trials)} |`),
+    '',
+    '</details>',
+    '',
+  ];
+};
+
 export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'recorded' | 'live'): string => {
   const shown = (value: number | null) => (value === null ? '-' : rate(value));
   const lines = [
@@ -84,6 +112,7 @@ export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'reco
     ...gate.failures.map((failure) => `- ${failure}`),
     '',
     ...(mode === 'recorded' ? ['Recorded mode grades nothing: the model answers with fixed text, so this checks that every scenario still runs, not reply quality.', ''] : []),
+    ...(card.profile || card.subset ? [`${card.profile ? `Profile \`${card.profile}\`. ` : ''}${card.subset ? `Subset \`${card.subset}\`: ${card.scenarios.length} scenarios.` : ''}`.trim(), ''] : []),
     `Candidate \`${card.candidate_model}\`, judge \`${card.judge_model}\`, ${card.trials_per_scenario} trials per scenario. Calls: ${card.calls.candidate} candidate, ${card.calls.judge} judge, budget ${card.calls.budget}. Tokens: ${card.tokens.candidate} candidate, ${card.tokens.judge} judge.`,
     '',
     '| Scope | Scenarios | Graded | Pass rate | pass^k rate |',
@@ -92,6 +121,7 @@ export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'reco
       `| ${scope} | ${rates.scenarios} | ${rates.graded} | ${shown(rates.pass_rate)} | ${shown(rates.pass_k_rate)} |`),
     '',
     ...checkLines(card),
+    ...costLines(card),
     '<details><summary>Scenarios</summary>',
     '',
     '| Scenario | Pain | Status | Passed | Failed | Ungraded |',

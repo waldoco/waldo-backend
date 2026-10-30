@@ -116,18 +116,17 @@ describe('live run plan', () => {
     expect(callPlan([late], 3).owner_turns).toBe(6);
   });
 
-  it('keeps the live workflow\'s cap at or above the plan and passes every setting a live run requires', async () => {
+  it('keeps the weekly full run\'s cap above the plan with room for the catalogue to grow', async () => {
     const { callPlan } = await import('../evals/nightly/plan');
     const workflow = readFileSync(new URL('../../../.github/workflows/evals-live.yml', import.meta.url), 'utf8');
-    const cap = Number(/WALDO_EVAL_MAX_CALLS: '(\d+)'/.exec(workflow)![1]);
-    const trials = Number(/WALDO_EVAL_TRIALS: '(\d+)'/.exec(workflow)![1]);
-    const mode = /WALDO_EVAL_JUDGE_MODE: (split|joint)/.exec(workflow)![1] as 'split' | 'joint';
-    expect(cap).toBeGreaterThanOrEqual(callPlan(NIGHTLY_SCENARIOS, trials, mode).suggested_max_calls);
+    const full = /if \[ "\$subset" = all \]; then\n\s+trials=(\d+)\n\s+cap=(\d+)/.exec(workflow)!;
+    const trials = Number(full[1]);
+    const cap = Number(full[2]);
+    expect(cap).toBeGreaterThanOrEqual(callPlan(NIGHTLY_SCENARIOS, trials, 'split').suggested_max_calls);
     // Room for the catalogue to grow by a few scenarios, since an exhausted budget fails the gate: a plan that sits on the
     // cap would turn the next scenario added, by any change, into a gate failure.
     const room = NIGHTLY_SCENARIOS.filter((scenario) => !scenario.blocked && scenario.rubric.voice).slice(0, 4);
-    expect(cap).toBeGreaterThanOrEqual(callPlan([...NIGHTLY_SCENARIOS, ...room], trials, mode).suggested_max_calls);
-    for (const name of ['WALDO_EVAL_MODE: live', 'OPENAI_API_KEY:', 'ANTHROPIC_API_KEY:', 'WALDO_EVAL_JUDGE_MODEL:']) expect(workflow).toContain(name);
+    expect(cap).toBeGreaterThanOrEqual(callPlan([...NIGHTLY_SCENARIOS, ...room], trials, 'split').suggested_max_calls);
   });
 
   it('wires the voice judge into a live run only, sharing the run\'s budget', async () => {

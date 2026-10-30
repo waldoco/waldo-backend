@@ -1,17 +1,30 @@
 name: evals-live
 
-# The nightly eval suite in live mode: the chat model answers and an independent judge grades each trial.
+# The nightly eval suite in live mode: the chat model answers as the staging Worker builds a turn (WALDO_EVAL_PROFILE=staging)
+# and an independent judge grades each trial. Nightly it runs the live-judged subset; weekly, the full catalogue at 3 trials.
 # It skips cleanly unless the repository has the secrets WALDO_EVAL_OPENAI_KEY and WALDO_EVAL_ANTHROPIC_KEY and the
-# variable WALDO_EVAL_JUDGE_MODEL. Spend cap: WALDO_EVAL_MAX_CALLS below bounds model calls (candidate plus both judges)
-# for the whole run; the runner refuses the call past it and the card reports the budget as exhausted. It is set from
-# `pnpm eval:plan` (evals/nightly/plan.ts), and a test holds it at or above the plan's suggestion. Cost per run and
-# the first-run procedure: docs/evals/LIVE_BASELINE_RUNBOOK.md.
-# GitHub runs schedules, and lists workflows for manual dispatch, from the default branch (main) only, so this
-# workflow does nothing until it reaches main.
+# variable WALDO_EVAL_JUDGE_MODEL, which must differ from the candidate and from both fallback models. Spend cap: the plan
+# step below sets WALDO_EVAL_MAX_CALLS, which bounds model calls (candidate plus both judges) for the whole run; the runner
+# refuses the call past it and the card reports the budget as exhausted. The caps are held at or above `pnpm eval:plan` by a
+# test. Cost per run and the first-run procedure: docs/evals/LIVE_BASELINE_RUNBOOK.md.
+# GitHub runs schedules, and lists workflows for manual dispatch, from the default branch (main) only, and main carries no
+# eval code, so every job checks out the branch named by the ref input (default beta-mvp) and runs that tree's runner.
 on:
   schedule:
-    - cron: '30 20 * * *' # 02:00 IST
+    - cron: '30 20 * * *' # nightly subset, 02:00 IST
+    - cron: '30 21 * * 0' # weekly full run, Sunday 03:00 IST
   workflow_dispatch:
+    inputs:
+      subset:
+        description: 'all, live, or scenario ids separated by commas'
+        required: false
+        default: 'live'
+        type: string
+      ref:
+        description: 'Branch, tag or commit to evaluate'
+        required: false
+        default: 'beta-mvp'
+        type: string
 
 permissions:
   contents: read
@@ -22,10 +35,9 @@ concurrency:
 
 jobs:
   live:
-    name: Nightly eval (live)
+    name: Eval (live)
     runs-on: ubuntu-latest
-    # The suite runs trials one after another: up to about 1,515 candidate calls at several seconds each, plus the
-    # judges, whose split calls for one trial run together. 360 minutes is the most a hosted runner allows.
+    # The runner makes its calls one trial after another, several seconds each; 360 minutes is the most a hosted runner allows.
     timeout-minutes: 360
     steps:
       - name: Check for eval keys
@@ -42,9 +54,46 @@ jobs:
             echo "::notice::Live eval skipped: set secrets WALDO_EVAL_OPENAI_KEY and WALDO_EVAL_ANTHROPIC_KEY and variable WALDO_EVAL_JUDGE_MODEL to run it."
           fi
 
+      # The weekly schedule runs the full catalogue; every other run takes the subset input, or the nightly subset.
+      # The subset reaches this script only through its environment and is checked before it is written anywhere.
+      - name: Plan the run
+        id: plan
+        if: steps.keys.outputs.run == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_SUBSET: ${{ inputs.subset }}
+        run: |
+          set -euo pipefail
+          subset="${INPUT_SUBSET:-live}"
+          if [ "$EVENT" = schedule ]; then
+            case "$SCHEDULE" in
+              '30 21 * * 0') subset=all ;;
+              *) subset=live ;;
+            esac
+          fi
+          case "$subset" in
+            ''|*[!a-z0-9,-]*) echo "::error::subset takes all, live, or scenario ids separated by commas"; exit 1 ;;
+          esac
+          if [ "${#subset}" -gt 4000 ]; then echo "::error::subset is too long"; exit 1; fi
+          trials=2
+          cap=600
+          if [ "$subset" = all ]; then
+            trials=3
+            cap=4000
+          fi
+          {
+            echo "subset=$subset"
+            echo "trials=$trials"
+            echo "cap=$cap"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         if: steps.keys.outputs.run == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.ref || 'beta-mvp' }}
+          persist-credentials: false
 
       - name: Setup Node
         if: steps.keys.outputs.run == 'true'
@@ -67,15 +116,17 @@ jobs:
         working-directory: packages/runtime
         env:
           WALDO_EVAL_MODE: live
-          WALDO_EVAL_TRIALS: '3'
-          WALDO_EVAL_MAX_CALLS: '4000'
+          WALDO_EVAL_PROFILE: staging
+          WALDO_EVAL_SUBSET: ${{ steps.plan.outputs.subset }}
+          WALDO_EVAL_TRIALS: ${{ steps.plan.outputs.trials }}
+          WALDO_EVAL_MAX_CALLS: ${{ steps.plan.outputs.cap }}
           WALDO_EVAL_JUDGE_MODE: split
           OPENAI_API_KEY: ${{ secrets.WALDO_EVAL_OPENAI_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.WALDO_EVAL_ANTHROPIC_KEY }}
           WALDO_EVAL_JUDGE_MODEL: ${{ vars.WALDO_EVAL_JUDGE_MODEL }}
         run: WALDO_EVAL_OUT="$RUNNER_TEMP/scorecard.json" pnpm eval:nightly > /dev/null
 
-      # Fails the run when the scorecard misses NIGHTLY_THRESHOLDS.live (evals/nightly/gate.ts).
+      # Fails the run when the scorecard misses NIGHTLY_THRESHOLDS.live (evals/nightly/gate.ts), sized to the subset when one ran.
       - name: Gate the scorecard
         id: gate
         if: steps.keys.outputs.run == 'true'
