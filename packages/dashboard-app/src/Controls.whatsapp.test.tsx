@@ -20,11 +20,11 @@ const mount = async (value: ConnectionsRecord, onAction = vi.fn()) => {
 afterEach(() => vi.unstubAllGlobals());
 
 it('shows WhatsApp as linked, not linked, or unknown, and offers unlink only while linked', async () => {
-  for (const [channels, label, offered] of [
-    [[{ channel: 'whatsapp', state: 'linked', masked_label: 'Your WhatsApp' }], 'Linked', true],
-    [[{ channel: 'whatsapp', state: 'unlinked', masked_label: null }], 'Not linked', false],
-    [[{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }], 'Status unknown', false],
-    [undefined, 'Status unknown', false],
+  for (const [channels, label, offered, link] of [
+    [[{ channel: 'whatsapp', state: 'linked', masked_label: 'Your WhatsApp' }], 'Linked', true, 'Link a different number'],
+    [[{ channel: 'whatsapp', state: 'unlinked', masked_label: null }], 'Not linked', false, 'Link WhatsApp'],
+    [[{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }], 'Status unknown', false, 'Link WhatsApp'],
+    [undefined, 'Status unknown', false, 'Link WhatsApp'],
   ] as const) {
     const view = await mount(record(channels as ConnectionsRecord['data']['channels']));
     expect(view.row.querySelector('.access-label')?.textContent).toBe(label);
@@ -32,7 +32,10 @@ it('shows WhatsApp as linked, not linked, or unknown, and offers unlink only whi
     expect(view.row.classList.contains('broken')).toBe(label !== 'Linked');
     expect(view.row.querySelector('.access-label')!.classList.contains('reconnect')).toBe(label === 'Not linked');
     expect(!!view.unlink).toBe(offered);
-    expect(view.row.textContent).toContain('Get a WhatsApp link code');
+    const button = [...view.row.querySelectorAll('button')].find(b => b.textContent === link);
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+    expect(view.onAction).toHaveBeenCalledWith('whatsapp.link');
     await view.cleanup();
   }
 });

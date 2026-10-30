@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { encode } from 'uqr';
 import type { ActionReveal, ControlAction, ControlFields, DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
@@ -7,6 +8,19 @@ const REVEAL_LABEL: Record<ActionReveal['kind'], string> = { link_code: 'Text th
 // The value is shown once. If the clipboard is refused, the whole value is selected so one keystroke copies it.
 /** sms: link that opens Messages to `to` with the text filled in (the iPhone's one-tap send). */
 const smsLink = (to: string, body: string) => `sms:${encodeURIComponent(to).replace(/%40/g, '@').replace(/%2B/g, '+')}&body=${encodeURIComponent(body)}`;
+/** WhatsApp's click-to-chat link to `to` (+E.164) with the text filled in. */
+const waLink = (to: string, body: string) => `https://wa.me/${to.slice(1)}?text=${encodeURIComponent(body)}`;
+/** One unit square per dark module. Drawn in the page: the link carries the one-time code, so it never goes to a QR service. */
+export const qrModules = (value: string) => {
+  const { size, data } = encode(value, { ecc: 'M', border: 2 });
+  return { size, d: data.flatMap((row, y) => row.flatMap((dark, x) => dark ? [`M${x} ${y}h1v1h-1z`] : [])).join('') };
+};
+function QrCode({ value, label }: { value: string; label: string }) {
+  const { size, d } = qrModules(value);
+  return <svg className="qr" role="img" aria-label={label} viewBox={`0 0 ${size} ${size}`} width={176} height={176} shapeRendering="crispEdges">
+    <rect width={size} height={size} fill="#fff"/><path d={d} fill="#000"/>
+  </svg>;
+}
 export function RevealedValue({ reveal }: { reveal: ActionReveal }) {
   const [copy, setCopy] = useState<'idle' | 'copied' | 'selected'>('idle');
   const value = useRef<HTMLParagraphElement>(null);
@@ -19,9 +33,14 @@ export function RevealedValue({ reveal }: { reveal: ActionReveal }) {
     }
   };
   return <div className="revealed">
-    <p className="label">{REVEAL_LABEL[reveal.kind]}</p>
+    <p className="label">{reveal.app === 'whatsapp' ? 'Send this to Waldo on WhatsApp' : REVEAL_LABEL[reveal.kind]}</p>
     <p className="revealed-value" ref={value}>{reveal.value}</p>
-    {reveal.kind === 'link_code' && reveal.to && <p>Send it to <strong>{reveal.to}</strong>. On your iPhone, <a className="button primary" href={smsLink(reveal.to, reveal.value)}>Open Messages</a> and tap Send.</p>}
+    {reveal.app === 'whatsapp' && reveal.to && <>
+      <p>Send it to <strong>{reveal.to}</strong>. <a className="button primary" href={waLink(reveal.to, reveal.value)}>Open WhatsApp</a> and tap Send.</p>
+      <p className="meta">On a computer? Scan this with your phone’s camera to open WhatsApp there.</p>
+      <QrCode value={waLink(reveal.to, reveal.value)} label="QR code that opens WhatsApp with the code filled in"/>
+    </>}
+    {reveal.app !== 'whatsapp' && reveal.kind === 'link_code' && reveal.to && <p>Send it to <strong>{reveal.to}</strong>. On your iPhone, <a className="button primary" href={smsLink(reveal.to, reveal.value)}>Open Messages</a> and tap Send.</p>}
     <div className="control-actions">
       <button type="button" onClick={() => void onCopy()}>{copy === 'copied' ? 'Copied' : copy === 'selected' ? 'Selected. Press Command-C to copy' : 'Copy'}</button>
     </div>

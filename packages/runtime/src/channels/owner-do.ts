@@ -2516,7 +2516,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if(action.action==='health_memory.set')return setHealthMemory(this.ctx.storage.kv,action.value);
               if(action.action==='whatsapp.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name');
-                return whatsappLinkReceipt(name?await consoleAuth(this.env)?.issueProviderLinkCode?.(name,'whatsapp')??null:null);
+                return whatsappLinkReceipt(name?await consoleAuth(this.env)?.issueProviderLinkCode?.(name,'whatsapp')??null:null,this.env.WHATSAPP_WALDO_NUMBER);
               }
               if(action.action==='telegram.unlink'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;

@@ -236,6 +236,9 @@ describe('one-time values in receipts', () => {
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair', 'https://x.test').reveal).toEqual({ kind: 'host_code', value: host });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, extra: 'never-retain' } }, 'device.pair', 'https://x.test').reveal).toEqual({ kind: 'pairing_code', value: pairing });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: 'woof@heywaldo.in' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100', app: 'whatsapp' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100' });
     for (const [value, action] of [
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'device.pair'],
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'challenge', value: host } }, 'imessage.pair'],

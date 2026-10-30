@@ -73,7 +73,8 @@ export type ControlFields = { id?: string; value?: string; quiet_start?: string;
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
 /** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
-export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string };
+// app is set by the reader from the action, never taken from the server: it picks the app the link code is sent from.
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string; app?: 'whatsapp' };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
@@ -275,6 +276,7 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
 // Each one-time value has one action and one exact shape; anything else is refused, never shown.
 const REVEALS: Partial<Record<ControlAction, { kind: ActionReveal['kind']; shape: RegExp }>> = {
   'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ }, 'imessage.enroll': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
+  'whatsapp.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
   'imessage.pair': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ }, 'imessage.pair_shared': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ },
   'imessage.verify': { kind: 'challenge', shape: /^wic_[a-f0-9]{48}$/ },
   'device.pair': { kind: 'pairing_code', shape: /^wp1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/ },
@@ -283,8 +285,9 @@ function readReveal(value: unknown, action: ControlAction, fresh: boolean): Acti
   const expected = REVEALS[action];
   const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
   if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
-  const to = expected.kind === 'link_code' && string(value.to) && /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/.test(value.to) ? value.to : undefined;
-  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}) };
+  const whatsapp = action === 'whatsapp.link';
+  const to = expected.kind === 'link_code' && string(value.to) && (whatsapp ? /^\+[1-9]\d{7,14}$/ : /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/).test(value.to) ? value.to : undefined;
+  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}), ...(whatsapp ? { app: 'whatsapp' as const } : {}) };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {
