@@ -2,6 +2,7 @@ import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOG
 import {HANDOFF_PARAM} from './connect-confirm';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
+import {whatsAppWaldoNumber} from './whatsapp-send-url';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
 type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
 export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean;revocation?:'revoked'|'unsupported'|'failed'}>;
@@ -99,9 +100,13 @@ export const appDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>
  const receipt=mcpDisconnectReceipt(result);
  return result.ok&&(result.provider==='revoked'||result.provider==='unsupported'||result.provider==='failed')?{...receipt,revocation:result.provider}:receipt;
 };
-export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
- ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
- :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
+// to is the Waldo WhatsApp number, where configured, so the console can open WhatsApp with the code filled in.
+export const whatsappLinkReceipt=(code:string|null,number?:string):ControlReceipt|RevealingReceipt=>{
+ if(!code)return {state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
+ const digits=whatsAppWaldoNumber(number);
+ return {receipt:{state:'recorded',message:`Send this to ${digits?`Waldo on WhatsApp at +${digits}`:'the Waldo WhatsApp number'} within 10 minutes. The code works once.`},
+  reveal:{kind:'link_code',value:`waldo ${code}`,...(digits?{to:`+${digits}`}:{})}};
+};
 export const whatsappUnlinkReceipt=(done:boolean):ControlReceipt=>done
  ?{state:'recorded',message:'WhatsApp unlinked. New messages from that number no longer reach your Waldo, and Waldo will not message it.'}
  :{state:'rejected',message:'WhatsApp was not unlinked. Refresh the records and try again.'};

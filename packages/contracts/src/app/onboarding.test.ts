@@ -148,6 +148,27 @@ describe('chat channels', () => {
       { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null },
     ]);
   });
+  it('opens WhatsApp to Waldo with the code filled in, and each link only for its own provider and code', () => {
+    const whatsapp = { provider: 'whatsapp', code, text: `waldo ${code}`, address: '+919226067544', expires_in_seconds: 600 };
+    const imessage = { provider: 'imessage', code, text: `waldo ${code}`, address: '+15550100', expires_in_seconds: 600 };
+    accepted(appChannelLinkCodeV1Schema, [
+      { ...whatsapp, send_url: `https://wa.me/919226067544?text=waldo%20${code}` },
+      { ...whatsapp, address: '+15550100', send_url: `https://wa.me/15550100?text=waldo%20${code}` },
+    ]);
+    rejected(appChannelLinkCodeV1Schema, [
+      { ...imessage, send_url: `https://wa.me/15550100?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `sms:+919226067544&body=waldo%20${code}` },
+      { ...whatsapp, send_url: `http://wa.me/919226067544?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `https://wa.me.evil.example/919226067544?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `https://wa.me/+919226067544?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `https://wa.me/9192260675x4?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `https://wa.me/1234567?text=waldo%20${code}` },
+      { ...whatsapp, send_url: `https://wa.me/0919226067544?text=waldo%20${code}` },
+      { ...whatsapp, send_url: 'https://wa.me/919226067544?text=waldo%20ZZZZZZZZZZ' },
+      { ...whatsapp, send_url: `https://wa.me/919226067544?text=waldo%20${code}&x=1` },
+      { provider: 'telegram', code, text: `/link ${code}`, address: null, send_url: `https://wa.me/919226067544?text=waldo%20${code}`, expires_in_seconds: 600 },
+    ]);
+  });
 });
 
 describe('setup answers', () => {
