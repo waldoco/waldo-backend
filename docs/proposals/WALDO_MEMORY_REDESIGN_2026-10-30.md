@@ -203,11 +203,11 @@ compared from Cloudflare's own docs (read 30 Oct 2026):
 
 | | **DO SQLite `claim_vectors`** (built, behind the flag) | **Vectorize** |
 |---|---|---|
-| Forget | The vector is deleted by a trigger **in the same transaction** as the claim's delete or redaction (`semantic-recall.ts:79-84`). `transactionSync` is all or nothing (Durable Objects SQLite storage API). | Insert, upsert and delete are **asynchronous** and return a `mutationId`. The index is "eventually consistent" (Cloudflare blog, *Building Vectorize*). Deletes "typically" take "a few seconds" (client API), with no stated worst case. Forget would need an outbox, a retry owner and a `processedUpToMutation` poll, and until that settles a forgotten item can still come back in search. |
-| Owner isolation | Structural: one owner's vectors live in that owner's object | A namespace per owner (50,000 namespaces per index on Workers Paid, by the limits page; the insert page says 1,000). A query that omits its namespace searches the whole index. |
-| Limits | 10 GB per object; 2 MB per row (DO limits). 1024 × float32 is 4 KB a vector. | 1,536 dims at most; 20M vectors per index; 10 metadata indexes, which must exist before insert; topK at most 100 (Vectorize limits) |
-| Cost at 5,000 owners × 5,000 vectors, 20 queries per owner per day | Rows read: 15B a month, inside the 25B included, so $0. Storage: about 102 GB, so about **$19.50 a month** (DO pricing: $0.20 per GB-month over 5 GB). | Queried dims (28.7B) about $286, plus stored dims about $12.80, so about **$299 a month** (Vectorize pricing formula, checked against the page's own example) |
-| Search | A brute-force cosine scan over one owner's rows | ANN; median about 30 ms on Cloudflare's own benchmark |
+| Forget | The vector is deleted by a trigger **in the same transaction** as the claim's delete or redaction (`semantic-recall.ts:79-84`). `transactionSync` is all or nothing (Durable Objects SQLite storage API). | "Vectorize deletes are asynchronous" and return a mutation identifier; vectors take "typically … a few seconds" to be removed, with no stated worst case [verified: client API page]. Cloudflare's *Building Vectorize* blog calls the index eventually consistent [research pass]. Forget would need an outbox, a retry owner and a `processedUpToMutation` poll, and until that settles a forgotten item can still come back in search. |
+| Owner isolation | Structural: one owner's vectors live in that owner's object | A namespace per owner (50,000 namespaces per index on Workers Paid, 1,000 on Free [verified: limits page]). A query that omits its namespace searches the whole index. |
+| Limits | 10 GB per object; 2 MB per row (DO limits). 1024 × float32 is 4 KB a vector. | 1,536 dims at most; 20M vectors per index; 10 metadata indexes, which must exist before insert; topK 50 when values or metadata are returned [verified: limits page]. The 25M vectors of the cost row need at least two indexes. |
+| Cost at 5,000 owners × 5,000 vectors, 20 queries per owner per day | Rows read: 15B a month, inside the 25B included, so $0. Storage: about 102 GB, so about **$19.50 a month** (DO pricing: $0.20 per GB-month over 5 GB). | Queried dims (28.7B) about $286, plus stored dims about $12.80, so about **$299 a month** (Vectorize pricing formula, checked against the page's own example) [research pass; the DO prices are verified: 25B rows read included, $0.20 per GB-month over 5 GB] |
+| Search | A brute-force cosine scan over one owner's rows | ANN; median about 30 ms on Cloudflare's own benchmark [research pass] |
 | Risk | CPU and memory per scan. The DO memory limit is not documented; a Worker isolate has 128 MB. At about 30,000 vectors one owner's set nears 120 MB, so the scan must stream rows. Above that, store int8 vectors. | A second home for claim-derived (possibly health-adjacent) data, with eventual deletes |
 
 **Decision: DO SQLite.** Forget in the writer's own transaction and structural owner isolation are hard boundaries (the
@@ -944,23 +944,34 @@ The "not too rigid" line above says which of these are hard boundaries.
 The owner's ruling (30 Oct): memory must not be restrictive, and should follow current best practice; what to remember is
 the model's judgment.
 
-These systems were read at primary sources on 30 Oct 2026: papers on arXiv, official docs and the official repo.
+A research pass read these systems at primary sources on 30 Oct 2026: papers on arXiv, official docs and the official
+repo. I re-read the two claims that drive a verdict myself [verified, 30 Oct]: Letta's MemFS page, and Mem0's *Add*
+page. Each row's other cells are from the research pass [research pass], with the sources listed after the table.
 - Benchmark numbers come from different judges (J, F1, accuracy) and are mostly vendor-run or competitor-run. They are
   quoted only as context, never compared across rows.
 - Two common beliefs were out of date:
-  - Mem0's current write path only appends (since April 2026). The paper's ADD/UPDATE/DELETE/NOOP step is gone.
-  - Letta's current model is MemFS: git-backed markdown files, with background "dreaming".
+  - Mem0's current write path only appends: "New memories are added without overwriting or deleting existing memories", "ADD-only; memories accumulate" [verified: Mem0 docs, *Add*]. The paper's ADD/UPDATE/DELETE/NOOP step is gone. The docs give no date for the change.
+  - Letta's current model is MemFS, "the git-backed memory filesystem": markdown files, root files loaded every turn, folders on demand, and a "dreaming" subagent that updates memory without blocking the agent [verified: Letta docs, *MemFS*].
 
 | System (source) | Stores | Retrieves | Updates and forgets | What Waldo adopts |
 |---|---|---|---|---|
 | **Letta / MemGPT** (Packer et al. 2023, arXiv 2310.08560; Letta docs: memory blocks, archival memory, MemFS, sleep-time) | Core memory blocks in the prompt (label, description, value, a character limit). Archival storage is a vector database; recall storage holds the full message history. MemFS keeps memories as markdown files in git: root files load every turn, folders on demand. | The core is always in the prompt. Archives and recall are searched by the agent through tools. | The agent edits memory through tool calls. At memory pressure the queue warns, then evicts and summarises; evicted messages stay searchable. Every MemFS edit is a commit. "Dreaming" subagents consolidate every N steps or at compaction. | **Adopted.** A small, capped core every turn (`core`, 5,200 characters, §1.6), with deep reach through tools (`read_memory`, `search_episodes`). A background consolidator (§6). **Next:** versioned edits. Claims already keep a `supersedes_id` chain; owner-visible history of a claim's versions is a follow-up. |
-| **Mem0** (Chhikara et al. 2025, arXiv 2504.19413; Mem0 docs) | Extracted facts, scoped by user, agent or app. The graph variant Mem0g stores entity triples. | Semantic, keyword and entity signals, fused and reranked toward what is current | **Paper:** an LLM chose ADD, UPDATE, DELETE or NOOP against the top 10 similar memories. **Since April 2026:** append only, with staleness handled at retrieval; `expiration_date` hides a memory. **Mem0g** marks an obsolete relation invalid instead of deleting it. | **Adopted:** extract salient facts per exchange and check them against near-duplicates before writing. Claims already dedupe by kind and text, and corrections supersede. Entity fusion in recall (§13). **Not adopted:** append-only. Waldo needs deterministic forget and correction (CLAUDE.md; the topic-forget ruling), so it supersedes instead. |
+| **Mem0** (Chhikara et al. 2025, arXiv 2504.19413; Mem0 docs) | Extracted facts, scoped by user, agent or app. The graph variant Mem0g stores entity triples. | Semantic, keyword and entity signals, fused and reranked toward what is current | **Paper:** an LLM chose ADD, UPDATE, DELETE or NOOP against the top 10 similar memories. **Now:** append only, with staleness handled at retrieval; `expiration_date` hides a memory. **Mem0g** marks an obsolete relation invalid instead of deleting it. | **Adopted:** extract salient facts per exchange and check them against near-duplicates before writing. Claims already dedupe by kind and text, and corrections supersede. Entity fusion in recall (§13). **Not adopted:** append-only. Waldo needs deterministic forget and correction (CLAUDE.md; the topic-forget ruling), so it supersedes instead. |
 | **Zep / Graphiti** (Rasmussen et al. 2025, arXiv 2501.13956; getzep/graphiti) | Episodes (raw, as provenance), entities with fact edges, communities (cluster summaries) | Cosine, BM25 and graph breadth-first search, fused with RRF, MMR or a cross-encoder. Context is built from facts with their validity dates. | **Bi-temporal edges:** when a fact held (`t_valid`/`t_invalid`) and when it was recorded (`t'_created`/`t'_expired`). A contradiction closes the old edge; nothing is deleted. Graph writes use fixed queries, never LLM-written ones. | **Adopted:** the bi-temporal model on claims, which already have `valid_from`/`valid_to` and `learned_at`/`created_at`. Entities, with claims as the edges (§13). Hybrid retrieval: bm25 plus vectors with RRF (§1.5), plus one entity hop. **Not adopted:** a separate edge store, which would be a second truth. |
 | **A-MEM** (Xu et al., NeurIPS 2025, arXiv 2502.12110) | Notes with LLM-written keywords, tags, a context description, an embedding, and links | Top-k cosine | LLM-chosen links among the 10 nearest notes. "Memory evolution" rewrites neighbours' descriptions when a new note arrives. No forgetting described. | **Adopted in spirit:** model-written aliases on claims (already built), and the nightly weave linking patterns. **Not adopted:** silently rewriting neighbouring notes. A rewrite of an owner's note goes through correction, so the owner can see it. |
 | **LangMem** (LangChain docs: conceptual guide, delayed processing) | Semantic memory as a collection and a profile; episodic examples; procedural prompt refinements; LangGraph store namespaces | Key lookup, semantic search, metadata filters. Recall weighs similarity, importance and strength (recency and use). | Hot-path tools during the conversation, plus a debounced background manager (30–60 minutes suggested). Outdated items are deleted, invalidated or merged. | **Adopted:** hot-path `remember` plus the debounced daytime consolidator (§6, every 15 minutes at most, 6 a day), and the profile-versus-collection split (*About you* versus claims). |
 | **Anthropic memory tool** (`memory_20250818`, platform docs; context editing) | A `/memories` directory of files on storage the client owns | The model reads what it chooses (`view`) | The model writes with `create`, `str_replace`, `insert`, `delete` and `rename`. The handler, not the prompt, enforces path safety, size caps, expiry and sensitive-data rules. Pairs with context clearing, which warns the model to save before old tool results are cleared. | **Adopted:** model-curated memory through tools, on storage we own, with safety enforced in the handler. That is Waldo's `ClaimStore` admission gate: grounding, barriers, health and secret checks. The compaction flush saves before clearing (harness S4). |
 | **ChatGPT memory** (OpenAI Help Center, *Memory in ChatGPT*) | Saved memories, plus reference to chat history (a running summary under "improved memory") | Only "when it is likely to improve a response". A *Sources* view shows what shaped a reply. | The owner can correct, choose "don't mention this again", or delete. Deleting a chat does not delete a memory made from it. Temporary chats write nothing. | **Adopted:** show what shaped an answer. `shown` ids (§1.6) and Spots' entity chips let the app show which notes a reply used [follow-up for the app]. Correct, suppress and forget stay separate controls. **Not adopted:** the gap where a chat delete leaves derived memory. Waldo's forget reaches every derived store (the owner-approved forget redesign, `FORGET_REDESIGN_2026-10-22.md`, ADR 0085 in draft). |
 | Generative Agents (Park et al. 2023, arXiv 2304.03442; historical) | A memory stream with reflections | A fixed score: recency + importance + relevance | Reflection when summed importance passes a threshold | **Not adopted as a fixed score.** CLAUDE.md keeps "what matters" with the model, so Waldo shows recency and importance as *information* (dates, pins) rather than computing a fixed score. |
+
+**Sources:**
+- arXiv 2310.08560 (MemGPT), 2504.19413 (Mem0), 2501.13956 (Zep), 2502.12110 (A-MEM), 2304.03442 (Generative Agents);
+- docs.letta.com/concepts/memfs;
+- docs.mem0.ai/core-concepts/memory-operations/add;
+- github.com/getzep/graphiti;
+- langchain-ai.github.io/langmem (conceptual guide);
+- platform.claude.com docs: *Memory tool* and *Context editing*;
+- help.openai.com: *Memory and new controls for ChatGPT*.
 
 **What this changes in the design** [proposed]:
 1. **Tiers.** The core every turn; recall per message; deep reach by tool. This is §1, and it matches Letta and LangMem.
@@ -1093,7 +1104,15 @@ item 15 plus the gate's app.v1 revision. **Wave 1's slices are unchanged:**
   - `llm/pricing.ts` has no embedding price.
   - `onboarding/findings.ts` and `APP_FINDING_UNCONFIRMED_DAYS_V1 = 30`.
   - The research sources listed in the companion file.
-- **Observed (30 Oct, final pass):** Cloudflare docs on Vectorize limits, pricing and consistency, and on Durable Objects limits, pricing and SQLite transactions (§1.5); the primary sources in §12; waldo-app `origin/main` `e935d649` for the Patrol screen (`app/(app)/patrol.tsx`, `settings.tsx:143`).
+- **Observed (30 Oct, final pass):**
+  - Cloudflare's Vectorize limits page and client API page.
+  - Durable Objects pricing (§1.5).
+  - Letta's *MemFS* page and Mem0's *Add* page (§12).
+  - waldo-app `e935d649`, `app/(app)/settings.tsx:143`, for the Patrol row ("What he ran in the background, and his checks").
+- **Research pass, not re-read by me:**
+  - the other §12 cells;
+  - the Vectorize pricing arithmetic, its blog quote, and the ANN latency;
+  - Durable Objects storage limits (10 GB per object, 2 MB per row).
 - **Inference:**
   - the latency of the lexical path;
   - the CPU cost of the brute-force scan (measured in S6);
