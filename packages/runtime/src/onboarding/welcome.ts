@@ -243,13 +243,8 @@ export const welcomeSupportIds = (claims: ClaimStore, nodeId: number): number[] 
   return node ? nodeSupports(claims.allClaims(), node).filter((claim) => isWelcomeRef(claim.source_ref) && claim.origin !== 'owner').map((claim) => claim.id) : [];
 };
 
-// The owner's yes: every support becomes their own word. An answer that already is stays as the owner wrote it.
-export const confirmWelcomeNode = (claims: ClaimStore, nodeId: number, at: string, how = 'owner, app:node.confirm'): boolean => {
-  const node = claims.nodes().find((row) => row.id === nodeId && row.status === 'active');
-  if (!node) return false;
-  const supports = nodeSupports(claims.allClaims(), node).filter((claim) => claim.status === 'active' || claim.status === 'promoted');
-  return supports.length > 0 && supports.filter((claim) => claim.verification_status !== 'owner-grounded').map((claim) => claims.ownerGround(claim.id, at, how)).every(Boolean);
-};
+// The owner's yes to the node's wording. The notes under it stay as they are: a read of their mail stays Waldo's read.
+export const confirmWelcomeNode = (claims: ClaimStore, nodeId: number, at: string, where = 'app:node.confirm'): boolean => claims.confirmNode(nodeId, where, at);
 
 // The owner's correction replaces the node with their words, resting on one owner-stated claim. Waldo's old read is barred
 // so a rerun cannot write it back, and its supports are handed back for the caller to purge outside this transaction.
@@ -262,6 +257,7 @@ export const correctWelcomeNode = (claims: ClaimStore, nodeId: number, text: str
   const said = claims.allClaims().filter((claim) => claim.source_ref === ref && claim.text === words).at(-1);
   if (!said) throw new Error('correction not stored');
   claims.saveNode({ id: node.id, domain: node.domain, label: words, summary: words, strength: node.strength, status: 'active', supporting_spots: [said.id] }, at);
+  claims.dropStatements(node.id);
   claims.barrier(node.label, at);
   return { purge, barred: node.label };
 };
