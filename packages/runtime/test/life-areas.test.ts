@@ -81,6 +81,23 @@ describe('filing a claim', () => {
   });
 });
 
+describe('only the owner moves a claim out of body or mind', () => {
+  it('a model refile or a model correction leaves it where it was, still out of outside-content calls; the owner can move it', async () => {
+    await withStore((store) => {
+      const mood = said(store, 'Stressed before board meetings', 'observation', 'mind');
+      applyClaimOps(store, ops({ areas: [{ id: mood.id, area: 'work' }] }), AT);
+      expect(store.allClaims().find((claim) => claim.id === mood.id)).toMatchObject({ area: 'mind', area_by: 'model' });
+      expect(store.setArea(mood.id, 'body', 'model')).toBe(false);
+      expect(store.correct(mood.id, { kind: 'observation', text: 'Tense before board meetings', source: 'stated', evidence: 'x', origin: 'owner', source_ref: 'owner, tg-fix', area: 'work' }, AT)).toBe(true);
+      const corrected = store.claims().find((claim) => claim.text === 'Tense before board meetings')!;
+      expect(corrected).toMatchObject({ area: 'mind' });
+      expect(outsideView(store).claims().map((claim) => claim.text)).toEqual([]);
+      expect(store.setArea(corrected.id, 'work', 'owner')).toBe(true);
+      expect(outsideView(store).claims().map((claim) => claim.text)).toEqual(['Tense before board meetings']);
+    });
+  });
+});
+
 describe('what a model call built from outside content may read', () => {
   it('leaves out every body and mind claim and every health claim whatever its area; other areas stay', async () => {
     await withStore((store) => {

@@ -48,6 +48,9 @@ type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence:
 // The part of the owner's life a claim is filed under, as stored: unsorted is NULL, and anything outside the set is unsorted.
 const filedArea = (area: string | null | undefined): LifeArea | null =>
   area !== 'unsorted' && (LIFE_AREAS as readonly (string | null | undefined)[]).includes(area) ? area as LifeArea : null;
+// body and mind keep a claim out of every model call built from outside content, so only the owner moves a claim out of them:
+// a model write may have been steered by that content.
+const FENCED_AREAS: readonly (string | null | undefined)[] = ['body', 'mind'];
 
 // Write-time retrieval aliases: alternative words the owner might use later for the same fact. Model-written, so
 // untrusted-quality: bounded and cleaned here (a hard bounding line, not meaning detection), used only for
@@ -598,8 +601,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           return true;
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
-        // The replacement stays filed where the old claim was, by whoever filed it, unless the writer files it anew.
-        const area = claim.area === undefined ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
+        // The replacement stays filed where the old claim was, by whoever filed it, unless the writer files it anew. A writer
+        // never moves it out of body or mind.
+        const kept = claim.area === undefined || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
+        const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
         const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
         const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' RETURNING id", at, id).toArray();
@@ -608,12 +613,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         return true;
       });
     },
-    // Files a live claim under an area. The model never refiles what the owner filed.
+    // Files a live claim under an area. The model never refiles what the owner filed, and never moves a claim out of body or mind.
     setArea(id: number, area: LifeArea, by: 'model' | 'owner'): boolean {
       if (!(LIFE_AREAS as readonly string[]).includes(area)) return false;
       const stored = filedArea(area);
       return sql.exec(`UPDATE claims SET area = ?, area_by = ? WHERE id = ? AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}'
-        AND (? = 'owner' OR COALESCE(area_by, '') != 'owner') RETURNING id`, stored, stored ? by : null, id, by).toArray().length === 1;
+        AND (? = 'owner' OR (COALESCE(area_by, '') != 'owner' AND (COALESCE(area, '') NOT IN ('body', 'mind') OR area IS ?))) RETURNING id`,
+        stored, stored ? by : null, id, by, stored).toArray().length === 1;
     },
     setStatus(id: number, status: string): void {
       sql.exec('UPDATE claims SET status = ? WHERE id = ?', status, id);
