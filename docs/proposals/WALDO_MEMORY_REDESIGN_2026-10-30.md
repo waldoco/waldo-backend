@@ -52,7 +52,7 @@ staging flag flip, which happens in a named deploy.
 | O9 | The source pass learns from mail and calendar content during the day. Outside content stays a candidate. | **Approved** (owner, 30 Oct, in chat), after the notice sentence. The flag flip is owner-only. |
 | O10 | The Close offers up to 3 look-up findings a day, through the new `decide_owner_finding` tool. | **Approved** (owner, 30 Oct, in chat) |
 | O11 | The `mind` area holds patterns in words, never a diagnosis or a reading. It is fenced from mail and web jobs. | **Approved** (owner, 30 Oct, in chat) |
-| #1587 Q1 | Cohort scope | **(a), (b) and (c)** (owner, 30 Oct, in chat). Calendar capture joins now and feeds daytime consolidation (§6). |
+| #1587 Q1 | Cohort scope | **(a), (b) and (c)** (owner, 30 Oct, in chat). Calendar capture joins now and feeds daytime consolidation (§6). The consequence, from #1587 §7: the app.v1 `open_loops.source` enum is closed to `gmail` and `chat`. `calendar` and `meeting` must be added before the Worker emits such items. That revision is the gate's to allocate. |
 | #1587 Q2 | Weekly review | **Yes, folded into a Close** (owner, 30 Oct, in chat). The goal check-ins in §8.4, rank 6, ride it. |
 | #1587 Q3 | Which captures need the owner's yes | **As proposed** (owner, 30 Oct, in chat). Captures from mail and calendar need the owner's yes; the owner's own words do not. |
 
@@ -713,28 +713,34 @@ The help taxonomy (research §4) is the frame.
 - **`skills_load` is permitted only on the `user_message` trigger** (`contracts/src/tools/permissions.ts:291`).
 - The owner object builds the skill book with `trigger: 'user_message'` (`channels/owner-do.ts:4108-4109`), on every surface.
 
+**Where a skill can load** [verified]:
+- **App and Telegram turns only.** The owner object passes a skill host for `telegram` and `app` and nothing else (`owner-do.ts:4283`).
+- **iMessage and WhatsApp turns have no skill book.** No skill can load there, though iMessage is a main owner surface.
+- **Under the harness tool loader (`WALDO_TOOL_LOADER = "harness"` on staging),** `skills_list` and `skills_load` are not core tools (brain `skills`, `tools/records.ts:128,132`). The model reaches them through the loader's `use_tool`, or `find_tools` then `use_tool` (`tools/loader.ts:6-12,42-70`). The skill catalogue metadata is in the prompt.
+- `CURATED_SKILLS` is the same 17 as the bundled pack, with `document-email-preparation` first (`curated-owner.ts:8-10`).
+
 **So every skill is on request today, and none is proactive.** Proactive help comes from separate code paths, listed after
 the table. Usage counts per owner (`skills.invocations`) were not read [unverified].
 
-| Skill | What it does (its description) | Tools (all have handlers [verified]) | Trigger | Reachable on staging | Clusters / areas |
+| Skill | What it does (its description) | Tools (all have handlers [verified]) | Trigger | Surfaces where it loads on staging | Clusters / areas |
 |---|---|---|---|---|---|
-| day-brief | Prepare a current day brief and ordered priorities | `query_calendar`, `get_communication`, `get_tasks` | On request | Yes | H1, H3 / work, home |
-| meeting-prep | Prepare for an identified meeting from its event and threads | `query_calendar`, `read_thread`, `workspace_read` | On request | Yes. Proactive pre-meeting notes are a separate path (below). | H3 / work, people |
-| follow-up-prep | Prepare a follow-up from the latest thread | `read_thread`, `get_tasks`, `draft_email` | On request | Yes | H5, H2 / work, people |
-| travel-prep | Research travel options and preparation, without booking | `web_search`, `browse_page`, `query_calendar` | On request | Yes | H4 / home |
-| weekly-review | Review the past week and prepare next-week priorities | `query_calendar`, `get_tasks`, `read_memory` | On request | Yes | H5, H10 / goals, work |
-| inbox-triage-reply-draft | Review an inbox and prepare replies for review | `get_communication`, `read_thread`, `draft_email` | On request | Yes | H2 / work, people |
-| reminders-and-watches | Set or inspect reminders and watched commitments | `get_context`, `set_reminder`, `list_reminders` | On request | Yes | H6 / all |
-| meal-activity-log-and-planning | Record owner-stated meals or activity, and plan | `log_meal`, `log_workout`, `list_health_logs` | On request | Yes | H8 / body |
-| decision-brief | Compare options; a source-backed recommendation | `web_search`, `browse_page`, `read_memory` | On request | Yes | H3 / any |
-| project-catch-up | Recover project state and the next step | `get_tasks`, `workspace_list`, `workspace_read` | On request | Yes | H5 / work, goals |
-| sourced-research-brief | A brief backed by original sources | `web_search`, `browse_page` | On request | Yes | H3 / any |
-| document-email-preparation | Prepare a document or email from owner facts | none | On request (also `brief`, `bundled-file.ts:30`) | Yes | H2 / work |
-| calendar-focus-proposal | Plan focus time, or a calendar change for review | `query_calendar`, `query_availability`, `propose_calendar_change` | On request | Yes | H1, H7 / work, mind |
-| artifact-revision-delivery | Revise a saved artifact and deliver a link | `workspace_*` | On request | Yes | — (tooling) |
-| reviewed-outbound-message | A message with exact recipients, reviewed before sending | `read_thread`, `draft_email`, `send_email` | On request | Yes | H2 / people, work |
-| memory-correction | Inspect and correct a remembered fact | `read_memory` | On request | Yes | H12 / all |
-| owner-lookup | Look the owner up and keep findings for their decision | `list_owner_findings`, `web_search`, `browse_page`, `record_owner_finding` | On request | Yes (`OWNER_LOOKUP = "1"` on staging) | H12 / all |
+| day-brief | Prepare a current day brief and ordered priorities | `query_calendar`, `get_communication`, `get_tasks` | On request | App, Telegram | H1, H3 / work, home |
+| meeting-prep | Prepare for an identified meeting from its event and threads | `query_calendar`, `read_thread`, `workspace_read` | On request | App, Telegram. Proactive pre-meeting notes are a separate path (below). | H3 / work, people |
+| follow-up-prep | Prepare a follow-up from the latest thread | `read_thread`, `get_tasks`, `draft_email` | On request | App, Telegram | H5, H2 / work, people |
+| travel-prep | Research travel options and preparation, without booking | `web_search`, `browse_page`, `query_calendar` | On request | App, Telegram | H4 / home |
+| weekly-review | Review the past week and prepare next-week priorities | `query_calendar`, `get_tasks`, `read_memory` | On request | App, Telegram | H5, H10 / goals, work |
+| inbox-triage-reply-draft | Review an inbox and prepare replies for review | `get_communication`, `read_thread`, `draft_email` | On request | App, Telegram | H2 / work, people |
+| reminders-and-watches | Set or inspect reminders and watched commitments | `get_context`, `set_reminder`, `list_reminders` | On request | App, Telegram | H6 / all |
+| meal-activity-log-and-planning | Record owner-stated meals or activity, and plan | `log_meal`, `log_workout`, `list_health_logs` | On request | App, Telegram | H8 / body |
+| decision-brief | Compare options; a source-backed recommendation | `web_search`, `browse_page`, `read_memory` | On request | App, Telegram | H3 / any |
+| project-catch-up | Recover project state and the next step | `get_tasks`, `workspace_list`, `workspace_read` | On request | App, Telegram | H5 / work, goals |
+| sourced-research-brief | A brief backed by original sources | `web_search`, `browse_page` | On request | App, Telegram | H3 / any |
+| document-email-preparation | Prepare a document or email from owner facts | none | On request. Its metadata also lists `brief` (`bundled-file.ts:30`), but the `brief` trigger has no `skills_load`, so it cannot load there. | App, Telegram | H2 / work |
+| calendar-focus-proposal | Plan focus time, or a calendar change for review | `query_calendar`, `query_availability`, `propose_calendar_change` | On request | App, Telegram | H1, H7 / work, mind |
+| artifact-revision-delivery | Revise a saved artifact and deliver a link | `workspace_*` | On request | App, Telegram | — (tooling) |
+| reviewed-outbound-message | A message with exact recipients, reviewed before sending | `read_thread`, `draft_email`, `send_email` | On request | App, Telegram | H2 / people, work |
+| memory-correction | Inspect and correct a remembered fact | `read_memory` | On request | App, Telegram | H12 / all |
+| owner-lookup | Look the owner up and keep findings for their decision | `list_owner_findings`, `web_search`, `browse_page`, `record_owner_finding` | On request | App, Telegram (`OWNER_LOOKUP = "1"` on staging) | H12 / all |
 
 **Blocked, text only** (`docs/skills/blocked-v1`, not loaded): rich-artifact-export, browser-task,
 document-signing-preparation, ride-preparation, trusted-person-coordination. Each is blocked on a missing tool or design
@@ -754,6 +760,7 @@ document-signing-preparation, ride-preparation, trusted-person-coordination. Eac
 **The gap.**
 - The seventeen skills are the reviewed *procedures*. The proactive paths are the *moments*.
 - The two never meet: a Brief cannot load `day-brief`, and a pre-meeting job cannot load `meeting-prep`.
+- On iMessage and WhatsApp, not even an on-request skill loads.
 - So the procedures run only when the owner thinks to ask. That defeats "act ahead of them".
 
 ### 8.2 Coverage by area and cluster
@@ -788,17 +795,21 @@ is the build size, with existing tools reused.
 
 | Rank | Slice | Area / cluster | Value | Cost | Why this rank |
 |---|---|---|---|---|---|
-| **0 (enabler)** | **K0: proactive turns can load skills** (waldoco/waldo-backend#1705) | all | Very high: it makes the 17 existing skills proactive | Low: permissions and the skill book for machine turns | Without it, every new skill below is on request only |
+| **0 (enabler)** | **K0: proactive turns can load skills** (waldoco/waldo-backend#1705) | all | Very high: it makes the 17 existing skills proactive | **Medium.** A machine turn needs its own skill-book envelope: today's capability binds to an owner turn's trigger, text, turn id and run scope (`owner-do.ts:4108-4109`). Widening a trigger's tool list touches the ADR-0033 permission map (`permissions.ts:123-126`). | Without it, every new skill below is on request only. In a machine turn that read outside content, a mail could steer *which* procedure loads. Skills grant no tools, and every tool keeps its own taint and approval gates; K0 adds a taint test for this. |
+| **0b (enabler)** | **K1: skills on iMessage and WhatsApp** (waldoco/waldo-backend#1711) | all | High: iMessage is a main owner surface and has no skills today | Low–medium: a skill host bound to the iMessage and WhatsApp turn records, like `appSkillHost` | Same owner, same book, any surface (one Waldo across surfaces) |
 | **1** | **S-1 intention-to-plan** (waldoco/waldo-backend#1706) | all / H5, H6 | High: when-then plans have the strongest evidence (d ≈ .65) and apply to every archetype | Low | A procedure over #1587's loops and reminders |
-| **2** | **S-2 relationship-upkeep** (waldoco/waldo-backend#1707) | `people` / H9, H2 | High: today there is no coverage | Low–medium | Memory plus observed mail; reply debts reuse `observed_mail` |
+| **2** | **S-2 relationship-upkeep** (waldoco/waldo-backend#1707) | `people` / H9, H2 | High: today there is no coverage | Low–medium | Memory plus observed mail, in a Brief or Close turn. A reply debt becomes a candidate through the loop tools in that turn, never from the consolidator. |
 | **3** | **S-3 overload-day** (waldoco/waldo-backend#1708) | `mind`, `work` / H7 | High for founders, clinicians and parents | Medium | Calendar proposals already exist |
-| **4** | **S-4 renewals-and-bills** (waldoco/waldo-backend#1709) | `money`, `home` / H11 | Medium–high: today there is no coverage | Low | Rides the consolidator (S7) and #1587's candidates |
+| **4** | **S-4 renewals-and-bills** (waldoco/waldo-backend#1709) | `money`, `home` / H11 | Medium–high: today there is no coverage | Low | Runs in the Brief or Close turn (via K0), which reads today's update cards and what the consolidator learned. That turn proposes candidates through the loop tools (#1587). The consolidator writes claims only, so loops keep one writer. |
 | **5** | **S-5 recovery-day** (waldoco/waldo-backend#1710) | `body` / H8, H4 | High under the health ruling | Medium: health evals | Shared health only; no clinical advice |
 | 6 | Goal check-ins in the weekly Close | `goals` / H10 | Medium | Low | Folds into #1587's weekly review (Q2: yes); reuses weekly-review |
 | 7 | Travel arrival plan (jet lag, time zones) | `home`, `body` / H4 | Medium for frequent travellers | Low | Extends travel-prep with the CDC rates |
 | 8 | Errand batching and household logistics | `home` | Medium | Medium | Needs location and opening hours; later |
 
-**Build order.** K0 first. Then S-1 and S-2 in parallel. Then S-3, S-4 (after #1587 and S7) and S-5.
+**One writer per aggregate.** A skill runs in a tool-loop turn (owner or machine). Backlog items and candidates come only
+from the loop tools, and claims only from `ClaimStore`. The daytime consolidator (§6) writes claims and never loops.
+
+**Build order.** K0 and K1 first. Then S-1 and S-2 in parallel. Then S-3, S-4 (after #1587 and S7) and S-5.
 
 **Per skill:**
 - a reviewed SKILL.md;
@@ -840,7 +851,8 @@ requested. Every app.v1 revision is **requested from the gate**, never picked he
 | **S7** (waldoco/waldo-backend#1703) | The daytime consolidator (§6.2), with `MEMORY_NIGHTLY_SOURCE_UPDATES` on for the cohort (O8, O9) | a new `memory/consolidator.ts` (debounce, watermark, daily cap); `channels/owner-do.ts` (subscribes to the harness's `observed` event); `channels/owner-turn.ts` (reuses the source pass and claim-ops calls); the cost ledger | `ClaimStore`; the consolidator only runs and retries passes | a 09:00 mail answers a 15:00 question (m14); never an owner-grounded claim from outside content; at most 6 runs a day; a missed event is recovered by the watermark; forget barriers hold; no health reading stored; owner scoping | none (a KV watermark); depends on the harness's `observed` emit (#1701) |
 | **S8** (waldoco/waldo-backend#1704) | Close-card offers: look-up findings and patterns waiting for the owner's yes, at most 3 a day (§6.4, §7.4, O10) | `prompt/day-cards.ts` (Close carry-over, within #1587's `loopsSection`), a new `decide_owner_finding` tool (`onboarding/findings.ts` handlers, `tools/records.ts` with `ownerTurnOnly: true`, `packages/contracts` schema) | `findingStore` (unchanged `decide`/`forget`) | at most 3 offered; never an expired finding; the tool is refused in a machine turn and in a turn that read outside content; the offer's text is fenced as external data; valid + invalid schema pair | additive tool-schema contract; rides on #1587's carry-over |
 
-| **K0** (waldoco/waldo-backend#1705) | Proactive turns can load reviewed skills (§8) | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (the skill book for machine turns), `skills/curated-host.ts` | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; owner scoping | a tool-permission change (internal) |
+| **K0** (waldoco/waldo-backend#1705) | Proactive turns can load reviewed skills (§8) | `contracts/src/tools/permissions.ts`, `channels/owner-do.ts` (a skill-book envelope for machine turns), `skills/curated-host.ts` | the skill book (unchanged writer) | a machine turn loads an enabled skill but cannot install or disable one; a disabled skill never loads; tool admission unchanged; a tainted machine turn gains no tool or approval by loading a skill; owner scoping | a tool-permission map change under ADR-0033; the gate decides whether it needs an ADR note |
+| **K1** (waldoco/waldo-backend#1711) | iMessage and WhatsApp turns get the owner's skill book (§8.1) | `channels/owner-do.ts` (a skill host bound to the iMessage and WhatsApp turn records) | the skill book (unchanged writer) | an iMessage turn loads an enabled skill; a stale record fails closed; the same book and custody as the app; owner scoping | none |
 | **S-1 to S-5** (waldoco/waldo-backend#1706–#1710) | New skills: intention-to-plan, relationship-upkeep, overload-day, renewals-and-bills, recovery-day (§8.4) | each a reviewed `packages/runtime/skills/<name>/SKILL.md`, plus nightly scenarios | none (procedures) | happy, null, hostile and quiet paths per skill; health and consent rules (S-5) | none |
 
 **Order:**
