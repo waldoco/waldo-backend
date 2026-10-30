@@ -194,16 +194,22 @@ export const toolsWhere = (fact: (record: ToolRecord) => boolean): ReadonlySet<T
 export const toolRecordColumn = <K extends keyof ToolRecord>(column: K): Readonly<Record<ToolName, ToolRecord[K]>> =>
   Object.fromEntries(Object.entries(TOOL_RECORDS).map(([name, record]) => [name, record[column]])) as Record<ToolName, ToolRecord[K]>;
 
+// Tools in name order: the list leads the provider's cached prefix, so the same admitted set gives the same bytes
+// whatever order the host assembled its handlers in.
+export const byToolName = (a: Readonly<{ name: string }>, b: Readonly<{ name: string }>): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
 // The brain's tool list with each tool's place on the surface: core tools as they are, the rest named into their
 // namespace and deferred, and the routing line of each namespace in use. A name outside the record (a test double) stays
-// core. Off, the list goes as it is, every tool up front.
+// core. Off, every tool goes up front. Either way the list is in name order and namespaces in BRAIN_NAMESPACES order.
 export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick<LLMRequest, 'tools' | 'tool_search'> => {
-  if (!toolSearch) return { tools: [...tools] };
-  const placed = tools.map((tool) => {
+  const ordered = [...tools].sort(byToolName);
+  if (!toolSearch) return { tools: ordered };
+  const placed = ordered.map((tool) => {
     const placement = (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[tool.name]?.brain ?? 'core';
     return placement === 'core' ? tool : { ...tool, namespace: placement, defer_loading: true };
   });
-  const used = [...new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []))];
+  const inUse = new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []));
+  const used = (Object.keys(BRAIN_NAMESPACES) as BrainNamespace[]).filter((name) => inUse.has(name));
   return { tools: placed, tool_search: { namespaces: Object.fromEntries(used.map((name) => [name, BRAIN_NAMESPACES[name]])) } };
 };
 
