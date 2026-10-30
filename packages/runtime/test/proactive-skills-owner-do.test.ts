@@ -45,8 +45,9 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-it('a due reminder loads a reviewed skill unprompted through the owner object, and its tools stay the reminder\'s', async () => {
-  const name = 'proactive-skill-reminder';
+// Staging runs the harness tool loader, where a deferred tool costs a find_tools hop; skills_load is offered directly.
+it.each([['default', undefined], ['harness', 'harness']] as const)('a due reminder loads a reviewed skill unprompted through the owner object, and its tools stay the reminder\'s (%s loader)', async (loader, toolLoader) => {
+  const name = `proactive-skill-reminder-${loader}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
@@ -56,7 +57,7 @@ it('a due reminder loads a reviewed skill unprompted through the owner object, a
       .set({ note: 'call Sam', at: earlier(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_LOADER: toolLoader });
     try {
       await state.storage.deleteAlarm();
       await owner.alarm();
