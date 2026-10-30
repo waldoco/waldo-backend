@@ -4941,7 +4941,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               log({ trace, hop: 'machine_check', ms: 0, ok: true, code, detail: id });
               if (decided) log({ trace: id, hop: 'machine_turn', ms: Date.now() - started, ok: code !== 'malformed_reply', code, detail: 'calendar_prep' });
             },
-            dayChangedSince: at => updates.changedSince(at, localIso(Date.now(), timezone).slice(0, 10), timezone),
+            dayChangedSince: (at, event) => updates.changedSince(at, localIso(Date.now(), timezone).slice(0, 10), timezone,
+              (event.attendee_emails ?? []).filter(email => email.toLowerCase() !== client.account?.email?.toLowerCase())),
             decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
             enqueue: prepEnqueue(connectionId, timezone, current),
           });

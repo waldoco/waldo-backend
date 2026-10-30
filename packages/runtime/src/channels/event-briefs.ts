@@ -140,8 +140,8 @@ export const eventBriefs = (sql: SqlStorage, timezone: string) => {
       machine(prep: PrepJob): PrepCode;
       // Each event's outcome; `decided` when this sweep asked the model about it, whose trace the caller closes.
       checked?(code: PrepCode, id: string, decided: boolean): void;
-      // Whether the owner's day changed (a calendar or mail change was recorded) after `at`.
-      dayChangedSince?(at: number): boolean;
+      // Whether the owner's day changed for this meeting after `at`: a calendar change that day, or mail from its people.
+      dayChangedSince?(at: number, event: CalendarItem): boolean;
       decide(id: string, prompt: string): Promise<string>;
       enqueue(id: string, text: string, receipt: CalendarPrepReceipt, commit: () => void): Promise<boolean>;
       known(id: string): boolean;
@@ -165,7 +165,7 @@ export const eventBriefs = (sql: SqlStorage, timezone: string) => {
         if (options.known(identity.id)) { checked('known'); continue; }
         const inputDigest = await calendarPrepDigest(event);
         const known = sql.exec<{ input_digest: string | null; briefed_at: number }>('SELECT input_digest, briefed_at FROM event_briefs WHERE event_id = ? AND start = ?', identity.key, identity.startKey).toArray()[0];
-        if (known?.input_digest === inputDigest && !options.dayChangedSince?.(known.briefed_at)) { checked('already_decided'); continue; }
+        if (known?.input_digest === inputDigest && !options.dayChangedSince?.(known.briefed_at, event)) { checked('already_decided'); continue; }
         const gate = await options.gate(identity, start);
         if (gate) { checked(gate); continue; }
         // Only a meeting the owner organized or accepted may choose which of their mail is read; an unanswered invite's title
