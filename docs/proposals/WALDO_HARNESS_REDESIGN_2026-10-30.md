@@ -18,6 +18,24 @@ Design only. This document changes no runtime code, flag, deploy or migration. I
 
 This adds §E (trace), §F (day working state, slice S8) and §G (one main thread, slice S9).
 
+### Final owner rulings (30 Oct, in chat, relayed by the orchestrator)
+
+These are not re-asked.
+
+1. **Decision 9 is option B.** The `update` push names the actual change, for example "Your 3pm with Krati moved to 5pm". This replaces the earlier fixed-line requirement. The orchestrator is updating the privacy notice's Expo row.
+2. **Proactivity is the goal, not silence.** Between the Brief, Check-in and Close, Waldo tells the owner about anything worth it: a meeting change, an important new mail, a task done. It uses the surface the owner prefers, mostly an app push, possibly WhatsApp. Card times follow the owner's patterns and calendar, and the owner's settings still win (§F).
+3. **Real-time events.** Evaluate the Google Workspace Events API and Google's official Workspace MCP servers. Recommend a real-time source per product (§F, "Real-time sources"; slice S10).
+4. **The model picks skills itself in any turn**, chat or proactive. Skills still grant no tools. This is memory-redesign's K0 (#1705); S8 assumes skills are available to proactive turns.
+5. **Pre-meeting briefs of Granola quality** are the first PR of the S8 lane, which the orchestrator has started: research first, with a root trace so every send or skip is visible. The prep fixed rules go (§F).
+6. **WhatsApp is live** (verified 30 Oct), so S9 includes it now. The owner has agreed #1463. If a vendor agreement still needs signing, that is the owner's step, and it is the only iMessage precondition.
+7. **Not too rigid** (verbatim):
+   - Product rules move to the model: caps, no_op bias, holds, fixed lines.
+   - Hard boundaries stay: auth and owner scoping, credentials never in prompts or logs, egress, schema validation, and ADR-0081's rules for where raw health values may go.
+   - Changing a hard boundary needs an ADR amendment in Brain.
+   - Copy and notice claims that hinder usefulness are changed rather than obeyed.
+
+**Gate allocations:** S1's ledger migration is `20261030140000`. S8's `update` push kind and its app.v1 additions get their revision when S8 builds. The new enum value is flagged for the app lane (app.v1 is additive only).
+
 ## Owner decisions, with recommendations
 
 **Status: all 13 approved as recommended.** Source: the owner, 30 Oct, in chat, relayed by the orchestrator.
@@ -39,9 +57,9 @@ Approving the design starts no build. Each slice still goes through its issue an
 | 6 | Core tool promotion (S3) | **No promotion now.** Decide per tool from S0's data. | Promotion costs cached bytes on every round. |
 | 7 | Compaction beyond the app (S4) | **Fold it into S9.** Once every surface writes the one main chain, that chain's existing compaction covers them, if the job is triggered from every drain. Before S9, no separate iMessage compaction. | Avoids building per-surface compaction twice. |
 | 8 | **New.** A delivered day card can be **revised**: Waldo writes a new revision, shown as "updated HH:MM" in the app and console. On surfaces that can't edit, Waldo sends an update message. | **Yes.** | The owner's meeting example. The original card stays in history; nothing is rewritten in place. |
-| 9 | **New.** A phone notification for a change the model judges worth interrupting for. It is a new push kind, `update`, an additive app.v1 contract change whose revision the gate allocates. Quiet hours and the owner's volume preference still hold. **The push text is a fixed line** (see S8, privacy notice). | **Yes.** | Today no push fires for an update (`expo-push.ts:8-11`). |
+| 9 | **New.** A phone notification for a change the model judges worth interrupting for. It is a new push kind, `update`, an additive app.v1 contract change whose revision the gate allocates. Quiet hours and the owner's volume preference still hold. **Option B (final ruling):** the push names the change, such as titles, times and attendee names. Health values and email body text never go to Expo, Apple or Google push. | **Yes, option B.** | Today no push fires for an update (`expo-push.ts:8-11`). |
 | 10 | **New.** Remove the fixed "after the Close, hold every update until tomorrow" rule (`owner-do.ts:4921`). The model judges whether a change after the Close matters, such as tomorrow's 08:00 meeting moving. | **Yes.** Quiet hours and volume stay, because they are owner preferences, not judgments. | `CLAUDE.md`: no fixed rules for judgment calls. |
-| 11 | **New.** One main thread: build #1544's "one timeline" design as S9, behind `WALDO_ONE_TIMELINE`. | **Yes**, but iMessage cutover waits on #1463's data-agreement answer, or on #1544's host-set health marker. Recommend also answering #1463. | Owner direction. The design exists and needs no new store. |
+| 11 | **New.** One main thread: build #1544's "one timeline" design as S9, behind `WALDO_ONE_TIMELINE`. | **Yes.** WhatsApp is live and included now. The owner has agreed #1463; if a vendor agreement still needs signing, that owner step is the only iMessage precondition. | Owner direction. The design exists and needs no new store. |
 | 12 | **New.** An owner-approved two-call Luna probe, if S7's digests show identical prefixes and the misses continue | **Yes**, capped at $0.01. | It settles whether caching is happening on the provider side. |
 | 13 | **New.** Change detection on MCP connectors | **Defer.** Calendar and Gmail changes already come through the REST Google grant. MCP servers have no push, and polling them costs model-free API calls with no clear owner value yet. Revisit if an owner connects a connector that has no REST path. | Today MCP is read only inside turns (`tools/live/mcp.ts`). |
 
@@ -55,7 +73,8 @@ Ranked by owner value, after the 30 Oct direction:
 4. **S7**: cache-miss diagnosis.
 5. **S1**: cost truth.
 6. **S2**: small; any time.
-7. **S3**, **S5**, **S6**: data-gated.
+7. **S10**: Workspace Events for Drive/Docs and Meet, after S8.
+8. **S3**, **S5**, **S6**: data-gated.
 
 S4 folds into S9.
 
@@ -63,6 +82,7 @@ S4 folds into S9.
 |---|---|---|---|
 | **S8** | Day working state: model-judged updates to the card, app, push, chat and console | A moved meeting never changes the delivered Brief. No push fires. After the Close, updates wait until tomorrow (§E). | S0 + decisions 8–10 |
 | **S9** | One main thread (#1544's design) | Each surface has its own chain. Telegram and WhatsApp are invisible in the app and console. The app shows iMessage rows the model doesn't share (§G). | Decision 11 (and #1463 for iMessage) |
+| **S10** | Workspace Events (Drive/Docs, Meet) | Owner ruling: proactive about Workspace changes. Only Calendar and Gmail have push today; the MCP servers have none. | S8 + an owner decision on the OAuth scopes |
 | **S0** | Eval parity: staging profile, live-judged subset, per-scenario cost and round metrics | Live suite never ran. Recorded mode grades nothing. Eval config differs from staging in 6 settings. | Owner decisions 1–2 |
 | **S1** | Cost truth: write tokens in the ledger, failed-call spend, per-model attribution, clamp | Ledger has no write column. Failed attempts drop billed tokens. Fallback reprices earlier attempts. | Decision 4 for the migration half |
 | **S2** | `read_tool_output` handle naming | Results say `stored_output`; the tool's strict schema takes only `id` | None (smallest) |
@@ -305,7 +325,7 @@ When something the owner's day depends on changes, Waldo knows within minutes. T
 - the update sweep, the push wake and the 10-minute poll;
 - `update_cards` as the single record of changes, with the owner object's `updateCheck` as its writer;
 - the two-step judgment: a cheap worker judges, and the brain acts only when the worker found something;
-- `WaldoCoordinator` and the final outbox as the effect path.
+- The owner object (`OwnerDO`), the only authority root, and its existing intent-before-I/O effect path through the final outbox. `CLAUDE.md` at this base records that `WaldoCoordinator` and the RunLoop were deleted in B-1.
 
 S8 changes four things.
 
@@ -325,7 +345,7 @@ S8 changes four things.
 **3. The judge chooses effects, with no fixed significance rules.**
 - The apply turn's answer widens from "Update or SKIP" to a typed choice of zero or more effects:
   - `revise_card(card_id)`: a new revision of today's delivered card, written by the day-card writer through the final outbox, linked to the original app row;
-  - `notify`: an `update` push, held during quiet hours, where the revision still lands. **Its text is one fixed line, such as "Waldo has an update to your day"; the detail stays in the app.** The model chooses whether to notify, never the push text;
+  - `notify`: an `update` push on the owner's preferred surface (mostly the app, possibly WhatsApp), held during quiet hours, where the revision still lands. The model writes the text and may name the change: titles, times, attendee names. Health values and email body text never enter it;
   - `say`: a Main chat message, today's update message;
   - `none`.
 - What counts as significant is the model's call, in the existing prompts, given the change (`before → after`), today's delivered cards, the plan and the owner's volume preference.
@@ -368,6 +388,54 @@ S8 changes four things.
 
 `WALDO_DAY_STATE=off` restores today's "Update or SKIP" path and gate. The last-seen table is additive. The `update` push kind and the card revision are additive contract fields that old app builds ignore.
 
+### Proactive between the cards (final ruling 2)
+
+- **Silence isn't the default.** Between the Brief, Check-in and Close, the judge's effects cover anything worth telling the owner: a meeting change, an important new mail, a task done. It writes to the owner's preferred surface, mostly an app push, possibly WhatsApp inside its window.
+- **The model judges what is worth it.** Code holds only the owner's settings (quiet hours, volume, follow-ups off) and the surface's send window.
+- **Card times follow the owner.** The Brief, Check-in and Close are timed from the owner's patterns and calendar: the model proposes the time each day. An owner-set time always wins (`schedule-preferences.ts`). The `defaultTime` values (`prompt/day-cards.ts:18`, `:27`, `:35`) become fallbacks, not rules.
+- **Skills are available to every proactive turn.** The model picks them itself, as it does in chat. They grant no tools (memory-redesign K0, #1705).
+
+### Pre-meeting briefs (the first PR of the S8 lane; final ruling 5)
+
+- **Quality bar.** Granola-quality briefs, built from:
+  - the calendar;
+  - mail search;
+  - Granola MCP and Wispr Flow MCP when connected;
+  - Google;
+  - web research.
+- **Order.** Research first, then a root trace so every send and every skip is visible in Langfuse.
+- **Fixed prep rules that go** [verified at `7e6bce8a`]:
+  - the pre-activity budget hold, about 2 a day (`prepGate` → `held_budget`, `owner-do.ts:4811-4817`);
+  - "Prefer no_op…" in the prep prompt (`channels/event-briefs.ts:88`);
+  - never reconsidering an occurrence until its digest changes (`event-briefs.ts:151`);
+  - routing only to Telegram or the app (`owner-do.ts:4858-4859`).
+- **What replaces them.** The model decides whether, when and how much to prepare. Quiet hours and volume stay as owner settings.
+
+### Real-time sources per product (final ruling 3) [verified against Google's docs, read 30 Oct]
+
+| Product | Best real-time source | Status and notes |
+|---|---|---|
+| Calendar | **Calendar push channels** (existing, `connectors/google-push.ts`) | The Workspace Events API does not cover Calendar. Keep the push and the 10-minute poll. |
+| Gmail | **Gmail `watch` + Pub/Sub** (existing, `GMAIL_PUSH_PROJECT`) | Not in the Workspace Events API. Keep. |
+| Drive and Docs | **Workspace Events API, Drive events** | Event families include `file.v3.contentChanged`, comments and replies, permissions and approvals. Docs are files, so they are covered [inference: the page's examples use the Docs MIME type]. Delivery is Pub/Sub only. A subscription lasts up to 7 days without resource data (4 h with it; 24 h with domain-wide delegation). The authorizing user must have access to the file. The page states no GA or preview status. |
+| Meet | **Workspace Events API, Meet events** | Conferences, participant sessions, recordings, transcripts and smart notes. A user subscription needs the user to **own** the meeting space. Useful for post-meeting follow-ups and for briefing the next meeting. |
+| Chat | Workspace Events API, Chat events | User subscriptions use user OAuth with `chat.*.readonly` scopes. **Defer:** no owner ask, and Chat is a Workspace-account product. |
+| Workspace MCP servers (Gmail, Drive, Docs, Sheets, Slides, Calendar, Chat, People) | **Not a change source** | All are Developer Preview with request/response tools only. Google's page documents no notifications. Since Oct 2026, OAuth clients calling them must be marked "Use this client for an AI-powered agent". There is no Meet MCP server. Keep them for in-turn reads. Decision 13 (defer MCP change detection) stands. |
+
+Sources:
+
+- [Workspace Events API overview](https://developers.google.com/workspace/events)
+- [Drive events](https://developers.google.com/workspace/events/guides/events-drive)
+- [Create a subscription](https://developers.google.com/workspace/events/guides/create-subscription)
+- [Configure the Workspace MCP servers](https://developers.google.com/workspace/guides/configure-mcp-servers)
+- [Workspace developer release notes](https://developers.google.com/workspace/release-notes), for the preview launches and the AI-agent OAuth client requirement.
+
+**Recommendation: a slice S10, after S8 [proposed].** Workspace Events subscriptions for Drive/Docs (comments, replies, `contentChanged`) and Meet (transcripts, smart notes, conference ended), name-only, feeding the same `observed()` hint and S8's judge.
+
+- **Delivery.** Pub/Sub on the project that already carries Gmail push. Ingress goes through `event-ingress.ts` with the same signed-token check as Gmail. Each product's push service account gets publish on the topic, for example `drive-api-event-push@system.gserviceaccount.com`.
+- **Subscription upkeep.** Renewal runs in the existing `watchUpkeep` before the 7-day expiry. Content is read on demand through the REST APIs or MCP inside the judged turn.
+- **Owner steps.** Adding Drive and Meet read scopes to the Google OAuth app, which is in production but unverified, may affect verification. That is an owner decision before S10 builds.
+
 ### Build slice S8
 
 | | |
@@ -376,8 +444,20 @@ S8 changes four things.
 | **Single writer** | `updateCheck` for changes and last-seen state; the day-card writer for revisions through the final outbox; the existing push sender. |
 | **Tests** | Golden: a meeting moved after the Brief gives a revision plus a push. Time-mocked: quiet hours (revision without push), after the Close (the model judges; the hold is gone), DST, time zone change. Concurrent: 5 pushes in a burst give one pass; a change during an open job joins the next job. Degraded: provider down means the change is recorded and the next card covers it; push failure leaves the revision in place. Hostile: an event title carrying instructions stays external-tainted data, and a tainted turn's effects stay card-only. Null: no Google grant means no sweep and a logged reason. |
 | **Migration / ADR** | DO migration (last-seen) / no ADR. It extends the update-card contract additively. App.v1 additions need a gate-allocated revision and a brief for Suyash's app lane: show "updated HH:MM" and handle push kind `update`. |
-| **Hard requirement: push privacy** | The published privacy notice (waldo-landing `content/legal/privacy.md` §6, the Expo row) promises Expo receives a fixed line with no health data, email content or names. So the `update` push body and data carry only a fixed line and fixed keys, the same as `PUSHES.brief` (`expo-push.ts:8-11`). No event title, person's name, email text or health value. **Test:** a moved meeting whose title and attendees include a name and an email address produces a push request whose body and data equal the fixed constants, byte for byte. This changes only if the owner first approves a notice change; the orchestrator drafted both options. |
+| **Hard requirement: push content** (option B, final ruling) | Push text may carry event titles, times and attendee names. It **never** carries health values or email body text to Expo, Apple or Google push. This follows ADR-0081's destination rules and `CLAUDE.md` ("third-party sends"). The privacy notice's Expo row is being updated to match (the orchestrator's PR). **Tests:** a moved meeting with a title and attendee names produces a push that names them; a turn whose context holds a health reading and a mail body produces a push request (body and data) containing neither the reading nor any span of the body. The push body is checked in code at the send boundary, which is a destination rule, not a judgment. |
 | **Flag** | `WALDO_DAY_STATE` [proposed], default off, staging on after S0 scenarios pass. |
+| **App lane** | New enum value: push kind `update` (app.v1 is additive only, so tell the app lane before it ships). The gate allocates the revision when S8 builds. |
+
+### Build slice S10: Workspace Events (Drive/Docs, Meet) [proposed]
+
+| | |
+|---|---|
+| **Files** | `src/connectors/google-push.ts` (subscription create, renew, delete), `src/channels/event-ingress.ts` (Pub/Sub route), `src/channels/owner-do.ts` (admit, then `observed()`), `src/channels/update-cards.ts` (change kinds), tests |
+| **Single writer** | the owner object: subscription state in watch state; changes in `update_cards` through `updateCheck` |
+| **Tests** | the Pub/Sub token is verified, and a bad or replayed token is refused; a subscription renews before 7 days, and an expired one is reported, not silent; an event for a file the owner can't read is skipped; an event name-only payload reaches the judge as a change ref, never as content. Adversarial: a comment containing instructions stays external-tainted data. |
+| **Migration / ADR** | none expected (watch state is a DO KV entry) / none. A new public route needs auth, rate limiting and generic errors (security checklist). |
+| **Flag** | `WORKSPACE_EVENTS` [proposed], default off |
+| **Owner steps** | adding OAuth scopes to the Google app (verification impact); the Pub/Sub publisher grants |
 
 ## G: one main thread (slice S9)
 
@@ -413,7 +493,8 @@ The code comment says so directly (`context-composer/owner-turn.ts:41-42`): unti
 
 - Telegram and WhatsApp move onto the canonical store as part of A.
 - That also gives them compaction through the main chain, which folds S4 in.
-- The iMessage cutover waits on #1463's data-agreement answer, or on #1544's host-set health marker.
+- WhatsApp is live (verified 30 Oct) and is included from the start.
+- The owner has agreed #1463. If a vendor agreement still needs signing, that owner step is the only precondition for the iMessage cutover.
 
 ### Falsifier, metric and rollback
 
@@ -548,7 +629,7 @@ S3–S6 all argue in cost, and the ledger is the only durable per-owner record.
 
 | | |
 |---|---|
-| **Files** | `src/observability/cost-rollup.ts`, `src/llm/pricing.ts`, `src/llm/provider.ts`, `src/channels/owner-turn.ts` (log sites only), `supabase/migrations/<new>_cost_ledger_cache_write.sql`, the `cost_ledger_add` RPC, tests |
+| **Files** | `src/observability/cost-rollup.ts`, `src/llm/pricing.ts`, `src/llm/provider.ts`, `src/channels/owner-turn.ts` (log sites only), `supabase/migrations/20261030140000_cost_ledger_cache_write.sql` (number allocated by the gate), the `cost_ledger_add` RPC, tests |
 | **Single writer** | the owner DO cost rollup (existing). The migration goes through the reviewed-migration lane. |
 | **Tests** | red first: a write reaches the month; a negative uncached input is clamped and logged; a fallback is priced per attempt; a failed attempt with billed usage counts. Adversarial: a replayed batch with the new column is not double-counted (`cost_ledger_batches`); old DO code writing without the column still inserts. |
 | **Migration / ADR** | **migration: yes, additive** / ADR: none (no new store or writer) |
@@ -927,16 +1008,17 @@ Both numbers are provisional.
 
 1. **S0** first. **S2** can go at any time.
 2. **S8 and S9** next, in parallel. Their files mostly differ, but both touch `owner-do.ts`, so each needs its own writer and the gate orders their merges.
-   - S9's iMessage cutover waits on #1463.
+   - S9's iMessage cutover waits only on the owner's vendor-agreement step for #1463, if one is still needed.
    - S8 needs decisions 8–10 and an app-lane brief for the contract additions.
 3. **S7 (A), S1, S5** share the `owner-turn.ts` log sites, so they are serialized in that order. S7 goes first because it has cited evidence.
 4. **S3 (E)** needs S0's `find_tools` metric.
 5. **S4** is folded into S9 (decision 7).
+6. **S10** after S8. It reuses S8's `observed()` hint and judge.
 6. **S6** last.
 
 The memory-redesign scenarios plug into S0 once it merges.
 
-Things this proposal never touches: `WaldoCoordinator`, the trusted RunLoop and physical-effect path, `ContextComposer`'s structure, the forget barrier, and ADR-0081/0082 health rules.
+Things this proposal never touches: the one-brain rule (`OwnerDO` as the only authority root and writer), the intent-before-I/O effect path, `ContextComposer`'s structure, the forget barrier, and ADR-0081/0082 health rules (as amended).
 
 ## Issues
 
@@ -954,3 +1036,4 @@ One issue per slice, in `waldoco/waldo-backend`:
 | S7 cache-miss diagnosis | #1700 |
 | S8 day working state | #1701 |
 | S9 one main thread | #1702 |
+| S10 Workspace Events | #1716 |
