@@ -51,3 +51,26 @@ describe('react_to_message outside the owner\'s own turn', () => {
     expect(p.freeze).toHaveBeenCalledWith('love', scope);
   });
 });
+
+describe('react_to_message by surface', () => {
+  const scope: RunEffectScope = { runId: 'run', attempt: 'a1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => work() };
+  const owner = { trigger: 'user_message', ownerInitiated: true, runScope: scope } as never;
+
+  it('a tapback-only surface sends an emoji it has a tapback for as that tapback, and refuses any other emoji', async () => {
+    const p = { ready: vi.fn(async () => true), freeze: vi.fn(() => 'queued' as const) };
+    expect(await reactToMessageHandler(p).handle({ reaction: '❤️' }, owner)).toEqual({ ok: true, data: { queued: true }, source_taint: null });
+    expect(p.freeze).toHaveBeenCalledWith('love', scope);
+    p.freeze.mockClear();
+    expect(await reactToMessageHandler(p).handle({ reaction: '🔥' }, owner)).toEqual({ ok: true, data: { queued: false, reason: 'unavailable' }, source_taint: null });
+    expect(p.freeze).not.toHaveBeenCalled();
+  });
+
+  it('an any-emoji surface sends the emoji itself, and a tapback name as its emoji', async () => {
+    const p = { anyEmoji: true as const, ready: vi.fn(async () => true), freeze: vi.fn((_emoji: string) => 'queued' as const) };
+    const handler = reactToMessageHandler(p);
+    expect(handler.description).toMatch(/one emoji/);
+    await handler.handle({ reaction: '🎉' }, owner);
+    await handler.handle({ reaction: 'laugh' }, owner);
+    expect(p.freeze.mock.calls.map(([emoji]) => emoji)).toEqual(['🎉', '😂']);
+  });
+});

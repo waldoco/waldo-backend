@@ -88,7 +88,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type IMessageStandardReaction, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
+import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '../memory/claims';
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
@@ -212,7 +212,6 @@ import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkCo
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
-import { STANDARD_REACTION_EMOJI } from './reactions';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -573,8 +572,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   // The WhatsApp turn running now: the owner's message it answers (its wamid), whether that message was itself a swipe-reply,
-  // and the reaction the model chose for it, which goes out after the reply.
-  private activeWhatsApp: { scope: RunEffectScope; wamid: string; threaded: boolean; reaction?: IMessageStandardReaction } | null = null;
+  // and the emoji the model chose for it, which goes out after the reply.
+  private activeWhatsApp: { scope: RunEffectScope; wamid: string; threaded: boolean; reaction?: string } | null = null;
   private activeAbort: AbortController | undefined;
   // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
   private compactionAbort: AbortController | undefined;
@@ -3572,10 +3571,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const progressNoteRoute = progressNoteRoutes[channel];
     const progressNoteTools = progressNoteRoute ? [progressNoteHandler({ log, deliver: progressNoteRoute })] : [];
     // A tapback goes only where a host sends one: iMessage, while the turn's bridge reports tapbacks verified.
-    // On WhatsApp the tapback is held for the running turn and sent after its reply, on the owner's message it answers.
+    // On WhatsApp the reaction, any one emoji, is held for the running turn and sent after its reply, on the owner's message it
+    // answers.
     const whatsappTapbacks: TapbackPort = {
+      anyEmoji: true,
       ready: async () => !!this.activeWhatsApp?.wamid,
-      freeze: (reaction, scope) => {
+      freeze: (reaction: string, scope: RunEffectScope) => {
         const active = this.activeWhatsApp;
         if (!active || active.scope.runId !== scope.runId || active.scope.attempt !== scope.attempt) throw new ClosedRunError();
         if (active.reaction && active.reaction !== reaction) return 'conflict';
@@ -4410,7 +4411,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const active = this.activeWhatsApp;
           if (!active?.reaction || active.scope.runId !== turn.runScope?.runId) return;
           turn.runScope.admit();
-          await routedCall('sendReaction', { message_id: active.wamid, emoji: STANDARD_REACTION_EMOJI[active.reaction] });
+          await routedCall('sendReaction', { message_id: active.wamid, emoji: active.reaction });
         },
       } : {}),
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {

@@ -118,13 +118,14 @@ it('a swipe-reply to Waldo\'s message reaches the turn as Waldo\'s quoted words,
   });
 }, 60_000);
 
-it('Waldo\'s reaction goes out after its reply, on the owner\'s message it answers', async () => {
-  await whatsappOwner('wa-react-out', async (deliver, graph) => {
-    model.react = 'love';
+it.each([['🎉', '🎉'], ['love', '❤️']])('Waldo\'s reaction %s goes out after its reply as %s, on the owner\'s message it answers', async (chosen, emoji) => {
+  await whatsappOwner(`wa-react-out-${emoji}`, async (deliver, graph) => {
+    model.react = chosen;
     await deliver(text('I got the job!', 'wamid.news'));
+    expect(lastTurn()).toContain('Reactions: available.');
     const out = sends(graph);
     expect(out.map(call => call.type)).toEqual(['text', 'reaction']);
-    expect(out[1]!.reaction).toEqual({ message_id: 'wamid.news', emoji: '❤️' });
+    expect(out[1]!.reaction).toEqual({ message_id: 'wamid.news', emoji });
   });
 }, 60_000);
 
@@ -143,7 +144,7 @@ it('a reply quotes the owner\'s message only when another came in after it', asy
 it('a static sticker is read as an image and an animated one gets the honest unsupported reply', async () => {
   await whatsappOwner('wa-sticker', async (deliver, graph) => {
     await deliver({ id: 'wamid.sticker', type: 'sticker', sticker: { id: 'media-sticker', mime_type: 'image/webp', animated: false } });
-    expect(lastTurn()).toContain('sticker.webp');
+    expect(lastMessage()).toContain('data:image/webp;base64,');
     const before = turns().length;
     await deliver({ id: 'wamid.animated', type: 'sticker', sticker: { id: 'media-animated', mime_type: 'image/webp', animated: true } });
     expect(turns().length).toBe(before);
