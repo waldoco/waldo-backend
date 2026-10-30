@@ -43,7 +43,7 @@ describe('modern account controls', () => {
     expect(html).toContain('Access granted · read unverified');
     expect(html).toContain('Disconnect &lt;script&gt;@test.invalid'); expect(html).not.toContain('<script>');
     expect(html).toContain('Link a Telegram account'); expect(html).not.toContain('Unlink Telegram');
-    expect(html).toContain('WhatsApp'); expect(html).toContain('Get a WhatsApp link code'); expect(html).not.toContain('/console/legacy');
+    expect(html).toContain('WhatsApp'); expect(html).toContain('Link WhatsApp'); expect(html).not.toContain('/console/legacy');
     expect(html).toContain('Sign out of this browser'); expect(html).toContain('Sign out everywhere');
     expect(html).not.toContain('/console/connections');
     expect(html).toContain('href="#/connections/imessage"'); expect(html).toContain('href="#/connections/devices"');

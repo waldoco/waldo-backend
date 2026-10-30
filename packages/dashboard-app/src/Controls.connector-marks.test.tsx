@@ -144,6 +144,6 @@ describe('explanations behind an (i) on Connections', () => {
     const googleText = document.getElementById(google.getAttribute('aria-controls')!)!;
     expect(googleText.textContent).toBe('Saved access is permission, not proof that a live Calendar, Gmail or Tasks request worked. Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.');
     expect(row('sample@example.test').textContent).not.toContain('Saved access is permission');
-    expect(row('WhatsApp').querySelector('.disclosure-body p')!.textContent).toBe('Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number.');
+    expect(row('WhatsApp').querySelector('.disclosure-body p')!.textContent).toBe('Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Link WhatsApp opens a chat with Waldo with a one-time code filled in; send it from the WhatsApp number you want linked.');
   });
 });

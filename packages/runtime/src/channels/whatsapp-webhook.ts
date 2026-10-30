@@ -4,6 +4,7 @@ import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, wha
 import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
+import { CONSOLE_PATH } from './console';
 
 export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
@@ -49,7 +50,7 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   // pending: the link sent earlier still works, so the sender is not sent a second one.
   if (opened === 'linked' || opened === 'pending') return null;
   const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
-  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console.`;
+  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
 };
 
 export const WHATSAPP_WEBHOOK_PATH = '/whatsapp/webhook';
