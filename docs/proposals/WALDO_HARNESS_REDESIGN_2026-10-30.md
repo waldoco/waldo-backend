@@ -8,31 +8,59 @@ Design only. This document changes no runtime code, flag, deploy or migration. I
 - **Citations:** a script printed every cited `file:line` at the baseline and I checked each one against its claim. That includes the citations that came from two read-only subagent audits.
 - **Companion:** the memory-redesign session designs memory selection. It owns the memory-selection interface. This document states only what the harness needs from that interface (§Seam).
 
-## Owner decisions
+## Owner direction (30 Oct, relayed by the orchestrator)
 
-None of these is decided here. Each one is needed before the slice it names.
+- Waldo behaves like a real personal assistant. It watches the day and acts ahead of the owner.
+- If a meeting moves two hours after the Brief, Waldo knows. It updates the day card, the app, notifications, chat and the console. The same holds for any Google Workspace or connector change.
+- Messages from iMessage and other channels appear in one main chat thread, in the app and in the console.
+- Nothing is rigid. The model reasons about what matters. Prompt caching and spend discipline still hold.
+- The owner called the earlier recommendations "good". They stand as approved unless a decision below changes them.
 
-1. **Land `evals-live.yml` on `main` (S0).** GitHub schedules and dispatches workflows only from the default branch. `evals-live.yml` returns 404 there, so the live suite has never run. There is precedent for landing dispatch-only workflows on `main`: commits `7296c718d` and `46f21fd76`.
-2. **Approve live eval spend (S0).** Two items:
-   - a nightly cap for the live-judged subset ([proposed] at most 600 calls, set from `pnpm eval:plan` for the subset);
-   - whether the full 3-trial live run (cap 4,000 calls, `evals-live.yml:71`) stays nightly or moves to weekly.
-3. **Langfuse read access for design and gate sessions (S1, S3–S5).** Design sessions have no `LANGFUSE_*` keys, and the built-in browser is not signed in. Every data-gated threshold below needs a read-only export, such as `scripts/cost-report.mjs` with a read-only key, or someone who can run it.
-4. **The cost-ledger write column (S1).** It needs an additive Supabase migration on `waldo.cost_ledger_daily`. Reviewed migrations need owner approval to be applied.
-5. **The router (S6).** Build on draft #1639 once S0 and S1 data exist, or keep deferring it. "Replace" is not offered: the 27 Oct ruling already chose a Decisions router. Two parts need their own approval:
-   - adding Sol/Opus as a `deep` tier;
-   - the new OpenAI Decisions egress, which needs a security review.
-6. **Core tool promotion (S3).** Which deferred tools move into the core set, once S0 measures how often each one is loaded. Moving a tool into core changes the cached tool bytes, and the 26 Oct design calls core membership a gate decision.
-7. **Compaction beyond the app (S4).** Whether iMessage gets compaction once its chains are shown to reach the trigger. Telegram is internal only and WhatsApp is held by Meta verification. Should those two wait until they have real users?
+This adds §E (trace), §F (day working state, slice S8) and §G (one main thread, slice S9).
+
+## Owner decisions, with recommendations
+
+Each item can be answered with yes or no. The **recommendation** comes first.
+
+| # | Decision | Recommendation | Why |
+|---|---|---|---|
+| 1 | Land `evals-live.yml` on `main` (S0). GitHub runs and dispatches workflows only from the default branch, where it is 404 today. | **Yes.** Same as the dispatch-only precedents `7296c718d` and `46f21fd76`. | No slice can be measured without it. |
+| 2 | Live eval spend (S0) | **Yes**, with two parts: (a) the live-judged subset runs nightly, capped at about 600 calls; (b) the full 3-trial run (cap 4,000, `evals-live.yml:71`) moves to weekly. | Daily signal on what S8/S9 change, at about a seventh of the full run's cost. The numbers are provisional. |
+| 3 | Langfuse read access | **Yes.** Add one project-scoped Langfuse secret key to the orchestrator's local `.env`, the file that already holds the public key. Never in the repo, prompts or logs. Design sessions get read-only exports through the orchestrator. | S1, S3–S5 and S7 are all gated on trace data. The 30 Oct cache check could only be done by reading the UI by hand. |
+| 4 | Cost-ledger write column (S1) | **Yes.** An additive migration with default 0, through the reviewed-migration lane. | The ledger can't separate write cost today. |
+| 5 | Router (S6) | **Defer.** Build on #1639 only when the S6 thresholds are met. Adding Sol/Opus as a tier and the Decisions egress each need their own yes later. | No per-turn data shows a saving yet. |
+| 6 | Core tool promotion (S3) | **No promotion now.** Decide per tool from S0's data. | Promotion costs cached bytes on every round. |
+| 7 | Compaction beyond the app (S4) | **Fold it into S9.** Once every surface writes the one main chain, that chain's existing compaction covers them, if the job is triggered from every drain. Before S9, no separate iMessage compaction. | Avoids building per-surface compaction twice. |
+| 8 | **New.** A delivered day card can be **revised**: Waldo writes a new revision, shown as "updated HH:MM" in the app and console. On surfaces that can't edit, Waldo sends an update message. | **Yes.** | The owner's meeting example. The original card stays in history; nothing is rewritten in place. |
+| 9 | **New.** A phone notification for a change the model judges worth interrupting for. It is a new push kind, `update`, an additive app.v1 contract change whose revision the gate allocates. Quiet hours and the owner's volume preference still hold. | **Yes.** | Today no push fires for an update (`expo-push.ts:8-11`). |
+| 10 | **New.** Remove the fixed "after the Close, hold every update until tomorrow" rule (`owner-do.ts:4921`). The model judges whether a change after the Close matters, such as tomorrow's 08:00 meeting moving. | **Yes.** Quiet hours and volume stay, because they are owner preferences, not judgments. | `CLAUDE.md`: no fixed rules for judgment calls. |
+| 11 | **New.** One main thread: build #1544's "one timeline" design as S9, behind `WALDO_ONE_TIMELINE`. | **Yes**, but iMessage cutover waits on #1463's data-agreement answer, or on #1544's host-set health marker. Recommend also answering #1463. | Owner direction. The design exists and needs no new store. |
+| 12 | **New.** An owner-approved two-call Luna probe, if S7's digests show identical prefixes and the misses continue | **Yes**, capped at $0.01. | It settles whether caching is happening on the provider side. |
+| 13 | **New.** Change detection on MCP connectors | **Defer.** Calendar and Gmail changes already come through the REST Google grant. MCP servers have no push, and polling them costs model-free API calls with no clear owner value yet. Revisit if an owner connects a connector that has no REST path. | Today MCP is read only inside turns (`tools/live/mcp.ts`). |
 
 ## Summary
 
+Ranked by owner value, after the 30 Oct direction:
+
+1. **S0**: measurement for everything else.
+2. **S8**: the day keeps up.
+3. **S9**: one main thread.
+4. **S7**: cache-miss diagnosis.
+5. **S1**: cost truth.
+6. **S2**: small; any time.
+7. **S3**, **S5**, **S6**: data-gated.
+
+S4 folds into S9.
+
 | Slice | What | Cited failure | Gate to start |
 |---|---|---|---|
+| **S8** | Day working state: model-judged updates to the card, app, push, chat and console | A moved meeting never changes the delivered Brief. No push fires. After the Close, updates wait until tomorrow (§E). | S0 + decisions 8–10 |
+| **S9** | One main thread (#1544's design) | Each surface has its own chain. Telegram and WhatsApp are invisible in the app and console. The app shows iMessage rows the model doesn't share (§G). | Decision 11 (and #1463 for iMessage) |
 | **S0** | Eval parity: staging profile, live-judged subset, per-scenario cost and round metrics | Live suite never ran. Recorded mode grades nothing. Eval config differs from staging in 6 settings. | Owner decisions 1–2 |
 | **S1** | Cost truth: write tokens in the ledger, failed-call spend, per-model attribution, clamp | Ledger has no write column. Failed attempts drop billed tokens. Fallback reprices earlier attempts. | Decision 4 for the migration half |
 | **S2** | `read_tool_output` handle naming | Results say `stored_output`; the tool's strict schema takes only `id` | None (smallest) |
 | **S3** | Loader carry-over | Definitions are not carried to the next turn; a deferred-tool turn pays a `find_tools` round, about 3–8 s on staging | S0 metrics + threshold |
-| **S4** | Compaction beyond the app (iMessage first) | No trace yet. The mechanism is verified: a plain window that slides once full re-bills the history every turn. | S0 + trace threshold + decision 7 |
+| **S4** | Compaction beyond the app (iMessage first) | No trace yet. The mechanism is verified: a plain window that slides once full re-bills the history every turn. | Folded into S9 (decision 7) |
 | **S5** | In-turn tool results | No change. Modelled only; needs write-billing data. | ≥7 days of write data + instrumentation |
 | **S6** | Router (#1639) | No per-turn cache data exists yet. | S0 + S1 + decision 5 |
 | **S7** | Diagnose prompt-cache misses | The first round of each Terra chat turn is uncached (about 36k tokens); Luna jobs never cache. Langfuse metadata, read by the orchestrator. | None for the measurement; P0 for any fix |
@@ -175,6 +203,18 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 - Mark up to 5 cases with S0's `live_subset: true` so they run in the nightly live-judged subset.
 - Raise `min_scenarios` (`evals/nightly/gate.ts:28-29`) in the same PR.
 
+**Event-input seam, agreed by message on 30 Oct.** Memory-redesign asked; the harness confirmed it at about 07:10Z.
+
+- The day's working state is a **read view over the existing tables**, each keeping its own writer: `update_cards` with observed mail, episodes, loops and health freshness. There is no new day-state store. S8's last-seen calendar table is written only by `updateCheck`.
+- After an ingestion commit, the owner object emits `observed({kind, refs, taint, at, localDay})`.
+  - It carries ids only and no text, and is emitted after the commit, outside the transaction.
+  - It is a **wake hint, not a record.** Each consumer reads by its own watermark, as the nightly source pass does (`update-cards.ts:96-100`), so a lost hint costs only latency.
+  - It has two consumers: S8's day-update judge, and memory's debounced consolidator.
+- Memory's consolidator is owned by memory-redesign:
+  - at most one pass per 15 minutes and 6 extra passes per day, both provisional;
+  - every pass is logged through `llm_*`, so it counts in the ceiling, and passes are skipped at the spend cap;
+  - input is bounded to rows since its watermark.
+
 **Agreed terms.** memory-redesign proposed the interface below, and the harness confirmed it on 30 Oct. Its doc (`docs/proposals/WALDO_MEMORY_REDESIGN_2026-10-30.md`) owns the detail:
 
 - **Call:** `selectMemory({ view, text, previous?, turn, room: { core, recalled }, deadlineMs }) -> { core, recalled, shown, failed, revision }`. Both `room` fields are hard caps, defaulting to 5,200 and 3,000 characters.
@@ -183,6 +223,188 @@ What the harness needs from the memory-selection interface. memory-redesign owns
 - **Placement:** memory stays in the per-message suffix. No harness slice moves it.
 - **`revision`:** used for the "core changed vs the previous turn" metric and for freezing within the turn. It is not used for the cross-turn cache.
 - **Scenarios:** memory-redesign adds its scenarios in the `state-memory-scenarios.ts` shape and proposes m08, m09, m10, m12 and m13 for `live_subset` once S0 (#1684) lands. Its doc (PR #1691, §1.6) records the same terms.
+
+## E: "a meeting moves after the Brief", traced at 7e6bce8a
+
+A read-only subagent traced this path. I checked its key lines myself: `expo-push.ts:8-11`, `owner-do.ts:4919-4923`, `:5002-5006`, `update-cards.ts:108-112`, `:131-136`. Every other citation went through the line-printing script.
+
+### What happens today, step by step [verified]
+
+1. **The push.** Google's push carries no event data (`connectors/google-push.ts:1-3`).
+   - `handleCalendarPush` checks the channel token and forwards the call to the owner object (`channels/event-ingress.ts:115-136`).
+   - `calendarPush` (`owner-do.ts:2240-2250`) admits it and calls `wakeBriefSweep`. That moves the 10-minute sweep earlier, to no sooner than 60 s after its last run (`channels/calendar-push.ts:14`, `:52-56`).
+   - With no armed sweep (event briefs off, or the time zone not confirmed), nothing happens (`calendar-push.ts:51`).
+2. **The poll fallback.** The sweep runs every 10 minutes (`channels/event-briefs.ts:12`). Its run calls `updateCheck` (`owner-do.ts:4890`).
+3. **Detection.** `readChanges` lists events with `updatedMin` set to the watermark, over the next 48 hours only (`update-cards.ts:131-134`).
+   - A fixed rule labels each change: `cancelled`, `added` (created after the watermark) or `changed` (`update-cards.ts:108-112`).
+   - **No earlier state is stored, so "moved from 10:00 to 15:00" can't be said.** Only the new time is known [inference from `toChange`].
+4. **The record.** `updateSweepCheck` writes the `update_cards` row, the watermarks and, if the gate is open, a reader job, all in one transaction (`update-sweep.ts:44-78`). The writer is the owner object's `updateCheck`.
+5. **The gate, fixed rules** (`owner-do.ts:4919-4923`). An update is held when:
+   - follow-ups are off;
+   - **the Close was sent today;**
+   - volume is low;
+   - it is quiet hours;
+   - the surface can't send now.
+
+   Follow-ups, volume and quiet hours are owner preferences. "The Close was sent" is a judgment call in code (decision 10).
+6. **The judgment.** It is all done by the model:
+   - a worker reader job judges which changes affect today or tomorrow (`prompt/machine-jobs.ts:19-28`);
+   - then the brain's apply turn writes "Update" with one to three lines, or `SKIP` (`update-sweep.ts:110-127`).
+
+### What the owner sees
+
+| Effect | Today |
+|---|---|
+| The delivered Brief | **Never changes.** `dayCardFinalId` stops a re-send (`owner-do.ts:5002-5006`). The change waits for the next main card: the Check-in at 14:00, or tomorrow's Brief if the Close already went. |
+| A separate "Update" message | Only if both model calls say so. It is dropped if not delivered within 30 minutes (`update-sweep.ts:22`). |
+| App | A new Main chat row for that update only (`proactive-surface.ts:110-122`). The Brief row is untouched. |
+| Phone push | **None.** Push kinds are `brief` and `approval` only (`expo-push.ts:8-11`). |
+| Console Today | "Today's messages" still shows the original Brief. Day history lists delivered updates (`day-history.ts:89-100`). Changes that were recorded but held are shown nowhere. |
+| Gmail | The same path: the push only wakes the sweep (`owner-do.ts:2253-2260`). At most 10 new primary-inbox mails per tick (`update-cards.ts:136`). With `MAIL_SOURCE_FOLLOWUPS=1`, the apply turn may open a loop. |
+| MCP connectors | No push and no polling. They are read only inside turns (`tools/live/mcp.ts:212`, `:287`). |
+
+### Where it stops
+
+The delivered card never changes, and nothing interrupts the owner. A change after the Close waits until tomorrow. Old times aren't known. Moves outside 48 hours aren't seen. While a sweep job is open, new changes wait (`update-sweep.ts:47`).
+
+## F: a working state for the day (slice S8)
+
+### Goal
+
+When something the owner's day depends on changes, Waldo knows within minutes. The model decides whether it matters and what to do: revise the card, notify, say it in chat, or stay quiet. Every effect goes through the one existing path.
+
+### What stays
+
+- the update sweep, the push wake and the 10-minute poll;
+- `update_cards` as the single record of changes, with the owner object's `updateCheck` as its writer;
+- the two-step judgment: a cheap worker judges, and the brain acts only when the worker found something;
+- `WaldoCoordinator` and the final outbox as the effect path.
+
+S8 changes four things.
+
+**1. Know what it was.**
+- Store a small "last seen" projection per calendar event: id, start, end, a title digest and attendee count. It's a DO table written only by `updateCheck`, inside its existing transaction, kept for 14 days.
+- Then the change carries `before → after`, and the model can say "moved from 10:00 to 15:00".
+- Widen the read window to now−1 day through now+14 days, so a move out of the next 48 hours is seen. Google filters by the event's current times, so a meeting moved to next week is otherwise invisible [inference].
+- This needs a DO migration reserved in the lineage guard (`guard-do-migration-lineage`), plus a short contract note. Raw calendar text stays in the existing projection (`calendarPromptProjection`). No health values.
+
+**2. One hint, two consumers.**
+- After any ingestion commit (update record, mail observed, health freshness, chat episode), the owner object emits `observed({kind, refs, taint, at, localDay})`. It carries ids only, and is emitted after the commit, outside the transaction.
+- It is a wake hint only. Each consumer reads by its own watermark, so a lost hint costs latency, not data.
+- **Consumers:**
+  - the update judge (this slice), which pulls the sweep forward as push does today;
+  - memory-redesign's debounced consolidator, which owns how events become claims. This was agreed by message on 30 Oct; see §Seam.
+
+**3. The judge chooses effects, with no fixed significance rules.**
+- The apply turn's answer widens from "Update or SKIP" to a typed choice of zero or more effects:
+  - `revise_card(card_id)`: a new revision of today's delivered card, written by the day-card writer through the final outbox, linked to the original app row;
+  - `notify`: an `update` push, held during quiet hours, where the revision still lands;
+  - `say`: a Main chat message, today's update message;
+  - `none`.
+- What counts as significant is the model's call, in the existing prompts, given the change (`before → after`), today's delivered cards, the plan and the owner's volume preference.
+- Code enforces only authority and preferences:
+  - quiet hours;
+  - the volume preference;
+  - follow-ups off;
+  - a surface that can't send now;
+  - the outbox's dedup.
+- The "Close already sent" hold is removed (decision 10).
+- On Telegram, iMessage and WhatsApp a card can't be edited. There, `revise_card` is delivered as a short update message, and the app and console show the revision.
+
+**4. Nothing gets lost.**
+- A change seen while a sweep job is open joins the next job instead of waiting for it (`update-sweep.ts:47`).
+- An update not delivered within 30 minutes is still folded into the next card, as today. It is also listed under the card's revision in the console Today view, so recorded-but-held changes are visible there.
+
+### Cost and caching [proposed; all numbers provisional]
+
+- **Debounce.** At most one judge pass per 5 minutes per owner. A burst of pushes coalesces into one pass. The pull-forward gap is 60 s today; the judge's own debounce sits on top.
+- **Cheapest judge.** The worker step stays on Luna. Its input is bounded to the changes (`before → after`), the delivered cards' summaries and the plan, with a character cap.
+  - S7 shows Luna isn't caching on staging today, so input size is the lever.
+- **Escalation.** The brain's apply turn on Terra runs only when the worker found something. The change text goes in the machine turn's per-message suffix, so the cached prefix (instructions, tools, history) holds.
+- **Budget.** Every pass is logged through `llm_*`, so it counts in the ceiling, and passes are skipped when the spend cap is reached. [proposed] Cap: 24 judge passes per owner per day. That is about $0.03 on Luna at 10k input [inference].
+
+### Falsifiers and threshold
+
+- **Falsifier.** In the S0 day-change scenarios, the model notifies for changes a human judge marks trivial, or misses moves the judge marks material, in more than 2 of 10 [proposed].
+  - If that happens, fix the prompts and the context given to the judge. Never add a significance rule in code.
+- **Done.** Latency from a calendar change to a visible revision is p50 ≤ 2 minutes with push on, and ≤ 11 minutes on the poll.
+
+### Metrics
+
+- latency from change to the first visible effect;
+- effects chosen per change, as bounded counts;
+- pushes per owner per day;
+- judge and apply cost per owner per day (S1 ledger);
+- the S0 scenarios. These are new: "meeting moved after the Brief", "cancelled after the Close for tomorrow 08:00", "trivial title edit", "burst of 5 pushes", and "change during quiet hours".
+
+### Rollback
+
+`WALDO_DAY_STATE=off` restores today's "Update or SKIP" path and gate. The last-seen table is additive. The `update` push kind and the card revision are additive contract fields that old app builds ignore.
+
+### Build slice S8
+
+| | |
+|---|---|
+| **Files** | `src/channels/update-cards.ts`, `src/channels/update-sweep.ts`, `src/prompt/update-cards.ts`, `src/channels/owner-do.ts` (gate, apply effects, `observed` emit), `src/channels/expo-push.ts`, day-card revision in `src/channels/day-cards.ts`, `src/channels/day-history.ts`, `packages/contracts` (app.v1 additive: push kind `update`, card revision), DO migration, tests |
+| **Single writer** | `updateCheck` for changes and last-seen state; the day-card writer for revisions through the final outbox; the existing push sender. |
+| **Tests** | Golden: a meeting moved after the Brief gives a revision plus a push. Time-mocked: quiet hours (revision without push), after the Close (the model judges; the hold is gone), DST, time zone change. Concurrent: 5 pushes in a burst give one pass; a change during an open job joins the next job. Degraded: provider down means the change is recorded and the next card covers it; push failure leaves the revision in place. Hostile: an event title carrying instructions stays external-tainted data, and a tainted turn's effects stay card-only. Null: no Google grant means no sweep and a logged reason. |
+| **Migration / ADR** | DO migration (last-seen) / no ADR. It extends the update-card contract additively. App.v1 additions need a gate-allocated revision and a brief for Suyash's app lane: show "updated HH:MM" and handle push kind `update`. |
+| **Flag** | `WALDO_DAY_STATE` [proposed], default off, staging on after S0 scenarios pass. |
+
+## G: one main thread (slice S9)
+
+### Current state [verified]
+
+A subagent traced this. I checked `context-composer/owner-turn.ts:38-43`, `conversation/canonical-owner-store.ts:78-79`, `channels/app-api.ts:348` and `conversation/joined-path.ts:70` myself.
+
+| Surface | Chain and store | In the app's main chat? | In the console's main thread? | In the model's history? |
+|---|---|---|---|---|
+| App | `owner:<principal>`, canonical store (`context-composer/owner-turn.ts:43`; `owner-do.ts:4292`) | Yes | Yes (the console forwards to the app endpoint, `console-chat.ts:58`) | Its own chain only (`joined-path.ts:70`) |
+| iMessage | its own chain, in the same canonical store (`imessage/ingress.ts:11`; `owner-do.ts:4298`) | **Yes, mixed in**, labelled `imessage` (`canonical-owner-store.ts:188`; `app-api.ts:348`) | Yes | **No.** Its own chain; episode recall only |
+| Telegram | `telegram-<subject>`, legacy `conv:*` store (`owner-do.ts:3962`, `:4199`) | No | No | No |
+| WhatsApp | `whatsapp-<chat>`, legacy store; no admitted owner context (`owner-do.ts:4181`) | No | No | No |
+
+The code comment says so directly (`context-composer/owner-turn.ts:41-42`): until the single transcript, each surface keeps its own chain.
+
+### Cited failure
+
+- **What the owner sees and what Waldo holds in context disagree.** The app shows iMessage messages that the app-side model doesn't have in its history, and the reverse.
+- **Telegram and WhatsApp are invisible** in the app and the console.
+
+### Options
+
+- **A.** Build #1544's "one timeline" (draft, head `8d49bfab`):
+  - one main chain `owner:<principal>`, read and written by every user surface;
+  - the delivery binding split from the history chain;
+  - a forward-only cutover behind `WALDO_ONE_TIMELINE`;
+  - no new store.
+- **B.** A merged read view only: the app and console show all surfaces interleaved by time, while the model's chains stay separate. Cheaper, but it keeps the disagreement the owner noticed.
+- **C.** Status quo.
+
+### Recommendation: A [proposed]
+
+- Telegram and WhatsApp move onto the canonical store as part of A.
+- That also gives them compaction through the main chain, which folds S4 in.
+- The iMessage cutover waits on #1463's data-agreement answer, or on #1544's host-set health marker.
+
+### Falsifier, metric and rollback
+
+- **Falsifier:** after cutover, a turn on any surface fails to see the previous turn from another surface within the window. The S0 scenario is "said on iMessage, asked in app".
+- **Metric:**
+  - the cross-surface recall scenario passes;
+  - zero rows in the app main chat that the model's main chain lacks.
+- **Rollback:** `WALDO_ONE_TIMELINE=off`. The cutover is forward-only, so rows written to the main chain stay readable there [per #1544].
+
+### Build slice S9
+
+| | |
+|---|---|
+| **Files** | per #1544: `src/context-composer/owner-turn.ts` (`ownerChainRef`), `src/channels/owner-do.ts` (history factories for Telegram, WhatsApp and iMessage; compaction trigger from every drain), `src/conversation/canonical-owner-store.ts`, `src/channels/app-api.ts`, tests |
+| **Single writer** | the owner object's conversation chain writer through the canonical store |
+| **Tests** | per #1544, plus: said on iMessage then asked in the app (golden); a WhatsApp turn admitted with an owner context; compaction triggered from an iMessage drain on the main chain. Adversarial: a row from another owner's chat is never attached; a forget lands across surfaces. |
+| **Migration / ADR** | none for the store. #1544 drafts an ADR-0077 amendment. |
+| **Flag** | `WALDO_ONE_TIMELINE` |
+| **App lane** | Show the surface badge (it already exists as `channel`). No contract change needed for reads [inference]. |
 
 ## S0: eval parity (do first)
 
@@ -675,11 +897,13 @@ Both numbers are provisional.
 
 ## Order and dependencies
 
-1. **S0** first, then **S2** (independent and small).
-2. **S1** next. S1 and S5 both touch `owner-turn.ts` log sites, so serialize them. S7 (A) touches the same log sites, so it joins that queue. It goes ahead of S5, because it has cited evidence.
-3. **S3 (E)** needs S0's `find_tools` metric.
-4. **S4** needs S0, a trace query (decision 3) and decision 7.
-5. **S5** needs S1's write data.
+1. **S0** first. **S2** can go at any time.
+2. **S8 and S9** next, in parallel. Their files mostly differ, but both touch `owner-do.ts`, so each needs its own writer and the gate orders their merges.
+   - S9's iMessage cutover waits on #1463.
+   - S8 needs decisions 8–10 and an app-lane brief for the contract additions.
+3. **S7 (A), S1, S5** share the `owner-turn.ts` log sites, so they are serialized in that order. S7 goes first because it has cited evidence.
+4. **S3 (E)** needs S0's `find_tools` metric.
+5. **S4** is folded into S9 (decision 7).
 6. **S6** last.
 
 The memory-redesign scenarios plug into S0 once it merges.
@@ -700,3 +924,5 @@ One issue per slice, in `waldoco/waldo-backend`:
 | S5 tool-result instrumentation | #1689 |
 | S6 router on #1639 | #1690 |
 | S7 cache-miss diagnosis | #1700 |
+| S8 day working state | #1701 |
+| S9 one main thread | #1702 |
