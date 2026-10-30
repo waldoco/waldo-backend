@@ -10,7 +10,7 @@ export const rememberArgsSchema = z.strictObject({
   evidence_quote: z.string().min(1),
   replaces_id: claimIdSchema.optional(),
   aliases: z.array(z.string().trim().min(1)).max(5).optional(),
-  area: lifeAreaSchema.describe('The part of the owner\'s life it mainly belongs to; leave it out when unclear. Energy, mood, stress, focus and sleep patterns are kind health.').optional(),
+  area: lifeAreaSchema.optional(),
 });
 export type RememberArgs = z.infer<typeof rememberArgsSchema>;
 export const forgetMemoryArgsSchema = z.strictObject({
