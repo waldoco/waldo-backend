@@ -553,7 +553,7 @@ There are three layers. Each has one owner and one writer.
   - episodes for chat the model did not save.
 - **Model and writes.** It uses the aux model and writes through `ClaimStore` only. Owner-grounding stays with the admission gate (`ground()`), never with the consolidator.
 - **No text in the event.** The consolidator reads content itself. Nothing is copied into a new store.
-- **Spend.** At most 6 aux calls a day, plus today's nightly calls. Each pass is bounded the way the nightly source pass already is (at most 40,000 input characters a call; the gate's conditions on #1653). Each pass logs through `llm_*`, so it counts in the ledger and the spend ceiling, and passes are skipped once the owner is at the cap. About $0.01 per owner-day at the cap [inference, O8].
+- **Spend.** At most 6 aux calls a day, plus today's nightly calls. Each pass is bounded the way the nightly source pass already is (at most 40,000 input characters a call; the gate's conditions on #1653). Each pass logs through `llm_*`, so it counts in the ledger and the spend ceiling, and passes are skipped once the owner is at the cap. About $0.01 per owner-day at the cap [inference, O8]. On staging the aux model (gpt-6-luna) shows 0 cached tokens, even across rounds of one job (harness-redesign, 30 Oct). So the estimate assumes no cache discount, and input size is the cost lever.
 - **Promotion stays nightly** [proposed]. A pattern needs owner claims on two different days (`claims.ts:1503`), so a daytime promotion pass could rarely admit anything new. The weave stays nightly too.
 
 **Decay** [proposed]. No fixed formula decides what fades. That would be a code rule making a judgment call (CLAUDE.md).
@@ -571,6 +571,15 @@ There are three layers. Each has one owner and one writer.
 - The day's working state is a **read view over existing tables**. There is no new day-state store.
 - The event is a **wake hint, not a record**. Each consumer reads by its own watermark, so a lost hint costs latency, not data.
 - It has two consumers: the harness's day-update judge, and this consolidator.
+- The hint only **schedules** the debounced pass, through the owner DO's scheduler, which keeps one alarm. An in-memory
+  callback alone would be lost on eviction. The pass then reads by its own watermark (`recordedAfter(at, limit)`,
+  `update-cards.ts:96-100`), so no queue row is needed.
+- **The harness's four conditions for the 6 extra passes a day** (provisional):
+  - every pass logs through `llm_*`, so it counts in the cost rollup and the ceiling;
+  - a pass is skipped while the spend cap is hit;
+  - input is bounded to rows since the watermark, under a character cap. The cap is 40,000 characters a pass, the same as
+    the nightly source pass;
+  - it is measured in S0 (m14) and in the harness's cost slice.
 
 ```ts
 // Emitted by the harness in the owner DO after an ingestion commits; never inside the SQLite transaction.
