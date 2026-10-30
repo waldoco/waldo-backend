@@ -9,6 +9,8 @@ import {
   renderSkill,
   skillSchema,
   triggerTypeSchema,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
+  OPENAI_GPT_6_1_TERRA_MODEL,
   type AdapterResult,
   type HookHandler,
   type LLMResponse,
@@ -28,6 +30,7 @@ import {
   type RuntimeLLMRequest,
   type TrustedProviderEffect,
 } from '../src/llm/provider';
+import { ownerRoutePolicy } from '../src/llm/owner-routes';
 import { createUnavailableSkillBudget } from '../src/skills/budget';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
@@ -923,6 +926,59 @@ describe('RuntimeLLMProvider', () => {
       ],
     });
     expect(gateway.requests).toHaveLength(1);
+  });
+
+  describe('tokens billed by a failed attempt', () => {
+    const billed = { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 20, cache_write_input_tokens: 30 };
+    const terraThenSonnet = {
+      trigger: 'user_message' as const,
+      policy: ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }),
+      renderRequest: () => ({ system: 'turn', messages: [{ role: 'user' as const, content: 'hello' }], max_tokens: 512, temperature: 0.3 }),
+    };
+    const ownerCtx = () => runtimeCtx({ trigger: 'user_message' });
+
+    it('stay with the model that billed them: the answering model\'s usage is its own call', async () => {
+      const gateway = new ScriptedGateway((request) => request.step.model === OPENAI_GPT_6_1_TERRA_MODEL
+        ? { ok: false, code: 'transient', error: 'down', spent: billed }
+        : { ok: true, data: response(request.request.model) });
+      const result = await new RuntimeLLMProvider({ gateway }).complete(terraThenSonnet, ownerCtx());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(gateway.requests.at(-1)!.step.model).toBe(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL);
+      expect(result.usage).toMatchObject({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input_tokens: 20, output_tokens: 5, cache_read_input_tokens: 3 });
+      expect(result.usage.cache_write_input_tokens).toBeUndefined();
+      const failed = result.attempts.filter((attempt) => attempt.outcome === 'failure');
+      expect(failed.length).toBeGreaterThan(0);
+      for (const attempt of failed) expect(attempt).toMatchObject({ model: OPENAI_GPT_6_1_TERRA_MODEL, spent: billed });
+    });
+
+    it('are reported on every failed attempt when no model answers', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'transient', error: 'down', spent: billed }));
+      const result = await new RuntimeLLMProvider({ gateway }).complete(terraThenSonnet, ownerCtx());
+      expect(result.ok).toBe(false);
+      const billedAttempts = result.attempts.filter((attempt) => attempt.outcome === 'failure' && attempt.spent);
+      expect(billedAttempts.length).toBeGreaterThan(1);
+      expect(billedAttempts.map((attempt) => attempt.model)).toEqual(gateway.requests.map((request) => request.step.model));
+    });
+
+    it('still join the usage of the same model when it answers on a resend', async () => {
+      const searchTurn = {
+        trigger: 'brief' as const,
+        renderRequest: () => ({
+          system: 'brief', messages: [{ role: 'user' as const, content: 'brief' }], max_tokens: 512, temperature: 0.3,
+          tools: [{ name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } }],
+          tool_search: { namespaces: { calendar: 'Calendar changes and free time.' } },
+        }),
+      };
+      const gateway = new ScriptedGateway((request) => request.request.tool_search
+        ? { ok: false, code: 'invalid_args', error: 'rejected', spent: billed }
+        : { ok: true, data: response(request.request.model) });
+      const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.usage).toMatchObject({ input_tokens: 120, output_tokens: 15, cache_read_input_tokens: 20, cache_write_input_tokens: 30 });
+      expect(result.attempts.every((attempt) => attempt.outcome !== 'failure' || attempt.spent === undefined)).toBe(true);
+    });
   });
 
   describe('a model that refuses the tool search request shape', () => {

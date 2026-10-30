@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { md5Hex } from '../src/channels/md5';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { modelCost } from '../src/llm/pricing';
@@ -30,7 +30,7 @@ describe('costRollupDelta', () => {
   it('turns a model call into a per-day, per-kind, per-model row priced by pricing.ts', () => {
     const usage = llm().usage!;
     expect(costRollupDelta(llm(), DAY)).toEqual({
-      day: '2026-10-20', kind: 'turn', model: OPENAI_GPT_6_LUNA_MODEL, calls: 1, input: 1000, output: 200, cached: 600,
+      day: '2026-10-20', kind: 'turn', model: OPENAI_GPT_6_LUNA_MODEL, calls: 1, input: 1000, output: 200, cached: 600, cache_write: 0,
       web_searches: 1, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: modelCost(usage)!.total,
     });
   });
@@ -47,7 +47,7 @@ describe('costRollupDelta', () => {
 
   it('counts a spend-ceiling hold as one call on held:<tool>, costing nothing, and ignores a malformed hold', () => {
     expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached:browse_act' }, DAY))
-      .toEqual({ day: '2026-10-20', kind: 'turn', model: 'held:browse_act', calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 });
+      .toEqual({ day: '2026-10-20', kind: 'turn', model: 'held:browse_act', calls: 1, input: 0, output: 0, cached: 0, cache_write: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 });
     expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached' }, DAY)).toBeNull();
     expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached:Browse Page' }, DAY)).toBeNull();
   });
@@ -55,6 +55,38 @@ describe('costRollupDelta', () => {
   it('defaults the kind to turn and ignores hops that cost nothing', () => {
     expect(costRollupDelta(llm({ cost_kind: undefined }), DAY)?.kind).toBe('turn');
     expect(costRollupDelta({ trace: 't', hop: 'send', ms: 3, ok: true }, DAY)).toBeNull();
+  });
+});
+
+describe('cache writes', () => {
+  const written = (over: Partial<TurnLogEntry> = {}) => llm({ usage: { model: OPENAI_GPT_6_1_TERRA_MODEL, input: 10_000, output: 100, cached: 2_000, cache_write: 7_000 }, ...over });
+
+  it('rides the row apart from reads, and its cost is the write rate', () => {
+    const delta = costRollupDelta(written(), DAY)!;
+    expect(delta).toMatchObject({ input: 10_000, cached: 2_000, cache_write: 7_000 });
+    expect(delta.usd).toBeCloseTo((1_000 * 1 + 2_000 * 0.05 + 7_000 * 1.25 + 100 * 5) / 1e6, 12);
+  });
+
+  it('reaches the month total and the signed batch through record() and flush()', async () => {
+    const kv = memoryKv(); const rpc = recorder();
+    const rollup = costRollup({ kv, call: rpc.call, doName: 'do-a', newId: ids() });
+    rollup.record(written(), DAY);
+    rollup.record(written(), DAY + 1000);
+    const perCall = (1_000 * 1 + 2_000 * 0.05 + 7_000 * 1.25 + 100 * 5) / 1e6;
+    expect(rollup.monthSpendUsd(DAY)).toBeCloseTo(2 * perCall, 12);
+    expect(rollup.monthSpendUsd(DAY)).toBeGreaterThan(2 * modelCost({ ...written().usage!, cache_write: 0 })!.total);
+    await rollup.flush();
+    expect(JSON.parse(rpc.sent[0]!.args.p_rows as string)).toEqual([expect.objectContaining({ calls: 2, input: 20_000, cached: 4_000, cache_write: 14_000 })]);
+  });
+
+  it('adds to a pending row an earlier DO version stored without the field, without turning the sum into NaN', async () => {
+    const kv = memoryKv(); const rpc = recorder();
+    const old = { day: '2026-10-20', kind: 'turn', model: OPENAI_GPT_6_1_TERRA_MODEL, calls: 1, input: 100, output: 10, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0.001 };
+    kv.put(COST_ROLLUP_KEY, { open: [old] });
+    const rollup = costRollup({ kv, call: rpc.call, doName: 'do-a', newId: ids() });
+    rollup.record(written(), DAY);
+    await rollup.flush();
+    expect(JSON.parse(rpc.sent[0]!.args.p_rows as string)).toEqual([expect.objectContaining({ calls: 2, cache_write: 7_000 })]);
   });
 });
 

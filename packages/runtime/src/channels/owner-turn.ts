@@ -32,6 +32,7 @@ import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, co
 import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
@@ -346,6 +347,16 @@ export const createOwnerResponder = (
       shape,
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
+    // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
+    for (const attempt of result.attempts) {
+      if (attempt.outcome !== 'failure' || !attempt.spent) continue;
+      const { input_tokens: input, output_tokens: output, cache_read_input_tokens: cached, cache_write_input_tokens: written } = attempt.spent;
+      log({ trace, hop: `llm_${purpose}_attempt`, ms: 0, ok: false, error_code: attempt.code, provider: attempt.provider,
+        usage: { model: attempt.model, input, output, cached, ...(written ? { cache_write: written } : {}), web_searches: 0 } });
+    }
+    if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
+      log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
+    }
     if (!result.ok) {
       const message = `live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason, result.scribe_stage].filter(Boolean).join(': ') || result.reason})`;
       const down = modelDownReason(result);
