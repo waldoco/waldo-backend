@@ -1,8 +1,8 @@
-import type { GoogleClient } from '../connectors/google';
+import type { CalendarItem, GoogleClient } from '../connectors/google';
 import { MEETING_PREP_JOB_TEXT } from '../prompt/machine-jobs';
 import { taskBrief } from '../tasks/jobs';
 import type { MachineHandler, MachineSpec } from '../tasks/machine';
-import { calendarPrepDigest, calendarPrepPrompt, checkedMail, parseCalendarPrep, prepIdentity, prepProjection, type eventBriefs, type PrepJob } from './event-briefs';
+import { calendarPrepDigest, calendarPrepPrompt, checkedMail, parseCalendarPrep, prepIdentity, prepProjection, type eventBriefs, type GranolaNotes, type PrepJob } from './event-briefs';
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 
 // Meeting prep as a machine job, for a meeting the owner organized or accepted: the worker reads their mail for it off the
@@ -36,6 +36,8 @@ export type MeetingPrepApplyDeps = Readonly<{
   // The calendar connection still belongs to this owner; throws when it no longer does.
   current(connectionId: string): Promise<void>;
   transaction(work: () => void): void;
+  // Granola's notes on earlier meetings with the same people, read by the harness; undefined when there is nothing to add.
+  granola?(event: CalendarItem, owner: string | null, trace: string): Promise<GranolaNotes | undefined>;
   // The prep decision turn, with no tools and the prep's JSON format: its raw reply.
   decide(trace: string, prompt: string, current: () => Promise<void>): Promise<string>;
   // Queues the note when the interrupt budget admits it, `commit` in the same transaction; false when it is not admitted.
@@ -59,8 +61,10 @@ export const meetingPrepApplier = (deps: MeetingPrepApplyDeps): MachineHandler =
       deps.transaction(io.settle);
       return { held: 'held_stale' };
     }
+    const granola = await deps.granola?.(latest, client.account?.email ?? null, io.trace);
+    await deps.current(connectionId);
     const now = deps.now();
-    const decision = parseCalendarPrep(await deps.decide(io.trace, calendarPrepPrompt(latest, now, deps.timezone, checkedMail(result)), async () => { await io.current(); await deps.current(connectionId); }));
+    const decision = parseCalendarPrep(await deps.decide(io.trace, calendarPrepPrompt(latest, now, deps.timezone, checkedMail(result), granola), async () => { await io.current(); await deps.current(connectionId); }));
     // A reply that is no decision is no note: the job settles unrecorded rather than paying for the same reply again.
     if (decision.kind === 'malformed') { deps.transaction(io.settle); return { held: 'malformed_reply' }; }
     const commit = () => { deps.briefs.commitPrep(identity, now, machine.input_digest); io.settle(); };

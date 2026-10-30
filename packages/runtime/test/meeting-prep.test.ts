@@ -405,3 +405,26 @@ describe('the model judges the prep, and every outcome has a code', () => {
     });
   });
 });
+
+describe('Granola in an accepted meeting\'s prep', () => {
+  it('the apply hands Granola\'s guarded notes to the decision, after the mail, with the trace of its own turn', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const asked: [string, string | null, string][] = [];
+      const a = applyingWith(h, { granola: async (event, owner, trace) => { asked.push([event.id, owner, trace]); return { status: 'checked', text: 'Budget approved last week.' }; } });
+      await a.lane();
+      expect(asked).toEqual([['e1', OWNER, `task:${job.id}:apply`]]);
+      expect(a.decided[0]).toMatch(/Asha sent the agenda[\s\S]*<granola_notes>[\s\S]*Budget approved last week/);
+      expect(a.delivered).toHaveLength(1);
+    });
+  });
+
+  it('an invite the owner has not answered never reads Granola', async () => {
+    await withPrep(({ owner_status: _status, ...event }) => event, async (h) => {
+      await h.sweep();
+      expect(h.decisions[0]).not.toContain('granola');
+      expect(h.decisions[0]).not.toContain('Granola');
+    });
+  });
+});
