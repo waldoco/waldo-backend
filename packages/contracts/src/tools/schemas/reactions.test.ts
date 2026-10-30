@@ -3,8 +3,8 @@ import { iMessageCommandSchema } from '../../channels/imessage-v1';
 import { TOOL_PERMISSIONS, toolNameSchema } from '../permissions';
 import { reactToMessageArgsSchema, reactToMessageResultSchema } from './reactions';
 
-// ADR-0029 valid + invalid pair per schema. The host picks the message a tapback goes on (the owner's message the turn
-// answers), so the model names only the reaction; it can never name a message, chat or custom emoji.
+// ADR-0029 valid + invalid pair per schema. The host picks the message a reaction goes on (the owner's message the turn
+// answers), so the model names only the reaction: a standard tapback or one emoji, never a message, chat or longer text.
 describe('react_to_message arguments', () => {
   it('accepts each standard tapback the iMessage contract sends', () => {
     for (const reaction of ['love', 'like', 'dislike', 'laugh', 'emphasis', 'question']) {
@@ -16,8 +16,12 @@ describe('react_to_message arguments', () => {
     }
   });
 
-  it('rejects a custom emoji, an unknown tapback and any field naming a target', () => {
-    const rejected = [{}, { reaction: '❤️' }, { reaction: 'heart' }, { reaction: { kind: 'custom', emoji: '🔥' } }, { reaction: 'love', messageGuid: 'm1' },
+  it('accepts one emoji: with its variation selector, a skin tone, a joined sequence, a flag or a keycap', () => {
+    for (const reaction of ['🔥', '❤️', '‼️', '👍🏽', '👩‍💻', '❤️‍🔥', '🇮🇳', '1️⃣']) expect(reactToMessageArgsSchema.safeParse({ reaction }).success, reaction).toBe(true);
+  });
+
+  it('rejects text, two emoji, an unknown tapback, a custom emoji object and any field naming a target', () => {
+    const rejected = [{}, { reaction: '' }, { reaction: 'heart' }, { reaction: '🔥🔥' }, { reaction: 'nice 👍' }, { reaction: '🇮' }, { reaction: { kind: 'custom', emoji: '🔥' } }, { reaction: 'love', messageGuid: 'm1' },
       { reaction: 'love', chatGuid: 'iMessage;-;someone' }, { reaction: 'love', action: 'remove' }, null];
     for (const value of rejected) expect(reactToMessageArgsSchema.safeParse(value).success, JSON.stringify(value)).toBe(false);
   });

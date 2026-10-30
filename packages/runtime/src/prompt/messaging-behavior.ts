@@ -136,14 +136,17 @@ export function messagingSystemPrompt(tools: readonly string[], presentation?: S
   const searchLine = toolSearch === 'harness' ? harnessTools(tools) : toolSearch ? TOOL_SEARCH_LINE : undefined;
   const tail = [...(tools.length > 0 && searchLine ? [searchLine] : []), ...(tools.length === 0 ? ['Tools available in this chat: none.'] : [])];
   if (!presentation) return [MESSAGING_BEHAVIOR, ...tail].join('\n\n');
-  return [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation), ...tail].join('\n\n');
+  return [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation, tools), ...tail].join('\n\n');
 }
 
-export function surfacePresentationPrompt(presentation: SurfacePresentation): string {
+// Reactions are available where the host reacts on its own (Telegram) or where the model's reaction tool is offered this
+// turn, so the line can never deny a tool the model holds.
+export function surfacePresentationPrompt(presentation: SurfacePresentation, tools: readonly string[] = []): string {
+  const reactions = presentation.delivery.reactions || tools.includes('react_to_message');
   return [
     'Current surface presentation (host-owned delivery facts; this does not grant approval or change task/source authority):',
     `Surface: ${presentation.surface}. Approval delivery: ${presentation.delivery.approval}.`,
-    `Reactions: ${presentation.delivery.reactions ? 'available' : 'unavailable'}. Attachment sending: ${presentation.delivery.attachments ? 'available' : 'unavailable'}.`,
+    `Reactions: ${reactions ? 'available' : 'unavailable'}. Attachment sending: ${presentation.delivery.attachments ? 'available' : 'unavailable'}.`,
     'Commands: none.',
     'Only describe cards, buttons, reactions, files and commands this host actually delivers. Keep shared reasoning, task context and approval semantics; do not flatten another surface to this one.',
     'Continue from the supplied shared task, decisions, execution and file receipts regardless of surface; do not ask the owner to retell context already supplied. If shared context is unavailable, say what is missing instead of inventing progress or restarting an uncertain effect.',
