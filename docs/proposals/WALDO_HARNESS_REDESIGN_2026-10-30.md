@@ -344,7 +344,7 @@ It is the smallest change that removes the guess.
   - History between turns is user and assistant text only (`conversation-entry.ts:167-172`).
   - `find_tools` results are kept out of the earlier-results context on purpose (`owner-turn.ts:673-679`).
 - **Calling without finding:** `use_tool` can call any admitted tool without `find_tools` (`loader.ts:94-104`).
-  - A `use_tool` call that fails the schema already gets the tool's definition back (`src/conversation/tool-loop.ts:366-370`, shipped with the loader in `f502c7c7b`). So a guess costs at most the round a `find_tools` would have cost.
+  - A `use_tool` call that fails the schema already gets the tool's definition back (`src/conversation/tool-loop.ts:367-371`, shipped with the loader in `f502c7c7b`). So a guess costs at most the round a `find_tools` would have cost.
   - The prompt doesn't tell the model this. It says "find_tools loads their definitions… Load the one you need" (`messaging-behavior.ts:129`), so the model is steered to `find_tools` first [inference: no trace of what it actually does].
 
 ### Cited failure
@@ -361,7 +361,7 @@ Caveat: the measured rounds in that note (`:7-11`) were on hosted tool search wi
 | **B. Data-driven core promotion** | Move the most-loaded deferred tools into core | Static bytes, so the cache prefix stays byte-stable. Every round of every turn pays their definitions as cached input. Each promotion is a gate decision (owner decision 6). |
 | **C. Carry the last turn's loaded definitions into the next turn's frozen suffix** | Those definitions arrive with the owner message, so `use_tool` works with no `find_tools` round | The definitions are paid once per turn as uncached input. That's only worth it when the next turn reuses them. The tools array never changes, so the cache prefix stays byte-stable. Needs a small "loaded last turn" record per chain. |
 | **D. Carry them into `offered`** | Grow the tools array with what was loaded | **Rejected.** The tools array leads the cached prefix. Changing it re-bills everything after it as writes (terra 1.25× input), on every turn the set changes. |
-| **E. Say what already works** | The harness line says `use_tool` may be called directly and a wrong-argument call returns the definition. The mechanism exists (`tool-loop.ts:366-370`); this changes only the prompt. | Whether to guess stays the model's call. A wrong guess costs one round, the same as `find_tools` today; a right guess saves one. One system-prompt string, so the cached prefix changes once, at deploy. |
+| **E. Say what already works** | The harness line says `use_tool` may be called directly and a wrong-argument call returns the definition. The mechanism exists (`tool-loop.ts:367-371`); this changes only the prompt. | Whether to guess stays the model's call. A wrong guess costs one round, the same as `find_tools` today; a right guess saves one. One system-prompt string, so the cached prefix changes once, at deploy. |
 
 ### Recommendation [proposed]
 
