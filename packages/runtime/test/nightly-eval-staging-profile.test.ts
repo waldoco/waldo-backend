@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, OPENAI_PROVIDER, PROVIDER_OF, type LLMResponse } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_FALLBACK_MODEL, WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMResponse } from '@waldo/contracts';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { callBudget } from '../evals/nightly/budget';
@@ -13,7 +13,7 @@ import { scorecardMarkdown, gateScorecard, thresholdsFor } from '../evals/nightl
 const START = '2026-09-24T09:00:00+05:30';
 const scenario = (steps: TrialScenario['steps'], world: TrialScenario['world'] = {}): TrialScenario => ({ id: 'profile-test', start: START, steps, world });
 const STAGING = readStagingVars();
-const LIVE = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: 'claude-opus-5-5', WALDO_EVAL_MAX_CALLS: '600', WALDO_EVAL_PROFILE: 'staging' };
+const LIVE = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, WALDO_EVAL_MAX_CALLS: '600', WALDO_EVAL_PROFILE: 'staging' };
 
 describe('the staging profile', () => {
   it('classifies every variable the staging block of wrangler.jsonc sets, and nothing it no longer sets', () => {
@@ -75,12 +75,12 @@ describe('the staging profile in the run settings', () => {
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'production' })).toThrow(/must be staging/);
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging', WALDO_EVAL_TOOL_SEARCH: 'on' })).toThrow(/leave WALDO_EVAL_TOOL_SEARCH/);
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging', WALDO_EVAL_COMPACTION: 'on' })).toThrow(/leave WALDO_EVAL_TOOL_SEARCH and WALDO_EVAL_COMPACTION/);
-    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_MODEL: 'gpt-6.1-sol' })).toThrow(/staging chat model/);
+    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_MODEL: OPENAI_GPT_6_1_SOL_MODEL })).toThrow(/staging chat model/);
   });
 
   it('holds the judge apart from the fallback models the trials can now meet', () => {
     expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL })).toThrow(/judge must differ/);
-    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: 'claude-haiku-5-5' })).toThrow(/judge must differ/);
+    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_AUXILIARY_FALLBACK_MODEL })).toThrow(/judge must differ/);
     expect(nightlyConfig(LIVE)).toMatchObject({ toolLoader: 'harness', candidate: `${WALDO_CHAT_MODEL}+staging` });
     // Without the profile a trial never meets a fallback model, so the earlier rule stands.
     const { WALDO_EVAL_PROFILE: _profile, ...plain } = LIVE;
