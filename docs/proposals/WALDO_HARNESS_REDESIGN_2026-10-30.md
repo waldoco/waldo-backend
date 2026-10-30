@@ -20,7 +20,14 @@ This adds §E (trace), §F (day working state, slice S8) and §G (one main threa
 
 ## Owner decisions, with recommendations
 
-Each item can be answered with yes or no. The **recommendation** comes first.
+**Status: all 13 approved as recommended.** Source: the owner, 30 Oct, in chat, relayed by the orchestrator.
+
+These still need the owner's own separate action:
+- placing the Langfuse key (decision 3), which the owner saves themselves;
+- each staging flag flip, as a named deploy;
+- the #1463 data-agreement answer (decision 11).
+
+Approving the design starts no build. Each slice still goes through its issue and the gate.
 
 | # | Decision | Recommendation | Why |
 |---|---|---|---|
@@ -103,7 +110,27 @@ How compaction differs by surface [verified]:
 
 ## Step 2: evidence
 
-### Cache writes on staging: [blocked]
+### Cache writes on staging: P0 passed
+
+**Evidence.** The orchestrator read this in the Langfuse UI. It is staging, `llm_reply`, release `7e6bce8aa`, trace key `app-8000000000006`: one app turn on gpt-6.1-terra over 3 rounds. Metadata only; no content was read.
+
+| Round | Uncached input | Cached | Cache write | Total cost |
+|---|---|---|---|---|
+| 1 | 3 | 0 | 16,729 | $0.02110 (the write alone is $0.02091) |
+| 2 | — | 16,729 | 795 | $0.00370 |
+| 3 | — | 17,524 | 3,230 | $0.00594 |
+
+What it shows:
+
+- **[verified by the orchestrator]**
+  - Langfuse records writes as `input_cache_write_tokens` in usage details and `cache_write` in cost details.
+  - Uncached input stays at 3, never negative. So OpenAI's `input_tokens` includes the written tokens, as #1681 assumed (`pricing.ts:26`), and S1's clamp is defensive only.
+- **[inference] Economics.** Writing 16,729 tokens cost $0.0209. Leaving them uncached would have cost $0.0167, about 25% less.
+  - A write pays back only when it is read again. Each read saves $0.95 per 1M against uncached input.
+  - Break-even: about 26% of the written tokens read once. Round 2 alone paid it back here.
+  - The same arithmetic drives S3 (carried definitions), S7 (first-round misses and the retention option) and S8 (keep the change text in the suffix).
+
+**Before P0 passed** (kept for the record):
 
 - I could not confirm `cache_write > 0` on a real staging turn.
   - The Langfuse web UI showed a sign-in page in the built-in browser, and I did not sign in.
@@ -119,7 +146,7 @@ How compaction differs by surface [verified]:
   - In the Langfuse UI, open any `llm_reply` generation on the staging environment that started after 2026-10-30T05:29Z, and read its usage details for `cache_write`.
   - For a count, export the generations and count those with `cache_write > 0`, by model.
   - `scripts/cost-report.mjs` at this SHA can't do this: it never reads `cache_write`, and its windows are whole days.
-- **Precondition P0 for every cost-driven slice** (S1's per-attempt half, S3's B, S4, S5's follow-ups, S6): one staging `llm_reply` usage block after 05:29Z on 30 Oct shows `cache_write > 0`. The owner was asked to check this in Langfuse. Until someone does, P0 is [blocked].
+- **Precondition P0 for every cost-driven slice** (S1's per-attempt half, S3's B, S4, S5's follow-ups, S6): one staging `llm_reply` usage block after 05:29Z on 30 Oct shows `cache_write > 0`. **Passed 30 Oct.** See the evidence above.
 - **Every threshold number in this document is provisional.** That covers each percentage, character size and day count. They are set again once P0 holds and there are at least 7 days of write data.
 
 ### The cost rollup, end to end
@@ -773,7 +800,7 @@ The orchestrator read about 48 staging `llm_reply` observations in Langfuse on r
   - Later rounds in the same turn hit 85–99.7%.
   - One later round hit only about 35–37%.
 - **Luna jobs (Brief and card jobs):** `input_cached_tokens` is 0 on every call, at inputs from about 10k to 114k tokens.
-- **No observation yet on `7e6bce8a`.** The newest is at 02:30Z, before the 05:29Z deploy, so P0 is still [blocked].
+- **When this was first read,** there was no observation on `7e6bce8a` yet. P0 has since passed (§Step 2).
 
 I haven't seen these traces myself. They are a teammate's reading, cited as such.
 
