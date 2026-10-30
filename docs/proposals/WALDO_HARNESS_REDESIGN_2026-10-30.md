@@ -1,0 +1,540 @@
+# Harness redesign proposal, 30 Oct 2026
+
+Design only. This document changes no runtime code, flag, deploy or migration. It is a candidate. The owner approves it before any slice is built, and each slice is then built under its own issue and gate review.
+
+- **Baseline:** `beta-mvp` at `7e6bce8a` (merge of #1683). All file:line citations are at that SHA.
+- **Written:** 2026-10-30, starting 06:25Z (`date -u`).
+- **Tags:** [verified] means read in source at the baseline or observed in a command. [inference] means concluded but not observed. [proposed] means a design choice or number this document puts forward. [blocked] means evidence I could not get, with the reason.
+- **Companion:** the memory-redesign session designs memory selection. It owns the memory-selection interface. This document states only what the harness needs from that interface (§Seam).
+
+## Owner decisions
+
+None of these is decided here. Each one is needed before the slice it names.
+
+1. **Land `evals-live.yml` on `main` (S0).** GitHub schedules and dispatches workflows only from the default branch. `evals-live.yml` returns 404 there, so the live suite has never run. There is precedent for landing dispatch-only workflows on `main`: commits `7296c718d` and `46f21fd76`.
+2. **Approve live eval spend (S0).** Two items:
+   - a nightly cap for the live-judged subset ([proposed] at most 600 calls, set from `pnpm eval:plan` for the subset);
+   - whether the full 3-trial live run (cap 4,000 calls, `evals-live.yml:71`) stays nightly or moves to weekly.
+3. **Langfuse read access for design and gate sessions (S1, S3–S5).** Design sessions have no `LANGFUSE_*` keys, and the built-in browser is not signed in. Every data-gated threshold below needs a read-only export, such as `scripts/cost-report.mjs` with a read-only key, or someone who can run it.
+4. **The cost-ledger write column (S1).** It needs an additive Supabase migration on `waldo.cost_ledger_daily`. Reviewed migrations need owner approval to be applied.
+5. **The router (S6).** Build on draft #1639 once S0 and S1 data exist, or keep deferring it. "Replace" is not offered: the 27 Oct ruling already chose a Decisions router. Two parts need their own approval:
+   - adding Sol/Opus as a `deep` tier;
+   - the new OpenAI Decisions egress, which needs a security review.
+6. **Core tool promotion (S3).** Which deferred tools move into the core set, once S0 measures how often each one is loaded. Moving a tool into core changes the cached tool bytes, and the 26 Oct design calls core membership a gate decision.
+7. **Compaction beyond the app (S4).** Whether iMessage gets compaction once its chains are shown to reach the trigger. Telegram is internal only and WhatsApp is held by Meta verification. Should those two wait until they have real users?
+
+## Summary
+
+| Slice | What | Cited failure | Gate to start |
+|---|---|---|---|
+| **S0** | Eval parity: staging profile, live-judged subset, per-scenario cost and round metrics | Live suite never ran. Recorded mode grades nothing. Eval config differs from staging in 6 settings. | Owner decisions 1–2 |
+| **S1** | Cost truth: write tokens in the ledger, failed-call spend, per-model attribution, clamp | Ledger has no write column. Failed attempts drop billed tokens. Fallback reprices earlier attempts. | Decision 4 for the migration half |
+| **S2** | `read_tool_output` handle naming | Results say `stored_output`; the tool's strict schema takes only `id` | None (smallest) |
+| **S3** | Loader carry-over | Definitions are not carried to the next turn; a deferred-tool turn pays a `find_tools` round, about 3–8 s on staging | S0 metrics + threshold |
+| **S4** | Compaction beyond the app (iMessage first) | No trace yet. The mechanism is verified: a plain window that slides once full re-bills the history every turn. | S0 + trace threshold + decision 7 |
+| **S5** | In-turn tool results | No change. Modelled only; needs write-billing data. | ≥7 days of write data + instrumentation |
+| **S6** | Router (#1639) | No per-turn cache data exists yet. | S0 + S1 + decision 5 |
+
+Dropped from the 776489078 audit after re-checking at `7e6bce8a`:
+
+- **Serial Google reads.** No longer true: `query_calendar`, `get_communication`, `search_communication` and `read_thread` are `concurrent: true` (`tools/records.ts:96-100`) [verified].
+- **Tool list order.** Fixed by #1680 and #1683 [verified, merged].
+
+Every path below is under `packages/runtime/` unless it starts with `packages/`, `supabase/`, `.github/` or `docs/`.
+
+## Step 1: re-baseline at 7e6bce8a
+
+| Audit gap | Status at 7e6bce8a | Where |
+|---|---|---|
+| Compaction covers app threads only | **Confirmed, with a sharper split.** See below. | `src/channels/owner-do.ts:4292`, `:4298`, `:4181`, `:1957-1964` |
+| Loader costs extra rounds; nothing carries over | **Confirmed.** History between turns holds only user and assistant text. `find_tools` results are kept out of the next turn's earlier results on purpose. | `packages/contracts/src/runtime/conversation-entry.ts:167-172`; `src/channels/owner-turn.ts:666-672` |
+| About 160k characters of tool results within a turn | **Confirmed as a constant. Cost question only.** | `src/conversation/tool-loop.ts:85` (`TOOL_RESULTS_KEEP_CHARS = 160_000`), `:90` (`COLD_CACHE_KEEP_ROUNDS = 3`) |
+| Evals don't match staging | **Confirmed, and worse than listed.** The live suite has never run. | §S0 |
+| Monthly ceiling prices writes; check the rollup | **Prices are right on successful calls. The rollup has gaps.** | §S1 |
+| `stored_output` vs `id` | **Confirmed. It is not specific to browse.** The generic offload result uses the same name. | `src/tools/dispatcher.ts:910`, `:954`; `src/channels/cloudflare-public-read.ts:230`; `packages/contracts/src/tools/schemas/reads.ts:353-357` |
+
+How compaction differs by surface [verified]:
+
+- **App:**
+  - The history is the canonical store with `compactionSettings(this.env)` (`owner-do.ts:4292`).
+  - The compaction job `compactApp` runs only from the app inbox drain (`owner-do.ts:1957`). It returns early unless `WALDO_COMPACTION=on` (`:1964`).
+- **iMessage:**
+  - The history is the canonical store with no settings, so it falls back to the default `COMPACTION` with `enabled: false` (`owner-do.ts:4298`; `src/conversation/compaction.ts:8-9`).
+  - No compaction job is triggered from the iMessage drain.
+- **Telegram:**
+  - `telegramContext` has a `contextHost` but no `history` factory (`owner-do.ts:4181-4199`).
+  - The responder therefore reads the legacy `store` (`src/channels/owner-turn.ts:171`).
+- **WhatsApp:**
+  - It runs `this.turn(update, 'whatsapp', …)` (`owner-do.ts:2092`).
+  - `telegramContext` is defined only for `channel === 'telegram'` (`:4181`), so WhatsApp has no context host and no history factory. It gets the legacy store too.
+- **Every non-app surface:** the model sees `windowModelMessages` over a 100k-token budget (`src/conversation/window.ts:27`, `:43-60`).
+  - That window keeps the newest messages and drops the oldest.
+  - It logs a `context_window` hop only when something is dropped (`owner-turn.ts:362-365`).
+
+## Step 2: evidence
+
+### Cache writes on staging: [blocked]
+
+- I could not confirm `cache_write > 0` on a real staging turn.
+  - The Langfuse web UI showed a sign-in page in the built-in browser, and I did not sign in.
+  - No Langfuse keys are present in this checkout or environment.
+- I asked the orchestrator (06:3xZ) whether it can read one `llm_reply` usage block from after 05:29Z.
+- What the code shows [verified]:
+  - Both adapters read write tokens:
+    - OpenAI: `input_tokens_details.cache_write_tokens`, through a cast because SDK 5.12.2 lacks the field (`src/llm/openai.ts:246-249`).
+    - Anthropic: `cache_creation_input_tokens` (`src/llm/anthropic.ts:85-101`).
+  - The per-call log carries `cache_write` (`owner-turn.ts:342-343`).
+  - The cost function prices it at the write rate (`src/llm/pricing.ts:27-37`).
+- **Command for the gate** (read-only, needs a Langfuse key): `node scripts/cost-report.mjs` over `llm_reply` observations since 2026-10-30T05:29Z. Count those with `cache_write > 0`, by model.
+- **Every threshold below that depends on write billing is provisional** until there are at least 7 days of write data [proposed].
+
+### The cost rollup, end to end
+
+**What works** [verified]:
+- The monthly total is DO KV `cost_month_usd` (`src/observability/cost-rollup.ts:107-118`).
+- It uses the same `modelCost(usage).total` (`cost-rollup.ts:49`), so writes are in `usd`.
+- It is written by the owner DO's `log` sink only when `WALDO_COST_LEDGER_SYNC=on` (`owner-do.ts:3414`, `:3442`). Staging sets it on (`wrangler.jsonc:109`).
+- The cap is checked before calls (`src/llm/provider.ts:469`, `:1507-1511`).
+
+**Gaps.** I verified items 1–4 in source. Items 5–6 were found by a read-only subagent; I spot-checked the cited lines, but they need the slice's own red test.
+
+1. **The ledger cannot show write tokens.** `CostRollupRow` has no write field (`cost-rollup.ts:9-13`), and `waldo.cost_ledger_daily` has no column for it (`supabase/migrations/20261020120000_waldo_cost_ledger.sql:6-22`). Writes exist only inside `usd_estimate`, so the durable record can't separate write cost from input cost.
+2. **A failed call logs no usage.** On `!result.ok` the hop has no `usage` (`owner-turn.ts:337`). Tokens billed by attempts before the failure never reach the month.
+3. **Fallback reprices earlier attempts.** `usage: { ...usage, ...addTokens(usage, spent) }` (`provider.ts:658`) folds a failed Terra attempt's tokens into the usage of the model that answered (for example Sonnet). Those tokens are then priced at Sonnet's rates.
+4. **No clamp on uncached input.** `input - cached - cache_write` is not clamped at 0 (`pricing.ts:30`). The comment at `:26` assumes OpenAI's `input_tokens` includes the written tokens, and only the fixture at `test/openai.test.ts:69` encodes that.
+   - If the assumption is wrong, uncached input goes negative.
+   - A negative row would then violate `usd_estimate >= 0` (`migration:19`), and the batch could be dropped after retries [inference].
+5. **Unpriced paths count as $0** [inference, unconfirmed]: the embedder, transcription, and Gemma (`cost-rollup.ts:49`, `?? 0`).
+6. **Side jobs check stale spend.** `turnSpend` is refreshed only in `converse()` (`owner-turn.ts:691`, `:788`). Nightly memory, welcome and compaction calls check whatever was last set [inference].
+
+**Tests.** `test/owner-turn-spend-ceiling.test.ts` checks writes up to the log entry. No test drives writes through `costRollup.record` into the month total.
+
+### The router, draft #1639
+
+Head `3e005f12`, draft, not wired, no flag [verified via `gh pr view`].
+
+- **What it holds:**
+  - `routeTurn`, a pure, sticky, escalate-only tier choice (`light`/`standard`/`deep` → Luna/Terra/Sol);
+  - a Decisions adapter: one `POST /v1/decisions` answered by Luna, which sends the last 4 turns, redacts health numbers, and returns `null` on every failure;
+  - a Sol→Opus fallback route;
+  - `scripts/cost-report.mjs --turns`.
+- **What its own body says is missing:**
+  - no per-turn measurement has run, because Langfuse credentials weren't available;
+  - the Decisions request and response shape comes from unpinned `openai-node` master source;
+  - no labelled set, no threshold tuning, no security review and no A/B.
+
+**Decision for this design: defer, and build on it later rather than replace it.**
+
+- **Why defer:**
+  - Its saving case needs per-turn cold-cache data, which nobody has measured.
+  - Its `light` tier fires only when Terra's cache is cold. OpenAI's TTL is a 30-minute minimum, so that window may be narrow [inference].
+  - Quality per tier can't be measured until S0 exists.
+- **Why build on it rather than replace it:**
+  - The policy is pure, tested, and already escalate-only, which protects the per-model cache.
+  - The owner already chose a Decisions router on 27 Oct.
+
+See §S6 for the action threshold.
+
+## Seam with memory-redesign
+
+**Placement, corrected.** `ContextComposer` and the owner turn consume memory in two places. Neither is in the system prompt [verified]:
+
+- **The pinned memory block** is a `sized` part:
+  - built at `owner-turn.ts:613`;
+  - placed into `turnContext` by `assembleTurnPrompt` (`src/prompt/turn-prompt.ts:60-66`);
+  - appended to the newest owner message as the frozen per-turn suffix (`owner-turn.ts:625-644`).
+- **Per-message recall** is `RECALL_MAX_CHARS = 3_000` (`src/memory/turn-recall.ts:10`), in the same suffix (`owner-turn.ts:586`, `:626`).
+
+What this placement means:
+
+- **Cost.** The suffix is not kept in history for the next turn. So memory bytes are paid once per turn as uncached input, then read from cache on every later round of that turn.
+- **Caching.** Memory changing between turns does not break the cached prefix.
+- **Size.** The pinned block's room is `system_prompt.max_chars` (400,000) minus everything else minus 2,048 (`owner-turn.ts:694`). In practice that means it has no budget.
+
+What the harness needs from the memory-selection interface. memory-redesign owns the inputs, ranking and how each budget is spent.
+
+| # | Need | Why | Number |
+|---|---|---|---|
+| M1 | An explicit character budget for the pinned block, passed in by the harness | It is uncached input on every turn and has no limit today | [proposed] default 12,000 characters |
+| M2 | An explicit character budget for per-message recall | Same reason | 3,000 (the existing constant) |
+| M3 | Deterministic output for the same store state and message: stable order, no wall-clock text | S0 evals compare runs | — |
+| M4 | Bounded latency, degrading to empty recall plus a logged hop, never a failed turn | Selection runs before the first model call | [proposed] p95 ≤ 250 ms on the DO |
+| M5 | One interface for every surface (app, iMessage, Telegram, WhatsApp) and for jobs. The compaction flush keeps `SpanMemory` (`compaction.ts:45-50`). | S4 extends compaction beyond the app | — |
+| M6 | Output stays `owner_store` parts that pass `applyForgetBarrier`. No numeric health. | Forget barrier and ADR-0081 | — |
+| M7 | Bounded metrics: characters emitted per block, and whether the budget was hit (yes/no). No content, no IDs as labels. | Attribute per-turn input cost | — |
+
+**Scenario plug-in.** Memory scenarios join the S0 suite as follows:
+
+- Spread a new array into `NIGHTLY_SCENARIOS` (`evals/nightly/catalogue.ts:14`), shaped as `NightlyScenario` (`evals/nightly/scenarios.ts:11-21`). See `m01-stale-premise` (`evals/nightly/state-memory-scenarios.ts:62-70`) for a worked example.
+- Mark up to 5 cases with S0's `live_subset: true` so they run in the nightly live-judged subset.
+- Raise `min_scenarios` (`evals/nightly/gate.ts:28-29`) in the same PR.
+
+Both points went to the memory-redesign session as messages (the second one corrects the placement in the first). Delivery was queued and is not confirmed read, so this section is the record.
+
+## S0: eval parity (do first)
+
+### Current state [verified]
+
+- **No live run has ever happened.**
+  - `gh run list --workflow evals-live.yml` returns `HTTP 404: workflow evals-live.yml not found on the default branch`.
+  - `docs/evals/LIVE_BASELINE_RUNBOOK.md:5` says "Nothing here has been run live."
+- **Recorded mode grades nothing.** The judge in recorded mode always returns `judge_error` (`evals/nightly/config.ts:34`, `:70-71`).
+- **No pass-rate floor exists.** `min_pass_rate: null` in both modes (`evals/nightly/gate.ts:28-29`).
+- **The eval config differs from staging (`wrangler.jsonc:109`):**
+
+| Setting | Staging | Nightly eval |
+|---|---|---|
+| Tool loader | `harness` (`owner-do.ts:4237`) | Not settable: `runTrial` deps have no `toolLoader` (`evals/nightly/trial.ts:60`, `:73`) |
+| Compaction | `on` | Off unless `WALDO_EVAL_COMPACTION=on` (`config.ts:58`); neither workflow sets it |
+| Fallback models | Sonnet 5.5 / Haiku 5.5 when the Anthropic key is valid (`src/llm/owner-routes.ts:54-56`) | None: the trial passes only an OpenAI key (`trial.ts:73`) |
+| Streaming | `on` | Not wired; the trial calls `respond` directly (`trial.ts:85`) |
+| Surface | app, iMessage, Telegram, WhatsApp | `app` only (`trial.ts:75`) |
+| Tools | Live registry | Synthetic handlers (`evals/nightly/world.ts:320-331`). This one is intentional. |
+
+  `MEMORY_SEMANTIC_RECALL=0` and the forget barrier already match.
+
+### Cited failure
+
+A harness slice measured by this suite today would be measured on a different loader, without fallback, and with no grade. So none of S1–S6 has a way to show it helped or hurt.
+
+### Options
+
+- **A.** A staging profile in the eval config that **reads `wrangler.jsonc` `env.staging.vars` at run time** and maps each turn-shaping variable to the trial deps. A parity test fails when a turn-shaping staging variable has no mapping.
+- **B.** A hand-kept list of eval flags that mirrors staging. It's simpler, but it drifts silently, which is the failure we have today.
+- **C.** Run evals against the deployed staging Worker over HTTP. That's the truest test, but it mutates staging state, costs per run, and can't use the synthetic world.
+
+### Recommendation: A [proposed]
+
+- **`WALDO_EVAL_PROFILE=staging`:**
+  - It sets `toolLoader: 'harness'`, compaction on, the Anthropic fallback (from the existing `WALDO_EVAL_ANTHROPIC_KEY`), the forget barrier and semantic recall as staging sets them.
+  - It runs the scenario's declared surface: `app` by default; `imessage` for cases that declare it, once S4 is relevant.
+- **A parity guard test:**
+  - It holds an explicit list of the turn-shaping staging variables: `WALDO_TOOL_LOADER`, `WALDO_TOOL_SEARCH`, `WALDO_COMPACTION`, `WALDO_FORGET_BARRIER`, `MEMORY_SEMANTIC_RECALL` and the model roster.
+  - It fails if any of them is unmapped or differs from the profile.
+  - A new staging flag that shapes turns then breaks CI until it is classified.
+- **A live-judged subset:**
+  - A `live_subset: true` field on `NightlyScenario`, and a `subset` input on `evals-live.yml` that reaches the runner only through `env:`.
+  - The subset is 12–20 scenarios: harness-sensitive cases (deferred-tool use, long chats, browse paging) plus up to 5 memory cases.
+  - It runs nightly under its own cap.
+- **Per-scenario metrics on the scorecard:**
+  - model rounds;
+  - `find_tools` calls and groups loaded;
+  - peak tool-result characters;
+  - input, cached and write tokens;
+  - USD.
+
+  These are counts only; the scorecard never holds reply text (runbook :22).
+- **A baseline.** The first green subset run at the S0 head is the baseline. Later slices report the delta against it.
+- **Recorded mode** stays a wiring smoke test for PRs. It is not a quality gate.
+
+### Falsifiers and threshold
+
+- **Falsifier.** S0 is wrong if two runs of the same subset at the same SHA disagree on more than 2 scenario verdicts out of 20 [proposed]. That would mean the judge is too noisy to gate on.
+- **If that happens:** raise trials to 3 for the subset, or tighten the rubrics, before any later slice relies on it.
+- **Done when:** one live subset run completes on `main` at the profile, and the parity test is green.
+
+### Proof and rollback
+
+- **Proof:** the parity test, plus one dispatched live subset run that the owner approves (it costs money).
+- **Rollback:** remove the profile. The default config is unchanged, so recorded CI is unaffected.
+
+### Build slice
+
+| | |
+|---|---|
+| **Files** | `evals/nightly/config.ts`, `evals/nightly/trial.ts`, `evals/nightly/scenarios.ts`, `evals/nightly/plan.ts`, `evals/nightly/gate.ts`; a new `evals/nightly/staging-profile.ts`; `.github/workflows/evals-live.yml`; tests under `test/` |
+| **Single writer** | the S0 owner. memory-redesign adds scenario files only, after S0 merges. |
+| **Tests** | parity guard: red when a staging variable is unmapped; profile turns the loader on (trace assertion that a deferred tool goes through `find_tools`/`use_tool`); fallback fires when the OpenAI fake fails; `subset` filter rejects an unknown id before any call; the cap is scaled to the subset plan. Adversarial: an injected `subset` value with shell metacharacters is rejected and never interpolated into `run:`. |
+| **Migration / ADR** | none / none |
+| **Flag** | none in runtime. The profile is an eval-only environment variable. |
+| **Owner** | decisions 1 and 2 |
+
+## S1: cost truth
+
+### Current state, cited failure
+
+See §Step 2, gaps 1–6.
+
+- **Concrete failure:** the durable ledger can't answer "how much of this month's cost was cache writes" [verified, the column doesn't exist].
+- **Pricing that is already wrong:** a fallback turn prices Terra's billed tokens at Sonnet's rates [verified mechanism at `provider.ts:658`; size unmeasured].
+
+### Options
+
+- **A.** Additive `cache_write_tokens` column, plus a per-attempt usage list on the provider result. Each attempt is priced at its own model, and failed attempts log their billed usage as a separate `llm_<purpose>_attempt` usage entry. Uncached input is clamped at 0, and a bounded `usage_anomaly` hop is logged when the clamp fires.
+- **B.** Keep write tokens in Langfuse only, and fix pricing in the DO without a migration. The ledger stays blind to writes.
+- **C.** Leave it as is. Every S3–S6 cost argument then rests on Langfuse exports alone.
+
+### Recommendation: A [proposed]
+
+S3–S6 all argue in cost, and the ledger is the only durable per-owner record.
+
+- **Falsifier:** gap 2 or 3 never fires on staging. Measure failed-with-usage attempts and fallback turns per day from the `fallback_fired` field already on the hop (`owner-turn.ts:335`).
+- **Threshold:**
+  - If fewer than 1% of turns fire a fallback, or fail after a billed attempt, over 7 days [proposed], ship only the column and the clamp.
+  - Defer the per-attempt work.
+
+### Proof and rollback
+
+- **Proof:**
+  - `test/cost-rollup.test.ts` gains write cases;
+  - a fallback test asserts two priced rows, Terra and Sonnet;
+  - the clamp test.
+- **Rollback:** the column is additive with default 0. The DO change reverts cleanly, and the old rows stay valid.
+
+### Build slice
+
+| | |
+|---|---|
+| **Files** | `src/observability/cost-rollup.ts`, `src/llm/pricing.ts`, `src/llm/provider.ts`, `src/channels/owner-turn.ts` (log sites only), `supabase/migrations/<new>_cost_ledger_cache_write.sql`, the `cost_ledger_add` RPC, tests |
+| **Single writer** | the owner DO cost rollup (existing). The migration goes through the reviewed-migration lane. |
+| **Tests** | red first: a write reaches the month; a negative uncached input is clamped and logged; a fallback is priced per attempt; a failed attempt with billed usage counts. Adversarial: a replayed batch with the new column is not double-counted (`cost_ledger_batches`); old DO code writing without the column still inserts. |
+| **Migration / ADR** | **migration: yes, additive** / ADR: none (no new store or writer) |
+| **Flag** | none. It rides `WALDO_COST_LEDGER_SYNC`. |
+
+## S2: `read_tool_output` handle name
+
+### Current state [verified]
+
+- Truncated results name the handle `stored_output`: the generic offload (`src/tools/dispatcher.ts:910`, `:954`) and the browse page (`src/channels/cloudflare-public-read.ts:230`).
+- `read_tool_output` takes a strict `{ id, offset?, length? }` (`packages/contracts/src/tools/schemas/reads.ts:353-357`).
+- Its description says only "The id comes from a truncated tool result" (`src/tools/read-tool-output.ts:13`).
+- A model that passes `{"stored_output": …}` gets `invalid_args`, which costs a round.
+- The cleared-result note does say "call read_tool_output with this id" (`tool-loop.ts:99`).
+- `provider.ts:1693` keys retrieval promises on the `"stored_output"` field, so renaming the field is not free.
+
+### Cited failure
+
+The naming mismatch is verified. That it costs rounds in practice is [inference]: there is no trace yet.
+
+### Options
+
+- **A.** The description names the field: "`id` is the `stored_output` value of a truncated result". It's one string. It changes the cached tool bytes once, at deploy.
+- **B.** Accept `stored_output` as an alias in the schema. This is an additive contract change, but it gives the model two names for one thing.
+- **C.** Rename the result field to `id`. It touches `provider.ts:1693`, the browse result and its tests, and the history text of old turns.
+
+### Recommendation: A [proposed]
+
+It is the smallest change that removes the guess.
+
+- **Falsifier:** `read_tool_output` `invalid_args` is already about zero in Langfuse over 7 days. In that case ship A anyway, since it costs nothing, and close the issue.
+- **Proof:** a scenario in S0's subset that pages a long browse result; it asserts no `invalid_args` on `read_tool_output`.
+- **Rollback:** revert the string.
+
+### Build slice
+
+| | |
+|---|---|
+| **Files** | `src/tools/read-tool-output.ts`; one test |
+| **Single writer** | the S2 owner |
+| **Tests** | the description names `stored_output`; a paging trace in the S0 subset. Adversarial: an id from another call is still refused (the existing provenance check at `provider.ts:1688-1697`). |
+| **Migration / ADR** | none / none |
+| **Flag** | none |
+
+## S3: loader carry-over
+
+### Current state [verified]
+
+- **What is offered:** under `WALDO_TOOL_LOADER=harness`, each round offers the core tools plus `find_tools` and `use_tool` (`src/tools/loader.ts:64-84`). The system prompt names the deferred tools by group (`loader.ts:56-62`; `src/prompt/messaging-behavior.ts:129-131`).
+- **Within a turn:** the offered list is fixed (`loader.ts:9-11`).
+- **Across turns:** loaded definitions don't carry over.
+  - History between turns is user and assistant text only (`conversation-entry.ts:167-172`).
+  - `find_tools` results are kept out of the earlier-results context on purpose (`owner-turn.ts:666-672`).
+- **Calling without finding:** `use_tool` can call any admitted tool without `find_tools` (`loader.ts:94-104`). Only the argument shape is unknown to the model.
+
+### Cited failure
+
+The 26 Oct design note states the cost (`docs/planning/agnostic-tool-loading.md:87`): "a turn that needs a deferred tool pays one `find_tools` round (about 3–8 s on staging)… Loaded definitions do not carry into the next turn." The staging probe's question used `get_communication`, which is deferred (group `mail`, `records.ts:97`).
+
+Caveat: the measured rounds in that note (`:7-11`) were on hosted tool search with `gpt-6.1-sol`, not on the harness loader. **No trace measures how often `find_tools` runs under `harness` on Terra.**
+
+### Options
+
+| Option | What it does | Trade-off |
+|---|---|---|
+| **A. Status quo** | Nothing | One extra round whenever a turn needs a deferred tool |
+| **B. Data-driven core promotion** | Move the most-loaded deferred tools into core | Static bytes, so the cache prefix stays byte-stable. Every round of every turn pays their definitions as cached input. Each promotion is a gate decision (owner decision 6). |
+| **C. Carry the last turn's loaded definitions into the next turn's frozen suffix** | Those definitions arrive with the owner message, so `use_tool` works with no `find_tools` round | The definitions are paid once per turn as uncached input. That's only worth it when the next turn reuses them. The tools array never changes, so the cache prefix stays byte-stable. Needs a small "loaded last turn" record per chain. |
+| **D. Carry them into `offered`** | Grow the tools array with what was loaded | **Rejected.** The tools array leads the cached prefix. Changing it re-bills everything after it as writes (terra 1.25× input), on every turn the set changes. |
+| **E. Self-repair on `use_tool`** | When `use_tool` fails schema validation for an admitted tool, return the tool's definition in the error | The model can skip `find_tools` and guess. A wrong guess costs one round, the same as today; a right guess saves one. No state. |
+
+### Recommendation [proposed]
+
+1. Measure first, in S0: `find_tools` calls per owner turn and the groups loaded.
+2. Then ship **E**: no state, it never costs more than today, and it is local to `loader.ts`.
+3. Then **B** for any tool loaded in at least 15% of owner turns over 7 days.
+4. Ship **C** only if a run of follow-up turns keeps reloading the same group.
+
+- **Falsifier:** fewer than 10% of owner turns call `find_tools` [proposed]. In that case stop after E.
+- **Threshold for B:** a tool loaded in at least 15% of owner turns, with the definition-size cost under 25% of the round time it saves. Price it with S1's real write and read rates.
+- **Metric:** the S0 subset's rounds per scenario and `find_tools` count, and p50 turn latency for turns with `find_tools` against turns without it (from the `llm_reply` hops).
+- **Rollback:**
+  - E: revert in `loader.ts`.
+  - B: move the tool's `brain:` back.
+  - C: a flag. The loader still works without the record.
+
+### Build slice (E, then B)
+
+| | |
+|---|---|
+| **Files** | `src/tools/loader.ts`, `src/conversation/tool-loop.ts` (route answer only), `src/tools/records.ts` (B only), tests |
+| **Single writer** | the S3 owner. `records.ts` is a hot file, so coordinate with any open tool PR. |
+| **Tests** | E: a `use_tool` with bad args for an admitted tool returns that tool's definition; for an unadmitted tool, or a meta tool, it returns `unknown_tool` and never echoes the name (`loader.ts:103`); every gate still runs (ACL, held, taint, approval). Adversarial: an argument payload that names another tool or embeds `find_tools` can't escalate; the definition returned is the admitted one only. B: the byte-stability test of the tools array across two turns. |
+| **Migration / ADR** | none / none (C would need a DO table and a short contract note) |
+| **Flag** | E: none. B: none (a gate decision). C: yes, `WALDO_LOADER_CARRY` [proposed]. |
+
+## S4: compaction beyond the app
+
+### Current state
+
+See §Step 1, how compaction differs by surface.
+
+### Cited failure
+
+None in traces. The mechanism is verified; the cost is [inference].
+
+- **The mechanism.** `windowModelMessages` keeps the newest messages that fit 100k estimated tokens (`window.ts:43-60`). Once a non-app chain is over budget, every new turn drops the oldest message. The first message after the system prompt changes, so the whole kept history is a new prefix on that turn.
+- **The cost.** At about 100k tokens on terra that is roughly $0.125 a turn billed as writes, against roughly $0.005 as cached reads [inference]. That assumes uncached tokens bill as writes, which is unverified (§Step 2).
+- **The quality loss.** It is also silent: dropped rows are not summarised.
+- **The counter-evidence.** No trace shows any non-app chain reaching the window. The `context_window` hop that would show it exists (`owner-turn.ts:365`), but nobody has queried it [blocked: Langfuse].
+
+### Options
+
+- **A. iMessage compaction.**
+  - Pass `compactionSettings(this.env)` at `owner-do.ts:4298`.
+  - Run the existing compaction job after the iMessage drain, as `compactApp` does after the app drain.
+  - The surface-neutral-core guard bans surface compares, so this needs a declared host option, not a `channel ===` branch.
+- **B. A surface-neutral compaction job keyed by chain.** This covers all four surfaces. Telegram and WhatsApp would first need to move off the legacy store to the canonical store, a much larger change.
+- **C. Chunked windowing for the legacy and plain paths.** When over budget, drop to 50% at once instead of one message per turn. The prefix then changes once per chunk instead of every turn. It is cheaper and needs no summary, but it loses more context at each step.
+- **D. Defer.** Telegram is internal only. WhatsApp is held by Meta verification. iMessage is the only non-app surface with users.
+
+### Recommendation [proposed]
+
+- **Now:** D, with a measurement.
+- **Then A for iMessage** when the threshold is met.
+- **C** is worth its small size if A is still a long way off once the threshold is met.
+- **B** waits until Telegram or WhatsApp has real users.
+
+### Falsifier and threshold
+
+- **Pull from Langfuse:**
+  - `context_window` hops with `dropped > 0` on `imessage-*` traces;
+  - the `estimated_tokens` / `budget_tokens` ratio on iMessage turns.
+- **Act (A)** if, over 7 days, any iMessage chain crosses 70% of budget (the app trigger, `compaction.ts:11`). The owner's own chain counts.
+- **Stay deferred** if no iMessage chain passes 50%.
+
+### Metric and rollback
+
+- **Metric:**
+  - S0 adds an `imessage`-surface long-chat scenario to the subset;
+  - the compaction summary keeps the owner's instructions (the existing compaction rubric);
+  - per-turn cache writes on that scenario fall after compaction.
+- **Rollback:**
+  - `WALDO_COMPACTION=off` turns off every surface;
+  - [proposed] a per-surface variable `WALDO_COMPACTION_SURFACES=app,imessage` lets iMessage roll back alone.
+
+### Build slice (A)
+
+| | |
+|---|---|
+| **Files** | `src/channels/owner-do.ts` (iMessage history factory, post-drain compaction call), `src/conversation/compaction.ts` (surface list in settings), tests |
+| **Single writer** | the conversation chain's existing writer, the owner DO. The compaction row is written through the same fenced `scope.commit` as the app (`owner-do.ts:1970`). |
+| **Tests** | red first: an iMessage chain over the trigger gets one compaction row and the next turn's view is summary + tail. Adversarial: a message admitted during compaction wins and the job yields (as `owner-do.ts:1957`); a forget landing mid-compaction leaves no summary that carries the topic (the existing flush and barrier); a summary never includes a health number (`COMPACTION_INSTRUCTION`, `compaction.ts:33`); the alarm deadline is respected. Time-mocked: the `minIntervalMs` re-compaction spacing. |
+| **Migration / ADR** | none. It reuses the compaction row (`docs/proposals/ADR_DRAFT_CONVERSATION_COMPACTION_ROW_2026-10-13.md`), whose scope note needs "app" widened to "app and iMessage". |
+| **Flag** | yes: the surface list [proposed]. Default `app` keeps today's behaviour. |
+
+## S5: in-turn tool results
+
+### Current state [verified]
+
+- `TOOL_RESULTS_KEEP_CHARS = 160_000` clears the oldest results down to half, once past the limit (`tool-loop.ts:82-85`).
+- Clearing for time applies only when every serving provider's cache has expired. In practice that means Anthropic (`tool-loop.ts:86-90`).
+- #1682 cut the 10-round browse test's peak resent results from 141,487 to 90,111 characters (side note `harness-efficiency-qol-2026-10-30.md`).
+- Nothing logs a turn's peak result characters or its clear count. `tool-loop.ts` has no hop for either.
+
+### Cited failure
+
+**None.** This area is settled and is not re-proposed.
+
+- Lowering the threshold or clearing in-turn on OpenAI was modelled as **more** expensive: a clear re-bills everything after it as writes at 1.25×.
+- Only T ≤ 32K was modelled as cheaper, by 8–34%. That rests on an unverified assumption that every uncached token bills as a write.
+
+### Options
+
+- **A.** No change, plus instrumentation: a bounded per-turn `tool_results` detail with the peak-characters bucket, the clear count, and the top tool by characters. Tool names are a bounded set, so they're safe as a label.
+- **B.** T = 32K. It is modelled cheaper only for some shapes, and it hides prior results from the model.
+- **C.** Source-side windows for the worst offenders, as #1682 did for browse, chosen from A's data.
+
+### Recommendation [proposed]
+
+- **Now:** A.
+- **C** for any tool that is the top contributor in at least 20% of turns whose peak exceeds 32K.
+- **B** only if, after 7 days of write data, the observed write billing matches the model **and** turns over 32K are at least 10% of owner-turn cost.
+
+### Falsifier, metric and rollback
+
+- **Falsifier:** fewer than 5% of turns ever exceed 32K. Then close S5 after A.
+- **Metric:** the peak bucket and clear count per turn in Langfuse; write tokens per turn from S1.
+- **Rollback:** A is a log field. C reverts per tool.
+
+### Build slice (A)
+
+| | |
+|---|---|
+| **Files** | `src/conversation/tool-loop.ts`, `src/channels/owner-turn.ts` (log site), tests |
+| **Single writer** | the S5 owner. `owner-turn.ts` is a hot file, so serialize with S1. |
+| **Tests** | the bucket is bounded (fixed edges); the detail never carries result text, ids or URLs; the clear count matches the existing clear test. |
+| **Migration / ADR** | none / none |
+| **Flag** | none |
+
+## S6: the router
+
+See §Step 2 for the evidence.
+
+### Recommendation [proposed]
+
+Defer. When the threshold below is met, build the wiring on #1639's `routeTurn` behind a default-off flag, as its own body plans. Owner decision 5 is needed.
+
+### Falsifiers and threshold
+
+Run `scripts/cost-report.mjs --turns` (from #1639) over at least 7 days of staging `llm_reply` turns. Then:
+
+- **Light tier:** act only if turns on a cold Terra cache are at least 25% of owner-turn cost, **and** the S0 subset run on Luna for those scenario types loses no more than 1 verdict in 20 against Terra.
+- **Deep tier:** act only if the S0 subset shows scenarios Terra fails and Sol passes.
+- **Stop:** if cold turns are under 10% of cost, the light tier's saving is too small to justify a second model in the cache [proposed].
+
+### Before wiring
+
+- the security review of the Decisions egress;
+- a live check of the `/v1/decisions` shape against a pinned source.
+
+### Metric and rollback
+
+- **Metric:** USD per owner turn by tier (S1 ledger), and the subset's pass rate per tier.
+- **Rollback:** the flag off returns every turn to Terra.
+
+### Build slice
+
+| | |
+|---|---|
+| **Files** | per #1639, plus `src/channels/owner-turn.ts` route selection, plus a flag in `wrangler.jsonc` |
+| **Single writer** | the #1639 lane owner |
+| **Tests** | already pinned in #1639: no switch inside a warm chain without a confident escalation; every failure path returns null; no secret, canary or health number in the request. The wiring adds: an escalation mid-chain keeps its tier on the next turn; the spend clamp still wins over the router. |
+| **Migration / ADR** | none / **yes**: a model-routing ADR or amendment, because it adds a tier and a provider egress |
+| **Flag** | yes, default off |
+
+## Order and dependencies
+
+1. **S0** first, then **S2** (independent and small).
+2. **S1** next. S1 and S5 both touch `owner-turn.ts` log sites, so serialize them.
+3. **S3 (E)** needs S0's `find_tools` metric.
+4. **S4** needs S0, a trace query (decision 3) and decision 7.
+5. **S5** needs S1's write data.
+6. **S6** last.
+
+The memory-redesign scenarios plug into S0 once it merges.
+
+Things this proposal never touches: `WaldoCoordinator`, the trusted RunLoop and physical-effect path, `ContextComposer`'s structure, the forget barrier, and ADR-0081/0082 health rules.
+
+## Issues
+
+The issue numbers are filled in after the issues are created.
