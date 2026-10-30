@@ -15,6 +15,7 @@ export type OwnerSkillCapability = Readonly<{
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;
 }>;
+const LOAD_DESCRIPTION='Load one enabled skill from the reviewed index for this turn. Its instructions join your next step; it grants no tools.';
 // Existing owner-channel ingress supplies this private capability; model arguments never do.
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;
@@ -33,7 +34,7 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
   {name:'skills_list',description:'Discover reviewed built-in skill metadata and enabled versions. Instructions are loaded separately with skills_load; metadata grants no tools or permission.',schema:skillsListArgsSchema,trigger_allowlist:allow('skills_list'),autonomy_gated:false,
    handle:async(_:unknown,ctx:ToolDispatcherContext)=>checked(ctx,()=>({ok:true,source_taint:null,data:book.list()}))},
   ...(['install','disable','load'] as const).map(action=>({name:`skills_${action}` as ToolName,
-   description:action==='load'?'Select one already enabled reviewed skill version for this invocation. Instructions enter trusted bounded context on the next step and never appear in this result.':`Explicit owner lifecycle command only: /skills ${action} <catalog-name>@<version>. Use the exact reviewed name and enabled version shown in skills_list; for install, use an available catalog version. Does not accept uploaded skills or grant capabilities.`,
+   description:action==='load'?LOAD_DESCRIPTION:`Explicit owner lifecycle command only: /skills ${action} <catalog-name>@<version>. Use the exact reviewed name and enabled version shown in skills_list; for install, use an available catalog version. Does not accept uploaded skills or grant capabilities.`,
    schema:skillsVersionArgsSchema,trigger_allowlist:allow(`skills_${action}` as ToolName),autonomy_gated:action!=='load',mutates_state:true as const,
    // Selecting an already enabled reviewed procedure grants no tools or lifecycle authority.
    // External data may inform that choice; original owner/run and exact catalog checks remain.
@@ -53,7 +54,7 @@ const procedureCapability=(book:CuratedOwnerSkills,turn:CuratedSkillTurn,handler
 // owner's own words, and a job over outside text may load too, because a procedure carries no tool.
 export function createJobSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn):OwnerSkillCapability {
  const book=new CuratedOwnerSkills(sql,turn.owner,undefined,turn.custodyKey ?? turn.owner);
- const load={name:'skills_load' as const,description:'Select one enabled reviewed skill for this turn. Its instructions join the next step; it grants no tools.',schema:skillsVersionArgsSchema,
+ const load={name:'skills_load' as const,description:LOAD_DESCRIPTION,schema:skillsVersionArgsSchema,
   trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('skills_load')),autonomy_gated:false,mutates_state:true as const,
   handle:async(args:SkillsVersionArgs,ctx:ToolDispatcherContext):Promise<ToolResult<unknown>>=>{
    await turn.assertCurrent();

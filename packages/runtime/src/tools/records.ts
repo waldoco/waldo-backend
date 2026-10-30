@@ -13,7 +13,7 @@ export const BRAIN_NAMESPACES = {
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
-  skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
+  skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
   artifacts: 'Documents Waldo makes: create, revise, export, list or read an artifact, a drafted document or a sheet cell.',
   actions: "Actions that reach beyond this chat: send_message for a message to someone else, a progress note, a file attachment, an approval card, the owner's Mac, a delegated research task, todos and code.",
@@ -129,7 +129,8 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim: loading selects ephemeral catalog metadata; it does not certify instruction admission.
   skills_install: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_enabled', replay: unknown(NOT_INSPECTED) },
   skills_disable: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_disabled', replay: unknown(NOT_INSPECTED) },
-  skills_load: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', tainted: { exempt: 'instructions_only', reason: 'it selects reviewed instructions for this turn and grants no tool; each effect those instructions describe still meets its own gate' }, replay: unknown(NOT_INSPECTED) },
+  // core: a skill fits a turn the owner never shaped for it, so the model must be able to load one without a search first.
+  skills_load: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', tainted: { exempt: 'instructions_only', reason: 'it selects reviewed instructions for this turn and grants no tool; each effect those instructions describe still meets its own gate' }, replay: unknown(NOT_INSPECTED) },
   // claim: verified against each handler (mutates_state, and the result says what happened). Proposals are labelled as
   // proposals: the owner-channel handlers only request an approval card.
   send_message: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'message_send_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('proposal only, but each call inserts a fresh ledger row and card; the model-supplied idempotency_key collapses only at approval after status done (approvals.ts). A crash after the send and before done can resend. No lookup reconciles it') },
