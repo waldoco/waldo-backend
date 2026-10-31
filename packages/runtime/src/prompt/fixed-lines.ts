@@ -56,9 +56,9 @@ export const interruptedReport = (row: Pick<JobRow, 'brief_json'>, timezone: str
   return `I was interrupted while telling you about ${name}, so I can't tell what I'd already done about it. Check before you start it again.`;
 };
 
-// A long task's progress note.
-export const progressNote = (row: Pick<JobRow, 'brief_json' | 'rounds'>, timezone: string): string => {
+// A long task's progress note. A step count is machinery to the owner, and "0 steps" reads as no progress.
+export const progressNote = (row: Pick<JobRow, 'brief_json'>, timezone: string): string => {
   const { title, started } = taskName(row, timezone);
-  const name = title === null ? `the background task you started at ${started}` : `"${title}" in the background`;
-  return `Still working on ${name} (${row.rounds} step${row.rounds === 1 ? '' : 's'} so far). I'll tell you when it's done.`;
+  const name = title === null ? `the background task you started at ${started}` : `"${title}"`;
+  return `Still working on ${name}. I'll tell you when it's done.`;
 };

@@ -1771,16 +1771,20 @@ it('a note from the next turn never reaches the owner before the reply still wai
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 600_000);
-  let setTiming!: (timing: unknown) => void;
-  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  let setTiming!: (timing: unknown) => void, ownStorage: unknown;
+  await runInDurableObject(w.ownerStub, async (instance, state) => { ownStorage = state.storage; setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  // The prototype spies below see every owner in the isolate, including one an earlier test left running; only this owner's calls count.
+  const ours = (outbox: IMessageFinalOutbox) => (outbox as unknown as { storage: unknown }).storage === ownStorage;
   const admitted = admissions();
   const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
   vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
-    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+    if (ours(this)) retries.push(ref);
+    return retryLater.call(this, ref, maxAge, delay);
   });
   const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
   vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
-    drops.push(args[0]); return dropProgress.apply(this, args);
+    if (ours(this)) drops.push(args[0]);
+    return dropProgress.apply(this, args);
   });
   const LATER = 'Switching the options to vegetarian ones.';
   proof.notes.push('Looking at dinner spots near you.', LATER);

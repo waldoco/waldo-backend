@@ -145,12 +145,13 @@ import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
-import { reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
+import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
-import { UPDATE_CARD_FRESH_MS, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
+import { granolaNotes, prepGranola } from './meeting-prep-granola';
+import { UPDATE_CARD_FRESH_MS, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
-import { toolNameSchema } from '@waldo/contracts';
+import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
 import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
@@ -388,6 +389,9 @@ const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel ===
 // messages wait for the bridge). There a day card or a standing-order report goes through the final outbox, which records a
 // delivery only once one happens, and no update card is written while it would only wait.
 const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindowOpen>>> = { whatsapp: whatsappWindowOpen, imessage: () => false };
+// Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
+// as a new message, which is itself the notification, so quiet hours hold it there.
+const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // Message ids only, never message text.
 type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
@@ -1342,14 +1346,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // as the chat shows it, read under the app session's own admission. The excerpt is not worth failing the day read for:
   // when the chat cannot be read, a card with a delivery leaves latest out, which says this Worker cannot tell, while a
   // card with none still says null.
-  private async appCardsLatest(view: ConsoleView, name: string, hash: string): Promise<ConsoleView['cards']> {
-    const delivered = cardDeliveries(dayPlanBook(this.ctx.storage.sql), this.ctx.storage.kv, view.now.slice(0, 10));
-    if (!delivered.size) return view.cards.map(card => ({ ...card, latest: null }));
+  // A build that reads revisions (`revised`) gets each revised card's count and time, and its newest revision's row as latest.
+  private async appCardsLatest(view: ConsoleView, name: string, hash: string, revised = false): Promise<ConsoleView['cards']> {
+    const day = view.now.slice(0, 10), plans = dayPlanBook(this.ctx.storage.sql);
+    const revisions = revised ? plans.revisions(day) : new Map<string, never>();
+    const marked = (card: ConsoleView['cards'][number]) => { const found = revisions.get(card.id); return found ? { ...card, revision: found.revision, revisedAt: found.revised_at } : card; };
+    const delivered = new Map([...cardDeliveries(plans, this.ctx.storage.kv, day)].map(([card, delivery]) => {
+      const row = revisions.get(card)?.message_id;
+      return [card, row ? { message_id: row, delivered_at: revisions.get(card)!.revised_at } : delivery] as const;
+    }));
+    if (!delivered.size) return view.cards.map(card => ({ ...marked(card), latest: null }));
     const shown = await this.appMainChatShown(name, hash, 'app_cards_latest');
-    if (shown === null) return view.cards.map(card => delivered.has(card.id) ? card : { ...card, latest: null });
+    if (shown === null) return view.cards.map(card => delivered.has(card.id) ? marked(card) : { ...marked(card), latest: null });
     return view.cards.map(card => {
       const delivery = delivered.get(card.id);
-      return { ...card, latest: latestDelivery(delivery, delivery && shown.get(delivery.message_id)) };
+      return { ...marked(card), latest: latestDelivery(delivery, delivery && shown.get(delivery.message_id)) };
     });
   }
 
@@ -1375,6 +1386,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return linkingAppRows(route, {
       card: (card, appRow) => dayPlanBook(this.ctx.storage.sql).delivered(card.day, card.card, appRow, Date.now()),
       update: (recordId, appRow) => updateBook(this.ctx.storage.sql).linked(recordId, appRow),
+      revision: (revision, appRow) => dayPlanBook(this.ctx.storage.sql).revisedRow(revision.day, revision.card, appRow),
       ...(langfuseOtlpConfig(this.env) ? { row: (appRow: string, trace: string) => rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now()) } : {}),
     });
   }
@@ -1721,7 +1733,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
-            cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
+            cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
             days:(date?:string)=>this.appDays(runtime,name,hash,date),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             ownerName:()=>ownerName(claimStore(this.ctx.storage.sql)),
@@ -2519,7 +2531,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
-              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','node.forget','node.confirm','node.correct'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConsoleStart():null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin,action.id||undefined));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
@@ -4936,6 +4948,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       client: () => google.client('calendar'),
       current: connectionId => calendarOwnerCurrent(connectionId, clock.timezone),
       transaction: work => storage.transactionSync(work),
+      granola: async (event, ownerEmail, trace) => {
+        const read = await prepGranola({ connection: () => this.granolaConnection(), describe: (server, tool) => this.mcp().describe(server, tool),
+          invoke: input => this.mcp().invoke(input) }, event, ownerEmail);
+        log({ trace, hop: 'prep_granola', ms: 0, ok: read.status === 'read' || read.code !== 'read_failed', code: read.status === 'read' ? 'read' : read.code });
+        return granolaNotes(read);
+      },
       decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT)),
       enqueue: (id, text, receipt, commit) => prepEnqueue(receipt.connectionId, clock.timezone, () => calendarOwnerCurrent(receipt.connectionId, clock.timezone))(id, text, receipt, commit),
     });
@@ -5009,10 +5027,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const sweepSourceFollowups = () => proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
     // Whether an update card could go out now. Where a send would only wait for the owner (WhatsApp outside its window), none
     // is written: its changes stay for the next card that reaches them.
+    // With the day state the Close no longer holds what comes after it: the model judges whether a change then matters, and on
+    // the app quiet hours keep only the message and the push back, so a revision still lands. Elsewhere a send is the only way
+    // a revision reaches the owner, so quiet hours hold it there.
+    const dayState = this.env.WALDO_DAY_STATE === '1', revisesCards = REVISES_CARDS[channel] === true;
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
-      return followups === false ? 'held_preference' : plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
-        : volume === 'low' ? 'held_volume' : quiet() ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
+      return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
+        : volume === 'low' ? 'held_volume' : quiet() && !(dayState && revisesCards) ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
     };
     const updateCheck = async (trace: string) => {
       const client = await google.client();
@@ -5028,7 +5050,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups,
+        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => recompute.calendarChanged().then(
@@ -5068,6 +5090,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // The sweep job's apply: the update-card turn on the job's changes, with the sweep's tools and the health logs as turn
     // context, tainted. Its card goes through the final outbox under the job's key, and is recorded sent once delivered.
+    const today = () => localIso(Date.now(), clock.timezone).slice(0, 10);
     const updateSweepApply = updateSweepApplier({
       updates, timezone: clock.timezone, now: () => Date.now(), sourceFollowups: sweepSourceFollowups,
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
@@ -5075,12 +5098,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
       turn: async (turn, text, current) => this.asOwnerJob('heartbeat', turn, async () =>
         responder.prompt(turn, owner, text, async (_hop, work) => work(), updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external')),
-      deliver: async (id, trace, text, recordId, commit) => {
+      deliver: async (id, trace, text, recordId, commit, effect) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        const card = effect?.revision as CardId | undefined;
         await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
           doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
-          expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
+          expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId }, ...(card ? { revision: { day: today(), card } } : {}),
+          ...(effect?.push ? { updatePush: { line: effect.push, ...(card ? { card } : {}) } } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
       },
+      ...(dayState ? { dayState: {
+        quiet: () => revisesCards && quiet(),
+        cards: dayCards, revisesCards,
+        delivered: card => plans.reached(today(), card),
+        pushLine: async (line, mail) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...mail, await healthLogLines()] }),
+        chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),
+      } } : {}),
     });
     const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
@@ -5178,6 +5210,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // beside the drain, so the record is marked settled without waiting on Expo and a restart does not push it again.
       if (record.calendarPrep && delivered && channel === 'app') this.ctx.waitUntil(push('prep', undefined, prepPushBody({ title: record.calendarPrep.title, start: record.calendarPrep.start,
         timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' })));
+      // A revision counts once it reached the owner on any surface; its push, only from the app, beside the drain like a prep note's.
+      if (record.revision && delivered) plans.revised(record.revision.day, record.revision.card, Date.now());
+      if (record.updatePush && delivered && REVISES_CARDS[channel]) this.ctx.waitUntil(push('update', undefined, record.updatePush.line, record.updatePush.card));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
         if (delivered) updates.pushed(record.update.recordId, record.payload.text, Date.now());
@@ -5336,6 +5371,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           // The owner pinning a claim says it is theirs, whoever wrote it: it is grounded first, so the pin always holds.
           if (!memory.ownerGround(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:spot.pin'}`)
             || !memory.pin(spotId, block, last + 1)) return 'spot.pin.failed';
+        } else if (action === 'spot.area') {
+          // The owner files the claim; the model's later passes never refile it.
+          const area = LIFE_AREAS.find((candidate) => candidate === value);
+          if (!area || !memory.setArea(spotId, area, 'owner')) return 'spot.area.failed';
         } else if (action === 'spot.edit') {
           // The owner's own text replaces the claim: correct() supersedes the old row and keeps its pin. A credential never
           // enters memory, whoever typed it, so the text crosses the same scribe check a remembered fact does.

@@ -173,3 +173,25 @@ describe('pushing the owner\'s app', () => {
     expect(logged).toEqual([{ code: 'partial', count: 0 }, { code: 'retire_failed', count: 1 }]);
   });
 });
+
+describe('an update push', () => {
+  it('carries the line it was given and the card it opens, on the proactive ceiling', async () => {
+    const { push, posted, store } = fixture();
+    await push('update', undefined, 'Your 15:00 with Krati moved to 17:00', 'card:brief');
+    expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Your 15:00 with Krati moved to 17:00', data: { trigger: 'update', card_ref: 'card:brief' }, sound: 'default' }]);
+    expect(store.get('app_push_proactive_budget_v1')).toEqual({ day: '2026-10-13', sent: 1 });
+    expect(store.get('app_push_budget_v1')).toBeUndefined();
+  });
+
+  it('without a line or a card, is the fixed line that opens Main chat', async () => {
+    const { push, posted } = fixture();
+    await push('update');
+    expect(posted[0]!.body).toEqual([{ to: EXPO, body: PUSHES.update.body, data: { trigger: 'update' }, sound: 'default' }]);
+  });
+
+  it('a card ref goes only on an update push', async () => {
+    const { push, posted } = fixture();
+    await push('brief', undefined, undefined, 'card:close');
+    expect((posted[0]!.body as { data: object }[])[0]!.data).toEqual(BRIEF);
+  });
+});

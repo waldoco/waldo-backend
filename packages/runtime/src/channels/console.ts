@@ -145,7 +145,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -187,6 +187,8 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.pin.failed': 'Nothing was pinned. Refresh Memory and try again.',
   'spot.unpin': 'Unpinned. Waldo still remembers it and finds it when it matters.',
   'spot.edit': 'Saved in your words. Waldo uses this from now on; the old version is kept as history.',
+  'spot.area': 'Moved. Waldo keeps it in the area you chose.',
+  'spot.area.failed': 'Nothing was moved. Pick one of the listed areas, then refresh Memory and try again.',
   'spot.edit.failed': 'Nothing was changed. The text must be 1 to 1,000 characters and hold no password, key or token.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
   'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
@@ -213,9 +215,10 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it. revision and revisedAt say
+// the card was revised after it was delivered (controls revision 9), and latest then names the newest revision's row.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number }>;
+  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number; revision?: number; revisedAt?: number }>;
 
 export type ConsoleView = Readonly<{
   release: string;
