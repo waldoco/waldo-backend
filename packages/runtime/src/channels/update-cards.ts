@@ -1,4 +1,4 @@
-import { calendarPromptProjection, mailPromptProjection, sha256Hex, type CalendarChange, type CalendarItem, type GoogleClient } from '../connectors/google';
+import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { CALENDAR_LAST_SEEN_TABLE_SCHEMA } from '../do-schema';
 import { localDayWindow } from '../health/scores/time';
 import { localIso } from './reminders';
@@ -179,10 +179,28 @@ export type ChangeRead = Readonly<{
   // (null when it was cancelled), by id.
   seen?: Readonly<{ day: string; seed: readonly SeenEvent[] | null; changed: ReadonlyMap<string, SeenEvent | null> }>;
 }>;
-const seenOf = async (event: Pick<CalendarItem, 'id' | 'title' | 'start' | 'end' | 'all_day' | 'attendees'>): Promise<SeenEvent> =>
-  ({ event_id: event.id, start: event.start, end: event.end, all_day: event.all_day, title_digest: await sha256Hex(event.title), ...(event.attendees === undefined ? {} : { attendees: event.attendees }) });
+// The kept title only answers whether it changed. It is an HMAC under a random key made once for the owner's object and kept in
+// its own storage, never logged or exported, so a short, guessable title can't be recovered from it by hashing a dictionary.
+const TITLE_KEY = 'calendar_title_key_v1';
+type TitleKeyStore = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
+export type TitleDigest = (title: string) => Promise<string>;
+export const titleDigester = (kv: TitleKeyStore): TitleDigest => {
+  let key: Promise<CryptoKey> | undefined;
+  return async (title) => {
+    key ??= (() => {
+      let raw = kv.get<string>(TITLE_KEY);
+      if (raw === undefined) { raw = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, '0')).join(''); kv.put(TITLE_KEY, raw); }
+      const bytes = Uint8Array.from(raw.match(/../g)!, pair => parseInt(pair, 16));
+      return crypto.subtle.importKey('raw', bytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    })();
+    const mac = await crypto.subtle.sign('HMAC', await key, new TextEncoder().encode(title));
+    return [...new Uint8Array(mac)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  };
+};
+const seenOf = (digest: TitleDigest) => async (event: Pick<CalendarItem, 'id' | 'title' | 'start' | 'end' | 'all_day' | 'attendees'>): Promise<SeenEvent> =>
+  ({ event_id: event.id, start: event.start, end: event.end, all_day: event.all_day, title_digest: await digest(event.title), ...(event.attendees === undefined ? {} : { attendees: event.attendees }) });
 export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, 'changedEvents' | 'newMail'>, now: number, sourceFollowups = false,
-  dayState?: Readonly<{ day: string; events: GoogleClient['events'] }>): Promise<ChangeRead> => {
+  dayState?: Readonly<{ day: string; events: GoogleClient['events']; titleDigest: TitleDigest }>): Promise<ChangeRead> => {
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const [from, to] = dayState ? [now - DAY_STATE_BACK_MS, now + DAY_STATE_AHEAD_MS] : [now, now + 2 * DAY_MS];
@@ -198,8 +216,8 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   });
   if (!dayState) return { changes: [...calendar, ...mail], observed, now };
   const seed = book.seedDue(dayState.day)
-    ? await Promise.all((await dayState.events(new Date(from).toISOString(), new Date(to).toISOString(), SEED_EVENTS, true)).map(seenOf)) : null;
-  const changed = new Map(await Promise.all(items.map(async (item): Promise<[string, SeenEvent | null]> => [item.id, item.status === 'cancelled' ? null : await seenOf(item)])));
+    ? await Promise.all((await dayState.events(new Date(from).toISOString(), new Date(to).toISOString(), SEED_EVENTS, true)).map(seenOf(dayState.titleDigest))) : null;
+  const changed = new Map(await Promise.all(items.map(async (item): Promise<[string, SeenEvent | null]> => [item.id, item.status === 'cancelled' ? null : await seenOf(dayState.titleDigest)(item)])));
   return { changes: [...calendar, ...mail], observed, now, seen: { day: dayState.day, seed, changed } };
 };
 // Records what the read observed and moves the watermarks. With the day state it also keeps each event as last seen, and

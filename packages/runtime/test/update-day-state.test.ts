@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { CalendarChange, CalendarItem, GoogleClient } from '../src/connectors/google';
-import { touchesDay, updateBook, type Change, type UpdateBook } from '../src/channels/update-cards';
+import { titleDigester, touchesDay, updateBook, type Change, type UpdateBook } from '../src/channels/update-cards';
+import { sha256Hex } from '../src/connectors/google';
 import { updateSweepCheck } from '../src/channels/update-sweep';
 import { jobBook } from '../src/tasks/jobs';
 
@@ -37,8 +38,9 @@ const withDay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       changedEvents: async (since: number, from: number, to: number) => { reads.changed.push([since, from, to]); return [...changed]; },
       newMail: async () => [],
     } as unknown as GoogleClient;
+    const titleDigest = titleDigester(state.storage.kv);
     const check = (dayState: boolean, day = '2026-10-20') => updateSweepCheck({
-      updates, jobs, google, now: clock.at, day, timezone: 'UTC', surface: 'app', sourceFollowups: false, dayState,
+      updates, jobs, google, now: clock.at, day, timezone: 'UTC', surface: 'app', sourceFollowups: false, ...(dayState ? { dayState: { titleDigest } } : {}),
       gate: () => 'held_quiet', providerDown: () => false, transaction: w => state.storage.transactionSync(w),
       enqueued: () => undefined, held: () => [], dayChanged: async () => undefined,
     });
@@ -129,5 +131,32 @@ describe('a change on the owner\'s day', () => {
     expect(touchesDay(change, '2026-10-20', 'UTC')).toBe(true);
     expect(touchesDay(change, '2026-10-22', 'UTC')).toBe(true);
     expect(touchesDay(change, '2026-10-21', 'UTC')).toBe(false);
+  });
+});
+
+// What is kept of a title only has to say whether it changed. It is an HMAC under a key made once for the owner's object and
+// kept in its storage, so a short, guessable title ("Therapy") can't be found by hashing a dictionary.
+describe('the kept title digest', () => {
+  const kvOf = () => { const store = new Map<string, unknown>(); return { get: <T,>(key: string) => store.get(key) as T | undefined, put: (key: string, value: unknown) => { store.set(key, value); } }; };
+
+  it('is not the plain SHA-256 of the title, and one object keeps one key', async () => {
+    const kv = kvOf();
+    const first = await titleDigester(kv)('Therapy');
+    expect(first).not.toBe(await sha256Hex('Therapy'));
+    expect(await titleDigester(kv)('Therapy')).toBe(first);
+    expect(await titleDigester(kvOf())('Therapy')).not.toBe(first);
+  });
+
+  it('is what the store keeps, and a rename still reads as one', async () => {
+    await withDay(async (h) => {
+      h.listed.push(SYNC);
+      await h.check(true);
+      const kept = h.sql.exec<{ title_digest: string }>('SELECT title_digest FROM calendar_last_seen').one().title_digest;
+      expect(kept).not.toBe(await sha256Hex(SYNC.title));
+      h.clock.at += 10 * 60_000;
+      h.changed.push(moved({ title: 'Therapy' }), moved({ id: 'e-same' }));
+      await h.check(true);
+      expect(h.recorded().at(-1)![0]!.before).toMatchObject({ title_changed: true });
+    });
   });
 });

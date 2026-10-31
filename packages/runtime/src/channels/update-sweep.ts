@@ -10,7 +10,7 @@ import { PUSHES } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
-import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type Change, type UpdateBook } from './update-cards';
+import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type Change, type TitleDigest, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
 // it for the next main card. When an update card could go out now and something changed, it writes a reader job in the
@@ -30,8 +30,8 @@ const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 export type SweepCheckDeps = Readonly<{
   updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events'>;
   now: number; day: string; timezone: string; surface: string; sourceFollowups: boolean;
-  // The day state: what each event was is kept, and two weeks ahead are read.
-  dayState?: boolean;
+  // The day state: what each event was is kept, and two weeks ahead are read. titleDigest keys what is kept of a title.
+  dayState?: Readonly<{ titleDigest: TitleDigest }>;
   gate(): SweepGate | null;
   // Every provider the worker could be served by is down.
   providerDown(): boolean;
@@ -55,7 +55,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   if (gate === null && deps.providerDown()) return { code: 'held_breaker', changes: 0, analysis: 0 };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
   const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups, deps.dayState
-    ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined) } : undefined);
+    ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined), titleDigest: deps.dayState.titleDigest } : undefined);
   // A job held for a topic the owner is forgetting rolls the whole write back: the record, the observed mail and the
   // watermarks stay as they were, so the tick after the forget settles reads the same window.
   const heldTopic = new Error('held_topic');
