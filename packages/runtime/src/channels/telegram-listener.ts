@@ -194,8 +194,8 @@ export class TelegramOwnerListener {
     } catch (error) {
       await settle(null);
       const failure = error instanceof TurnTimeout
-        ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
-        : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
+        ? 'That took too long, and anything I had started may still finish. Try again, or split it into smaller asks.'
+        : this.options.failureText ?? 'I hit a problem answering that. Try again in a moment.';
       // WhatsApp's outer admission owns the fixed check-first notice. Do not
       // turn an uncertain post-effect send into retry wording or a second send.
       if (turn.runScope || this.options.surface === 'whatsapp') {
