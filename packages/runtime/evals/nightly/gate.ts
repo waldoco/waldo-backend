@@ -112,7 +112,7 @@ export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'reco
     ...gate.failures.map((failure) => `- ${failure}`),
     '',
     ...(mode === 'recorded' ? ['Recorded mode grades nothing: the model answers with fixed text, so this checks that every scenario still runs, not reply quality.', ''] : []),
-    ...(card.profile || card.subset ? [`${card.profile ? `Profile \`${card.profile}\`. ` : ''}${card.subset ? `Subset \`${card.subset}\`: ${card.scenarios.length} scenarios.` : ''}`.trim(), ''] : []),
+    ...(card.profile || card.subset || card.shard ? [`${card.profile ? `Profile \`${card.profile}\`. ` : ''}${card.subset ? `Subset \`${card.subset}\`. ` : ''}${card.shard ? `Shard ${card.shard}. ` : ''}${card.scenarios.length} scenarios.`.trim(), ''] : []),
     `Candidate \`${card.candidate_model}\`, judge \`${card.judge_model}\`, ${card.trials_per_scenario} trials per scenario. Calls: ${card.calls.candidate} candidate, ${card.calls.judge} judge, budget ${card.calls.budget}. Tokens: ${card.tokens.candidate} candidate, ${card.tokens.judge} judge.`,
     '',
     '| Scope | Scenarios | Graded | Pass rate | pass^k rate |',

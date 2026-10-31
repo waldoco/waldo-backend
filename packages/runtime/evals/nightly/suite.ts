@@ -37,6 +37,9 @@ export type NightlyRun = Readonly<{
   // The staging profile and the subset spec the run used, named on the scorecard.
   profile?: 'staging';
   subset?: string;
+  shard?: string;
+  // Told the scorecard of the scenarios finished so far, after each one, so a run that is cut off leaves what it had.
+  progress?: (card: ReturnType<typeof scorecard>) => void;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
   memory?: MemoryMode;
   // Compaction on: each trial's chat is the app's canonical store, built with these settings (WALDO_EVAL_COMPACTION=on).
@@ -61,6 +64,9 @@ const sumMetrics = (trials: readonly TrialMetrics[]): TrialMetrics & Readonly<{ 
 };
 
 const graded = (outcome: TrialOutcome) => outcome === 'pass' || outcome === 'fail';
+
+const card = (results: readonly ScenarioTrials[], run: NightlyRun) =>
+  scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage(), ...(run.profile ? { profile: run.profile } : {}), ...(run.subset ? { subset: run.subset } : {}), ...(run.shard ? { shard: run.shard } : {}) });
 
 export const runNightly = async (scenarios: readonly NightlyScenario[], run: NightlyRun) => {
   const results: ScenarioTrials[] = [];
@@ -105,6 +111,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), receipt_failed: receiptFailed, judge_passed: judgePassed, receipts_skipped: receiptsSkipped,
       ...(metrics.length ? { metrics: sumMetrics(metrics) } : {}),
     });
+    run.progress?.(card(results, run));
   }
-  return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage(), ...(run.profile ? { profile: run.profile } : {}), ...(run.subset ? { subset: run.subset } : {}) });
+  return card(results, run);
 };

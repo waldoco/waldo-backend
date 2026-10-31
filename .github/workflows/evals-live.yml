@@ -1,14 +1,16 @@
 name: evals-live
 
 # The nightly eval suite in live mode: the chat model answers as the staging Worker builds a turn (WALDO_EVAL_PROFILE=staging)
-# and an independent judge grades each trial. Nightly it runs the live-judged subset; weekly, the full catalogue at 3 trials.
-# It skips cleanly unless the repository has the secrets WALDO_EVAL_OPENAI_KEY and WALDO_EVAL_ANTHROPIC_KEY and the
-# variable WALDO_EVAL_JUDGE_MODEL, which must differ from the candidate and from both fallback models. Spend cap: the plan
-# step below sets WALDO_EVAL_MAX_CALLS, which bounds model calls (candidate plus both judges) for the whole run; the runner
-# refuses the call past it and the card reports the budget as exhausted. The caps are held at or above `pnpm eval:plan` by a
-# test. Cost per run and the first-run procedure: docs/evals/LIVE_BASELINE_RUNBOOK.md.
+# and an independent judge grades each trial. Nightly it runs the live-judged subset; weekly, the full catalogue at 3 trials,
+# cut into shards that run as separate jobs. It skips cleanly unless the repository has the secrets WALDO_EVAL_OPENAI_KEY and
+# WALDO_EVAL_ANTHROPIC_KEY and the variable WALDO_EVAL_JUDGE_MODEL, which must differ from the candidate and from both
+# fallback models. This file holds no trials, shard counts or call caps: the plan job asks the evaluated tree for them
+# (packages/runtime/evals/nightly/live-plan.ts), where a test holds them to `pnpm eval:plan`. Each shard's cap bounds model
+# calls (candidate plus both judges) for that job; the runner refuses the call past it and the card reports the budget as
+# exhausted. Cost per run and the first-run procedure: docs/evals/LIVE_BASELINE_RUNBOOK.md.
 # GitHub runs schedules, and lists workflows for manual dispatch, from the default branch (main) only, and main carries no
-# eval code, so every job checks out the branch named by the ref input (default beta-mvp) and runs that tree's runner.
+# eval code, so every job checks out the branch named by the ref input (default beta-mvp) and runs that tree's runner. A
+# dispatch runs the code of the ref it names with both provider keys, so dispatch is for people who can already push.
 on:
   schedule:
     - cron: '30 20 * * *' # nightly subset, 02:00 IST
@@ -34,11 +36,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  live:
-    name: Eval (live)
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    # The runner makes its calls one trial after another, several seconds each; 360 minutes is the most a hosted runner allows.
-    timeout-minutes: 360
+    timeout-minutes: 20
+    outputs:
+      proceed: ${{ steps.keys.outputs.run }}
+      subset: ${{ steps.plan.outputs.subset }}
+      trials: ${{ steps.plan.outputs.trials }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Check for eval keys
         id: keys
@@ -53,40 +59,6 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Live eval skipped: set secrets WALDO_EVAL_OPENAI_KEY and WALDO_EVAL_ANTHROPIC_KEY and variable WALDO_EVAL_JUDGE_MODEL to run it."
           fi
-
-      # The weekly schedule runs the full catalogue; every other run takes the subset input, or the nightly subset.
-      # The subset reaches this script only through its environment and is checked before it is written anywhere.
-      - name: Plan the run
-        id: plan
-        if: steps.keys.outputs.run == 'true'
-        env:
-          EVENT: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-          INPUT_SUBSET: ${{ inputs.subset }}
-        run: |
-          set -euo pipefail
-          subset="${INPUT_SUBSET:-live}"
-          if [ "$EVENT" = schedule ]; then
-            case "$SCHEDULE" in
-              '30 21 * * 0') subset=all ;;
-              *) subset=live ;;
-            esac
-          fi
-          case "$subset" in
-            ''|*[!a-z0-9,-]*) echo "::error::subset takes all, live, or scenario ids separated by commas"; exit 1 ;;
-          esac
-          if [ "${#subset}" -gt 4000 ]; then echo "::error::subset is too long"; exit 1; fi
-          trials=2
-          cap=600
-          if [ "$subset" = all ]; then
-            trials=3
-            cap=4000
-          fi
-          {
-            echo "subset=$subset"
-            echo "trials=$trials"
-            echo "cap=$cap"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         if: steps.keys.outputs.run == 'true'
@@ -111,25 +83,78 @@ jobs:
         if: steps.keys.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Run the nightly suite (live)
+      # The weekly schedule runs the full catalogue; every other run takes the subset input, or the nightly subset. The
+      # subset reaches the planner only through its environment, and the planner refuses anything but the forms it knows
+      # before it prints a line, so nothing unchecked is written to the job's outputs.
+      - name: Plan the run
+        id: plan
         if: steps.keys.outputs.run == 'true'
+        working-directory: packages/runtime
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_SUBSET: ${{ inputs.subset }}
+        run: |
+          set -euo pipefail
+          subset="${INPUT_SUBSET:-live}"
+          if [ "$EVENT" = schedule ]; then
+            case "$SCHEDULE" in
+              '30 21 * * 0') subset=all ;;
+              *) subset=live ;;
+            esac
+          fi
+          WALDO_EVAL_SUBSET="$subset" pnpm exec tsx evals/nightly/live-plan.ts
+
+  live:
+    name: Eval (live), shard ${{ matrix.shard }}
+    needs: plan
+    if: needs.plan.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    # A hosted runner stops a job at 360 minutes. The plan cuts the full run so each shard takes about a quarter of it.
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.ref || 'beta-mvp' }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+        with:
+          version: 10.34.4
+
+      - name: Install (frozen lockfile, release-age policy active)
+        run: pnpm install --frozen-lockfile
+
+      # The runner writes the scorecard so far after every scenario, so a job that is cut off still leaves what it measured.
+      - name: Run the nightly suite (live)
         working-directory: packages/runtime
         env:
           WALDO_EVAL_MODE: live
           WALDO_EVAL_PROFILE: staging
-          WALDO_EVAL_SUBSET: ${{ steps.plan.outputs.subset }}
-          WALDO_EVAL_TRIALS: ${{ steps.plan.outputs.trials }}
-          WALDO_EVAL_MAX_CALLS: ${{ steps.plan.outputs.cap }}
+          WALDO_EVAL_SUBSET: ${{ needs.plan.outputs.subset }}
+          WALDO_EVAL_SHARD: ${{ matrix.shard }}
+          WALDO_EVAL_TRIALS: ${{ needs.plan.outputs.trials }}
+          WALDO_EVAL_MAX_CALLS: ${{ matrix.cap }}
           WALDO_EVAL_JUDGE_MODE: split
           OPENAI_API_KEY: ${{ secrets.WALDO_EVAL_OPENAI_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.WALDO_EVAL_ANTHROPIC_KEY }}
           WALDO_EVAL_JUDGE_MODEL: ${{ vars.WALDO_EVAL_JUDGE_MODEL }}
         run: WALDO_EVAL_OUT="$RUNNER_TEMP/scorecard.json" pnpm eval:nightly > /dev/null
 
-      # Fails the run when the scorecard misses NIGHTLY_THRESHOLDS.live (evals/nightly/gate.ts), sized to the subset when one ran.
+      # Fails the job when the scorecard misses NIGHTLY_THRESHOLDS.live (evals/nightly/gate.ts), sized to its subset and shard.
       - name: Gate the scorecard
         id: gate
-        if: steps.keys.outputs.run == 'true'
         working-directory: packages/runtime
         env:
           WALDO_EVAL_MODE: live
@@ -138,3 +163,14 @@ jobs:
       - name: Publish the scorecard to the run summary
         if: ${{ !cancelled() && steps.gate.conclusion != 'skipped' }}
         run: cat "$RUNNER_TEMP/scorecard.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the scorecard
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evals-live-scorecard-${{ matrix.index }}
+          path: |
+            ${{ runner.temp }}/scorecard.json
+            ${{ runner.temp }}/scorecard.md
+          if-no-files-found: ignore
+          retention-days: 90
