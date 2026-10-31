@@ -108,7 +108,7 @@ it('after an eviction, the turn that was running gets one notice quoting its mes
     expect((await post(instance, 'wamid.evict.A', 'Book me a table for Friday.')).status).toBe(200);
     expect((await post(instance, 'wamid.evict.B', 'Also, is it raining in Pune?')).status).toBe(200);
     // A was running in an instance that is gone: its attempt is live nowhere.
-    inbox.claim(inbox.next()!.id, Date.now() + WHATSAPP_TURN_DEADLINE_MS);
+    inbox.claimNext(Date.now() + WHATSAPP_TURN_DEADLINE_MS);
     await drainWhatsAppTurns(instance);
     expect(sent.filter(row => row.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ text: WHATSAPP_PARTIAL_NOTICE, quote: 'wamid.evict.A' }]);
     expect(model.turns).toHaveLength(1);
@@ -117,6 +117,22 @@ it('after an eviction, the turn that was running gets one notice quoting its mes
     expect(states(inbox)).toEqual([['wamid.evict.A', 'interrupted'], ['wamid.evict.B', 'completed']]);
     await drainWhatsAppTurns(instance);
     expect(sent.filter(row => row.text === WHATSAPP_PARTIAL_NOTICE)).toHaveLength(1);
+  });
+});
+
+it('a row whose sender is no longer this owner\'s number runs fenced and closes without a notice; the drain goes on to the next row and stops', async () => {
+  await harness('whatsapp-second-message-fenced-row', async ({ instance, state, inbox, sent, replies }) => {
+    expect((await post(instance, 'wamid.fenced.B', 'Also, is it raining in Pune?')).status).toBe(200);
+    // A row queued under a number that is no longer bound, ahead of B, as if the binding moved without its rows being revoked.
+    const b = inbox.records()[0]!;
+    state.storage.kv.put('whatsapp:inbox-record:wa-0', { ...b, id: 'wa-0', updateId: b.updateId - 1, wamid: 'wamid.fenced.A', subject: '15550009999',
+      update: { ...b.update, message: { ...(b.update as { message: object }).message, text: 'Find me flights to Goa.' } } });
+    await drainWhatsAppTurns(instance);
+    expect(states(inbox)).toEqual([['wamid.fenced.A', 'interrupted'], ['wamid.fenced.B', 'completed']]);
+    expect(sent.filter(row => row.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([]);
+    expect(replies()).toHaveLength(1);
+    expect(model.turns.at(-1)).toContain('raining in Pune');
+    expect(inbox.next()).toBeNull();
   });
 });
 

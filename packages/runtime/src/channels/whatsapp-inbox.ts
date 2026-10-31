@@ -87,12 +87,16 @@ export class WhatsAppOwnerInbox {
     this.refreshDue();
   }
 
-  claim(id: string, deadline: number): WhatsAppInboxRecord | null {
+  /**
+   * Claims the oldest waiting row in one step: running, with a new attempt and its deadline. Null only when no row waits, so a
+   * drain that stops on null can never retry a row it could not claim.
+   */
+  claimNext(deadline: number): WhatsAppInboxRecord | null {
     return this.storage.transactionSync(() => {
-      const r = this.get(id);
-      if (!r || r.state !== 'admitted') return null;
+      const r = this.next();
+      if (!r) return null;
       r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline;
-      this.storage.kv.put(PREFIX + id, r);
+      this.storage.kv.put(PREFIX + r.id, r);
       this.refreshDue();
       return structuredClone(r);
     });

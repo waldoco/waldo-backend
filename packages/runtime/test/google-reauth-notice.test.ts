@@ -233,8 +233,10 @@ describe('a Google grant that stops working, on the app', () => {
 });
 
 describe('a Google grant that stops working, on WhatsApp', () => {
-  it('inside the 24-hour window, sends one plain notice saying where to reconnect, with no link, once per episode', async () => {
+  // The WhatsApp world binds only a WhatsApp number: no app session and no iMessage, so the outbox has WhatsApp alone to reach.
+  it('a WhatsApp-only owner, inside the 24-hour window, gets one plain notice on WhatsApp saying where to reconnect, with no link, once per episode', async () => {
     await world('reauth-whatsapp-open', 'whatsapp', async w => {
+      expect([w.state.storage.kv.get('app_subject'), w.state.storage.kv.get('imessage_subject')]).toEqual([undefined, undefined]);
       await w.read('whatsapp');
       await vi.waitFor(() => expect(w.notices()).toHaveLength(1), { timeout: 5_000, interval: 20 });
       expect(w.notices().map(record => record.payload.text)).toEqual([reconnectNoticeText('console', EMAIL)]);

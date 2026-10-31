@@ -30,9 +30,9 @@ it('a full inbox throws inside the admitting transaction, so nothing it was give
   expect(inbox.records()).toHaveLength(WHATSAPP_INBOX_MAX_OPEN);
 }));
 
-it('claims the next row with a deadline and an attempt, then settles it; text is gone once it closes', () => withInbox((inbox, storage, clock) => {
+it('claims the oldest waiting row with a deadline and an attempt, then settles it; text is gone once it closes', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }]);
-  const record = inbox.claim(inbox.next()!.id, clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
   expect(record).toMatchObject({ state: 'running', deadline: clock.now + WHATSAPP_TURN_DEADLINE_MS });
   expect(record.attempt).toEqual(expect.any(String));
   expect(inbox.next()).toBeNull();
@@ -45,7 +45,7 @@ it('claims the next row with a deadline and an attempt, then settles it; text is
 
 it('a failed turn settles interrupted once; a second settle of the same attempt changes nothing', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }]);
-  const record = inbox.claim(inbox.next()!.id, clock.now + 60_000)!;
+  const record = inbox.claimNext(clock.now + 60_000)!;
   expect(inbox.settle(record, false)).toBe(true);
   expect(inbox.get(record.id)).toMatchObject({ state: 'interrupted', update: null });
   expect(inbox.settle(record, false)).toBe(false);
@@ -53,7 +53,7 @@ it('a failed turn settles interrupted once; a second settle of the same attempt 
 
 it('the scope holds while the row runs under its attempt, before its deadline and while authority stands', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }]);
-  const record = inbox.claim(inbox.next()!.id, clock.now + 60_000)!;
+  const record = inbox.claimNext(clock.now + 60_000)!;
   let authority = true;
   const abort = new AbortController(), scope = inbox.scope(record, abort.signal, () => authority);
   expect(scope.commit(() => 'kept')).toBe('kept');
@@ -69,7 +69,7 @@ it('the scope holds while the row runs under its attempt, before its deadline an
 
 it('recovery closes a running row whose attempt is not live and returns it for its notice; a live one is left running', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }, { wamid: 'wamid.B', body: 'Is it raining in Pune?' }]);
-  const a = inbox.claim(inbox.next()!.id, clock.now + 60_000)!;
+  const a = inbox.claimNext(clock.now + 60_000)!;
   expect(storage.transactionSync(() => inbox.recover(new Set([a.attempt!])))).toEqual([]);
   expect(inbox.get(a.id)?.state).toBe('running');
   const cut = storage.transactionSync(() => inbox.recover(new Set()));
@@ -82,7 +82,7 @@ it('recovery closes a running row whose attempt is not live and returns it for i
 
 it('revoking closes queued and running rows, and a running turn stops at its next scope check', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }, { wamid: 'wamid.B', body: 'Is it raining in Pune?' }]);
-  const a = inbox.claim(inbox.next()!.id, clock.now + 60_000)!;
+  const a = inbox.claimNext(clock.now + 60_000)!;
   const scope = inbox.scope(a, new AbortController().signal, () => true);
   expect(storage.transactionSync(() => inbox.revokeOpen())).toBe(2);
   expect(inbox.records().map(row => [row.state, row.update])).toEqual([['revoked', null], ['revoked', null]]);
@@ -101,8 +101,9 @@ it('forget redacts a queued row\'s text, caption, quoted reply and file name, an
   expect(inbox.forget(redact, holds)).toEqual({ rewritten: 2, remaining: 0 });
   expect(JSON.stringify(inbox.records().map(row => row.update))).not.toContain('X123');
   expect(inbox.get(inbox.records()[1]!.id)?.update).toMatchObject({ message: { caption: '[forgotten] scan', document: { file_id: 'm1', file_name: '[forgotten].pdf' }, reply_to_message: { text: 'you said [forgotten]' } } });
+  for (let row = inbox.claimNext(clock.now + 60_000); row; row = inbox.claimNext(clock.now + 60_000)) inbox.settle(row, true);
   storage.transactionSync(() => inbox.admit([{ update: text(4, 'X123 again'), wamid: 'wamid.D' }], SUBJECT));
-  const running = inbox.claim(inbox.records()[3]!.id, clock.now + 60_000)!;
+  const running = inbox.claimNext(clock.now + 60_000)!;
   // The running row is usually the forget request itself: it is left alone and its text goes when it closes.
   expect(inbox.forget(redact, holds)).toEqual({ rewritten: 0, remaining: 0 });
   expect(inbox.get(running.id)?.update).toMatchObject({ message: { text: 'X123 again' } });
@@ -110,8 +111,19 @@ it('forget redacts a queued row\'s text, caption, quoted reply and file name, an
 
 it('finished rows past the wamid retention are dropped at the next admission', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.old', body: 'old' }]);
-  inbox.settle(inbox.claim(inbox.next()!.id, clock.now + 60_000)!, true);
+  inbox.settle(inbox.claimNext(clock.now + 60_000)!, true);
   clock.now += 8 * 24 * 60 * 60_000;
   admit(inbox, storage, [{ wamid: 'wamid.new', body: 'new' }]);
   expect(inbox.records().map(row => row.wamid)).toEqual(['wamid.new']);
+}));
+
+it('claimNext returns null only when nothing waits: a drain that stops on null takes every waiting row once, in order', () => withInbox((inbox, storage, clock) => {
+  expect(inbox.claimNext(clock.now + 60_000)).toBeNull();
+  admit(inbox, storage, [{ wamid: 'wamid.A', body: 'a' }, { wamid: 'wamid.B', body: 'b' }, { wamid: 'wamid.C', body: 'c' }]);
+  // A row someone else closed meanwhile is never handed out.
+  storage.transactionSync(() => { const b = inbox.records()[1]!; storage.kv.put(`whatsapp:inbox-record:${b.id}`, { ...b, state: 'revoked', update: null }); });
+  const taken: string[] = [];
+  for (let row = inbox.claimNext(clock.now + 60_000); row; row = inbox.claimNext(clock.now + 60_000)) { taken.push(row.wamid); inbox.settle(row, true); }
+  expect(taken).toEqual(['wamid.A', 'wamid.C']);
+  expect(inbox.next()).toBeNull();
 }));

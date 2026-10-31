@@ -2066,14 +2066,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) return;
     const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
     for (const record of this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts))) await this.whatsappNotice(record);
-    for (let pending = inbox.next(); pending; pending = inbox.next()) {
+    while (inbox.next()) {
       // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this turn
       // sees what the owner has seen.
       try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event)), this.ctx.storage.kv.get<string>('whatsapp_subject') ?? ''); } catch { console.error('whatsapp held delivery unavailable'); }
       try { await releaseWhatsAppOutbox(this.setup('whatsapp').finalOutbox, this.outboxRoute('whatsapp'), this.setup('whatsapp').settleFinal); } catch { console.error('whatsapp outbox release unavailable'); }
       try { await this.setup('whatsapp').desk.ownerWrote(); } catch { console.error('whatsapp waiting approval cards unavailable'); }
       const deadline = runClaimDeadline(WHATSAPP_TURN_DEADLINE_MS, alarmEnd); if (deadline === null) break;
-      const record = inbox.claim(pending.id, deadline); if (!record) continue;
+      const record = inbox.claimNext(deadline); if (!record) break;
       // How long the owner waited between Meta's 200 and the turn starting, with how many messages wait behind it: counts only.
       console.log(JSON.stringify({ hop: 'whatsapp_turn_start', ok: true, ms: Date.now() - record.admittedAt, queued: inbox.records().filter(row => row.state === 'admitted').length }));
       let completed = false;
@@ -3695,9 +3695,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const googleBooks = <T,>(work: () => Promise<T>) => this.googleBooks(work);
-    // A dead grant's notice where no connect button can go (the app, iMessage, WhatsApp): plain text, no link, through the delivery outbox,
-    // which takes it to the app transcript for an owner the directory admits there, or to iMessage for an owner whose only
-    // surface it is. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
+    // A dead grant's notice where no connect button can go (the app, iMessage, WhatsApp): plain text, no link, through the
+    // delivery outbox, which takes it to the surface the owner's proactive messages reach: the app transcript for an owner the
+    // directory admits there, otherwise WhatsApp (held until its window opens) or iMessage. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
     // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none, and
     // reads that failed together, each finding the grant healthy when it noted the failure, get the one notice the first queued.
     const queueReauthNotice = async (id: string): Promise<void> => {
