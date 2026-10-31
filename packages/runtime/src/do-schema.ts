@@ -433,8 +433,8 @@ export const RETIRE_MEMORY_HALLS_MIGRATION: DoMigration = {
 };
 
 // What each calendar event last looked like to the update sweep, so a change can say what it was: its times, whether its
-// title changed (a digest, never the title) and how many attended. Written only by the sweep's own transaction, which runs
-// this DDL itself, and kept for two weeks after the event was last seen.
+// title changed (an HMAC under a per-object key, never the title) and how many attended. Written only by the sweep's own
+// transaction, which runs this DDL itself, and kept for two weeks after the event was last seen.
 export const CALENDAR_LAST_SEEN_TABLE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS calendar_last_seen (
     event_id     TEXT PRIMARY KEY,
