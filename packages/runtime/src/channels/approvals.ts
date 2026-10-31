@@ -1003,10 +1003,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         // A fixed code only: the provider's message, the addresses, the words and the provider id never reach a log.
         const hop = (code: string, ok = false) => deps.log({ trace, hop: 'agent_mail_send', ms: deps.now() - started, ok, code });
         const holder = action === 'a' && !recovering ? keyHolder(ap.idempotency_key, id, 'agent_mail_send') : undefined;
+        // An earlier approval of this card may have sent it, so nothing found now turns it into "not sent".
+        const unknownStill: ApprovalDecision = { toast: 'Outcome unknown', message: "The send outcome is unknown, and the mail service can't be asked afterwards. Check with the recipients before sending it again; nothing was sent again." };
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
         } else if (!deps.agentMail) {
-          out = { toast: 'Not set up', message: 'Sending as Waldo is not set up on this Waldo yet, so nothing was sent.' };
+          out = recovering ? unknownStill : { toast: 'Not set up', message: 'Sending as Waldo is not set up on this Waldo yet, so nothing was sent.' };
         } else if (holder) {
           if ((JSON.parse(holder.payload_json) as AgentMailSendProposal).parts_digest !== ap.parts_digest) {
             setStatus(id, 'failed');
@@ -1020,9 +1022,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } else {
           const parts = await deps.agentMail.intact(ap).catch(() => null);
           if (!parts) {
-            setStatus(id, 'failed');
             hop('changed');
-            out = changedSend(entry);
+            if (recovering) out = unknownStill;
+            else { setStatus(id, 'failed'); out = changedSend(entry); }
           } else {
             if (!recovering) {
               const lost = claimOpen(id);
@@ -1054,7 +1056,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
                 out = { toast: 'Not sent', message: `Not sent: ${why ? AGENT_MAIL_REFUSED[why] : 'the mail service refused it'}, so nothing went out: ${describeAgentMail(ap)}.` };
               } else {
                 setStatus(id, 'uncertain');
-                out = { toast: 'Outcome unknown', message: "The send outcome is unknown, and the mail service can't be asked afterwards. Check with the recipients before sending it again; nothing was sent again." };
+                out = unknownStill;
               }
             }
           }

@@ -191,6 +191,24 @@ describe('a send as Waldo on the approval desk', () => {
     });
   }
 
+  it('an uncertain send stays unknown when approved again after the card no longer checks out or sending is off', async () => {
+    await owner('agent-mail-send-unknown-recheck', async state => {
+      const f = harness(state);
+      f.fake.answer = async () => { throw new Error('socket closed'); };
+      const id = await f.desk.proposeAgentMailSend(await agentMailProposal());
+      expect((await f.approve(id)).toast).toBe('Outcome unknown');
+      state.storage.sql.exec("UPDATE ledger SET payload_json = json_set(payload_json, '$.body', 'Changed.') WHERE id = ?", id);
+      const again = await f.approve(id);
+      expect(again.toast).toBe('Outcome unknown');
+      expect(again.message).not.toContain('nothing went out');
+      expect(f.status(id)).toBe('uncertain');
+      const off = harness(state, { sender: false });
+      expect((await off.desk.decide(id, 'a', 'trace', { surface: 'app' })).toast).toBe('Outcome unknown');
+      expect(off.status(id)).toBe('uncertain');
+      expect(f.fake.attempts).toHaveLength(1);
+    });
+  });
+
   it('logs the fixed code only: never the error message, an address, the subject, the words or the provider id', async () => {
     await owner('agent-mail-send-logs', async state => {
       const logs: TurnLogEntry[] = [];
