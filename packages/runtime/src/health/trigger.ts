@@ -364,7 +364,7 @@ export const healthNoticePrompt = (input: Readonly<{ view: HealthTriggerView; no
     "Nothing is on the owner's calendar, tasks or open loops in the next 24 hours.",
     "The owner's own goals are in their profile in memory (a race, a training block, a sleep or energy aim): weigh this change against them, since a change that serves a goal they stated can be worth raising. Never invent a goal they have not stated.",
     "Decide whether this change is worth one short note to the owner now, between the day's main cards (The Brief, the Check-in and The Close), which already carry the day. A note is a gentle flag: what you notice, in zone words, and at most one small thing they could do with it today, offered and easy to ignore. Most changes do not need one: write it only when hearing it now, rather than at the next main card, would change how they spend today. Otherwise return no_op. A note the owner finds pointless costs their trust and their attention.",
-    `Never diagnose or alarm, and never mention medicine; never a number, a score or a reading. Write it as a short update card: a first line "Update", then one or two short lines, at most ${NOTICE_MAX} characters in all.`,
+    `Never diagnose or alarm, and never mention medicine; never a number, a score or a reading. Write it as one or two short lines that lead with the change itself, in plain words, at most ${NOTICE_MAX} characters in all.`,
     'Return only JSON: kind (notice or no_op) and text (the note; empty for no_op).',
   ].join('\n\n');
 };
