@@ -4662,7 +4662,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
     };
-    const replanToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => replanCards(trace)));
+    // Whatever fails before the re-plan's own catch (reading the plan, the owner job itself) is logged as a code here, so the
+    // queued job never ends in an unhandled rejection.
+    const replanToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => replanCards(trace))
+      .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'replan_failed' })));
     // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
     // lands in the schedule retry/quarantine policy unchanged. Past-due loops become a reader job written with the scan; the
     // worker checks them off this pass, and the jobs lane applies what it found (heartbeatApply below).

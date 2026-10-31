@@ -20,7 +20,7 @@ const OWNER_ID = '5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const LISTED: CalendarItem = { id: 'e-call', title: 'Call with Asha', status: 'confirmed', start: '2026-10-20T07:30:00Z', end: '2026-10-20T08:00:00Z', all_day: false };
 const CALL: CalendarChange = { ...LISTED, status: 'confirmed', created: '2026-10-20T06:05:00Z' };
-const fixture = vi.hoisted(() => ({ listed: [] as CalendarItem[], changed: [] as CalendarChange[], replans: [] as string[], reply: '' }));
+const fixture = vi.hoisted(() => ({ listed: [] as CalendarItem[], changed: [] as CalendarChange[], replans: [] as string[], reply: '', movableThrows: false }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -28,6 +28,13 @@ vi.mock('../src/connectors/google', async load => {
     calendarPage: async () => ({ events: [...fixture.listed], next_page_token: null, fetched_count: fixture.listed.length, account, observed_at: new Date().toISOString() }),
     event: async () => fixture.listed[0] ?? null, changedEvents: async () => [...fixture.changed], newMail: async () => [],
   }) };
+});
+vi.mock('../src/channels/day-cards', async load => {
+  const original = await load<typeof import('../src/channels/day-cards')>();
+  return { ...original, movableCards: (...args: Parameters<typeof original.movableCards>) => {
+    if (fixture.movableThrows) throw new Error('day plan unreadable');
+    return original.movableCards(...args);
+  } };
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -42,7 +49,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 let clock = 0;
 beforeEach(() => {
-  fixture.listed = []; fixture.changed = []; fixture.replans = []; fixture.reply = '';
+  fixture.listed = []; fixture.changed = []; fixture.replans = []; fixture.reply = ''; fixture.movableThrows = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -138,4 +145,23 @@ it('with the day state off, a change touching today re-plans nothing', async () 
     expect(replanNotes(sql)).toEqual([]);
     expect(due('card:brief')).toBe(Date.parse('2026-10-20T08:00:00Z'));
   });
+});
+
+it('a re-plan that throws before it reads the calendar is logged, never left unhandled', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (event: PromiseRejectionEvent) => { unhandled.push(event.reason); event.preventDefault(); };
+  globalThis.addEventListener('unhandledrejection', onUnhandled);
+  try {
+    await withOwner('day-replan-throws', '1', async ({ sweep, due, sql }) => {
+      fixture.movableThrows = true;
+      fixture.listed = [LISTED];
+      fixture.changed = [CALL];
+      await sweep();
+      await vi.waitFor(() => expect(replanNotes(sql).map(row => row.ok)).toEqual([0]));
+      expect(fixture.replans).toEqual([]);
+      expect(due('card:brief')).toBe(Date.parse('2026-10-20T08:00:00Z'));
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(unhandled).toEqual([]);
+  } finally { globalThis.removeEventListener('unhandledrejection', onUnhandled); }
 });
