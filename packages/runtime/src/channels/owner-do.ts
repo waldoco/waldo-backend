@@ -171,6 +171,7 @@ import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standi
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
+import { browserErrandRecord, clearBrowserErrandReceipt, revokeBrowserErrand } from './browser-errand-grant';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { HEALTH_TRIGGER_RUN, NIGHTLY_RUN, recordedRun, runBook } from './background-runs';
@@ -609,6 +610,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      endGrant: runRef => { const ended = revokeBrowserErrand(self.ctx.storage, runRef); if (ended) console.log(JSON.stringify({ hop: 'browser_errand_grant_ended', ok: true, submits: ended.submits.length, max_submits: ended.maxSubmits })); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
@@ -3138,6 +3140,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const kv = storage.kv, jobs = this.jobs();
       const ran = await runJobsLane({
         book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, surface, log: runtime.log,
+        errandRecord: { get: id => browserErrandRecord(storage, `task:${id}`, runtime.timezone), clear: id => { clearBrowserErrandReceipt(storage, `task:${id}`); } },
         quiet: () => isQuiet(loopBook(storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), runtime.timezone),
         startWorker: async ticket => {
           const workers = this.env.TASK_WORKER_DO;
@@ -4392,6 +4395,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
       } }), ...loopHandlers(loops, closableIn), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable, cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
+        errandGrant: { storage, propose: proposal => desk.proposeTaintedAction(proposal) },
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,

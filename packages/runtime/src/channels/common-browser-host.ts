@@ -11,6 +11,7 @@ import type {workspaceOwnerHost} from './workspace-host';
 import {generalDigest} from './general-browser-observation';
 import {browserScreenshotToWorkspace} from './browser-screenshot-workspace';
 import {browserDownloadToWorkspace,type BrowserDownloadMetadata,type BrowserDownloadReceipt} from './browser-download-workspace';
+import {browserErrandAdmits,spendBrowserErrandSubmit} from './browser-errand-grant';
 import type { GeneralBrowserAction } from './general-browser-actions';
 export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number;keepAliveMs?:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
@@ -75,6 +76,8 @@ export function commonBrowserHost(options:Readonly<{
  let handoffSession:BrowserSession|undefined;
  let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
+ // The run whose errand grant may spend page writes; set only while that run's click or key press is in flight.
+ let errandRun:string|undefined;
  const snapshot=()=>options.source();
  const checked=async()=>{await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
  const granted=async()=>{
@@ -94,7 +97,7 @@ export function commonBrowserHost(options:Readonly<{
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
-  authorizeRequest:async(url,method)=>readableUrl(grant,url,method)});
+  authorizeRequest:async(url,method)=>readableUrl(grant,url,method)||errandRun!==undefined&&isPublicWebUrl(url,options.egressAllowlist)&&spendBrowserErrandSubmit(options.storage,errandRun,url,options.now())});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
@@ -262,7 +265,8 @@ export function commonBrowserHost(options:Readonly<{
     }
     else {
      if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
-     if('intent' in command&&command.intent==='send')throw Error('browser approval required');
+     // A step the model marks as sending runs only as a click or key press of the run its owner granted this site to.
+     if('intent' in command&&command.intent==='send'&&!((command.operation==='click'||command.operation==='type'&&command.key==='Enter')&&ctx.runScope&&browserErrandAdmits(options.storage,ctx.runScope.runId,before.state.url,options.now())))throw Error('browser approval required');
      const prepare=async(prepared:string)=>{
        await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
        options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser effect custody changed');save({...latest,action:{digest:prepared,state:'prepared'}},storageKey!);digest=prepared;});
@@ -274,8 +278,10 @@ export function commonBrowserHost(options:Readonly<{
       const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='select'?{operation:'select',element_ref:command.element_ref,value:command.value}:command.operation==='set_checked'?{operation:'set_checked',element_ref:command.element_ref,checked:command.checked}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
       if(!action)throw Error('unsupported current browser command');
       const element=action.operation==='scroll'?undefined:before.state.elements[before.observation.elements.findIndex(row=>row.ref===action.element_ref)];
-      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type)))&&!(element.formMethod==='get'&&element.formAction&&readableUrl(grant,element.formAction,'GET')))throw new GeneralBrowserError('native_submit_requires_card');
-      observed=await driver.act(record.session,before,action,prepare);
+      const runId=ctx.runScope?.runId,errand=runId!==undefined&&browserErrandAdmits(options.storage,runId,element?.formAction??before.state.url,options.now());
+      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type)))&&!(element.formMethod==='get'&&element.formAction&&readableUrl(grant,element.formAction,'GET'))&&!errand)throw new GeneralBrowserError('native_submit_requires_card');
+      errandRun=errand&&(action.operation==='click'||action.operation==='press')?runId:undefined;
+      try{observed=await driver.act(record.session,before,action,prepare);}finally{errandRun=undefined;}
      }
     }
     if(digest){const completed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===completed)save({...latest,action:{digest:completed,state:'observed'}},storageKey!);});}

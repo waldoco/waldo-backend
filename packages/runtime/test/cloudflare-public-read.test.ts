@@ -21,7 +21,7 @@ const fake = () => {
   const emit = (event: string, request: unknown) => { for (const listener of listeners[event] ?? []) listener(request); };
   return { calls, page, sdk, browser, privateContext, mainFrame, emit, socket: () => socketRouted, route: async (url: string, method = 'GET', status = 200, location?: string, request: Readonly<{ type?: string; navigation?: boolean; frame?: FakeFrame }> = {}) => {
     const events: string[] = [], navigation = request.navigation ?? Boolean(location);
-    await routed!({ request: () => ({ url: () => url, method: () => method, resourceType: () => request.type ?? (navigation ? 'document' : 'fetch'), isNavigationRequest: () => navigation, frame: () => request.frame ?? mainFrame }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
+    await routed!({ request: () => ({ url: () => url, method: () => method, resourceType: () => request.type ?? (navigation ? 'document' : 'fetch'), isNavigationRequest: () => navigation, postDataBuffer: () => null, frame: () => request.frame ?? mainFrame }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
     return events;
   } };
 };
