@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(34);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -16,6 +16,7 @@ create function pg_temp.send(code text, sender text) returns uuid language sql a
 create function pg_temp.owner(o text) returns uuid language sql as $$ select id from waldo.owners where do_name = o $$;
 create function pg_temp.verified(o text) returns boolean language sql as $$
   select phone_verified_at is not null from waldo.owners where do_name = o $$;
+create function pg_temp.phone(o text) returns text language sql as $$ select phone from waldo.owners where do_name = o $$;
 create function pg_temp.active(o text) returns text language sql as $$
   select string_agg(subject, ',' order by subject) from waldo.presences where owner_id = pg_temp.owner(o) and provider = 'whatsapp' and state = 'active' $$;
 
@@ -42,14 +43,43 @@ select ok(pg_temp.issue('wa-ana', 'ANACODE789'), 'she gets a code to link a diff
 select is(pg_temp.send('ANACODE789', '919800000188'), pg_temp.owner('wa-ana'), 'which another of her numbers redeems');
 select is(pg_temp.active('wa-ana'), '919800000188', 'leaving only the new number linked');
 
--- A different WhatsApp number proves nothing about an unverified number on file, so it cannot link, and the code survives.
+-- A different WhatsApp number than the unproven one on file: the send proves the sending number, so it becomes his.
 select ok(pg_temp.issue('wa-ben', 'BENCODE234'), 'ben is issued a WhatsApp code');
-select throws_ok($$ select pg_temp.send('BENCODE234', '919800000199') $$, 'P0001', 'whatsapp presence requires a verified phone (phone_verified_at is null)',
-  'a code sent from another number does not link while his number is unverified');
-select ok(not pg_temp.verified('wa-ben'), 'and verifies nothing');
-select is((select count(*)::int from waldo.link_codes where owner_id = pg_temp.owner('wa-ben') and used_at is null), 1, 'nor spends the code');
-select is(pg_temp.send('BENCODE234', '919800000102'), pg_temp.owner('wa-ben'), 'which then works from his own number');
-select ok(pg_temp.verified('wa-ben') and pg_temp.active('wa-ben') = '919800000102', 'verifying and linking it in that one send');
+select is(pg_temp.send('BENCODE234', '919800000199'), pg_temp.owner('wa-ben'), 'a code sent from another number links');
+select ok(pg_temp.verified('wa-ben') and pg_temp.phone('wa-ben') = '+919800000199', 'and that number replaces his unproven one, proven');
+select is(pg_temp.active('wa-ben'), '919800000199', 'with WhatsApp linked from it');
+
+-- Most owners have no number on file: their first WhatsApp link gives them one, proven.
+insert into waldo.owners (do_name, email) values ('wa-cy', 'cy@test.invalid'), ('wa-dee', 'dee@test.invalid'), ('wa-eli', 'eli@test.invalid');
+select ok(pg_temp.issue('wa-cy', 'CYCODE2345'), 'cy, with no number on file, is issued a code');
+select is(pg_temp.send('CYCODE2345', '919800000301'), pg_temp.owner('wa-cy'), 'her send links');
+select ok(pg_temp.verified('wa-cy') and pg_temp.phone('wa-cy') = '+919800000301', 'and makes that number hers, proven');
+
+-- A number another owner holds is not taken: the refusal says so, nothing changes and the code survives.
+select ok(pg_temp.issue('wa-dee', 'DEECODE234'), 'dee is issued a code');
+select throws_ok($$ select pg_temp.send('DEECODE234', '919800000301') $$, '23505', 'presence already linked to another owner',
+  'a number already linked to another owner''s WhatsApp is refused as linked elsewhere');
+update waldo.presences set state = 'unlinked', unlinked_at = now() where owner_id = pg_temp.owner('wa-cy') and provider = 'whatsapp';
+select throws_ok($$ select pg_temp.send('DEECODE234', '919800000301') $$, '23505', 'phone number held by another owner',
+  'once unlinked, a number another owner has proven is still refused, in its own words');
+select ok(not pg_temp.verified('wa-dee') and pg_temp.phone('wa-dee') is null, 'dee gains no number');
+select is((select count(*)::int from waldo.link_codes where owner_id = pg_temp.owner('wa-dee') and used_at is null), 1, 'and keeps her code');
+
+-- An owner who has proven a number keeps it when linking WhatsApp from another.
+select ok(pg_temp.issue('wa-cy', 'CYCODE6789'), 'cy gets a new code');
+select is(pg_temp.send('CYCODE6789', '919800000302'), pg_temp.owner('wa-cy'), 'and links a second WhatsApp number');
+select ok(pg_temp.phone('wa-cy') = '+919800000301' and pg_temp.verified('wa-cy'), 'her proven number stays as it was');
+
+-- iMessage from a number proves it the same way; from an Apple ID email it proves nothing.
+insert into waldo.link_codes (code_hash, owner_id, provider, expires_at) values
+  ('im-eli', pg_temp.owner('wa-eli'), 'imessage', now() + interval '10 minutes'),
+  ('im-dee', pg_temp.owner('wa-dee'), 'imessage', now() + interval '10 minutes');
+select is(waldo.redeem_link_code('im-dee', 'imessage', 'dee@icloud.test'), pg_temp.owner('wa-dee'), 'dee links iMessage from an Apple ID email');
+select ok(not pg_temp.verified('wa-dee') and pg_temp.phone('wa-dee') is null, 'which gives her no number');
+select is(waldo.redeem_link_code('im-eli', 'imessage', '+919800000401'), pg_temp.owner('wa-eli'), 'eli links iMessage from his number');
+select ok(pg_temp.verified('wa-eli') and pg_temp.phone('wa-eli') = '+919800000401', 'which becomes his proven number');
+select ok(pg_temp.issue('wa-eli', 'ELICODE234'), 'eli gets a WhatsApp code');
+select is(pg_temp.send('ELICODE234', '919800000401'), pg_temp.owner('wa-eli'), 'and links WhatsApp from the same number');
 
 select * from finish();
 rollback;
