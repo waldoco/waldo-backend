@@ -1,6 +1,7 @@
 import { LIFE_AREAS } from '@waldo/contracts';
 import { CONSTELLATION_BLOCK_MAX_CHARS, constellationBlock, FACTS_BLOCK_MAX_CHARS, fittingLines, MEMORY_HEADER, pinnedIn, PROFILE_BLOCK_MAX_CHARS, profileClaims, profileLine, statedReading, type Claim, type ClaimStore } from './claims';
-import { RECALL_MAX_CHARS, recallForTurn, type RecallEpisodes, type RecallLeg, type RecallNear } from './turn-recall';
+import { EMBED_TIMEOUT_MS } from './semantic-recall';
+import { RECALL_MAX_CHARS, recallForTurn, type RecallEpisodes, type RecallLeg, type RecallNear, type TurnRecall } from './turn-recall';
 
 // What the model sees of the owner's memory, chosen by the model rather than by age (memory redesign option B). The core holds
 // the nightly's pins, what the owner said since that review, and a count by area of what is left out; recall offers this
@@ -17,15 +18,19 @@ const leftOutLine = (claims: readonly Claim[]): string => {
   return named.length ? `(More the owner told Waldo, not shown here: ${named.join(', ')}. Recall brings what a message needs; read_memory by area or query reaches the rest.)` : '';
 };
 
-// The core within room and CORE_ROOM, whichever is less. reviewedThrough is when memory was last reviewed (ms); a claim told
-// after it is new, and with no review yet every claim is. New claims are the newest that fit, shown oldest first, so the
+// Whether the nightly has reviewed a claim, and so had the chance to pin it.
+export type Reviewed = (claim: Claim) => boolean;
+// The owner object's: a claim told after the nightly's mark (ms) is new, and with no pass yet every claim is.
+export const reviewedThrough = (mark: number | undefined): Reviewed => (claim) => mark !== undefined && Date.parse(claim.created_at) <= mark;
+
+// The core within room and CORE_ROOM, whichever is less. New claims are the newest that fit, shown oldest first, so the
 // fact the owner just gave is always there. A health note or a stated reading is never in the core: recall and get_health
 // carry those. Nothing is cut mid-line; what does not fit is counted.
-export const coreMemory = (store: ClaimStore, room: number, reviewedThrough: number | undefined): string => {
+export const coreMemory = (store: ClaimStore, room: number, reviewed: Reviewed): string => {
   const eligible = profileClaims(store);
   const pinned = (claim: Claim) => claim.pinned === 'profile' || claim.pinned === 'facts';
   const fresh = eligible.filter((claim) => !pinned(claim) && claim.kind !== 'health' && !statedReading(claim)
-    && (reviewedThrough === undefined || Date.parse(claim.created_at) > reviewedThrough)).sort((a, b) => a.id - b.id);
+    && !reviewed(claim)).sort((a, b) => a.id - b.id);
   const parts: string[] = [];
   let left = Math.min(room, CORE_ROOM);
   const push = (text: string): boolean => {
@@ -57,6 +62,21 @@ export const coreMemory = (store: ClaimStore, room: number, reviewedThrough: num
   return parts.join('\n');
 };
 
+// MEMORY_SELECTION=1: the owner turn shows option B, judging what is new as of this turn.
+export type MemorySelection = Readonly<{ reviewed(): Reviewed }>;
+// How long selection waits for recall: the lexical path alone, or one embedding call when the meaning leg is on.
+export const LEXICAL_DEADLINE_MS = 250;
+export const SEMANTIC_DEADLINE_MS = EMBED_TIMEOUT_MS;
+
+// Recall that misses deadlineMs is left out, and the legs it was waiting on are named.
+export const recallWithin = async (args: Parameters<typeof recallForTurn>[0], deadlineMs: number): Promise<TurnRecall> => {
+  const pending: RecallLeg[] = [...(args.semantic ? ['semantic' as const] : []), ...(args.episodes ? ['episodes' as const] : [])];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deadlineMs); });
+  const recalled = await Promise.race([recallForTurn(args), late]).finally(() => clearTimeout(timer));
+  return recalled ?? { text: '', failed: pending.length ? pending : ['claims'] };
+};
+
 export type MemoryTurn = 'owner' | 'machine' | 'outside';
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 const ids = (text: string, prefix: 'c' | 'n') => [...text.matchAll(new RegExp(`\\b${prefix}(\\d+) · `, 'g'))].map((match) => Number(match[1]));
@@ -66,25 +86,20 @@ const ids = (text: string, prefix: 'c' | 'n') => [...text.matchAll(new RegExp(`\
 // out, and its legs are named in failed; the core never waits on it. shown lists the ids shown in full, never a stub.
 export const selectMemory = async (input: Readonly<{
   view: ClaimStore; text: string; previous?: string; turn: MemoryTurn;
-  room: Readonly<{ core: number; recalled: number }>; deadlineMs: number; reviewedThrough: number | undefined;
+  room: Readonly<{ core: number; recalled: number }>; deadlineMs: number; reviewed: Reviewed;
   holds: Holds; episodes?: RecallEpisodes; current?: string; semantic?: RecallNear;
 }>): Promise<Readonly<{ core: string; recalled: string; shown: Readonly<{ claims: readonly number[]; nodes: readonly number[] }>; failed: readonly RecallLeg[]; revision: number }>> => {
-  const core = coreMemory(input.view, input.room.core, input.reviewedThrough);
+  const core = coreMemory(input.view, input.room.core, input.reviewed);
   const episodes = input.turn === 'owner' ? input.episodes : undefined;
-  const pending: RecallLeg[] = [...(input.semantic ? ['semantic' as const] : []), ...(episodes ? ['episodes' as const] : [])];
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), input.deadlineMs); });
-  const recalled = await Promise.race([recallForTurn({
+  const recalled = await recallWithin({
     claims: input.view, question: input.text, room: input.room.recalled, holds: input.holds, stubs: true,
     ...(input.previous === undefined ? {} : { previous: input.previous }),
     ...(episodes ? { episodes, ...(input.current === undefined ? {} : { current: input.current }) } : {}),
     ...(input.semantic ? { semantic: input.semantic } : {}),
-  }), late]).finally(() => clearTimeout(timer));
-  const text = recalled?.text ?? '';
+  }, input.deadlineMs);
   return {
-    core, recalled: text,
-    shown: { claims: [...new Set([...ids(core, 'c'), ...ids(text, 'c')])], nodes: ids(core, 'n') },
-    failed: recalled ? recalled.failed : pending.length ? pending : ['claims'],
-    revision: input.view.revision(),
+    core, recalled: recalled.text,
+    shown: { claims: [...new Set([...ids(core, 'c'), ...ids(recalled.text, 'c')])], nodes: ids(core, 'n') },
+    failed: recalled.failed, revision: input.view.revision(),
   };
 };
