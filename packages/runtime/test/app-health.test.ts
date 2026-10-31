@@ -450,10 +450,57 @@ describe('app health scores', () => {
   });
 });
 
+// The owner's stated sleep need: read and replaced whole through the signed health-plane calls. Every value is synthetic.
+describe('app health settings', () => {
+  const put = (body: unknown) => handleApp(new Request('https://w.test/app/v1/health/settings', {
+    method: 'PUT', headers: headers({ 'content-type': 'application/json' }), body: typeof body === 'string' ? body : JSON.stringify(body),
+  }), env(), auth) as Promise<Response>;
+
+  it('reads the stated need through the signed settings read, and shows the app the need alone', async () => {
+    rpcResult = { sleep_need_minutes: 480, updated_at: '2026-10-10T08:00:00.000Z' };
+    const response = await get('/app/v1/health/settings');
+    expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 480 }]);
+    expect(rpcs.map(call => [call.fn, call.body.p_do_name, call.body.p_payload])).toEqual([['health_settings_read', 'owner-1', '{}']]);
+  });
+
+  it('replaces it whole, and answers with what the health plane stored', async () => {
+    rpcResult = { sleep_need_minutes: 450, updated_at: '2026-10-10T08:00:00.000Z' };
+    const response = await put({ sleep_need_minutes: 450 });
+    expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 450 }]);
+    expect(rpcs.map(call => [call.fn, call.body.p_payload, call.body.p_sig === undefined])).toEqual([['health_settings_write', '{"sleep_need_minutes":450}', false]]);
+    rpcResult = { sleep_need_minutes: null, updated_at: '2026-10-10T08:05:00.000Z' };
+    expect(await (await put({ sleep_need_minutes: null })).json()).toEqual({ sleep_need_minutes: null });
+  });
+
+  it('refuses a body outside the contract before any database call', async () => {
+    for (const body of [{}, { sleep_need_minutes: 359 }, { sleep_need_minutes: 601 }, { sleep_need_minutes: 480, owner_id: 'owner-2' }, 'not json']) {
+      const response = await put(body);
+      expect([response.status, await response.json()], JSON.stringify(body)).toEqual([400, { error: 'invalid_request' }]);
+    }
+    expect(rpcs).toEqual([]);
+  });
+
+  it('passes a closed database refusal on, and never a database answer outside the contract', async () => {
+    rpcResult = { error: 'not_linked' };
+    expect((await get('/app/v1/health/settings')).status).toBe(403);
+    rpcResult = { sleep_need_minutes: 9000 };
+    const response = await put({ sleep_need_minutes: 480 });
+    expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
+  });
+
+  it('takes GET and PUT only, behind the app credential', async () => {
+    expect((await post('/app/v1/health/settings', { sleep_need_minutes: 480 })).status).toBe(405);
+    const anonymous = await handleApp(new Request('https://w.test/app/v1/health/settings'), env(), auth);
+    expect(anonymous!.status).toBe(401);
+    expect(rpcs).toEqual([]);
+  });
+});
+
 describe('app health route table', () => {
   it('serves exactly the routes the contract declares', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores', 'GET /app/v1/health/scores/history',
+      'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
   });
 });

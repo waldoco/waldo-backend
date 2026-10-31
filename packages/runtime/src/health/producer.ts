@@ -1,4 +1,5 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
@@ -28,7 +29,26 @@ export type ProducerDeps = Readonly<{
   backfillLimit?: number;
   // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
   trainingLoad?: boolean;
+  // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
+  // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
+  readSettings?: () => Promise<unknown>;
 }>;
+
+// The stated need and when it last changed, or null for an answer that is not the settings shape.
+type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
+const statedNeedOf = (raw: unknown): StatedNeed | null => {
+  const answer = asRecord(raw);
+  const minutes = answer?.sleep_need_minutes === null ? { success: true as const, data: null } : healthSleepNeedMinutesV1Schema.safeParse(answer?.sleep_need_minutes);
+  if (!answer || !minutes.success) return null;
+  const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
+  return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
+};
+// A row compiled before the need last changed may move zone only because the need moved, not the body, so its move is not
+// told to the health trigger. The next compile is on the new need on both sides.
+const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
+  const compiledAt = typeof before?.compiled_at === 'string' ? Date.parse(before.compiled_at) : NaN;
+  return stated.changedAt !== null && Number.isFinite(compiledAt) && compiledAt < stated.changedAt;
+};
 
 // Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.
 export const BACKFILL_DAYS_PER_RUN = 30;
@@ -430,6 +450,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
     const parsed = parseSeries(await scoresRead);
     if (parsed.kind !== 'series') return parsed.kind;
+    const stated = deps.readSettings ? statedNeedOf(await deps.readSettings().catch(() => null)) : { minutes: null, changedAt: null };
+    if (!stated) return 'failed';
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
@@ -469,7 +491,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         const chosen = chooseFor(day);
         const records = recordsBySource.get(chosen.source) ?? recordsOf(chosen);
         recordsBySource.set(chosen.source, records);
-        const scores = deps.compute({ access: 'granted', targetDay: day, days: records.days, sleepNeedMinutes: null, asOf: series.readAt });
+        const scores = deps.compute({ access: 'granted', targetDay: day, days: records.days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
         if (scores.recovery.state === 'unavailable' && scores.sleep_debt.state === 'unavailable') continue;
         const unavailable = (reason: 'intraday_inputs_unavailable' | 'calendar_demand_unavailable') => ({ state: 'unavailable' as const, reason });
         const late = { ...scores, form: unavailable('intraday_inputs_unavailable'), weight: unavailable('calendar_demand_unavailable') };
@@ -486,20 +508,21 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
+      const before = await storedBefore(deps.readScores, targetDay);
       const row = {
-        ...rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (writeOutcome(answer) === 'written') logWritten(row);
-      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     if (provisional && deps.readHistory) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.

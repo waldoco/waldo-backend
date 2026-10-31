@@ -476,6 +476,15 @@ export const healthScoresHistoryV1Schema = z.strictObject({
 export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
 export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
 
+// The owner's own sleep need, when they have stated one, in whole minutes and inside the range the score engine trusts (six to
+// ten hours). null clears it, and the engine goes back to the owner's own nights. It is the owner's statement, not a reading:
+// no source holds it, so one source's withdrawal leaves it, and account deletion removes it. The app reads it with GET and
+// replaces it whole with PUT, which answers with what is now stored.
+export const HEALTH_SLEEP_NEED_MIN_MINUTES_V1 = 360;
+export const HEALTH_SLEEP_NEED_MAX_MINUTES_V1 = 600;
+export const healthSleepNeedMinutesV1Schema = z.int().min(HEALTH_SLEEP_NEED_MIN_MINUTES_V1).max(HEALTH_SLEEP_NEED_MAX_MINUTES_V1);
+export const healthSettingsV1Schema = z.strictObject({ sleep_need_minutes: healthSleepNeedMinutesV1Schema.nullable() });
+
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
@@ -489,9 +498,12 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/settings', response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/health/settings', request: healthSettingsV1Schema, response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;
 export type HealthSampleV1 = z.infer<typeof healthSampleV1Schema>;
 export type HealthScoresV1 = z.infer<typeof healthScoresV1Schema>;
 export type HealthScoresResponseV1 = z.infer<typeof healthScoresResponseV1Schema>;
+export type HealthSettingsV1 = z.infer<typeof healthSettingsV1Schema>;
