@@ -25,15 +25,15 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
 });
 
 describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
-  it('is declared off for production and staging until the gate turns it on', () => {
+  it('is on for staging and off for production', () => {
     expect(parsed.vars.HEALTH_SOLO_NOTICE).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('1');
   });
 });
 
 describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
-  it('is declared off for production and staging until migration 20261031130000 is applied and the gate turns it on', () => {
+  it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
     expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('1');
   });
 });

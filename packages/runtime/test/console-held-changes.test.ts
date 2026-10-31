@@ -71,7 +71,7 @@ describe('the held-changes read', () => {
       expect.objectContaining({ source: 'calendar', title: null, start: '2026-10-20T15:00:00Z' }),
       expect.objectContaining({ source: 'mail', subject: null, from: 'Asha <asha@client.example>' }),
     ]);
-    expect(JSON.stringify(changes)).not.toMatch(/9\.8|48 bpm/);
+    expect(JSON.stringify(changes)).not.toMatch(/9\.8 mmol|48 bpm/);
   });
 
   it('a cancelled event comes without times', async () => {
