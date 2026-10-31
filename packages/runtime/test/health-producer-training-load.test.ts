@@ -46,10 +46,10 @@ describe('producer: candidate training load', () => {
       worn(TODAY),
     ]));
     if (parsed.kind !== 'series') throw new Error(parsed.kind);
-    expect(parsed.series.sources[0]!.readings.map(r => r.workout)).toEqual([
-      { zoneSeconds: [600, 600, 600, 600, 0], effort: { score: 6, method: 'rated' } },
-      { zoneSeconds: null, effort: null },
-      { zoneSeconds: null, effort: null },
+    expect(parsed.series.sources[0]!.readings.map(r => r.workout && { zoneSeconds: r.workout.zoneSeconds, effort: r.workout.effort, activity: r.workout.activity })).toEqual([
+      { zoneSeconds: [600, 600, 600, 600, 0], effort: { score: 6, method: 'rated' }, activity: 'running' },
+      { zoneSeconds: null, effort: null, activity: 'running' },
+      { zoneSeconds: null, effort: null, activity: 'running' },
       null,
     ]);
   });

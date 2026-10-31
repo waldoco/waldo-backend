@@ -43,7 +43,7 @@ export const DAY_CARDS: readonly DayCard[] = [
 
 // The owner chooses whether their health reaches Waldo, so a card speaks about the body only from what they shared. A
 // card job cannot change the calendar or raise a card for a change, so the plan offers one and the owner's yes raises it.
-const SILENT_WITHOUT = 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score.';
+const SILENT_WITHOUT = 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.';
 export const CLASH_LINE = 'When the calendar asks a lot of them on a day their Form or Recovery is low, that clash is the read of the day: say it plainly, and offer the one change that would ease it most.';
 const BODY_RULE: Readonly<Record<DayCard['body'], string>> = {
   plan: `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good, a line is enough. ${CLASH_LINE} You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it; a yes from them puts it on an approval card. When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`,
@@ -70,6 +70,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   `<today>\n${context.today || '(no conversation yet today)'}\n</today>`,
   ...(context.updates ? [updatesSection(context.updates)] : []),
   card.instruction,
+  "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
   BODY_RULE[card.body],
   `Format it as a compact card for chat: a first line naming "${card.name}", then short sections. Keep it tight enough to read in 20 seconds.`,
 ].join('\n\n');
