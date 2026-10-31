@@ -7,6 +7,7 @@ import {
   DO_SCHEMA_VERSION,
   DO_PRODUCT_TABLES,
   DoSchemaDriftError,
+  EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION,
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
@@ -69,6 +70,11 @@ function provisionThroughV6(storage: DurableObjectStorage): void {
   applyDoMigration(storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION);
 }
 
+function provisionThroughV7(storage: DurableObjectStorage): void {
+  provisionThroughV6(storage);
+  applyDoMigration(storage, RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION);
+}
+
 describe('HEY-10 DO SQLite schema root', () => {
   it('reports an empty DO SQLite database as missing required product tables', async () => {
     const stub = freshStub();
@@ -105,7 +111,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -200,7 +206,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
@@ -233,7 +239,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 7, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 8, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -328,7 +334,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 7 });
+    expect(result.after).toEqual({ ...result.before, version: 8 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -440,7 +446,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -520,7 +526,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.preserved).toEqual(result.before);
     expect(result.protocolVersion).toBe('0.3');
     expect(result.executionTables).toEqual([
@@ -661,7 +667,7 @@ describe('HEY-10 DO SQLite schema root', () => {
   it('downgrades an empty V7 judgment schema to V6', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
-      provisionDoSchema(state.storage);
+      provisionThroughV7(state.storage);
       applyDoMigration(
         state.storage,
         RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
@@ -774,7 +780,7 @@ describe('HEY-10 DO SQLite schema root', () => {
 
     for (const testCase of cases) {
       const result = await runInDurableObject(freshStub(), (_instance, state) => {
-        provisionDoSchema(state.storage);
+        provisionThroughV7(state.storage);
         state.storage.sql.exec(testCase.insert, ...testCase.args);
         expect(() => applyDoMigration(
           state.storage,
@@ -1038,7 +1044,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 8,
+        version: DO_SCHEMA_VERSION + 1,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -1060,10 +1066,110 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 7,
-      afterVersion: 7,
+      beforeVersion: 8,
+      afterVersion: 8,
       outcomesPresent: true,
       probeTables: [],
+    });
+  });
+
+  describe('V8 email drafts know their connected mailbox', () => {
+    const insertDraft = `INSERT INTO drafts (
+        user_id, draft_id, connection_id, provider, created_at, recipient_count, idempotency_key
+      ) VALUES (?, ?, ?, 'gmail', 1700000000, 1, ?)`;
+
+    const insertError = (sql: SqlStorage, ...args: (string | null)[]) => {
+      try {
+        sql.exec(insertDraft, ...args);
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+
+    it('keeps V7 drafts with an unknown mailbox and preserves the user-created index', async () => {
+      const result = await runInDurableObject(freshStub(), (_instance, state) => {
+        provisionThroughV7(state.storage);
+        state.storage.sql.exec(
+          `INSERT INTO drafts (user_id, draft_id, provider, created_at, recipient_count, idempotency_key)
+           VALUES ('user-v7', 'draft-v7', 'gmail', 1700000000, 2, 'key-v7')`,
+        );
+        applyDoMigration(state.storage, EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION);
+        return {
+          version: getSchemaVersion(state.storage.sql),
+          row: state.storage.sql.exec(
+            `SELECT user_id, draft_id, connection_id, provider, created_at, sent_at,
+                    recipient_count, idempotency_key FROM drafts`,
+          ).one(),
+          indexes: state.storage.sql.exec<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'drafts' AND name NOT LIKE 'sqlite_autoindex%' ORDER BY name",
+          ).toArray().map((row) => row.name),
+        };
+      });
+
+      expect(result.version).toBe(8);
+      expect(result.row).toEqual({
+        user_id: 'user-v7', draft_id: 'draft-v7', connection_id: null, provider: 'gmail',
+        created_at: 1700000000, sent_at: null, recipient_count: 2, idempotency_key: 'key-v7',
+      });
+      expect(result.indexes).toEqual(['drafts_connection_idempotency_idx', 'drafts_user_created_idx']);
+    });
+
+    it('scopes draft dedup to one mailbox: the same request may be drafted in two accounts', async () => {
+      const result = await runInDurableObject(freshStub(), (_instance, state) => {
+        provisionDoSchema(state.storage);
+        const sql = state.storage.sql;
+        return {
+          work: insertError(sql, 'user-1', 'draft-a', 'conn-work', 'same-key'),
+          personal: insertError(sql, 'user-1', 'draft-b', 'conn-personal', 'same-key'),
+          sameMailbox: insertError(sql, 'user-1', 'draft-c', 'conn-work', 'same-key'),
+          legacyFirst: insertError(sql, 'user-1', 'draft-d', null, 'legacy-key'),
+          legacyAgain: insertError(sql, 'user-1', 'draft-e', null, 'legacy-key'),
+          emptyConnection: insertError(sql, 'user-1', 'draft-f', '', 'other-key'),
+        };
+      });
+
+      expect(result.work).toBeNull();
+      expect(result.personal).toBeNull();
+      expect(result.sameMailbox).toMatch(/UNIQUE/);
+      expect(result.legacyFirst).toBeNull();
+      expect(result.legacyAgain).toMatch(/UNIQUE/);
+      expect(result.emptyConnection).toMatch(/CHECK/);
+    });
+
+    it('downgrades to V7 while only drafts with an unknown mailbox exist', async () => {
+      const result = await runInDurableObject(freshStub(), (_instance, state) => {
+        provisionDoSchema(state.storage);
+        insertError(state.storage.sql, 'user-1', 'draft-legacy', null, 'legacy-key');
+        applyDoMigration(state.storage, EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION, 'down');
+        return {
+          version: getSchemaVersion(state.storage.sql),
+          columns: state.storage.sql.exec<{ name: string }>('PRAGMA table_info(drafts)')
+            .toArray().map((row) => row.name),
+          rows: state.storage.sql.exec<{ count: number }>('SELECT count(*) AS count FROM drafts').one().count,
+        };
+      });
+
+      expect(result).toEqual({
+        version: 7,
+        columns: ['user_id', 'draft_id', 'provider', 'created_at', 'sent_at', 'recipient_count', 'idempotency_key'],
+        rows: 1,
+      });
+    });
+
+    it('refuses the V7 downgrade once a draft names its mailbox, and keeps that draft', async () => {
+      const result = await runInDurableObject(freshStub(), (_instance, state) => {
+        provisionDoSchema(state.storage);
+        insertError(state.storage.sql, 'user-1', 'draft-a', 'conn-work', 'key-a');
+        expect(() => applyDoMigration(state.storage, EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION, 'down')).toThrow();
+        return {
+          version: getSchemaVersion(state.storage.sql),
+          connection: state.storage.sql.exec<{ connection_id: string }>('SELECT connection_id FROM drafts').one()
+            .connection_id,
+        };
+      });
+
+      expect(result).toEqual({ version: 8, connection: 'conn-work' });
     });
   });
 });

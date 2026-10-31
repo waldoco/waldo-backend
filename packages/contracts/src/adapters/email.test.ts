@@ -33,6 +33,7 @@ const key = 'b'.repeat(64);
 
 const minimalDraft = {
   draft_id: 'r-123abc',
+  connection_id: 'conn-work',
   subject: 'Boundary for Thursday',
   to: ['sam@example.com'],
   created_at: '2026-05-23T09:00:00Z',
@@ -63,6 +64,7 @@ const baseSummary = {
 
 const baseRecord = {
   draft_id: 'r-123abc',
+  connection_id: 'conn-work',
   provider: 'gmail',
   created_at: 1_748_000_000_000,
   sent_at: null,
@@ -89,6 +91,7 @@ describe('emailDraft — the body-free reference', () => {
   it('key set is exactly the contract fields, in order — no body key exists', () => {
     expect(Object.keys(emailDraftSchema.shape)).toEqual([
       'draft_id',
+      'connection_id',
       'thread_id',
       'message_id',
       'subject',
@@ -105,6 +108,12 @@ describe('emailDraft — the body-free reference', () => {
     expect(emailDraftSchema.safeParse({ ...fullDraft, body_markdown: 'hello' }).success).toBe(
       false,
     );
+  });
+
+  it('rejects a draft that does not name the connected mailbox it lives in', () => {
+    const { connection_id: _omitted, ...withoutConnection } = minimalDraft;
+    expect(emailDraftSchema.safeParse(withoutConnection).success).toBe(false);
+    expect(emailDraftSchema.safeParse({ ...minimalDraft, connection_id: '' }).success).toBe(false);
   });
 
   it('rejects an empty recipient list and an empty subject', () => {
@@ -126,6 +135,7 @@ describe('emailDraftRecord — the DO drafts-table row', () => {
   it('column set is exactly the audit-safe residue: recipient_count, never recipients or body', () => {
     expect(Object.keys(emailDraftRecordSchema.shape)).toEqual([
       'draft_id',
+      'connection_id',
       'provider',
       'created_at',
       'sent_at',
@@ -139,6 +149,12 @@ describe('emailDraftRecord — the DO drafts-table row', () => {
     expect(
       emailDraftRecordSchema.safeParse({ ...baseRecord, sent_at: 1_748_000_300_000 }).success,
     ).toBe(true);
+  });
+
+  it('rejects a row without the connected mailbox that owns the draft', () => {
+    const { connection_id: _omitted, ...withoutConnection } = baseRecord;
+    expect(emailDraftRecordSchema.safeParse(withoutConnection).success).toBe(false);
+    expect(emailDraftRecordSchema.safeParse({ ...baseRecord, connection_id: null }).success).toBe(false);
   });
 
   it('rejects a row carrying a recipient list or a body column', () => {
@@ -283,6 +299,7 @@ describe('EmailProvider seam — fake provider', () => {
     const draft = emailDraftSchema.parse(fullDraft);
     const provider: EmailProvider = {
       provider: 'gmail',
+      connection_id: 'conn-work',
       get_metadata: async () => ({ ok: true, data: { summary: baseSummary } }),
       create_draft: async () => ({ ok: true, data: { draft } }),
       list_drafts: async () => ({ ok: true, data: { drafts: [draft] } }),

@@ -1121,6 +1121,68 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+// A user can connect several mailboxes of one provider, so each draft records the connection
+// that holds it, and draft dedup is scoped per mailbox. Drafts written before V8 keep a NULL
+// connection_id: their mailbox is unknown and is never guessed.
+export const EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION: DoMigration = {
+  version: 8,
+  name: 'email-draft-connection',
+  up: [
+    'DROP INDEX drafts_user_created_idx;',
+    'ALTER TABLE drafts RENAME TO drafts_v07;',
+    `CREATE TABLE drafts (
+      user_id          TEXT NOT NULL,
+      draft_id         TEXT NOT NULL,
+      connection_id    TEXT CHECK (connection_id IS NULL OR length(connection_id) > 0),
+      provider         TEXT NOT NULL CHECK (provider IN ('gmail', 'outlook_graph')),
+      created_at       INTEGER NOT NULL,
+      sent_at          INTEGER,
+      recipient_count  INTEGER NOT NULL CHECK (recipient_count > 0),
+      idempotency_key  TEXT NOT NULL,
+      PRIMARY KEY (user_id, draft_id)
+    );`,
+    `INSERT INTO drafts (
+      user_id, draft_id, connection_id, provider, created_at, sent_at, recipient_count, idempotency_key
+    ) SELECT
+      user_id, draft_id, NULL, provider, created_at, sent_at, recipient_count, idempotency_key
+    FROM drafts_v07;`,
+    'DROP TABLE drafts_v07;',
+    'CREATE INDEX drafts_user_created_idx ON drafts(user_id, created_at);',
+    `CREATE UNIQUE INDEX drafts_connection_idempotency_idx
+       ON drafts(user_id, coalesce(connection_id, ''), idempotency_key);`,
+  ],
+  down: [
+    `CREATE TABLE email_draft_connection_rollback_guard (
+      eligible INTEGER NOT NULL CHECK (eligible = 1)
+    );`,
+    `INSERT INTO email_draft_connection_rollback_guard (eligible)
+     SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM drafts WHERE connection_id IS NOT NULL)
+     THEN 1 ELSE 0 END;`,
+    'DROP TABLE email_draft_connection_rollback_guard;',
+    'DROP INDEX drafts_connection_idempotency_idx;',
+    'DROP INDEX drafts_user_created_idx;',
+    'ALTER TABLE drafts RENAME TO drafts_v08;',
+    `CREATE TABLE drafts (
+      user_id          TEXT NOT NULL,
+      draft_id         TEXT NOT NULL,
+      provider         TEXT NOT NULL CHECK (provider IN ('gmail', 'outlook_graph')),
+      created_at       INTEGER NOT NULL,
+      sent_at          INTEGER,
+      recipient_count  INTEGER NOT NULL CHECK (recipient_count > 0),
+      idempotency_key  TEXT NOT NULL,
+      PRIMARY KEY (user_id, draft_id),
+      UNIQUE (user_id, idempotency_key)
+    );`,
+    `INSERT INTO drafts (
+      user_id, draft_id, provider, created_at, sent_at, recipient_count, idempotency_key
+    ) SELECT
+      user_id, draft_id, provider, created_at, sent_at, recipient_count, idempotency_key
+    FROM drafts_v08;`,
+    'DROP TABLE drafts_v08;',
+    'CREATE INDEX drafts_user_created_idx ON drafts(user_id, created_at);',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1129,6 +1191,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
+  EMAIL_DRAFT_CONNECTION_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -1245,6 +1308,7 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
   drafts: [
     'user_id',
     'draft_id',
+    'connection_id',
     'provider',
     'created_at',
     'sent_at',

@@ -31,6 +31,9 @@ export const EMAIL_DRAFT_POLICY: EmailDraftPolicy = {
 // z.email(): provider drafts legitimately carry display-name forms ("Sam <sam@example.com>").
 export const emailDraftSchema = z.strictObject({
   draft_id: z.string().min(1),
+  // The connected mailbox (oauth_tokens connection id) holding the draft. A user can connect
+  // several accounts of one provider, so the provider name alone does not locate a draft.
+  connection_id: z.string().min(1),
   thread_id: z.string().min(1).optional(),
   message_id: z.string().min(1).optional(),
   subject: z.string().min(1),
@@ -47,6 +50,7 @@ export type EmailDraft = z.infer<typeof emailDraftSchema>;
 // stored, never the recipient list; there is no body column. Runtime row, so epoch-ms ints.
 export const emailDraftRecordSchema = z.strictObject({
   draft_id: z.string().min(1),
+  connection_id: z.string().min(1),
   provider: emailProviderNameSchema,
   created_at: z.int().nonnegative(),
   sent_at: z.int().nonnegative().nullable(),
@@ -138,8 +142,11 @@ export const sendDraftResultSchema = adapterResult(sendDraftDataSchema);
 // tool layer never routes model output to it: draft_email creates the draft; only a
 // user-tapped [Send], carrying a valid confirmation token through execute_action, sends.
 // Sent mail is the irreversible edge; drafts remain deletable via delete_draft.
+// One EmailProvider instance serves exactly one connected mailbox; the caller picks the
+// instance for the account the user meant, and every draft it returns carries that id.
 export interface EmailProvider {
   provider: EmailProviderName;
+  readonly connection_id: string;
   get_metadata(args: EmailMetadataArgs): Promise<AdapterResult<EmailMetadataData>>;
   create_draft(args: CreateDraftArgs): Promise<AdapterResult<CreateDraftData>>;
   list_drafts(args: ListDraftsArgs): Promise<AdapterResult<ListDraftsData>>;
