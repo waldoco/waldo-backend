@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { IMESSAGE_BUSY_RETRY_MS, IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { drainIMessageOutbox } from '../src/channels/imessage/owner-runtime';
+import { iMessageCardIsLatest } from '../src/channels/imessage/approval-cards';
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
@@ -359,5 +360,32 @@ it('a reply waiting on a busy bridge steps aside when an earlier reply becomes d
     expect(calls).toEqual(['bridge reply:b']);
     expect(outbox.get('reply:b')).toMatchObject({ state: 'frozen', attempts: 1 });
     expect(outbox.due().map(row => row.replyRef)).toEqual(['plain:a']);
+  });
+});
+
+it('a plain resend keeps its reply\'s place in the chat\'s order too: a card the next turn sent before the refusal stays the latest', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage);
+    outbox.freeze(threadedTurn('a'), 'first answer'); outbox.markQueued('reply:a');
+    const b = threadedTurn('b');
+    outbox.freezeProactive('card:b:1', 'wac_card_b', targetOf(b), 'Approve the booking? Reply 1 or 2.');
+    outbox.settle('reply:a', 'cmd-a', refused('cmd-a', 'photon_target_unavailable'));
+    expect(outbox.get('plain:a')?.state).toBe('frozen');
+    expect(iMessageCardIsLatest(state.storage, b)('wac_card_b')).toBe(true);
+  });
+});
+
+it('a plain resend gets the whole hand-off age from when it was frozen, however late the refusal came', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = 1_000_000;
+    const outbox = new IMessageFinalOutbox(state.storage, () => now);
+    outbox.freeze(threadedTurn('a'), 'the reply'); outbox.markQueued('reply:a');
+    now += 11 * 60_000;
+    outbox.settle('reply:a', 'cmd-a', refused('cmd-a', 'photon_target_unavailable'));
+    outbox.retryLater('plain:a', 10 * 60_000, IMESSAGE_BUSY_RETRY_MS);
+    expect(outbox.get('plain:a')).toMatchObject({ state: 'frozen', text: 'the reply', attempts: 1 });
+    now += 10 * 60_000;
+    outbox.retryLater('plain:a', 10 * 60_000, IMESSAGE_BUSY_RETRY_MS);
+    expect(outbox.get('plain:a')).toMatchObject({ state: 'settled', result: { state: 'rejected', reason: 'bridge_unavailable' } });
   });
 });
