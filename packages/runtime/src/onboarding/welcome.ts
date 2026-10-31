@@ -47,6 +47,9 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
   const write = (next: Record<WelcomeStage, Stage>, finished: number | null, added = 0) =>
     sql.exec('UPDATE welcome_builds SET stages_json = ?, nodes = nodes + ?, finished_at = ? WHERE id = 1', JSON.stringify(next), added, finished);
   const settled = (state: StageState) => state !== 'pending' && state !== 'reading';
+  // A stage that settled skipped may have its source connected since. Health that settled empty may have its first readings
+  // since, because setup often finishes before the phone's first upload lands. Either is taken up again, once.
+  const waiting = (stage: WelcomeStage, at: Stage) => !at.reopened && (at.state === 'skipped' || (stage === 'health' && at.state === 'empty'));
   return {
     // Setup completion starts it, from whichever signal arrives first; a second start, from either, starts nothing.
     start(): boolean {
@@ -72,20 +75,20 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       const current = stages(run), at = now();
       return STAGES.filter((stage) => current[stage].state === 'pending' || (current[stage].state === 'reading' && at - current[stage].at >= STALE_MS));
     },
-    // Skipped stages whose source may have been connected since: never reopened, and not checked within the recheck window.
+    // Waiting stages: never reopened, and not checked within the recheck window.
     reopenable(): readonly WelcomeStage[] {
       const run = row();
       if (!run) return [];
       const current = stages(run), at = now();
-      return STAGES.filter((stage) => current[stage].state === 'skipped' && !current[stage].reopened && at - (current[stage].checked ?? 0) >= WELCOME_RECHECK_MS);
+      return STAGES.filter((stage) => waiting(stage, current[stage]) && at - (current[stage].checked ?? 0) >= WELCOME_RECHECK_MS);
     },
     // The source is there now: the stage goes back to pending, once, and the build is building again. Checked again in the same
-    // write, so a second caller that read the same skipped state reopens nothing.
+    // write, so a second caller that read the same waiting state reopens nothing.
     reopen(stage: WelcomeStage): boolean {
       const run = row();
       if (!run) return false;
       const current = stages(run), at = now();
-      if (current[stage].state !== 'skipped' || current[stage].reopened) return false;
+      if (!waiting(stage, current[stage])) return false;
       write({ ...current, [stage]: { state: 'pending', at, reopened: true } }, null);
       return true;
     },
