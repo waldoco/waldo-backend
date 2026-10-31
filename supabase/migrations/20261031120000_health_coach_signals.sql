@@ -6,10 +6,9 @@
 --   which are the contract's unit-mistake catches and not medical thresholds. stand_hour is a local-hour window of 0 or 1. A
 --   workout's optional detail (distance, climb, heart rate, zones, effort, sport metrics) is checked by the Worker against the
 --   contract and stored in the payload as it is, like its energy.
--- - waldo.health_series_read is re-created whole from its last definition (20261027150000). It takes the new signals, returns a
---   workout's detail under `workout` (the Worker's reader ignores keys it does not know, so an older Worker is unaffected), and
---   reads up to 91 local days, the whole raw retention, so load and trends can see more than a month. The 8,000-row cap and its
---   truncated flag are unchanged: a caller that wants 90 days asks for the signals it needs.
+-- - waldo.health_series_read is re-created whole from its last definition (20261027150000). It takes the new signals and
+--   returns a workout's detail under `workout`, from a fixed key list so the origin never leaves; the Worker's reader ignores
+--   keys it does not know, so an older Worker is unaffected. Its 31-day window, row cap and truncated flag are unchanged.
 -- Signatures, security definer, search_path and grants are unchanged.
 alter table waldo.health_samples drop constraint health_samples_signal_check;
 alter table waldo.health_samples add constraint health_samples_signal_check check (signal in ('sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate',
@@ -194,7 +193,7 @@ begin
   if jsonb_typeof(v_body->'from') is distinct from 'string' or (v_body->>'from') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
     or jsonb_typeof(v_body->'to') is distinct from 'string' or (v_body->>'to') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then return '{"error":"invalid_request"}'; end if;
   v_from := (v_body->>'from')::date; v_to := (v_body->>'to')::date;
-  if v_to < v_from or v_to - v_from > 90 then return '{"error":"invalid_request"}'; end if;
+  if v_to < v_from or v_to - v_from > 30 then return '{"error":"invalid_request"}'; end if;
   if v_body ? 'signals' then
     if jsonb_typeof(v_body->'signals') is distinct from 'array' or jsonb_array_length(v_body->'signals') not between 1 and cardinality(v_all)
       or exists (select 1 from jsonb_array_elements(v_body->'signals') s where jsonb_typeof(s) is distinct from 'string' or not ((s #>> '{}') = any (v_all))) then return '{"error":"invalid_request"}'; end if;

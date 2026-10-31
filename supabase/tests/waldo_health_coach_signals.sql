@@ -1,10 +1,10 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(16);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
--- Health contract revision 5: body composition, stand hours, a workout's detail on the series read and a 91-day read window.
+-- Health contract revision 5: body composition, stand hours and a workout's detail on the series read.
 -- Every reading here is synthetic.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$
@@ -14,9 +14,9 @@ begin
   return r;
 end $$;
 create function pg_temp.iso(t timestamptz) returns text language sql as $$ select to_char(t at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') $$;
-create function pg_temp.point(id text,sig text,unit text,val numeric,extra jsonb default '{}',minutes int default 1,days_ago int default 0) returns jsonb language sql as $$
-  select jsonb_build_object('sample_id',id,'revision',1,'signal',sig,'unit',unit,'value',val,'day',((now()-make_interval(days=>days_ago,mins=>minutes+180)) at time zone 'UTC')::date,
-    'start_at',pg_temp.iso(now()-make_interval(days=>days_ago,mins=>minutes+180)),'end_at',pg_temp.iso(now()-make_interval(days=>days_ago,mins=>180)),'utc_offset_minutes',0) || extra $$;
+create function pg_temp.point(id text,sig text,unit text,val numeric,extra jsonb default '{}',minutes int default 1) returns jsonb language sql as $$
+  select jsonb_build_object('sample_id',id,'revision',1,'signal',sig,'unit',unit,'value',val,'day',((now()-make_interval(mins=>minutes+180)) at time zone 'UTC')::date,
+    'start_at',pg_temp.iso(now()-make_interval(mins=>minutes+180)),'end_at',pg_temp.iso(now()-interval '180 minutes'),'utc_offset_minutes',0) || extra $$;
 -- One whole local hour (UTC), three hours back, so it is over.
 create function pg_temp.hour(id text,val numeric) returns jsonb language sql as $$
   select jsonb_build_object('sample_id',id,'revision',1,'signal','stand_hour','unit','count','value',val,'day',((date_trunc('hour',now())-interval '3 hours') at time zone 'UTC')::date,
@@ -28,8 +28,8 @@ create function pg_temp.rejected(sig text,idx int,rsn text default 'invalid_samp
   select jsonb_build_object('change','sample','index',idx,'signal',sig,'reason',rsn) $$;
 create function pg_temp.stored(sid text) returns jsonb language sql as $$
   select s.payload from waldo.health_samples s join waldo.owners o on o.id=s.owner_id where o.do_name='coach-owner' and s.sample_id=sid $$;
-create function pg_temp.series(signals jsonb,days int default 3) returns jsonb language sql as $$
-  select pg_temp.h('series_read','coach-owner',jsonb_build_object('from',((now() at time zone 'UTC')::date-days)::text,'to',((now() at time zone 'UTC')::date+1)::text,'signals',signals)) $$;
+create function pg_temp.series(signals jsonb) returns jsonb language sql as $$
+  select pg_temp.h('series_read','coach-owner',jsonb_build_object('from',((now() at time zone 'UTC')::date-3)::text,'to',((now() at time zone 'UTC')::date+1)::text,'signals',signals)) $$;
 insert into auth.users(id,email) values ('3c100000-0000-0000-0000-0000000000c1','coach@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values ('3c300000-0000-0000-0000-0000000000c3','3c100000-0000-0000-0000-0000000000c1','coach-owner','coach@example.invalid');
 select pg_temp.h('consent_grant','coach-owner',jsonb_build_object('request_id','grant-coach-st1','source','apple','purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true));
@@ -86,12 +86,6 @@ select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["worko
   'the read carries no origin');
 select is((select jsonb_agg(s->'value' order by s->>'signal', (s->>'value')::numeric desc) from jsonb_array_elements(pg_temp.series('["body_mass","body_fat_percentage","stand_hour"]')->'sources'->0->'samples') s),
   '[14.2,72.4,1,0]'::jsonb,'body composition and stand hours come back as readings');
-
--- Ninety days back: a 91-day window is read, a 92-day one refused.
-select is(pg_temp.h('ingest','coach-owner',pg_temp.batch('coach-old-000001',jsonb_build_array(pg_temp.point('mass-80','body_mass','kilograms',73.1,'{}',1,80))))->>'accepted','1','a reading from 80 days ago is stored');
-select is((select count(*)::int from jsonb_array_elements(pg_temp.series('["body_mass"]',89)->'sources'->0->'samples') s where (s->>'value')::numeric = 73.1),1,
-  'a 91-day read reaches it');
-select is(pg_temp.series('["body_mass"]',90)->>'error','invalid_request','a 92-day read is refused');
 
 select * from finish();
 rollback;

@@ -49,7 +49,7 @@ select throws_ok(format($$select waldo.health_series_read('series-owner-a','{"fr
 select is(pg_temp.series('series-owner-c',pg_temp.today()-3,pg_temp.today())->>'error','not_linked','a suspended owner has no series');
 select is(pg_temp.series('series-owner-nobody',pg_temp.today()-3,pg_temp.today())->>'error','not_linked','an unprovisioned locator has no series');
 select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-01-05","to":"2026-01-04"}')->>'error','invalid_request','a range that ends before it starts is refused');
-select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-01-01","to":"2026-04-02"}')->>'error','invalid_request','a range longer than 91 days, the raw retention, is refused');
+select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-01-01","to":"2026-02-01"}')->>'error','invalid_request','a range longer than 31 days is refused');
 select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-01-01","to":"2026-01-31"}')->>'error',null,'thirty-one days is allowed');
 select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-1-1","to":"2026-01-02"}')->>'error','invalid_request','a malformed day is refused');
 select is(pg_temp.h('series_read','series-owner-a','{"from":"2026-02-30","to":"2026-03-01"}')->>'error','invalid_request','an impossible date is refused without a raw database error');
