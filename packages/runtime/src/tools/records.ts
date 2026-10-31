@@ -161,7 +161,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   set_schedule_preference: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
   log_meal: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
   log_workout: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
-  set_sleep_need: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
+  set_sleep_need: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.

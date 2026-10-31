@@ -71,5 +71,8 @@ describe('producer: the owner\'s stated sleep need', () => {
     expect(moved.notices).toEqual([]);
     const body = await run({ readSettings: settings(480, '2026-03-29T08:00:00.000Z'), readScores: stored('2026-03-30T09:00:00.000Z') }, ['recovery']);
     expect(body.notices).toEqual([TODAY]);
+    // A row compiled at the very instant of the change may hold either need.
+    const tied = await run({ readSettings: settings(480, '2026-03-30T09:00:00.000Z'), readScores: stored('2026-03-30T09:00:00.000Z') }, ['recovery']);
+    expect(tied.notices).toEqual([]);
   });
 });

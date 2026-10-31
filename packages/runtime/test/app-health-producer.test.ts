@@ -65,7 +65,7 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
     expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
     expect(await toOwner[0]!.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe(true);
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('readings');
   });
 
   it('asks nothing for a replayed, empty or refused batch', async () => {
@@ -200,5 +200,37 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     await ingest(batch, d.defer);
     await Promise.all(d.work);
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read', 'health_series_read']);
+  });
+});
+
+describe('a saved sleep need asks the owner\'s object to recompute', () => {
+  const put = (body: unknown, defer?: (work: Promise<unknown>) => void) => handleApp(new Request('https://w.test/app/v1/health/settings', {
+    method: 'PUT', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }), env({ HEALTH_COACHING: '1' }), auth, defer) as Promise<Response>;
+
+  it('after the answer, with the signed settings notice that spends no welcome retry, and never fails the save', async () => {
+    answers.health_settings_write = { sleep_need_minutes: 480, updated_at: '2026-10-11T08:00:00.000Z' };
+    for (const owner of [() => Response.json({ ok: true }), () => Response.json({ error: 'unavailable' }, { status: 503 })]) {
+      ownerAnswer = owner; toOwner.length = 0;
+      const d = deferrals();
+      const response = await put({ sleep_need_minutes: 480 }, d.defer);
+      expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 480 }]);
+      await expect(Promise.all(d.work)).resolves.toBeDefined();
+      expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
+      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('settings');
+    }
+  });
+
+  it('asks nothing when the need was not saved', async () => {
+    for (const answer of [{ error: 'not_linked' }, { sleep_need_minutes: 9000 }, new Error('down')]) {
+      answers.health_settings_write = answer as never; toOwner.length = 0;
+      const d = deferrals();
+      expect((await put({ sleep_need_minutes: 480 }, d.defer)).status, JSON.stringify(answer)).not.toBe(200);
+      expect(d.work).toEqual([]);
+    }
+    const d = deferrals();
+    expect((await put({ sleep_need_minutes: 900 }, d.defer)).status).toBe(400);
+    expect(d.work).toEqual([]);
+    expect(toOwner).toEqual([]);
   });
 });

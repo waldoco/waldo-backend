@@ -35,19 +35,19 @@ export type ProducerDeps = Readonly<{
 }>;
 
 // The stated need and when it last changed, or null for an answer that is not the settings shape.
-type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
-const statedNeedOf = (raw: unknown): StatedNeed | null => {
+export type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
+export const statedNeedOf = (raw: unknown): StatedNeed | null => {
   const answer = asRecord(raw);
   const minutes = answer?.sleep_need_minutes === null ? { success: true as const, data: null } : healthSleepNeedMinutesV1Schema.safeParse(answer?.sleep_need_minutes);
   if (!answer || !minutes.success) return null;
   const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
   return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
 };
-// A row compiled before the need last changed may move zone only because the need moved, not the body, so its move is not
-// told to the health trigger. The next compile is on the new need on both sides.
+// A row compiled before the need last changed, or at that instant, may move zone only because the need moved, not the body,
+// so its move is not told to the health trigger. The next compile is on the new need on both sides.
 const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
   const compiledAt = typeof before?.compiled_at === 'string' ? Date.parse(before.compiled_at) : NaN;
-  return stated.changedAt !== null && Number.isFinite(compiledAt) && compiledAt < stated.changedAt;
+  return stated.changedAt !== null && Number.isFinite(compiledAt) && compiledAt <= stated.changedAt;
 };
 
 // Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.

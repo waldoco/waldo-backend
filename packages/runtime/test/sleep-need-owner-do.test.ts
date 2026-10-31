@@ -74,14 +74,15 @@ describe('set_sleep_need through the owner object', () => {
     }
   }, 30_000);
 
-  it('saves what the owner says directly, signed for their own setting', async () => {
-    await withOwner('1', async deliver => {
+  it('saves what the owner says directly, signed for their own setting, and asks for one recompute on it', async () => {
+    await withOwner('1', async (deliver, state) => {
       proof.outputs.push([call('need-owner', 'set_sleep_need', { minutes: 480 })], []);
       proof.replies.push('', 'Saved.');
       await deliver(text(401, 'I need about 8 hours of sleep.'));
       expect(writes()).toHaveLength(1);
       expect(JSON.parse(writes()[0]!.body).p_payload).toBe('{"sleep_need_minutes":480}');
       expect(toolOutput('need-owner')).toContain('"state":"set"');
+      expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM schedule WHERE id = 'health-recompute'").one().n).toBe(1);
     });
   }, 30_000);
 
@@ -94,6 +95,7 @@ describe('set_sleep_need through the owner object', () => {
       expect(toolOutput('need-direct')).not.toContain('propose_action');
       expect(toolOutput('need-card')).toContain('never put on a card');
       expect(writes()).toEqual([]);
+      expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM schedule WHERE id = 'health-recompute'").one().n).toBe(0);
       expect(proof.telegram.filter(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'))).toEqual([]);
       expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM ledger WHERE payload_json LIKE '%sleep%' OR payload_json LIKE '%480%'").one().n).toBe(0);
     });
