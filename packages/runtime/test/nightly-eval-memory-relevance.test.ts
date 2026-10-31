@@ -8,11 +8,12 @@ import { callPlan } from '../evals/nightly/plan';
 import { failedReceipts, neverReaches, reaches, reachesWritten, type TrialEvidence } from '../evals/nightly/receipts';
 import { MEMORY_RELEVANCE_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
 import { runTrial } from '../evals/nightly/trial';
+import { fakeEmbeddings } from '../src/testing/fake-embeddings';
 
 const scenario = (id: string) => MEMORY_RELEVANCE_SCENARIOS.find((entry) => entry.id.startsWith(id))!;
 const evidence = (inputs: readonly Readonly<{ turn: number; text: string }>[], extra: Partial<TrialEvidence> = {}): TrialEvidence =>
   ({ transcript: [], effects: [], final_state: {}, tools: [], toolOutputs: [], model_inputs: inputs, ...extra });
-const trial = async (id: string, rules: readonly ScriptRule[] = [], memorySelection = false) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness', ...(memorySelection ? { memorySelection } : {}) });
+const trial = async (id: string, rules: readonly ScriptRule[] = [], options: Readonly<{ memorySelection?: boolean; semantic?: boolean }> = {}) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness', ...(options.memorySelection ? { memorySelection: true } : {}), ...(options.semantic ? { embeddings: fakeEmbeddings() } : {}) });
 const remember = (text: string, evidence_quote: string) => ({ name: 'remember', arguments: { kind: 'preference', text, evidence_quote } });
 
 describe('the relevance cases', () => {
@@ -138,7 +139,7 @@ describe('the cases against the production prompt', () => {
 describe('the cases with memory selection on (option B)', () => {
   const opened = (ids: readonly number[]) => ({ name: 'read_memory', arguments: { ids } });
   it('m11: the dentist claim arrives as a stub, and the model that opens it by id passes', async () => {
-    const run = await trial('m11', [{ match: /Which day does my dentist/, rounds: [{ toolCalls: [opened([2001])] }, { text: 'Tuesdays, at the Park Road clinic.' }] }], true);
+    const run = await trial('m11', [{ match: /Which day does my dentist/, rounds: [{ toolCalls: [opened([2001])] }, { text: 'Tuesdays, at the Park Road clinic.' }] }], { memorySelection: true });
     expect(run.status).toBe('ran');
     expect(run.model_inputs[0]!.text).toMatch(/c2001 stub · fact/);
     expect(run.model_inputs[0]!.text).not.toMatch(/c2001 · /);
@@ -155,7 +156,7 @@ describe('the cases with memory selection on (option B)', () => {
     const run = await trial('m10', [
       { match: /Remember that I moved/, rounds: [{ toolCalls: [remember('The owner does their grocery shopping on Thursdays.', 'I moved my grocery shopping to Thursdays.')] }, { text: 'Noted: Thursdays.' }] },
       { match: /Which day is my grocery run/, rounds: [{ text: 'Thursday.' }] },
-    ], true);
+    ], { memorySelection: true });
     expect(failedReceipts(scenario('m10').receipts!, run)).toEqual([]);
     expect(run.model_inputs.filter((input) => input.turn === 2).some((input) => input.text.includes('<owner_new>'))).toBe(true);
   });
@@ -169,11 +170,21 @@ describe('the cases with memory selection on (option B)', () => {
 
   it('m12 and m13: nothing forgotten, held or health is shown, offered or opened', async () => {
     for (const id of ['m12', 'm13']) {
-      const run = await trial(id, [], true);
+      const run = await trial(id, [], { memorySelection: true });
       expect(run.status, id).toBe('ran');
       expect(failedReceipts(scenario(id).receipts!, run), id).toEqual([]);
     }
-    const opening = await trial('m12', [{ match: /deposits/, rounds: [{ toolCalls: [opened([3001, 3002])] }, { text: 'Nothing to share.' }] }], true);
+    const opening = await trial('m12', [{ match: /deposits/, rounds: [{ toolCalls: [opened([3001, 3002])] }, { text: 'Nothing to share.' }] }], { memorySelection: true });
     expect(failedReceipts(scenario('m12').receipts!, opening)).toEqual([]);
+  });
+});
+
+describe('m08 with the semantic leg on and off', () => {
+  const shownTeeth = (failed: readonly string[]) => !failed.some((receipt) => receipt.includes('teeth-cleaning claim'));
+  it('misses the teeth-cleaning claim on words alone, and shows it once the leg is on', async () => {
+    const off = await trial('m08');
+    const on = await trial('m08', [], { semantic: true });
+    expect(shownTeeth(failedReceipts(scenario('m08').receipts!, off))).toBe(false);
+    expect(failedReceipts(scenario('m08').receipts!, on)).toEqual([]);
   });
 });

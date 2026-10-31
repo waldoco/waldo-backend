@@ -106,3 +106,8 @@ it('actual WhatsApp DO turn and listener propagate uncertain final issue to one 
   }finally{setup.mockRestore();}
  },false);
 });
+
+it('words the two notices as Waldo: a safe resend says nothing happened, a partial one says to check first', () => {
+  expect(WHATSAPP_UNSTARTED_NOTICE).toBe("I couldn't get to your last message, so nothing happened. Send it again?");
+  expect(WHATSAPP_PARTIAL_NOTICE).toBe('I may have only partly handled your last message. Check what went through before you send it again.');
+});

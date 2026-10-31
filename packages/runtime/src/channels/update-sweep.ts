@@ -20,10 +20,16 @@ import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type 
 // Why an update card cannot go out now: the owner turned follow-ups off, the day's last card went, volume is low, quiet
 // hours, or the owner's surface would only hold it. The changes still wait for the next main card.
 export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window';
-export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | SweepGate | MachineEnqueued['code'];
+export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | SweepGate | MachineEnqueued['code'];
 
 // An update card is worth reading only soon: one still waiting after half an hour is dropped, its changes left for the next card.
 export const UPDATE_CARD_FRESH_MS = 30 * 60_000;
+// With the day state the judge runs at most once in this gap: a tick inside it reads nothing, so what it would have read
+// waits, watermarks unmoved, for the first tick after it.
+export const UPDATE_JUDGE_GAP_MS = 5 * 60_000;
+// When the next judge pass is due after a debounced tick. The tick runs inside the sweep's own run, which re-arms the sweep
+// when it ends, so the owner object pulls the sweep to this time once its scheduled pass is done.
+export const UPDATE_JUDGE_WAKE_KEY = 'update_judge_wake_v1';
 // A sweep job not applied within the hour is dropped silently; its changes are already recorded for the next main card.
 const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 
@@ -46,13 +52,18 @@ export type SweepCheckDeps = Readonly<{
 }>;
 
 // The job's key is the window it covers: the watermarks before this tick moved them.
-type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow }>;
+// wakeAt: when a debounced tick's changes can next be judged. recorded: the update record this tick committed with changes,
+// and the sources they came from. seedCapped: the day's read of events was cut at its cap.
+type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow; wakeAt?: number;
+  recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true }>;
 export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
   // A sweep still open holds the window: nothing is read, so the next tick after it settles reads everything since.
   if (deps.jobs.openMachine('update_sweep', 'owner')) return { code: 'held_open_job', changes: 0, analysis: 0 };
   const gate = deps.gate();
   if (gate === null && deps.providerDown()) return { code: 'held_breaker', changes: 0, analysis: 0 };
+  const lastJob = deps.dayState && gate === null ? deps.jobs.lastMachine('update_sweep') : null;
+  if (lastJob !== null && deps.now < lastJob + UPDATE_JUDGE_GAP_MS) return { code: 'held_debounce', changes: 0, analysis: 0, wakeAt: lastJob + UPDATE_JUDGE_GAP_MS };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
   const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups, deps.dayState
     ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined), titleDigest: deps.dayState.titleDigest } : undefined);
@@ -67,7 +78,8 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
     const analysis = deps.sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pending] : changes;
-    const counts = { changes: changes.length, analysis: analysis.length };
+    const counts = { changes: changes.length, analysis: analysis.length,
+      ...(recordId === null ? {} : { recorded: { id: recordId, sources: [...new Set(changes.map(change => change.source))] } }) };
     if (gate !== null) return { code: gate, ...counts };
     if (!analysis.length) return { code: 'unchanged', ...counts };
     recordId ??= updates.record(deps.day, deps.now, [], null);
@@ -82,7 +94,18 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
   // recorded. A failed ask never costs the update.
   if (changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
-  return checked;
+  return read.seen?.seedCapped ? { ...checked, seedCapped: true } : checked;
+};
+
+// The harness's wake hint after an ingestion commits: ids only, never text, emitted outside the transaction. Each consumer
+// reads by its own watermark, so a lost event costs latency, not data. The shape is the one agreed with memory's daytime
+// consolidator (WALDO_MEMORY_REDESIGN_2026-10-30.md §6.3).
+export type ObservedEvent = Readonly<{ kind: 'chat' | 'mail' | 'calendar' | 'health' | 'connector'; refs: readonly string[]; taint: 'owner' | 'external'; at: number; localDay: string }>;
+export const observedEvents = (checked: SweepChecked, localDay: string, at: number): readonly ObservedEvent[] =>
+  (checked.recorded?.sources ?? []).map(kind => ({ kind, refs: [`update:${checked.recorded!.id}`], taint: 'external', at, localDay }));
+export type ObservedSubscriber = (event: ObservedEvent) => void;
+export const emitObserved = (subscribers: readonly ObservedSubscriber[], events: readonly ObservedEvent[]): void => {
+  for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({
@@ -93,18 +116,20 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
-// What an update push may say. It may name the change (a meeting's title, its times, its people); it never carries a link
-// (a meeting link can hold its passcode), an email address, a health value, or four words in a row from a mail or health
-// line the turn read. Anything else, and every line
-// while the owner has not turned named updates on, is the fixed line. A destination rule, so it holds at the send.
+// What an update push may say. It may name the change (a meeting's title, its times, its people). A line with anything shaped
+// like a host (a link with or without its scheme, an email address: a meeting link can hold its passcode, and a stranger's
+// invite can carry a lure), a health value, or four words in a row from outside text the turn read (mail, an invite's
+// description or location, the health log) is the fixed line, as is every line while the owner has not turned named updates
+// on. A destination rule, so it holds at the send. Text the turn read through its own tools is not in that list.
 export const UPDATE_PUSH_CHARS = 140;
 const SHARED_WORDS = 4;
+const HOST = /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.\p{L}{2,24}(?![\p{L}\p{N}])|:\/\/|@/u;
 const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 const shingles = (text: string) => { const w = words(text); return w.slice(0, Math.max(0, w.length - SHARED_WORDS + 1)).map((_, i) => w.slice(i, i + SHARED_WORDS).join(' ')); };
 export const updatePushLine = (line: string, rules: Readonly<{ named: boolean; forbidden: readonly string[] }>): string => {
   const fixed = PUSHES.update.body;
-  const plain = line.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ').replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!rules.named || !plain || numericHealthIn(plain)) return fixed;
+  const plain = line.replace(/\s+/g, ' ').trim();
+  if (!rules.named || !plain || HOST.test(plain) || numericHealthIn(plain)) return fixed;
   const seen = new Set(rules.forbidden.flatMap(shingles));
   if (shingles(plain).some(shingle => seen.has(shingle))) return fixed;
   if (plain.length <= UPDATE_PUSH_CHARS) return plain;
@@ -145,6 +170,12 @@ export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => 
 // What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
 export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
 
+const outsideText = (change: Change): readonly string[] => {
+  if (change.source === 'mail') return [change.detail];
+  const { description, location } = JSON.parse(change.detail) as { description?: unknown; location?: unknown };
+  return [description, location].filter((text): text is string => typeof text === 'string' && text.length > 0);
+};
+
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
   gate(): SweepGate | null;
@@ -164,9 +195,12 @@ export type UpdateSweepApplyDeps = Readonly<{
     revisesCards: boolean;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
-    // The push line as it may go out (updatePushLine), given the mail the turn read.
-    pushLine(line: string, mail: readonly string[]): Promise<string>;
+    // The push line as it may go out (updatePushLine), given the outside text the turn read in its changes: each mail, and
+    // each invite's description and location.
+    pushLine(line: string, outside: readonly string[]): Promise<string>;
     chose(trace: string, code: UpdateEffectCode): void;
+    // The job settled, however it ended: changes that arrived while it was open can be read now, not at the next poll.
+    settled(): void;
   }>;
 }>;
 
@@ -178,8 +212,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     deps.updates.judgedJob(recordId!, refs);
     settle();
   });
-  return {
-    apply: async (row, result, io) => {
+  const apply: MachineHandler['apply'] = async (row, result, io) => {
       const gate = deps.gate();
       if (gate) { deps.transaction(io.settle); return { held: gate }; }
       const { record_id: recordId, refs, withheld } = taskBrief(row).machine!;
@@ -204,12 +237,15 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const effect = chosen.revise ? 'revise' : chosen.say ? 'say' : null;
       if (!effect) return skip('none');
       if (quiet && effect === 'say') return skip('say+quiet');
-      const push = chosen.push && !quiet ? await day.pushLine(chosen.push, changes.filter(change => change.source === 'mail').map(change => change.detail)) : undefined;
+      // A push goes only from a surface that raises one; elsewhere the message is the notification.
+      const push = chosen.push && !quiet && day.revisesCards ? await day.pushLine(chosen.push, changes.flatMap(outsideText)) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
       return 'delivered';
-    },
-    noNews: judged,
+  };
+  return {
+    apply: async (row, result, io) => { try { return await apply(row, result, io); } finally { deps.dayState?.settled(); } },
+    noNews: (row, settle) => { judged(row, settle); deps.dayState?.settled(); },
   };
 };

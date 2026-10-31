@@ -27,9 +27,21 @@ describe('the update push line', () => {
     expect(check(line)).toBe(PUSHES.update.body);
   });
 
-  it('drops links and email addresses, and cuts a long line', () => {
-    expect(check('Sync with krati@example.com moved to 17:00')).toBe('Sync with moved to 17:00');
-    expect(check('Sync moved to 17:00 https://meet.example/abc?pwd=s3cr3t join www.example.test/x')).toBe('Sync moved to 17:00 join');
+  it.each([
+    ['a meeting link without a scheme', 'Call moved, zoom.us/j/8812345678?pwd=Xy12ab'],
+    ['a bare meeting host', 'Sync moved to 17:00, join meet.google.com/abc-defg-hij'],
+    ['a short link', 'Urgent: verify your account at bit.ly/3abcDEF now'],
+    ['a link with its scheme', 'Sync moved to 17:00 https://meet.example/abc?pwd=s3cr3t'],
+    ['an email address', 'Sync with krati@example.com moved to 17:00'],
+  ])('falls back to the fixed line for %s, rather than cutting it out', (_case, line) => {
+    expect(check(line)).toBe(PUSHES.update.body);
+  });
+
+  it('keeps times, initials and abbreviations that only look dotted', () => {
+    for (const line of ['Sync moved to 3.30pm', 'Dr. Rao moved your 10:00 to 11:30', 'Lunch with A.K. moved to 1pm']) expect(check(line)).toBe(line);
+  });
+
+  it('cuts a long line', () => {
     const long = check(`The sync ${'moved again '.repeat(30)}`);
     expect(long.length).toBeLessThanOrEqual(UPDATE_PUSH_CHARS);
   });

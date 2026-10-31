@@ -10,6 +10,7 @@ import type { NightlyScenario } from './scenarios';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from './scorecard';
 import { runTrial, type TrialMetrics, type TrialRecord } from './trial';
 import type { MemoryMode } from './world';
+import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 import type { CompactionSettings } from '../../src/conversation/compaction';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import type { VoiceJudge, VoiceVerdict } from './voice';
@@ -44,6 +45,8 @@ export type NightlyRun = Readonly<{
   memory?: MemoryMode;
   // Option B's memory in every trial (MEMORY_SELECTION=1).
   memorySelection?: true;
+  // Semantic recall on: each trial embeds over a runner from this.
+  embeddings?: () => EmbeddingRunner;
   // Compaction on: each trial's chat is the app's canonical store, built with these settings (WALDO_EVAL_COMPACTION=on).
   compaction?: CompactionSettings;
   // Read receipts on every completed trial, not only the ones a judge graded: state is checked in code, so a judge that
@@ -84,7 +87,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const missed = run.ablationMisses?.() ?? 0;
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
+      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
       metrics.push(record.metrics);
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       // A trial whose rules were not all dropped measured nothing about them.
