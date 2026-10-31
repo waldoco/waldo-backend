@@ -11,7 +11,7 @@ import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrie
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { FloorTurn } from '../../src/llm/owner-routes';
 import { modelCost } from '../../src/llm/pricing';
-import { FIND_TOOLS, USE_TOOL } from '../../src/tools/loader';
+import { FIND_TOOLS, USE_TOOL, type CarryBook } from '../../src/tools/loader';
 import type { JobBook, RetryBrief } from '../../src/tasks/jobs';
 import { promiseRetry, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
@@ -100,7 +100,7 @@ const metricsOf = ({ groups, ...meter }: Meter): TrialMetrics => ({ ...meter, gr
 
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; loaderCarry?: CarryBook; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -115,7 +115,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
   const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
   const skills = trialSkillBook(world.sql);
-  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader, ...(deps.loaderCarry ? { loaderCarry: deps.loaderCarry } : {}) } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
