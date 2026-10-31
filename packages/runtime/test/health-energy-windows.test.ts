@@ -24,7 +24,7 @@ const dayAt = (day: string, shape: DayShape = {}): DayRecord => {
   const curve = shape.curve ?? TWO_PEAKS;
   const movement = shape.movement ?? (() => 2);
   const hourly: HourlyBucket[] = Array.from({ length: shape.hours ?? 16 }, (_, k) => ({
-    startAt: new Date(wakeMs + k * HOUR).toISOString(), heartRate: curve(k + 1), hrv: null, hrvMethod: null,
+    startAt: new Date(wakeMs + k * HOUR).toISOString(), heartRate: curve(k + 1), hrvReadings: [],
     daylightMinutes: null, movementMinutes: movement(k + 1), activeEnergyKcal: null,
   }));
   const asleepFrom = shape.sleepStart === undefined ? (shape.bed ? instant(addDays(day, -1), shape.bed) : new Date(wakeMs - 8 * HOUR).toISOString()) : shape.sleepStart;

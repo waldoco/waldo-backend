@@ -132,7 +132,7 @@ describe('S7 an owner whose watch gives SDNN only', () => {
   });
   it('reads the day\'s hourly SDNN against its own days for Form\'s stress part, from the seventh earlier day', () => {
     const formAt = (records: ReturnType<typeof history>, n: number) => { const f = scoresAt(records, n).form; if (f.state !== 'available') throw new Error(JSON.stringify(f)); return f.score; };
-    const calm = (factor: number) => history(spec, 12).map((d, i) => (i === 11 ? { ...d, hourly: d.hourly.map(b => ({ ...b, hrv: b.hrv! * factor })) } : d));
+    const calm = (factor: number) => history(spec, 12).map((d, i) => (i === 11 ? { ...d, hourly: d.hourly.map(b => ({ ...b, hrvReadings: b.hrvReadings.map(r => ({ ...r, value: r.value * factor })) })) } : d));
     expect(formAt(calm(2.5), 11)).toBeGreaterThan(formAt(calm(1), 11));
   });
 });

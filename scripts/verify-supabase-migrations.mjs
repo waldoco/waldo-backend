@@ -104,6 +104,7 @@ const expectedMigrations = [
   '20261031140000_waldo_agent_mail_rules.sql',
   '20261031160000_waldo_link_adopts_verified_phone.sql',
   '20261031170000_health_training_load.sql',
+  '20261101000000_health_owner_settings.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
