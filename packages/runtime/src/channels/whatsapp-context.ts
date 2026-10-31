@@ -1,11 +1,12 @@
 import { carriesTopic } from '../memory/forget-guard';
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../scribe/sanitiser';
+import { redactSecretUrls } from './egress-guard';
 import { REPLY_QUOTE_LIMIT } from './owner-turn-envelope';
 
 // What the owner's WhatsApp reactions and swipe-replies point at: the words of each message Waldo sent there, by its message
 // id (wamid), and the owner's reactions waiting for their next turn. Meta delivers a reaction or a reply to a business
 // message only within 30 days of it, so an older record can never be named again and goes; the newest 200 are kept.
-// Numbers that could be health readings are masked before anything is kept.
+// Numbers that could be health readings, and secret-bearing links, are masked before anything is kept.
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
 type Row = Readonly<{ at: number; text: string }>;
 
@@ -22,7 +23,7 @@ const trim = (kv: Kv, prefix: string, keep: number, now: number) => {
 export const recordWhatsAppSent = (kv: Kv, id: string, text: string, now: number): void => {
   const words = text.trim();
   if (!id || !words) return;
-  kv.put(`${SENT}${id}`, { at: now, text: redactNumericHealth(words, HEALTH_SPAN_MARKER).slice(0, REPLY_QUOTE_LIMIT) } satisfies Row);
+  kv.put(`${SENT}${id}`, { at: now, text: redactNumericHealth(redactSecretUrls(words).text, HEALTH_SPAN_MARKER).slice(0, REPLY_QUOTE_LIMIT) } satisfies Row);
   trim(kv, SENT, SENT_KEPT, now);
 };
 
