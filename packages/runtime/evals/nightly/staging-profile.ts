@@ -29,6 +29,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
+  MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
   MEMORY_SEMANTIC_RECALL: mapped('the eval has no semantic leg, so the profile refuses a staging that turns it on'),
 
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
@@ -95,6 +96,7 @@ export type StagingProfile = Readonly<{
   toolSearch?: true;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
+  memorySelection: boolean;
 }>;
 
 // The owner object's own precedence: the harness loader wins over provider tool search.
@@ -106,5 +108,6 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
+    memorySelection: vars.MEMORY_SELECTION === '1',
   };
 };

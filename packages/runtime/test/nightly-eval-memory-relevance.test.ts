@@ -12,13 +12,13 @@ import { runTrial } from '../evals/nightly/trial';
 const scenario = (id: string) => MEMORY_RELEVANCE_SCENARIOS.find((entry) => entry.id.startsWith(id))!;
 const evidence = (inputs: readonly Readonly<{ turn: number; text: string }>[], extra: Partial<TrialEvidence> = {}): TrialEvidence =>
   ({ transcript: [], effects: [], final_state: {}, tools: [], toolOutputs: [], model_inputs: inputs, ...extra });
-const trial = async (id: string, rules: readonly ScriptRule[] = []) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness' });
+const trial = async (id: string, rules: readonly ScriptRule[] = [], memorySelection = false) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness', ...(memorySelection ? { memorySelection } : {}) });
 const remember = (text: string, evidence_quote: string) => ({ name: 'remember', arguments: { kind: 'preference', text, evidence_quote } });
 
 describe('the relevance cases', () => {
-  it('are m07 to m13 with m11 held back until the stubs exist, and no model call for it', async () => {
+  it('are m07 to m13, none of them blocked now that stubs exist', async () => {
     expect(MEMORY_RELEVANCE_SCENARIOS.map((entry) => entry.id.slice(0, 3))).toEqual(['m07', 'm08', 'm09', 'm10', 'm11', 'm12', 'm13']);
-    expect(MEMORY_RELEVANCE_SCENARIOS.filter((entry) => entry.blocked).map((entry) => entry.id.slice(0, 3))).toEqual(['m11']);
+    expect(MEMORY_RELEVANCE_SCENARIOS.filter((entry) => entry.blocked)).toEqual([]);
     for (const entry of MEMORY_RELEVANCE_SCENARIOS) expect(NIGHTLY_SCENARIOS).toContain(entry);
     for (const entry of MEMORY_RELEVANCE_SCENARIOS) expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
   });
@@ -76,6 +76,17 @@ describe('the shown-ids receipt', () => {
     expect(receipt.holds(evidence([{ turn: 2, text: tagged(5) }], { final_state: { memory: [{ ...memory[0]!, status: 'forgotten' }] } }))).toBe(false);
   });
 
+  it('does not count a stub as shown: the claim counts once read_memory opens it', () => {
+    const receipt = reaches(2001, 'park road clinic', 1, 'shown');
+    const stub = '- [c2001 stub · fact] The owner\'s dentist, Dr. Rao, sees them on Tuesdays at the P…';
+    expect(receipt.holds(evidence([{ turn: 1, text: stub }]))).toBe(false);
+    expect(receipt.holds(evidence([{ turn: 1, text: stub }], { toolOutputs: [{ name: 'read_memory', output: '{"claims":[{"text":"... the Park Road clinic."}]}' }] }))).toBe(true);
+  });
+
+  it('fails m12 and m13 when a forgotten or held claim reaches the model even as a stub', () => {
+    expect(neverReaches([{ id: 3002, needle: 'lotus hall' }], 'never').holds(evidence([{ turn: 1, text: '- [c3002 stub · fact] The owner paid the…' }]))).toBe(false);
+  });
+
   it('fails m12 and m13 when a forgotten, held or health claim is shown, read or repeated', () => {
     const receipt = neverReaches([{ id: 3001, needle: 'okafor' }, { id: 3002, needle: 'lotus hall' }], 'never', undefined);
     expect(receipt.holds(evidence([{ turn: 1, text: 'clean input' }]))).toBe(true);
@@ -122,12 +133,47 @@ describe('the cases against the production prompt', () => {
   it('gives the plan a turn for the outside job', () => {
     expect(callPlan([scenario('m13')], 1).owner_turns).toBe(1);
   });
+});
 
-  it('reports m11 blocked without a model call', async () => {
-    const gateway = scriptedGateway({ rules: [] });
+describe('the cases with memory selection on (option B)', () => {
+  const opened = (ids: readonly number[]) => ({ name: 'read_memory', arguments: { ids } });
+  it('m11: the dentist claim arrives as a stub, and the model that opens it by id passes', async () => {
+    const run = await trial('m11', [{ match: /Which day does my dentist/, rounds: [{ toolCalls: [opened([2001])] }, { text: 'Tuesdays, at the Park Road clinic.' }] }], true);
+    expect(run.status).toBe('ran');
+    expect(run.model_inputs[0]!.text).toMatch(/c2001 stub · fact/);
+    expect(run.model_inputs[0]!.text).not.toMatch(/c2001 · /);
+    expect(failedReceipts(scenario('m11').receipts!, run)).toEqual([]);
+  });
+
+  it('m11 without selection: the dentist claim is neither shown nor offered', async () => {
+    const run = await trial('m11');
+    expect(run.model_inputs[0]!.text).not.toMatch(/c2001\b/);
+    expect(failedReceipts(scenario('m11').receipts!, run)).not.toEqual([]);
+  });
+
+  it('m10: the fact saved on the first turn is new, so it is in the core on the second', async () => {
+    const run = await trial('m10', [
+      { match: /Remember that I moved/, rounds: [{ toolCalls: [remember('The owner does their grocery shopping on Thursdays.', 'I moved my grocery shopping to Thursdays.')] }, { text: 'Noted: Thursdays.' }] },
+      { match: /Which day is my grocery run/, rounds: [{ text: 'Thursday.' }] },
+    ], true);
+    expect(failedReceipts(scenario('m10').receipts!, run)).toEqual([]);
+    expect(run.model_inputs.filter((input) => input.turn === 2).some((input) => input.text.includes('<owner_new>'))).toBe(true);
+  });
+
+  it('reaches every trial of a run that turns it on', async () => {
+    const gateway = scriptedGateway({ rules: [], unmatchedText: 'Noted.' });
     const { runNightly } = await import('../evals/nightly/suite');
-    const card = await runNightly([scenario('m11')], { trials: 2, budget: callBudget(10), gateway: () => gateway, judge: async () => ({ outcome: 'judge_error' }), candidate: 'x', judgeModel: 'y' });
-    expect(card.scenarios[0]).toMatchObject({ status: 'blocked' });
-    expect(gateway.requests()).toHaveLength(0);
+    await runNightly([scenario('m11')], { trials: 1, budget: callBudget(10), gateway: () => gateway, judge: async () => ({ outcome: 'judge_error' }), candidate: 'x', judgeModel: 'y', memorySelection: true });
+    expect(JSON.stringify(gateway.requests()[0]!.request)).toMatch(/c2001 stub · fact/);
+  });
+
+  it('m12 and m13: nothing forgotten, held or health is shown, offered or opened', async () => {
+    for (const id of ['m12', 'm13']) {
+      const run = await trial(id, [], true);
+      expect(run.status, id).toBe('ran');
+      expect(failedReceipts(scenario(id).receipts!, run), id).toEqual([]);
+    }
+    const opening = await trial('m12', [{ match: /deposits/, rounds: [{ toolCalls: [opened([3001, 3002])] }, { text: 'Nothing to share.' }] }], true);
+    expect(failedReceipts(scenario('m12').receipts!, opening)).toEqual([]);
   });
 });
