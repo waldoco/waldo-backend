@@ -6,7 +6,7 @@ import { approvalDesk } from '../src/channels/approvals';
 import { googleTaskHandlers } from '../src/tools/live/tasks';
 import { googleHandlers } from '../src/tools/live/google';
 import { sendMessageHandler } from '../src/tools/live/messaging';
-import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, recordNeedsOwnerCard } from '../src/hooks/registry';
+import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused, recordNeedsOwnerCard } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { proposeActionHandler, replayHost, taintedActionReplay } from '../src/tools/live/propose-action';
@@ -40,7 +40,6 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
     ['log_meal', { description: 'Lunch at the client office', calories_estimate: 2400 }],
     ['log_workout', { type: 'run', duration_minutes: 30 }],
   ],
-  'health settings': [['set_sleep_need', { minutes: 480 }]],
   'workspace writes': [
     ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
     ['workspace_render', { source_file_id: 'f1', source_revision: 1, path: 'out/vendor.pdf', expected_revision: 0, format: 'pdf' }],
@@ -122,7 +121,7 @@ describe('a tainted turn sends every write to the owner card', () => {
   it('every tool whose record says it raises its own card has a live handler that declares it', () => {
     const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined, proposeGoogleTaskChange: async () => 'p', proposeMessage: async () => 'p' };
     const live = [...googleHandlers({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), ...googleTaskHandlers(desk as never), sendMessageHandler(desk as never)];
-    const ownCard = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted?.exempt === 'own_card').map(([tool]) => tool).sort();
+    const ownCard = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted !== undefined && 'exempt' in record.tainted && record.tainted.exempt === 'own_card').map(([tool]) => tool).sort();
     expect(ownCard).toEqual(['propose_calendar_change', 'propose_google_task_change', 'send_email', 'send_message']);
     for (const tool of ownCard) expect(live.find((handler) => handler.name === tool)?.proposal_only, tool).toBe(true);
   });
@@ -168,7 +167,7 @@ describe('a tainted turn sends every write to the owner card', () => {
       'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_sleep_need', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
+      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
@@ -182,6 +181,39 @@ const deskIn = (state: DurableObjectState, replay: Parameters<typeof approvalDes
     owner: 42, call: async () => ({ message_id: 1 }), google: async () => null, newId: () => `tw${++cardIds}`, now: () => Date.UTC(2026, 9, 23, 9), timezone: 'UTC', log: () => undefined, replayTaintedAction: replay,
   });
 const rows = (state: DurableObjectState) => state.storage.sql.exec<{ id: string; status: string }>("SELECT id, status FROM ledger WHERE kind = 'tainted_action'").toArray();
+
+// The owner's stated sleep need is taken only from what the owner says directly, and a card would keep the figure in the
+// owner's ledger, so a turn that has read outside text is refused the call outright: not run, not carded. Synthetic values.
+describe('a tainted turn is refused an owner-statement tool, never carded', () => {
+  it('the refused set is exactly the records that name the refusal', () => {
+    const refused = toolNameSchema.options.filter((tool) => taintedCallRefused(tool, 'external'));
+    expect(refused).toEqual(['set_sleep_need']);
+    for (const tool of toolNameSchema.options) expect(taintedCallRefused(tool, null), tool).toBe(false);
+  });
+
+  it('after outside text the direct call is refused with a fix that asks the owner, and the owner\'s own turn runs it', async () => {
+    const { handler, runs } = recording('set_sleep_need');
+    const refused = await dispatchTool({ id: 'need-t', name: 'set_sleep_need', args: { minutes: 480 } }, tainted(), { handlers: [handler] });
+    expect(refused).toMatchObject({ ok: false, error_code: 'hook_denied' });
+    expect(JSON.stringify(refused)).toContain('Ask the owner to tell you it in a message of their own');
+    expect(JSON.stringify(refused)).not.toContain('propose_action');
+    expect(runs).toEqual([]);
+    expect(await dispatchTool({ id: 'need-o', name: 'set_sleep_need', args: { minutes: 480 } }, context(), { handlers: [handler] })).toMatchObject({ ok: true });
+    expect(runs).toEqual([{ minutes: 480 }]);
+  });
+
+  it('propose_action makes no card for it, so the figure never reaches the ledger', async () => {
+    await runInDurableObject(stub('owner-statement'), async (_instance, state) => {
+      const { handler, runs } = recording('set_sleep_need');
+      const desk = deskIn(state, taintedActionReplay({ handlers: () => [handler], context: () => context() }));
+      const proposed = await proposeActionHandler(desk, replayHost(() => [handler])).handle({ tool: 'set_sleep_need', args: { minutes: 480 }, reasoning: 'A forwarded mail said so.' } as never, tainted());
+      expect(proposed).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(TAINT_REFUSED_CAUSE) });
+      expect(rows(state)).toEqual([]);
+      expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM ledger WHERE payload_json LIKE '%480%'").one().n).toBe(0);
+      expect(runs).toEqual([]);
+    });
+  });
+});
 
 describe('propose_action carries every carded write', () => {
   it('each carded write goes on one card and runs once when the owner approves; "call it directly" holds exactly when the gate admits it', async () => {

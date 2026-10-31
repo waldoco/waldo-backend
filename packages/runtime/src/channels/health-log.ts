@@ -2,7 +2,7 @@ import {
   listHealthLogsArgsSchema, logMealArgsSchema, logWorkoutArgsSchema, setSleepNeedArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ListHealthLogsArgs, type LogMealArgs, type LogWorkoutArgs, type SetSleepNeedArgs, type SetSleepNeedResult, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
-import { healthSettingsV1Schema } from '../../../contracts/src/app/health-ingest';
+import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso, localToEpoch } from './reminders';
@@ -154,8 +154,11 @@ export const sleepNeedHandler = (write: (payload: string) => Promise<unknown>) =
   autonomy_gated: false,
   mutates_state: true,
   async handle(args) {
-    const stored = healthSettingsV1Schema.safeParse(await write(JSON.stringify({ sleep_need_minutes: args.minutes })));
-    if (!stored.success || stored.data.sleep_need_minutes !== args.minutes) return { ok: false, code: 'transient', error: 'the sleep need was not saved' };
+    // The health plane answers the stored need with when it changed; only the need is checked.
+    const answer = await write(JSON.stringify({ sleep_need_minutes: args.minutes }));
+    const stored = typeof answer === 'object' && answer !== null && 'sleep_need_minutes' in answer
+      ? healthSleepNeedMinutesV1Schema.nullable().safeParse(answer.sleep_need_minutes) : null;
+    if (!stored?.success || stored.data !== args.minutes) return { ok: false, code: 'transient', error: 'the sleep need was not saved' };
     return { ok: true, data: { state: args.minutes === null ? 'cleared' : 'set' }, source_taint: null };
   },
 } satisfies ToolHandler<SetSleepNeedArgs, SetSleepNeedResult, ToolDispatcherContext>);

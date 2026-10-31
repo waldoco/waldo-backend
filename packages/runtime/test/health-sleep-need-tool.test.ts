@@ -12,7 +12,7 @@ const tool = (answer: unknown) => {
 
 describe('set_sleep_need', () => {
   it('writes the stated need whole and answers in a word, never the figure', async () => {
-    const { sent, handle } = tool({ sleep_need_minutes: 480 });
+    const { sent, handle } = tool({ sleep_need_minutes: 480, updated_at: '2026-03-30T08:00:00.000Z' });
     const result = await handle(480);
     expect(sent).toEqual(['{"sleep_need_minutes":480}']);
     expect(result).toEqual({ ok: true, data: { state: 'set' }, source_taint: null });
@@ -20,16 +20,16 @@ describe('set_sleep_need', () => {
   });
 
   it('clears it when the owner asks', async () => {
-    const { sent, handle } = tool({ sleep_need_minutes: null });
+    const { sent, handle } = tool({ sleep_need_minutes: null, updated_at: '2026-03-30T08:00:00.000Z' });
     expect(await handle(null)).toEqual({ ok: true, data: { state: 'cleared' }, source_taint: null });
     expect(sent).toEqual(['{"sleep_need_minutes":null}']);
   });
 
   it('never says it saved what the health plane did not store', async () => {
-    for (const answer of [null, { error: 'not_linked' }, { error: 'invalid_request' }, { sleep_need_minutes: 420 }, 'ok']) {
+    for (const answer of [null, { error: 'not_linked' }, { error: 'invalid_request' }, { sleep_need_minutes: 420, updated_at: '2026-03-30T08:00:00.000Z' }, { updated_at: '2026-03-30T08:00:00.000Z' }, { sleep_need_minutes: 9000 }, 'ok']) {
       const result = await tool(answer).handle(480);
       expect(result.ok, JSON.stringify(answer)).toBe(false);
-      expect(JSON.stringify(result)).not.toMatch(/48|420/);
+      expect(JSON.stringify(result)).not.toMatch(/48|420|9000/);
     }
   });
 

@@ -10,5 +10,5 @@ export const HEALTH_MEMORY_RULES = [
 // The background writers' rules add the stated sleep need, which lives in the owner's health settings. remember's description
 // carries only HEALTH_MEMORY_RULES: a tool description is capped at 1,024 characters and remember's is at the cap, so in chat the
 // set_sleep_need description says the same thing.
-export const SLEEP_NEED_MEMORY_RULE = 'The owner\'s sleep need is kept in their health settings, set with set_sleep_need: memory keeps no figure for it, at most that they set one.';
+export const SLEEP_NEED_MEMORY_RULE = 'The owner\'s sleep need belongs in their health settings (set_sleep_need, when offered), never in memory: memory keeps no figure for it, at most that they stated one.';
 export const PASS_HEALTH_MEMORY_RULES = [...HEALTH_MEMORY_RULES, SLEEP_NEED_MEMORY_RULE];

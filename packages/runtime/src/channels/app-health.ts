@@ -265,7 +265,8 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
     return answer(healthConsentView(await invokeHealth(rpc, doName, 'consent_list', '{}'), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health')));
   }
   if (route === '/scores/history') return scoresHistory(input);
-  if (route === '/settings') return settings(input);
+  // The stated need is stored only while the coaching switch is on; off, the route is not served.
+  if (route === '/settings') return input.coaching === true ? settings(input) : refuse('unavailable', 404);
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
   const write = writes[route];
   if (!write) return refuse('unavailable', 404);

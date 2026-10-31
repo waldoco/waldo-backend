@@ -13,7 +13,9 @@ const auth = { readAppCredential: async (credential: string) => (credential === 
 
 const limiterKeys: string[] = [];
 let limiterAllows = true;
+let coaching: string | undefined;
 const env = () => ({
+  ...(coaching === undefined ? {} : { HEALTH_COACHING: coaching }),
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { limiterKeys.push(key); return { success: limiterAllows }; } },
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
@@ -23,7 +25,7 @@ type Rpc = { fn: string; body: Record<string, unknown> };
 const rpcs: Rpc[] = [];
 let rpcResult: unknown = {};
 beforeEach(() => {
-  rpcs.length = 0; limiterKeys.length = 0; limiterAllows = true; rpcResult = {};
+  rpcs.length = 0; limiterKeys.length = 0; limiterAllows = true; rpcResult = {}; coaching = undefined;
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     rpcs.push({ fn: url.split('/rpc/')[1]!, body: JSON.parse(String(init.body)) });
     if (rpcResult instanceof Error) throw rpcResult;
@@ -452,9 +454,35 @@ describe('app health scores', () => {
 
 // The owner's stated sleep need: read and replaced whole through the signed health-plane calls. Every value is synthetic.
 describe('app health settings', () => {
-  const put = (body: unknown) => handleApp(new Request('https://w.test/app/v1/health/settings', {
-    method: 'PUT', headers: headers({ 'content-type': 'application/json' }), body: typeof body === 'string' ? body : JSON.stringify(body),
+  const put = (body: unknown, path = '/app/v1/health/settings', extra: Record<string, string> = headers()) => handleApp(new Request(`https://w.test${path}`, {
+    method: 'PUT', headers: { 'content-type': 'application/json', ...extra }, body: typeof body === 'string' ? body : JSON.stringify(body),
   }), env(), auth) as Promise<Response>;
+  beforeEach(() => { coaching = '1'; });
+
+  it('is not served while the coaching switch is off: 404 as an unknown path, with no database call', async () => {
+    for (const value of [undefined, '0', 'true']) {
+      coaching = value;
+      expect((await get('/app/v1/health/settings')).status, String(value)).toBe(404);
+      expect((await put({ sleep_need_minutes: 480 })).status, String(value)).toBe(404);
+    }
+    expect(rpcs).toEqual([]);
+  });
+
+  it('writes only after the credential and the owner\'s health budget, and for the session\'s owner alone', async () => {
+    expect((await put({ sleep_need_minutes: 480 }, undefined, {})).status).toBe(401);
+    expect(limiterKeys).toEqual([]);
+    rpcResult = { sleep_need_minutes: 480, updated_at: '2026-10-10T08:00:00.000Z' };
+    expect((await put({ sleep_need_minutes: 480 }, '/app/v1/health/settings?owner=owner-2')).status).toBe(200);
+    expect(limiterKeys).toEqual(['app-health:owner-1']);
+    const [sent] = rpcs;
+    expect(Object.keys(sent!.body).sort()).toEqual(['p_at', 'p_do_name', 'p_payload', 'p_sig']);
+    expect(sent!.body.p_do_name).toBe('owner-1');
+    expect(sent!.body.p_sig).toBe(await routerSignature(SECRET, sent!.body.p_at as number, `health.settings_write.owner-1.${md5Hex('{"sleep_need_minutes":480}')}`));
+    limiterAllows = false; rpcs.length = 0;
+    const limited = await put({ sleep_need_minutes: 480 });
+    expect([limited.status, limited.headers.get('retry-after')]).toEqual([429, '60']);
+    expect(rpcs).toEqual([]);
+  });
 
   it('reads the stated need through the signed settings read, and shows the app the need alone', async () => {
     rpcResult = { sleep_need_minutes: 480, updated_at: '2026-10-10T08:00:00.000Z' };
