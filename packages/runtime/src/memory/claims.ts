@@ -352,7 +352,29 @@ const stringsOf = (value: unknown): string[] =>
     : Array.isArray(value) ? value.flatMap(stringsOf)
       : value !== null && typeof value === 'object' ? Object.values(value).flatMap(stringsOf) : [];
 
-export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
+// Read only: an owner whose memory was never opened reads 0.
+export const memoryRevision = (sql: Sql): number =>
+  tableExists(sql, 'memory_revision') ? sql.exec<{ value: number }>('SELECT value FROM memory_revision WHERE id = 1').toArray()[0]?.value ?? 0 : 0;
+
+const MEMORY_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(?:claims|constellation_nodes|constellation_edges)\b/i;
+const RETURNING = /\bRETURNING\b/i;
+
+export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
+  // A count, never content. Every write that changes the owner's claims, patterns or links moves it in the writer's own
+  // transaction, whoever wrote (chat, the nightly pass, the welcome build, the console), so an open app screen knows to read
+  // memory again. Every such write in this store goes through `sql` below, which moves it; re-reading a claim (seen) writes
+  // through `db` and does not. No trigger does this: a trigger's write would count in every statement's rowsWritten.
+  db.exec('CREATE TABLE IF NOT EXISTS memory_revision (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
+  const bump = () => db.exec('INSERT INTO memory_revision (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1');
+  // A RETURNING statement runs as its rows are read, and nothing may run in between, so it moves the count first: the
+  // writer's transaction takes both or neither.
+  const sql: Sql = { exec: (query: string, ...bindings: unknown[]) => {
+    if (!MEMORY_WRITE.test(query)) return db.exec(query, ...bindings);
+    if (RETURNING.test(query)) { bump(); return db.exec(query, ...bindings); }
+    const cursor = db.exec(query, ...bindings);
+    if (cursor.rowsWritten > 0) bump();
+    return cursor;
+  } } as Sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
@@ -511,7 +533,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, null, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases));
     },
     seen(id: number, at: string): void {
-      sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
+      db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
     // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
