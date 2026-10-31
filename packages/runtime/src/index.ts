@@ -236,11 +236,11 @@ const worker = {
     // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
-    // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
-    // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
     // Waldo's routing rules no held handle accounts for: an account deleted with its owner object leaves its rule behind.
     const mailRouting = agentMailRouting(env), mailHeld = agentMailHeldHandles(env);
     if (mailRouting && mailHeld) ctx.waitUntil(sweepAgentMailRules(mailRouting, mailHeld).then((outcome) => console.log(JSON.stringify({ hop: 'agent_mail_rule_sweep', ...outcome }))));
+    // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
+    // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
     if (env.LANGFUSE_RETENTION_SWEEP === '1' || env.LANGFUSE_RETENTION_SWEEP === 'dry') ctx.waitUntil(sweepLangfuseRetention(env).then((outcome) => (outcome.overdue ? console.error : console.log)(langfuseSweepLogLine(outcome))));
   },
 } satisfies ExportedHandler<Env>;
