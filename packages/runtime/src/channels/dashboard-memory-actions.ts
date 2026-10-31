@@ -5,7 +5,7 @@ import {nodeConfirmation,nodeSources,nodeSupports,supportIds} from '../memory/no
 // local IDs alone do not authorize a change; every target is resolved in this DO.
 export function memoryControl(view:ConsoleView,scope:string,id:string){
  const claim=view.spots.find(c=>`${scope}:claim:${c.id}`===id),pending=view.forgettingSpots.find(c=>`${scope}:claim:${c.id}`===id),node=view.nodes.find(n=>`${scope}:node:${n.id}`===id);
- if(claim)return {id,kind:'claim' as const,source:claim.source,origin:claim.origin??'legacy',status:claim.status,review:{label:claim.text,note:claim.evidence,kind:claim.kind,seen:claim.seen_count,last_seen:claim.last_seen_at},actions:[...(awaitsOwnerConfirm(claim)?['spot.confirm']:[]),...(claim.pinned?['spot.unpin']:PROFILE_KINDS.includes(claim.kind)?['spot.pin']:[]),...(claim.status==='active'?['spot.edit']:[]),'spot.dismiss','spot.forget']};
+ if(claim)return {id,kind:'claim' as const,source:claim.source,origin:claim.origin??'legacy',status:claim.status,review:{label:claim.text,note:claim.evidence,kind:claim.kind,seen:claim.seen_count,last_seen:claim.last_seen_at,area:claim.area??'unsorted'},actions:[...(awaitsOwnerConfirm(claim)?['spot.confirm']:[]),...(claim.pinned?['spot.unpin']:PROFILE_KINDS.includes(claim.kind)?['spot.pin']:[]),...(claim.status==='active'?['spot.edit']:[]),'spot.area','spot.dismiss','spot.forget']};
  if(pending)return {id,kind:'claim' as const,source:pending.source,origin:pending.origin??'legacy',status:'purging',actions:['spot.forget']};
  // Confirm and correct act on a live node only; forget stays on any node, so a stale one can still be removed. A node
  // citing a support that is no longer live is Waldo's read and cannot be confirmed: confirm grounds only what it can find.

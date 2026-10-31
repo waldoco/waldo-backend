@@ -69,7 +69,7 @@ export const workerRouteDown = (access: OwnerModelAccess): boolean => {
 };
 
 // Why a machine job with news still told the owner nothing: its gate closed between the check and the apply.
-export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'held_budget' | 'no_source';
+export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'held_budget' | 'no_source' | 'malformed_reply';
 export type MachineApplied = 'delivered' | 'skipped' | Readonly<{ held: MachineHeld }>;
 // A job's apply: rechecks its gates, runs its apply turn and delivers. It calls `settle` exactly once, as the commit of its
 // delivery or alone when nothing goes out; `settle` throws ClosedRunError for a job cancelled or forgotten meanwhile. A
@@ -80,6 +80,8 @@ export type MachineHandler = Readonly<{
   // The worker checked and found nothing: the job's own record that its data was checked, written in one transaction with
   // `settle`, so the same data does not start another job.
   noNews?(row: JobRow, settle: () => void): void | Promise<void>;
+  // The apply runs on an empty result too: the job's judgment does not rest on the worker's findings alone.
+  decidesOnEmpty?: boolean;
 }>;
 export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler>>>;
 
@@ -92,13 +94,22 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void;
 }>): Promise<void> => {
   const { book } = deps;
+  const job = taskBrief(row).machine!.job;
   const settle = () => { if (!book.settle(row.id)) throw new ClosedRunError(); };
+  let applied = false;
+  // Each trace the job wrote (its lane, its worker's last attempt, its apply turn) closes with a machine_turn root carrying
+  // the job's last code, so the exporter flushes it.
+  const roots = (after: JobRow, code: string, ok: boolean) => {
+    const traces = [`task:${row.id}`, ...(after.attempt > 0 ? [`task:${row.id}:${after.attempt}`] : []), ...(applied ? [`task:${row.id}:apply`] : [])];
+    for (const trace of traces) deps.hop(after, 'machine_turn', { trace, ms: deps.now() - after.created_at, ok, code, detail: job });
+  };
   const done = (name: string, fields: Partial<TurnLogEntry> = {}) => {
     const after = book.get(row.id) ?? row;
     deps.hop(after, name, {
       ms: deps.now() - after.created_at, ...(after.outcome ? { outcome: TURN_OUTCOME[after.outcome] } : {}),
       detail: `rounds=${after.rounds}:cost_usd=${after.cost_usd.toFixed(4)}:attempts=${after.attempt}`, ...fields,
     });
+    roots(after, fields.code ?? name, fields.ok ?? true);
   };
   const quietly = (name: string, fields: Partial<TurnLogEntry> = {}) => {
     try { settle(); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
@@ -109,7 +120,8 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   const unavailable = (error: unknown) => {
     if (error instanceof ClosedRunError) {
       book.endApply(row.id);
-      return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+      deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+      return roots(book.get(row.id) ?? row, 'machine_apply_dropped', false);
     }
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
     return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
@@ -118,23 +130,24 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   // A pass lost inside the apply turn left its intent: the turn may have raised a card or opened a loop, so it is not run
   // again. The owner never asked for this work, so nothing names it; the trigger's next tick asks again.
   if (applyInterrupted(row)) return quietly('machine_apply_uncertain', { ok: false });
-  const handler = deps.appliers[taskBrief(row).machine!.job];
+  const handler = deps.appliers[job];
   const result = jobResult(row)!;
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
   // nothing about an item it was not shown, so a job with one goes to the brain's apply, which can see it.
-  if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length) {
+  if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {
     if (!handler?.noNews) return quietly('machine_no_news');
     try { await handler.noNews(row, settle); } catch (error) { return unavailable(error); }
     return done('machine_no_news');
   }
   if (!handler) return quietly('machine_held', { code: 'no_applier' });
   const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
-  let applied: MachineApplied;
+  let outcome: MachineApplied;
   if (!book.beginApply(row.id)) return;
+  applied = true;
   try {
-    applied = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
+    outcome = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
   } catch (error) { return unavailable(error); }
-  if (applied === 'delivered') done('machine_applied');
-  else if (applied === 'skipped') done('machine_skipped');
-  else done('machine_held', { code: applied.held });
+  if (outcome === 'delivered') done('machine_applied');
+  else if (outcome === 'skipped') done('machine_skipped');
+  else done('machine_held', { code: outcome.held });
 };

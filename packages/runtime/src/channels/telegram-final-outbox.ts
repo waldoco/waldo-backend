@@ -25,7 +25,8 @@ export type FinalPayload = TelegramFinalPayload;
 export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string; status?: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
-export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
+// title: the event's title, kept only for the app push that may name the meeting.
+export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string; title?: string };
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
@@ -52,6 +53,10 @@ export type FinalRecord = {
   mailFollowup?: MailFollowupReceipt;
   // An update card written by a sweep job: its update_cards row, recorded sent once the card is delivered.
   update?: { recordId: number };
+  // An update that revises a day card already delivered today: the day plan counts the revision once it is delivered.
+  revision?: { day: string; card: CardId };
+  // The push an update raises once it reaches the app: its checked line, and the day card it revised.
+  updatePush?: { line: string; card?: CardId };
   calendarPrep?: CalendarPrepReceipt;
   // A health-only note: it goes out only while the owner still shares health and has health proposals on.
   healthNotice?: { day: string };

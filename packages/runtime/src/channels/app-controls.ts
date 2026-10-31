@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -6,6 +6,7 @@ import { controlAction, controlRevision, type ControlReceipt } from './dashboard
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
 import type { ConsoleAction, ConsoleView } from './console';
+import { memoryRevision } from '../memory/claims';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-phone';
@@ -19,7 +20,7 @@ export type AppControlsHost = Readonly<{
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
-  cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
+  cardsLatest?(view:ConsoleView,revised:boolean):Promise<ConsoleView['cards']>;
   // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
   days?(date?:string):Promise<object|null>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
@@ -67,6 +68,10 @@ const dayForRevision=(request:Request,shown:Record<string,unknown>)=>{
 };
 // Controls revision 7 names the owner on the day view and gives the account view its identity lines; builds below it never receive either.
 const namesOwner=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_IDENTITY_REVISION;
+// Controls revision 8 tells an open screen that memory changed; builds below it never receive the count.
+const signalsMemory=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_SIGNAL_REVISION;
+// Controls revision 9 shows a revised day card as revised; builds below it read the card as first delivered.
+const showsRevisions=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_DAY_CARD_REVISION;
 // The sign-in email and, once verified, the number on file. Each is left out when the directory cannot say, and neither read can fail the view.
 const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
   const [email,phone]=await Promise.all([ownerAccountEmail(env,owner),phoneSms(env).state(owner).catch(()=>null)]);
@@ -138,10 +143,11 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=await projection(query.data.view,undefined,page);if(!result)return reply({error:'not_found'},404);
     // The revision guards what an action changes, so it is taken before latest is added: an action rebuilds the day without it.
     const revision=await controlRevision(result);
-    const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built)},'day'):result;
+    const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built,showsRevisions(request))},'day'):result;
     const named=query.data.view==='day'&&namesOwner(request)?host.ownerName?.()??null:null;
+    const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
     const day=query.data.view==='day'?dayForRevision(request,shown):shown;
-    const parsed=appControlProjectionV1Schema.safeParse({...(named?{...day,data:{...(day.data as object),name:named}}:day),revision});
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
