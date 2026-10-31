@@ -961,6 +961,24 @@ describe('RuntimeLLMProvider', () => {
       expect(billedAttempts.map((attempt) => attempt.model)).toEqual(gateway.requests.map((request) => request.step.model));
     });
 
+    it('are kept when a reply is halted by the post-call hook, so a billed halt is not free', async () => {
+      const gateway = new ScriptedGateway((request) => ({ ok: true, data: { ...response(request.request.model, `leaked ${canaryTokens[0]}`), input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 20 } }));
+      const result = await new RuntimeLLMProvider({ gateway }).complete(terraThenSonnet, ownerCtx());
+      expect(result.ok).toBe(false);
+      const halted = result.attempts.filter((attempt) => attempt.outcome === 'failure');
+      expect(halted).toHaveLength(1);
+      expect(halted[0]).toMatchObject({ model: OPENAI_GPT_6_1_TERRA_MODEL, code: 'forbidden', spent: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 20 } });
+    });
+
+    it('price a reply from another model at the model that billed it', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: true, data: response(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL) }));
+      const result = await new RuntimeLLMProvider({ gateway }).complete(terraThenSonnet, ownerCtx());
+      expect(result.ok).toBe(false);
+      const mismatched = result.attempts.filter((attempt) => attempt.outcome === 'failure');
+      expect(mismatched).toHaveLength(1);
+      expect(mismatched[0]).toMatchObject({ model: OPENAI_GPT_6_1_TERRA_MODEL, billed_model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, spent: { input_tokens: 20, output_tokens: 5 } });
+    });
+
     it('still join the usage of the same model when it answers on a resend', async () => {
       const searchTurn = {
         trigger: 'brief' as const,

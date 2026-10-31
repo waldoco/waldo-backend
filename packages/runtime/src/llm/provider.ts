@@ -250,8 +250,10 @@ export type LLMAttempt =
       context: LLMContextMode;
       fallback_step: GatewayAttemptFallbackStep;
       code: ErrorCode;
-      // What the provider still billed for this attempt, priced at this attempt's own model.
+      // What the provider still billed for this attempt, priced at this attempt's own model, or at billed_model when the
+      // reply came from a different model than the one asked for.
       spent?: SpentTokens;
+      billed_model?: string;
     }
   | {
       outcome: 'skipped';
@@ -481,9 +483,10 @@ export class RuntimeLLMProvider {
     // Tokens billed by failed attempts, per model. The model that answers owns its own failed tries (a retried step is metered
     // whole); every other model's tokens stay on its failed attempts, so each is priced at its own rates.
     const spentByModel = new Map<string, SpentTokens>();
-    const failure = (plan: ReturnType<typeof attemptPlan>[number], code: ErrorCode, spent?: SpentTokens): LLMAttempt => {
-      if (spent) spentByModel.set(modelKey(plan.step), addTokens(spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS, spent));
-      return { outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code, ...(spent ? { spent } : {}) };
+    const failure = (plan: ReturnType<typeof attemptPlan>[number], code: ErrorCode, spent?: SpentTokens, billedModel?: string): LLMAttempt => {
+      const elsewhere = billedModel !== undefined && billedModel !== plan.step.model;
+      if (spent && !elsewhere) spentByModel.set(modelKey(plan.step), addTokens(spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS, spent));
+      return { outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code, ...(spent ? { spent } : {}), ...(spent && elsewhere ? { billed_model: billedModel } : {}) };
     };
     let lastDetail: string | undefined;
 
@@ -610,7 +613,7 @@ export class RuntimeLLMProvider {
       if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.request.model) {
         this.circuitBreaker.recordFailure(plan.step.provider);
         // A reply that parsed but came from another model was still billed; one that did not parse reports no tokens.
-        attempts.push(failure(plan, 'invalid_args', parsedResponse.success ? tokensOf(parsedResponse.data) : undefined));
+        attempts.push(parsedResponse.success ? failure(plan, 'invalid_args', tokensOf(parsedResponse.data), parsedResponse.data.model) : failure(plan, 'invalid_args'));
         return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
       }
 
@@ -651,7 +654,7 @@ export class RuntimeLLMProvider {
         ...(searchDegraded ? { tool_search_degraded: true as const, ...(searchRejection ? { tool_search_rejection: searchRejection } : {}) } : {}),
         usage: { ...usage, ...addTokens(usage, spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS) },
         attempts: attempts.map((attempt) => {
-          if (attempt.outcome !== 'failure' || !attempt.spent || attempt.model !== plan.step.model || attempt.provider !== plan.step.provider) return attempt;
+          if (attempt.outcome !== 'failure' || !attempt.spent || attempt.billed_model !== undefined || attempt.model !== plan.step.model || attempt.provider !== plan.step.provider) return attempt;
           const { spent: _counted, ...rest } = attempt;
           return rest;
         }),

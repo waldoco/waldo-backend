@@ -51,6 +51,7 @@ import type { SemanticRecall } from '../memory/semantic-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
+import { billedAttemptEntries } from './billed-attempts';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -348,12 +349,7 @@ export const createOwnerResponder = (
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
-    for (const attempt of result.attempts) {
-      if (attempt.outcome !== 'failure' || !attempt.spent) continue;
-      const { input_tokens: input, output_tokens: output, cache_read_input_tokens: cached, cache_write_input_tokens: written } = attempt.spent;
-      log({ trace, hop: `llm_${purpose}_attempt`, ms: 0, ok: false, error_code: attempt.code, provider: attempt.provider,
-        usage: { model: attempt.model, input, output, cached, ...(written ? { cache_write: written } : {}), web_searches: 0 } });
-    }
+    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt` })) log(entry);
     if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
       log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
     }
