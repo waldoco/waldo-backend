@@ -120,9 +120,9 @@ export class WhatsAppOwnerInbox {
     };
   }
 
-  /** After a drain that failed: the waiting rows wake again after `delayMs`, not at the floor. */
+  /** After a drain that failed or could not run: the open rows, waiting or cut off while running, wake again after `delayMs`, not at the floor. */
   deferWake(delayMs: number): void {
-    this.storage.transactionSync(() => { if (this.next()) this.storage.kv.put(WHATSAPP_INBOX_DUE_KEY, this.now() + delayMs); });
+    this.storage.transactionSync(() => { if (this.records().some(open)) this.storage.kv.put(WHATSAPP_INBOX_DUE_KEY, this.now() + delayMs); });
   }
 
   /** Closes the claimed row. True when this call closed it as interrupted, so the caller owes the owner a notice. */

@@ -128,10 +128,15 @@ it('claimNext returns null only when nothing waits: a drain that stops on null t
   expect(inbox.next()).toBeNull();
 }));
 
-it('deferWake moves the wake of waiting rows later, and does nothing when none waits', () => withInbox((inbox, storage, clock) => {
+it('deferWake moves the wake of open rows later, waiting or running, and does nothing when none is open', () => withInbox((inbox, storage, clock) => {
   inbox.deferWake(30_000);
   expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBeUndefined();
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'a' }]);
   inbox.deferWake(30_000);
   expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBe(clock.now + 30_000);
+  // A row cut off while running is open too: its wake moves, rather than staying due at the floor.
+  inbox.claimNext(clock.now + 60_000);
+  storage.kv.put(WHATSAPP_INBOX_DUE_KEY, clock.now - 1);
+  inbox.deferWake(60_000);
+  expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBe(clock.now + 60_000);
 }));

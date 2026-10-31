@@ -2066,7 +2066,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly whatsappAttempts = new Set<string>();
   private async drainWhatsApp(alarmEnd?: number): Promise<void> {
     const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
-    // Without a WhatsApp transport nothing can be claimed or sent: waiting rows wake again in a minute, not at the floor.
+    // Without a WhatsApp transport nothing can be claimed or sent: open rows wake again in a minute, not at the floor. A row
+    // cut off while running is recovered once the transport returns, so its notice can go out.
     if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) { inbox.deferWake(WHATSAPP_RUNNING_CHECK_MS); return; }
     for (const record of this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts))) await this.whatsappNotice(record);
     while (inbox.next()) {
