@@ -241,7 +241,8 @@ const memoryClaim = z.strictObject({
   pinned: z.enum(['profile', 'facts']).nullable().optional(),
 });
 // Where a node's support came from, when Waldo read it from a connected source; empty for a node resting on what the owner
-// said. confirmation is confirmed once every supporting claim is the owner's own word, and waldos_read until then.
+// said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote
+// or confirmed the notes under it.
 export const appNodeSourceV1Schema = z.enum(['apple_health', 'health_connect', 'calendar', 'tasks', 'gmail']);
 const memoryNode = z.strictObject({
   id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
