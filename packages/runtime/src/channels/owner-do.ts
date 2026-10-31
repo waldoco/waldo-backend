@@ -139,7 +139,7 @@ import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
-import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
+import { armBriefSweep, BRIEF_SWEEP_ID, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
@@ -148,7 +148,7 @@ import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './
 import { reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
-import { UPDATE_CARD_FRESH_MS, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
+import { observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedEvent, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
@@ -2932,6 +2932,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
           throw error;
         }
+        const judgeWake = this.ctx.storage.kv.get<number>(UPDATE_JUDGE_WAKE_KEY);
+        if (judgeWake !== undefined) { this.ctx.storage.kv.delete(UPDATE_JUDGE_WAKE_KEY); await scheduler.pullForward(BRIEF_SWEEP_ID, judgeWake); }
         for (const entry of fired) {
           const late = started - entry.due_at;
           if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
@@ -5036,6 +5038,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
         : volume === 'low' ? 'held_volume' : quiet() && !(dayState && revisesCards) ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
     };
+    // An ingestion committed: the harness's wake hint, ids only. It is traced now; memory's daytime consolidator subscribes here.
+    const observed = (trace: string, event: ObservedEvent) => log({ trace, hop: 'observed', ms: 0, ok: true, code: event.kind, detail: `refs=${event.refs.length}` });
     const updateCheck = async (trace: string) => {
       const client = await google.client();
       if (client === null) return;
@@ -5057,6 +5061,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
             () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })) });
         log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}` });
+        if (check.wakeAt !== undefined) storage.kv.put(UPDATE_JUDGE_WAKE_KEY, check.wakeAt);
+        for (const event of observedEvents(check, day, now)) observed(trace, event);
         if (check.code === 'enqueued') {
           log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: check.job!.id, job_profile: 'reader' });
           await armTaskJobsWake(storage, Date.now());
@@ -5112,6 +5118,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         delivered: card => plans.reached(today(), card),
         pushLine: async (line, mail) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...mail, await healthLogLines()] }),
         chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),
+        settled: () => this.ctx.waitUntil(wakeBriefSweep(scheduler, Date.now()).then(() => undefined, () => undefined)),
       } } : {}),
     });
     const writeCard = async (entry: ScheduleEntry) => {

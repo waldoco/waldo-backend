@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { CalendarChange, CalendarItem, GoogleClient } from '../src/connectors/google';
 import { touchesDay, updateBook, type Change, type UpdateBook } from '../src/channels/update-cards';
-import { updateSweepCheck } from '../src/channels/update-sweep';
+import { observedEvents, updateSweepCheck } from '../src/channels/update-sweep';
 import { jobBook } from '../src/tasks/jobs';
 
 // The day state: the sweep keeps what each calendar event last looked like, so a change says what it was as well as what it
@@ -129,5 +129,96 @@ describe('a change on the owner\'s day', () => {
     expect(touchesDay(change, '2026-10-20', 'UTC')).toBe(true);
     expect(touchesDay(change, '2026-10-22', 'UTC')).toBe(true);
     expect(touchesDay(change, '2026-10-21', 'UTC')).toBe(false);
+  });
+});
+
+// With the day state the judge runs at most once per five minutes: a tick inside that gap reads nothing, so the watermarks
+// hold and every change it would have read is still there for the next job, which the owner object pulls forward to.
+describe('the day state: one judge pass per five minutes', () => {
+  const MIN = 60_000;
+  const withBurst = <T,>(work: (h: Readonly<{ tick(): Promise<Awaited<ReturnType<typeof updateSweepCheck>>>; at(ms: number): void; change(id: string, at: number): void;
+    settle(): void; since(): number | null; jobs(): { id: string; refs: string[] }[] }>) => Promise<T>) =>
+    runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`update-day-burst-${seq += 1}`)), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let clock = T0, n = 0;
+      const jobs = jobBook(sql, { now: () => clock, newId: () => `job_${(n += 1).toString(16).padStart(12, '0')}`, newToken: () => `tok-${n += 1}` });
+      const updates = updateBook(sql);
+      updates.mark('mail_since', T0 - 600_000);
+      updates.mark('calendar_since', T0 - 600_000);
+      const google: CalendarChange[] = [], made: { id: string; refs: string[] }[] = [];
+      const client = {
+        events: async () => [],
+        changedEvents: async (since: number) => google.filter(item => Date.parse(item.updated!) > since),
+        newMail: async () => [],
+      } as unknown as GoogleClient;
+      return work({
+        tick: async () => {
+          const checked = await updateSweepCheck({ updates, jobs, google: client, now: clock, day: '2026-10-20', timezone: 'UTC', surface: 'app', sourceFollowups: false, dayState: true,
+            gate: () => null, providerDown: () => false, transaction: w => state.storage.transactionSync(w), enqueued: () => undefined, held: () => [], dayChanged: async () => undefined });
+          if (checked.code === 'enqueued') made.push({ id: checked.job!.id, refs: (JSON.parse(checked.job!.brief_json) as { machine: { refs: string[] } }).machine.refs });
+          return checked;
+        },
+        at: ms => { clock = ms; },
+        change: (id, at) => { google.push({ ...SYNC, id, title: id, status: 'confirmed', created: '2026-10-01T00:00:00Z', updated: new Date(at).toISOString() }); },
+        settle: () => { for (const job of jobs.open()) jobs.cancel(job.id, 'owner'); },
+        since: () => updates.since('calendar_since'),
+        jobs: () => made,
+      });
+    });
+
+  it('a burst of five changes over four minutes makes one job now and one for the rest five minutes after it', async () => {
+    await withBurst(async (h) => {
+      h.change('e-a', T0 - 1000);
+      expect((await h.tick()).code).toBe('enqueued');
+      h.settle();
+      const held: number[] = [];
+      for (const [minute, id] of [[1, 'e-b'], [2, 'e-c'], [3, 'e-d'], [4, 'e-e']] as const) {
+        h.at(T0 + minute * MIN);
+        h.change(id, T0 + minute * MIN - 1000);
+        const checked = await h.tick();
+        expect(checked).toMatchObject({ code: 'held_debounce', changes: 0, wakeAt: T0 + 5 * MIN });
+        held.push(h.since()!);
+      }
+      expect(held).toEqual([T0, T0, T0, T0]);
+      h.at(T0 + 5 * MIN);
+      expect((await h.tick()).code).toBe('enqueued');
+      expect(h.jobs().map(job => job.refs)).toEqual([['event:e-a'], ['event:e-b', 'event:e-c', 'event:e-d', 'event:e-e']]);
+    });
+  });
+
+  it('a change that arrives while a job is open is read by the first tick after it settles', async () => {
+    await withBurst(async (h) => {
+      h.change('e-a', T0 - 1000);
+      await h.tick();
+      h.at(T0 + 6 * MIN);
+      h.change('e-b', T0 + 6 * MIN - 1000);
+      expect((await h.tick()).code).toBe('held_open_job');
+      h.settle();
+      expect((await h.tick()).code).toBe('enqueued');
+      expect(h.jobs().at(-1)!.refs).toEqual(['event:e-b']);
+    });
+  });
+});
+
+// The harness's wake hint, in the shape agreed with memory (§6.3): after a sweep commits a record with changes, one event per
+// source it saw, naming the record by id. A rolled-back write or a tick that recorded nothing emits none.
+describe('the observed event', () => {
+  it('names the committed record, once per source, with the owner\'s day and outside taint', async () => {
+    await withDay(async (h) => {
+      h.listed.push(SYNC);
+      await h.check(true);
+      h.clock.at += 10 * 60_000;
+      h.changed.push(moved({ start: '2026-10-20T15:00:00Z', end: '2026-10-20T15:30:00Z' }));
+      const checked = await h.check(true);
+      const id = h.sql.exec<{ id: number }>('SELECT id FROM update_cards ORDER BY id DESC LIMIT 1').one().id;
+      expect(observedEvents(checked, '2026-10-20', h.clock.at)).toEqual([{ kind: 'calendar', refs: [`update:${id}`], taint: 'external', at: h.clock.at, localDay: '2026-10-20' }]);
+      expect(JSON.stringify(observedEvents(checked, '2026-10-20', h.clock.at))).not.toContain('Krati');
+    });
+  });
+
+  it('emits nothing for a tick that recorded nothing', async () => {
+    await withDay(async (h) => {
+      expect(observedEvents(await h.check(true), '2026-10-20', h.clock.at)).toEqual([]);
+    });
   });
 });

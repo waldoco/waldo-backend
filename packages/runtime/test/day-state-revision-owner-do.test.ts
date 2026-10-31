@@ -143,6 +143,11 @@ it.each([
       if (mail) fixture.mail = [MAIL];
       await due(BRIEF_SWEEP_ID, 'pre_activity_spot');
       await alarm();
+      // The harness's wake hint: traced once per source the sweep saw, by kind and count, never the meeting or the mail.
+      const hint = JSON.stringify(state.storage.sql.exec("SELECT * FROM trace_log WHERE hop = 'observed'").toArray());
+      expect(JSON.parse(hint)).toHaveLength(mail ? 2 : 1);
+      for (const kind of mail ? ['calendar', 'mail'] : ['calendar']) expect(hint).toContain(kind);
+      for (const text of ['Krati', 'cholesterol', 'Asha']) expect(hint).not.toContain(text);
       const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
       const [job] = state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray();
       expect(job).toBeDefined();
@@ -220,6 +225,65 @@ it.each([
       await sweep();
       expect(state.storage.sql.exec("SELECT id FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray().length > 0).toBe(job);
       expect(state.storage.sql.exec('SELECT changes FROM update_cards').toArray()).toHaveLength(1);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});
+
+// The wakes in the owner object, with the real ten-minute sweep armed. When a job settles the sweep is pulled forward at
+// once (no sooner than a minute after it last ran); a tick inside the five-minute gap reads nothing and pulls the sweep to
+// the gap's end, where the next job is written.
+it('a settled job wakes the sweep; a tick inside the judge gap pulls it to the gap\'s end', async () => {
+  const name = 'day-state-wakes';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const originalNow = Date.now;
+    clock = Date.parse('2026-10-20T07:00:00Z');
+    const start = clock, MIN = 60_000;
+    Date.now = () => clock;
+    try {
+      claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
+      state.storage.kv.put('do_name', name);
+      state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+      state.storage.kv.put('timezone', 'UTC');
+      state.storage.kv.put('timezone_confirmed', true);
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+        OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
+        GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
+      await owner.setup('app').ready;
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      state.storage.sql.exec('DELETE FROM schedule');
+      await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: clock - 1000, dueAt: clock - 1000,
+        recurrence: { type: 'interval', every_ms: 10 * MIN, phase_ms: 0 } });
+      const alarm = async () => { state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
+      const sweepDue = () => state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM schedule WHERE id = ?', BRIEF_SWEEP_ID).one().due_at;
+      const sweepJobs = () => state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep' ORDER BY created_at").toArray();
+      const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
+      fixture.push = PUSH;
+
+      fixture.listed = [SYNC];
+      await alarm();
+      clock = start + MIN;
+      fixture.changed = [{ ...SYNC, start: '2026-10-20T15:00:00Z', end: '2026-10-20T15:30:00Z', status: 'confirmed', created: '2026-10-01T00:00:00Z' }];
+      await scheduler.pullForward(BRIEF_SWEEP_ID, clock);
+      await alarm();
+      const [first] = sweepJobs();
+      expect(first?.created_at).toBe(start + MIN);
+
+      // The job settles: the sweep comes forward to a minute after it last ran, not the ten-minute poll.
+      expect(jobs.report(jobs.startAttempt(first!.id)!, FOUND, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      clock = start + MIN + 10_000;
+      await alarm();
+      await vi.waitFor(() => expect(sweepDue()).toBe(start + 2 * MIN));
+
+      // A tick inside the gap reads nothing and pulls the sweep to the gap's end, where the next job is written.
+      clock = start + 2 * MIN;
+      await alarm();
+      expect(sweepJobs()).toHaveLength(1);
+      expect(sweepDue()).toBe(start + 6 * MIN);
+      clock = start + 6 * MIN;
+      await alarm();
+      expect(sweepJobs()).toHaveLength(2);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

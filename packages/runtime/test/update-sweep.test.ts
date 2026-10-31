@@ -359,9 +359,9 @@ describe('the owner turning the sweep off', () => {
 // With the day state the apply turn answers with typed effects: revise a day card that already reached the owner, say an
 // update, push with either, or nothing. Code holds the owner's quiet hours and which cards reached them; the model judges
 // what is worth it.
-type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; pushLines: { line: string; mail: readonly string[] }[] }>;
+type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; pushLines: { line: string; mail: readonly string[] }[]; settled: { n: number } }>;
 const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], surface = 'app'): DayApply => {
-  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, pushLines: DayApply['pushLines'] = [];
+  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, pushLines: DayApply['pushLines'] = [], settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [];
   const handler = updateSweepApplier({
     updates: h.updates, timezone: 'UTC', now: () => h.clock.at, sourceFollowups: () => true, gate: () => h.gate.code,
@@ -372,12 +372,13 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
       pushLine: async (line, mail) => { pushLines.push({ line, mail }); return `checked: ${line}`; }, chose: (_trace, code) => { chose.push(code); },
+      settled: () => { settled.n += 1; },
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
-    turns, delivered: [], reply, log, effects, chose, quiet, pushLines,
+    turns, delivered: [], reply, log, effects, chose, quiet, pushLines, settled,
     lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { update_sweep: handler } }).then(() => undefined),
@@ -463,6 +464,19 @@ describe('applying a sweep job with the day state', () => {
       await a.lane();
       expect([a.effects, a.chose]).toEqual([[], ['say+quiet']]);
       expect(h.updates.unfolded('UTC')).toContain('Quote signed');
+    });
+  });
+
+  it('every way a job settles wakes the sweep, so a change that waited on it is read now', async () => {
+    for (const [text, result, gate] of [['{}', FOUND, null], [JSON.stringify({ say: 'x' }), FOUND, null], ['{}', NOTHING, null], ['{}', FOUND, 'held_quiet']] as const) await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      await h.check();
+      report(h, result);
+      const a = applyingDay(h);
+      a.reply.text = text;
+      h.gate.code = gate;
+      await a.lane();
+      expect(a.settled.n).toBe(1);
     });
   });
 
