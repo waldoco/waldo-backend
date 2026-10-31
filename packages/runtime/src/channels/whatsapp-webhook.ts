@@ -1,7 +1,8 @@
 import { consoleAuth } from '../identity/console-auth';
 import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
-import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
+import { createWhatsAppCaller, sendWhatsAppText, sendWhatsAppWaldoCard, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
+import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { CONSOLE_PATH } from './console';
@@ -14,6 +15,8 @@ export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
   WHATSAPP_ONBOARDING_URL?: string;
+  // Waldo's own number, as E.164 digits: sent as a contact card after a link. Unset, no card is sent.
+  WHATSAPP_WALDO_NUMBER?: string;
   // 'true' logs whole signed payloads and Graph refusals while testing, on staging only (whatsappDebugLog).
   WHATSAPP_DEBUG_LOG?: string;
   WALDO_ENVIRONMENT?: string;
@@ -233,6 +236,9 @@ export const handleWhatsAppWebhook = async (
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
+      const waldo = whatsAppWaldoNumber(env.WHATSAPP_WALDO_NUMBER);
+      if (linked && waldo) await sendWhatsAppWaldoCard(call, sender, waldo)
+        .catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_contact_card', ok: false, ...sendFailure(error, debug) })));
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error, debug) }))));
   }
   for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));
