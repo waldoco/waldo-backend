@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 import type { OwnerDO } from '../src/channels/owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
@@ -215,7 +216,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
     const notices = rows.filter(row => row.trace === `tg-${updateId}`);
     expect(notices).toHaveLength(1);
-    expect(notices[0]!.payload.text).toContain('outcome is uncertain');
+    expect(notices[0]!.payload.text).toContain(INTERRUPTED_NOTICES.uncertain);
     expect(notices[0]!.payload.text).toContain('2026-10-03 23:30 Asia/Kolkata');
     expect(notices[0]!.payload.text).not.toContain('PRIVATE_INTERRUPTED_REQUEST');
     expect(notices[0]!.expiresAt).toBeUndefined();
@@ -229,7 +230,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     for (const row of rows) if (row.trace === `tg-${updateId}`) row.dueAt = 0;
     state.storage.kv.put('telegram_final_outbox_v1', rows);
     await instance.alarm(); await instance.alarm();
-    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('outcome is uncertain'))).toHaveLength(1);
+    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes(INTERRUPTED_NOTICES.uncertain))).toHaveLength(1);
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // With scheduled behaviors off nothing else calls the model, so any call after the crash cut is a replay.
     expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
@@ -284,7 +285,7 @@ it('actual eviction after failure closure but before notice enqueue recovers one
     await instance.alarm();
     const matching = (state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(row => row.trace === 'tg-995005');
     expect(matching).toHaveLength(1);
-    expect(matching[0]!.payload.text).toContain('did not finish');
+    expect(matching[0]!.payload.text).toContain(INTERRUPTED_NOTICES.unfinished);
     expect(matching[0]!.expiresAt).toBeUndefined();
     await state.storage.deleteAlarm();
   });
@@ -389,7 +390,7 @@ it('actual eviction with a committed final reconciles delivery without a competi
     await instance.alarm(); await instance.alarm();
     const matching = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.filter(row => row.trace === `tg-${updateId}`);
     expect(matching).toHaveLength(1); expect(matching[0]!.status).toBe('delivered');
-    expect(matching[0]!.payload.text).not.toContain('outcome is uncertain');
+    expect(matching[0]!.payload.text).not.toContain(INTERRUPTED_NOTICES.uncertain);
     expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(outbox.filter(item => item.method === 'sendMessage')).toHaveLength(1);
     await state.storage.deleteAlarm();
@@ -1088,7 +1089,7 @@ it.each([false, true])('a steer heard by a run that commits its final completes 
     expect(modelInputs.slice(inputsBefore).some(input => JSON.stringify(input).includes('While you were working, the owner added:') && JSON.stringify(input).includes(steerText))).toBe(true);
     expect(rows.find(row => row.updateId === parentId)).toMatchObject({ state: 'completed', reason: 'delivery_ack' });
     expect(finals().filter(row => row.id.startsWith(`steer-failure:${child.id}:`)).map(row => row.payload.text), worldNote(state)).toEqual([]);
-    expect(outbox.slice(sentBefore).filter(item => String(item.body.text).includes('outcome is uncertain')).map(item => item.body.text)).toEqual([]);
+    expect(outbox.slice(sentBefore).filter(item => String(item.body.text).includes("I can't tell what I'd already done")).map(item => item.body.text)).toEqual([]);
     expect(child).toMatchObject({ state: 'completed', reason: 'target_final_committed', body: '' });
     expect(child.outcomeNoticeQueued).not.toBe(true);
     await state.storage.deleteAlarm();
