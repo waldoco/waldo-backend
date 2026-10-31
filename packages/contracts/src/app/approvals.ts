@@ -55,11 +55,13 @@ export const appApprovalExactV1Schema = z.strictObject({
   }).optional(),
   scope: z.string().min(1).max(2048).optional(),
   task: appApprovalTaskExactV1Schema.optional(),
+  // Who a send as Waldo comes from: the display name and Waldo's own address, as the recipients' clients show them.
+  sender: z.strictObject({ name: z.string().min(1).max(200).regex(/^[^\r\n]*$/), address: z.email() }).optional(),
 });
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope', agent_mail_send: 'recipients',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 // An approval the health trigger raised carries the model's one-line reason for it, approvals revision 4. Only the
@@ -77,13 +79,16 @@ export const appApprovalV1Schema = z.strictObject({
   question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
   health: appApprovalHealthV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
-  .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
+  .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' || kind === 'agent_mail_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
     { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
+  .refine(({ kind, exact: { sender } }) => (kind === 'agent_mail_send') === (sender !== undefined), { error: 'a send as Waldo names its sender, and nothing else does', path: ['exact', 'sender'] })
   .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
-export const APP_APPROVALS_CONTRACT_REVISION = 4;
+// A send as Waldo from the owner's Waldo address, with its sender, is approvals revision 6; an older build is never shown one.
+export const APP_APPROVALS_AGENT_MAIL_REVISION = 6;
+export const APP_APPROVALS_CONTRACT_REVISION = 6;
 // An approval as a build reading `revision` parses it: revision 3 is the shape before the health origin, revision 2 the
 // shape before the draft of a send, and revision 1 the shape before the calendar details too. An approval a revision
 // leaves whole is returned as it is.

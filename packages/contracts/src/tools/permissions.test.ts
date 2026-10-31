@@ -124,6 +124,7 @@ describe('toolName', () => {
       'list_owner_findings',
       'react_to_message',
       'connect_app',
+      'send_agent_mail',
     ]);
   });
 
@@ -285,6 +286,7 @@ describe('TOOL_PERMISSIONS', () => {
         'export_artifact',
         'draft_email',
         'send_email',
+        'send_agent_mail',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
