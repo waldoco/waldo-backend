@@ -139,6 +139,19 @@ export type DraftEmailArgs = z.infer<typeof draftEmailArgsSchema>;
 export const sendEmailArgsSchema = draftEmailArgsSchema;
 export type SendEmailArgs = z.infer<typeof sendEmailArgsSchema>;
 
+// A send as Waldo from the owner's Waldo address. It only proposes, like send_email; the desk re-renders the stored draft and
+// sends that. Cloudflare Email Service takes at most 50 recipients in all, and has no Bcc in a structured send.
+export const AGENT_MAIL_SEND_RECIPIENTS_MAX = 50;
+export const sendAgentMailArgsSchema = z.strictObject({
+  to: z.array(z.email()).min(1).max(AGENT_MAIL_SEND_RECIPIENTS_MAX),
+  cc: z.array(z.email()).max(AGENT_MAIL_SEND_RECIPIENTS_MAX - 1).optional(),
+  subject: z.string().min(1).max(200).regex(/^[^\r\n]*$/),
+  body_markdown: z.string().min(1).max(10_000),
+  // The Message-ID of the mail in Waldo's thread this replies to, angle brackets included.
+  in_reply_to: z.string().min(3).max(998).regex(/^<[^<>\s@]+@[^<>\s@]+>$/).optional(),
+}).refine(args => args.to.length + (args.cc?.length ?? 0) <= AGENT_MAIL_SEND_RECIPIENTS_MAX, { error: 'at most 50 recipients in all', path: ['cc'] });
+export type SendAgentMailArgs = z.infer<typeof sendAgentMailArgsSchema>;
+
 // 'energized'/'steady' mirror the form-zone vocabulary (health/crs); 'avoid_trough' is a
 // scheduling-only preference. 'peak' is deliberately absent — it names a load zone, not a
 // form zone.

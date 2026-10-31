@@ -1,6 +1,6 @@
 import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
 import {HANDOFF_PARAM} from './connect-confirm';
-import type {ApprovalDecision} from './approvals';
+import {DRAFT_SEND_KINDS,type ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 import {whatsAppWaldoNumber} from './whatsapp-send-url';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
@@ -128,7 +128,7 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
   if(action.action==='approval.approve')return consoleMayApprove(p);
   if(action.action==='approval.send'||action.action==='approval.edit')return waitingMaySend(p);
   if(action.action==='approval.undo')return p.state==='done'&&p.undoable&&p.kind==='calendar_change';
-  return consoleMayApprove(p)||(['email_send','message_send'].includes(p.kind)&&['open','review_only'].includes(p.state));
+  return consoleMayApprove(p)||(DRAFT_SEND_KINDS.includes(p.kind)&&['open','review_only'].includes(p.state));
  }
  return true;
 }

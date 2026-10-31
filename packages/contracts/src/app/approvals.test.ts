@@ -8,6 +8,7 @@ import {
   appApprovalStateV1Schema,
   appApprovalAtRevision,
   appApprovalV1Schema,
+  APP_APPROVALS_AGENT_MAIL_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
   type AppApprovalV1,
 } from './approvals';
@@ -276,7 +277,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(4);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(6);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -333,5 +334,35 @@ describe('the health origin of an approval, approvals revision 4', () => {
   it('serves the marker in a list only as the schema allows', () => {
     expect(appApprovalListV1Schema.safeParse({ approvals: [marked, email] }).success).toBe(true);
     expect(appApprovalListV1Schema.safeParse({ approvals: [{ ...marked, health: { reason: '' } }] }).success).toBe(false);
+  });
+});
+
+describe('a send as Waldo, approvals revision 6', () => {
+  const sender = { name: "Waldo, Sam's assistant", address: 'sam@mail.example.com' };
+  const asWaldo = {
+    ...email, approval_id: 'p0007', kind: 'agent_mail_send', review: `From: ${sender.name} <${sender.address}>\nTo: lee@example.com\nSubject: Friday\n\nSee you at 4.`,
+    exact: { recipients: { to: ['lee@example.com'], cc: [], bcc: [] }, sender, message: { subject: 'Friday', body: 'See you at 4.' } },
+  } as const;
+
+  it('accepts a send that names its sender, its recipients and its draft', () => {
+    expect(APP_APPROVALS_AGENT_MAIL_REVISION).toBe(6);
+    expect(appApprovalV1Schema.safeParse(asWaldo).success).toBe(true);
+    const { message: _draft, ...withoutDraft } = asWaldo.exact;
+    expect(appApprovalV1Schema.safeParse({ ...asWaldo, exact: withoutDraft }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [asWaldo, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no sender', { ...asWaldo, exact: { recipients: asWaldo.exact.recipients } }],
+    ['no recipients', { ...asWaldo, exact: { sender } }],
+    ['a sender on a Gmail send', { ...email, exact: { ...email.exact, sender } }],
+    ['a sender on a message', { ...message, exact: { ...message.exact, sender } }],
+    ['a sender name that breaks its line', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: 'Waldo\r\nBcc: x@example.com' } } }],
+    ['an empty sender name', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: '' } } }],
+    ['a sender that is not an address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, address: 'waldo' } } }],
+    ['a sender with more than its name and address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, reply_to: 'x@example.com' } } }],
+    ['a draft without its subject', { ...asWaldo, exact: { ...asWaldo.exact, message: { subject: null, body: 'See you at 4.' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import { whatsappIngressUpdates } from '../src/channels/whatsapp-api';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import { stableJson } from '../src/context-composer/canonical';
 import { emailProposal } from './fixtures/email-send';
+import { agentMailProposal } from './fixtures/agent-mail-send';
 
 const NOW = Date.UTC(2026, 9, 25, 9, 0, 0);
 const OWNER = 447700900123;
@@ -68,6 +69,7 @@ const tainted = async () => {
 const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDesk) => Promise<string>>> = {
   email_send: async desk => desk.proposeSendEmail(await email()),
   message_send: desk => desk.proposeSendMessage(message()),
+  agent_mail_send: async desk => desk.proposeAgentMailSend(await agentMailProposal()),
   calendar_change: desk => desk.propose(HOLD),
   calendar_shared: desk => desk.propose({ ...HOLD, attendees: ['sam@example.test'], send_updates: 'all' }),
   google_task_change: desk => desk.proposeGoogleTaskChange(TASK),

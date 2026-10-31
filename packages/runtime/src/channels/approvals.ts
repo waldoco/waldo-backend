@@ -17,6 +17,7 @@ import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { appApprovalStepUp } from './approval-step-up';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
+import { AGENT_MAIL_REFUSED, agentMailIntact, agentMailRefusal, agentMailSendCode, type AgentMailDeskDep, type AgentMailSendCode, type AgentMailSendProposal } from './agent-mail/send';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -131,6 +132,7 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string; earlier_unknown_at?: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
+  | Readonly<{ kind: 'agent_mail_send'; from: Readonly<{ name: string; address: string }>; to: readonly string[]; cc: readonly string[]; subject: string; body: string }>
   // A tool or action approval: the same frozen review its card and the app show (tool, masked arguments, what approving runs).
   | Readonly<{ kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
@@ -167,6 +169,7 @@ export type ApprovalDesk = Readonly<{
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
+  proposeAgentMailSend(payload: AgentMailSendProposal): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
@@ -203,6 +206,7 @@ const DECISION = { a: 'approve', e: 'edit', s: 'skip' } as const;
 const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; modify: boolean }>>> = {
   calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
   email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
+  agent_mail_send: { title: 'Send this email as Waldo?', approve: 'Send it', modify: true },
   browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
   tainted_action: { title: 'Run this action?', approve: 'Do it', modify: false },
 };
@@ -232,6 +236,12 @@ const reviewEmail = (p: EmailSendProposal) =>
     ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
     `Subject: ${p.subject}`, '', p.body].join('\n');
 const reviewMessage = (p: MessageSendProposal) => p.content;
+const reviewAgentMail = (p: AgentMailSendProposal) =>
+  [`From: ${p.from.name} <${p.from.address}>`, `To: ${p.to.join(', ')}`, ...(p.cc.length ? [`Cc: ${p.cc.join(', ')}`] : []), `Subject: ${p.subject}`, '', p.body].join('\n');
+const describeAgentMail = (p: AgentMailSendProposal) => `Send email as Waldo from ${p.from.address} to ${p.to.join(', ')}: "${p.subject}"`;
+// The sends whose card is their exact draft: an email from the owner's Gmail, a message, and an email as Waldo. What goes
+// out is checked against the stored payload the card showed, and the console may send them from that review.
+export const DRAFT_SEND_KINDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
@@ -279,6 +289,7 @@ const reviewText = (entry: LedgerRow): string => {
   const p = JSON.parse(entry.payload_json);
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
+  if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
   if (entry.kind === 'tainted_action') return `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
@@ -301,6 +312,7 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
   const whole = (message: Readonly<{ subject: string | null; body: string }>) => appApprovalMessageV1Schema.safeParse(message).success ? { message } : {};
   if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}), ...whole({ subject: p.subject, body: p.body }) };
   if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] }, ...whole({ subject: null, body: p.content }) };
+  if (entry.kind === 'agent_mail_send') return { recipients: { to: p.to, cc: p.cc, bcc: [] }, sender: { name: p.from.name, address: p.from.address }, ...whole({ subject: p.subject, body: p.body }) };
   if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
   if (entry.kind === 'tainted_action') return { scope: `${p.tool} from external content` };
@@ -424,6 +436,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   browserDeny?: (proposal: BrowserSubmitProposal) => Promise<void>;
   browserReceiptVerified?: (proposal: BrowserSubmitProposal, receipt: Extract<BrowserSubmitOutcome, { status: 'verified_with_receipt' }>['receipt']) => Promise<boolean>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void | Readonly<{ provider_id: string }>>;
+  // Sends as Waldo from the owner's Waldo address; absent while that is off. intact answers the parts to send, only while
+  // the stored card still renders to what it showed; sent records the provider's id in the mail threads, outside any transaction.
+  agentMail?: AgentMailDeskDep;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string | EffectReceipt>;
   // Replays an approved tainted action once through the dispatcher; the outcome says only what the replay established.
@@ -584,7 +599,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
     // Whatever its card recorded, even one shown before this rule: a kind the app gates is never approved from chat.
     if (HANDS_TO_APP.has(via.surface) && approvedInApp(entry)) return [];
-    if (via.surface === 'console') return entry.kind === 'email_send' || entry.kind === 'message_send' || (entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json))) ? live.filter(approves) : [];
+    if (via.surface === 'console') return DRAFT_SEND_KINDS.includes(entry.kind) || (entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json))) ? live.filter(approves) : [];
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
     return (tapped.length ? tapped : mine).filter(approves);
@@ -598,6 +613,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Said the same whether the stored draft changed, its bytes disagree with its words, or its card recorded no digest.
   const changedSend = (entry: LedgerRow): ApprovalDecision => entry.kind === 'email_send'
     ? { toast: 'Email changed', message: `I couldn't confirm the stored email is the one on the card you reviewed, so nothing was sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Ask me again and I'll prepare a fresh one.` }
+    : entry.kind === 'agent_mail_send'
+    ? { toast: 'Email changed', message: "I couldn't confirm the stored email is the one on the card you reviewed, or that it can still go out from your Waldo address, so nothing was sent. Ask me again and I'll prepare a fresh one." }
     : { toast: 'Message changed', message: "I couldn't confirm the stored message is the one on the card you reviewed, so nothing was sent. Ask me again and I'll prepare a fresh one." };
   const notPresented = (entry: LedgerRow, via: ApprovalVia, action: 'a' | 'e'): ApprovalDecision => {
     const id = entry.id;
@@ -630,6 +647,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
     if (entry.kind === 'message_send') return describeMessage(JSON.parse(entry.payload_json) as MessageSendProposal);
+    if (entry.kind === 'agent_mail_send') return describeAgentMail(JSON.parse(entry.payload_json) as AgentMailSendProposal);
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
     if (entry.kind === 'tainted_action') return describeTaintedAction(JSON.parse(entry.payload_json) as TaintedActionProposal);
     if (entry.kind === 'google_task_change') return describeGoogleTaskChange(googleTaskProposalSchema.parse(JSON.parse(entry.payload_json)));
@@ -637,8 +655,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
-  const keyHolder = (key: string, selfId: string) =>
-    sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = 'message_send' AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray()[0];
+  const keyHolder = (key: string, selfId: string, kind: 'message_send' | 'agent_mail_send' = 'message_send') =>
+    sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = ? AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", kind, selfId, key).toArray()[0];
   // Once the apply effect is on record the change may have happened, so expiry never closes that request.
   const applyOnRecord = (entry: LedgerRow) => !!deps.effects?.get(`${operationRefOf(entry)}:apply`);
   // A request closes at its expiry the first time a read or a decision sees it. Only its status changes: every reader
@@ -727,7 +745,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'card_unconfirmed' && entry.card_waits_on != null) return { toast: 'Not out yet', message: `That card has not reached you on ${entry.card_waits_on} yet; it goes out there when you next write. Nothing was done.` };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry, via, action);
-    if (action === 'a' && entry.status === 'open' && (entry.kind === 'email_send' || entry.kind === 'message_send') && !await shownAsStored(entry, via)) {
+    if (action === 'a' && entry.status === 'open' && DRAFT_SEND_KINDS.includes(entry.kind) && !await shownAsStored(entry, via)) {
       setStatus(id, 'failed');
       return changedSend(entry);
     }
@@ -978,6 +996,69 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             deps.log({ trace, hop: 'message_effect_unknown', ms: 0, ok: false, error: String(error) });
             setStatus(id, 'uncertain');
             out = { toast: 'Outcome unknown', message: 'The message outcome is unknown. Check the channel before retrying; nothing was sent again.' };
+          }
+        }
+      } else if (entry.kind === 'agent_mail_send') {
+        const ap = JSON.parse(entry.payload_json) as AgentMailSendProposal;
+        // A fixed code only: the provider's message, the addresses, the words and the provider id never reach a log.
+        const hop = (code: string, ok = false) => deps.log({ trace, hop: 'agent_mail_send', ms: deps.now() - started, ok, code });
+        const holder = action === 'a' && !recovering ? keyHolder(ap.idempotency_key, id, 'agent_mail_send') : undefined;
+        // An earlier approval of this card may have sent it, so nothing found now turns it into "not sent".
+        const unknownStill: ApprovalDecision = { toast: 'Outcome unknown', message: "The send outcome is unknown, and the mail service can't be asked afterwards. Check with the recipients before sending it again; nothing was sent again." };
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
+        } else if (!deps.agentMail) {
+          out = recovering ? unknownStill : { toast: 'Not set up', message: 'Sending as Waldo is not set up on this Waldo yet, so nothing was sent.' };
+        } else if (holder) {
+          if ((JSON.parse(holder.payload_json) as AgentMailSendProposal).parts_digest !== ap.parts_digest) {
+            setStatus(id, 'failed');
+            out = { toast: 'Key already used', message: 'A different email already used this send key, so nothing was sent. Ask me again and I will prepare a fresh one.' };
+          } else {
+            setStatus(id, holder.status === 'done' ? 'done' : 'skipped');
+            out = holder.status === 'done'
+              ? { toast: 'Already sent', message: `That exact email already went out once, so nothing was sent twice: ${describeAgentMail(ap)}` }
+              : { toast: 'Already handled.', message: 'That email is already being sent or its outcome is unknown. Nothing was sent again.' };
+          }
+        } else {
+          const parts = await deps.agentMail.intact(ap).catch(() => null);
+          if (!parts) {
+            hop('changed');
+            if (recovering) out = unknownStill;
+            else { setStatus(id, 'failed'); out = changedSend(entry); }
+          } else {
+            if (!recovering) {
+              const lost = claimOpen(id);
+              if (lost) return lost;
+            }
+            const agentMail = deps.agentMail;
+            let code: AgentMailSendCode | 'other' = 'other', refused = false;
+            try {
+              const receipt = await effect(`${operationRef}:apply`, 'send_agent_mail', ap, async () => {
+                let sent: { messageId: string };
+                try { sent = await agentMail.send(parts); }
+                catch (error) {
+                  code = agentMailSendCode(error);
+                  refused = agentMailRefusal(code) !== null;
+                  throw refused ? new EffectNotAppliedError() : new EffectUnknownError();
+                }
+                if (typeof sent?.messageId !== 'string' || !sent.messageId) throw new EffectUnknownError();
+                return { provider_id: sent.messageId, result: null };
+              }, async () => ({ status: refused ? 'not_applied' : 'unknown' }));
+              setStatus(id, 'done');
+              hop('sent', true);
+              try { agentMail.sent(receipt.provider_id, ap); } catch { hop('thread_unrecorded'); }
+              out = { toast: 'Sent', message: `Sent: ${describeAgentMail(ap)}. This one can't be undone.` };
+            } catch (error) {
+              hop(code);
+              if (error instanceof EffectNotAppliedError) {
+                const why = agentMailRefusal(code);
+                setStatus(id, 'failed');
+                out = { toast: 'Not sent', message: `Not sent: ${why ? AGENT_MAIL_REFUSED[why] : 'the mail service refused it'}, so nothing went out: ${describeAgentMail(ap)}.` };
+              } else {
+                setStatus(id, 'uncertain');
+                out = unknownStill;
+              }
+            }
           }
         }
       } else if (entry.kind === 'tainted_action') {
@@ -1339,6 +1420,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await present(id);
       return id;
     },
+    async proposeAgentMailSend(payload) {
+      // A card is made only from a draft that renders to the words and parts it carries, so approving can check it the same way.
+      if (!await agentMailIntact(payload)) throw new Error('agent mail draft does not render as stored');
+      // A replay of the same turn and arguments finds its card by the send key; the same key with other content is refused.
+      const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'agent_mail_send' AND json_extract(payload_json, '$.idempotency_key') = ? ORDER BY created_at DESC LIMIT 1", payload.idempotency_key).toArray()[0];
+      if (prior) {
+        if ((JSON.parse(prior.payload_json) as AgentMailSendProposal).parts_digest !== payload.parts_digest) throw new EmailProposalError('identifier_reused');
+        if (prior.status === 'open' || prior.status === 'review_only' || cardWaits(prior)) return prior.id;
+        throw new EmailProposalError(prior.status === 'card_unconfirmed' ? 'card_unconfirmed' : 'already_handled');
+      }
+      const originRunRef = deps.currentRunRef?.();
+      const id = `p${deps.newId()}`;
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'agent_mail_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeAgentMail(payload), JSON.stringify(payload), deps.now(), payload.parts_digest);
+      bindOrigin(id, originRunRef);
+      try { await present(id); }
+      catch { throw new EmailProposalError('card_unconfirmed'); }
+      return id;
+    },
     async proposeMcpCall(payload) {
       const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
@@ -1408,7 +1507,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     pending(now) {
       expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'agent_mail_send', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       const review = (r: LedgerRow): ApprovalReview | null => {
@@ -1422,6 +1521,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (r.kind === 'message_send') {
             const p = JSON.parse(r.payload_json) as MessageSendProposal;
             return typeof p.channel === 'string' && typeof p.content === 'string' ? { kind: 'message_send', channel: p.channel, content: p.content } : null;
+          }
+          if (r.kind === 'agent_mail_send') {
+            const p = JSON.parse(r.payload_json) as AgentMailSendProposal;
+            const strings = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === 'string');
+            if (typeof p.from?.name !== 'string' || typeof p.from.address !== 'string' || !strings(p.to) || !p.to.length || !strings(p.cc) || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
+            return { kind: 'agent_mail_send', from: { name: p.from.name, address: p.from.address }, to: p.to, cc: p.cc, subject: p.subject, body: p.body };
           }
           if (r.kind === 'mcp_call' || r.kind === 'tainted_action' || r.kind === 'browser_submit') return { kind: r.kind, text: appReview(r).text };
           if (r.kind === 'google_task_change') {
@@ -1492,7 +1597,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // no valid send approval until reconciled, so tell the owner what to do next.
       const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;
       const reported = unconfirmedRow?.status === 'card_unconfirmed'
-        ? { toast: 'Review not confirmed', message: unconfirmedRow.kind === 'email_send'
+        ? { toast: 'Review not confirmed', message: unconfirmedRow.kind === 'email_send' || unconfirmedRow.kind === 'agent_mail_send'
           ? 'That review card was not confirmed, so I cannot use its Send it instruction. No email was sent. Check this chat and ask for a fresh proposal if you still want the email.'
           : 'That approval card was not confirmed, so I cannot use its button. Nothing was done. Check this chat and ask for a fresh proposal if you still want it.' }
         : out;
@@ -1503,7 +1608,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'agent_mail_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [

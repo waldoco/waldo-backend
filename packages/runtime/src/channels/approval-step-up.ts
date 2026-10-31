@@ -10,6 +10,7 @@ import type { ApprovalActionV1, ApprovalKindV1 } from '../../../contracts/src/ap
 export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared', Readonly<{ gated: boolean; why: string }>>> = {
   email_send: { gated: true, why: 'Sends one email as the owner to other people; it cannot be called back.' },
   message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },
+  agent_mail_send: { gated: true, why: "Sends one email as Waldo, from the owner's Waldo address, to other people; it cannot be called back." },
   calendar_change: { gated: false, why: 'Changes one event on the owner\'s own primary calendar, with no guests.' },
   calendar_shared: { gated: true, why: 'Changes an event with guests, or on a calendar other people may share.' },
   google_task_change: { gated: false, why: 'Changes one task on the owner\'s own list; reaches no one else.' },
