@@ -1,6 +1,6 @@
 import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
-export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone';
+export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone' | 'agent_mail';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
 export const CARD_STATES = ['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused'] as const;
 export type CardState = (typeof CARD_STATES)[number];
@@ -65,11 +65,17 @@ export type PhoneRecord = Base<'phone', {
   phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
   challenge: { state: (typeof PHONE_STATES)[number]; expires_at: number; retry_at: number | null; checks_left: number } | null;
 }>;
-type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
+const AGENT_MAIL_ACTIONS = ['agent_mail.claim', 'agent_mail.release'] as const, AGENT_MAIL_RULES = ['pending', 'live', 'failed', 'unknown'] as const;
+/** The owner's Waldo address. handle, address and rule come together, once a handle is held; domain and notice while agent mail is enabled. */
+export type AgentMailRecord = Base<'agent_mail', {
+  enabled: boolean; domain?: string; handle?: string; address?: string; rule?: (typeof AGENT_MAIL_RULES)[number]; rule_reason?: 'not_configured';
+  notice?: { version: string; text: string }; display_name: string; actions: (typeof AGENT_MAIL_ACTIONS)[number][];
+}>;
+type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord; agent_mail: AgentMailRecord };
 export type ControlRecord = Records[ControlsView];
 export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
-  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
+  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number] | (typeof AGENT_MAIL_ACTIONS)[number];
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string; notice?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
 /** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
@@ -215,6 +221,18 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     type Challenge = NonNullable<PhoneRecord['data']['challenge']>;
     return { ...base, view: 'phone', data: { phone: data.phone, verified: data.verified, sms: data.sms, actions: [...data.actions] as PhoneRecord['data']['actions'],
       challenge: obj(challenge) ? { state: challenge.state as Challenge['state'], expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } : null } } as Records[V];
+  }
+  if (expected === 'agent_mail') {
+    const notice = data.notice, held = data.handle !== undefined;
+    if (typeof data.enabled !== 'boolean' || !string(data.display_name) || !listed(data.actions, AGENT_MAIL_ACTIONS) || (data.domain !== undefined && !string(data.domain))
+      || (held ? !(string(data.handle) && string(data.address) && (AGENT_MAIL_RULES as readonly string[]).includes(String(data.rule))) : data.address !== undefined || data.rule !== undefined)
+      || (data.rule_reason !== undefined && data.rule_reason !== 'not_configured') || (notice !== undefined && !(obj(notice) && string(notice.version) && string(notice.text)))) throw shapeError();
+    return { ...base, view: 'agent_mail', data: {
+      enabled: data.enabled, display_name: data.display_name, actions: [...data.actions] as AgentMailRecord['data']['actions'],
+      ...(string(data.domain) ? { domain: data.domain } : {}), ...(obj(notice) ? { notice: { version: notice.version as string, text: notice.text as string } } : {}),
+      ...(held ? { handle: data.handle as string, address: data.address as string, rule: data.rule as NonNullable<AgentMailRecord['data']['rule']> } : {}),
+      ...(data.rule_reason === 'not_configured' ? { rule_reason: 'not_configured' as const } : {}),
+    } } as Records[V];
   }
   if (expected === 'files') {
     if (data.storage !== 'telegram_reference' || !Array.isArray(data.items) || !data.items.every(item => obj(item) && count(item.id) && item.id > 0 && string(item.kind) && string(item.name) && optionalString(item.mime) && (item.size === null || count(item.size)) && string(item.caption) && typeof item.at === 'number' && Number.isFinite(item.at))) throw shapeError();
