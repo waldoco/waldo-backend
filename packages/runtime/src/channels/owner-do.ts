@@ -2083,6 +2083,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (inbox.settle(record, completed)) await this.whatsappNotice(record);
     }
   }
+  // WhatsApp turns run first in every pass, ahead of every slower lane (mail, the app and iMessage drains, nightly work,
+  // sweeps, jobs) and of the link mode and directory checks, and outside the lane holds (UNHELD_LANES): another lane's failure,
+  // or a held pass, never delays an owner's reply. Their own failure is caught here and waits 30 s, so it holds no lane, never
+  // makes the alarm throw and never refires at the floor.
+  private async whatsappTurns(alarmEnd?: number): Promise<void> {
+    try { await this.serialWithin(alarmEnd, () => this.drainWhatsApp(alarmEnd)); }
+    catch (error) {
+      try { new WhatsAppOwnerInbox(this.ctx.storage).deferWake(30_000); } catch { /* the wake already armed stands */ }
+      console.error(JSON.stringify({ hop: 'whatsapp_drain', ok: false, code: error instanceof Error ? error.name : 'unknown' }));
+    }
+  }
   // The one notice for a WhatsApp turn that closed without its reply. A turn that started may have had effects, so it says to
   // check first; it is never replayed. It goes as a reply to the owner's own message, which names that message without
   // repeating its words, never with the error. One attempt; a number unlinked or moved meanwhile is not told.
@@ -2769,13 +2780,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
   private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number): Promise<void> {
+    await this.browserReady;
+    await this.whatsappTurns(alarmEnd);
     if (held === 'pass') return;
     const lane: LaneRunner = (id, work) => runLane(id, held, work);
-    await this.browserReady;
     await lane('whatsapp', () => this.recoverWhatsappPending());
-    // WhatsApp turns run first, ahead of every slower lane (mail, the app and iMessage drains, nightly work, sweeps, jobs) and
-    // of the link mode and directory checks, which they never waited on: a reply held behind those would arrive minutes late.
-    await this.serialWithin(alarmEnd, () => lane('whatsapp', () => this.drainWhatsApp(alarmEnd)));
     // Before any surface is chosen: mail that cannot run for want of one still expires.
     await lane('mail', async () => this.expireAgentMail());
     await lane('mail', () => this.reconcileAgentMailRules());

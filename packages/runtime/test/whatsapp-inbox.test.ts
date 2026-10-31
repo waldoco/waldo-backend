@@ -127,3 +127,11 @@ it('claimNext returns null only when nothing waits: a drain that stops on null t
   expect(taken).toEqual(['wamid.A', 'wamid.C']);
   expect(inbox.next()).toBeNull();
 }));
+
+it('deferWake moves the wake of waiting rows later, and does nothing when none waits', () => withInbox((inbox, storage, clock) => {
+  inbox.deferWake(30_000);
+  expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBeUndefined();
+  admit(inbox, storage, [{ wamid: 'wamid.A', body: 'a' }]);
+  inbox.deferWake(30_000);
+  expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBe(clock.now + 30_000);
+}));

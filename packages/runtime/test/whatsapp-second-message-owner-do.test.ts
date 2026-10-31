@@ -5,7 +5,8 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_TYPING_REFRESH_MS } from '../src/channels/whatsapp-api';
-import { WHATSAPP_INBOX_MAX_OPEN, WHATSAPP_TURN_DEADLINE_MS, WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
+import { WHATSAPP_INBOX_DUE_KEY, WHATSAPP_INBOX_MAX_OPEN, WHATSAPP_TURN_DEADLINE_MS, WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // The first owner turn waits on `hold`; each reply names the turn it answers.
@@ -189,6 +190,47 @@ it('an alarm pass answers WhatsApp before any slower lane: mail, the app and iMe
     expect(began.every(entry => entry.endsWith(':1'))).toBe(true);
     const turnStart = started.mock.calls.map(([line]) => String(line)).find(line => line.includes('"hop":"whatsapp_turn_start"'));
     expect(JSON.parse(turnStart!)).toEqual({ hop: 'whatsapp_turn_start', ok: true, ms: expect.any(Number), queued: 0 });
+  });
+});
+
+// Another lane's failure holds that lane, or the whole pass, until its retry, which backs off as far as the heartbeat. A
+// WhatsApp reply never waits on it: the turns run outside the holds, and their wake is never pushed to the retry.
+it.each(['pass', 'whatsapp', 'mail'] as const)('a held %s lane never holds a WhatsApp reply: the arbiter wakes for it at once and the alarm answers it', async held => {
+  await harness(`whatsapp-second-message-held-${held}`, async ({ instance, state, replies }) => {
+    state.storage.kv.put(ALARM_FAILED_LANE_KEY, held);
+    state.storage.kv.put(ALARM_RETRY_DUE_KEY, Date.now() + 10 * 60_000);
+    expect((await post(instance, `wamid.held.${held}`, 'Find me flights to Goa.')).status).toBe(200);
+    await rearmSharedAlarm(state.storage, null, Date.now());
+    expect(await state.storage.getAlarm()).toBeLessThan(Date.now() + 1_000);
+    await instance.alarm();
+    expect(replies()).toEqual(['Reply to turn 1.']);
+  });
+});
+
+it('a WhatsApp drain that throws holds no lane and waits 30 seconds, so it neither delays other work nor spins the alarm', async () => {
+  await harness('whatsapp-second-message-drain-throws', async ({ instance, state }) => {
+    expect((await post(instance, 'wamid.throws.A', 'Find me flights to Goa.')).status).toBe(200);
+    vi.spyOn(instance as unknown as { drainWhatsApp(): Promise<void> }, 'drainWhatsApp').mockRejectedValue(new Error('storage fault'));
+    const before = Date.now();
+    // A throw out of alarm() would add the platform's own alarm retry on top of the inbox's: it never happens, pass after pass.
+    for (let pass = 0; pass < 3; pass++) await expect(instance.alarm()).resolves.toBeUndefined();
+    expect(state.storage.kv.get(ALARM_FAILED_LANE_KEY)).toBeUndefined();
+    expect(state.storage.kv.get<number>(WHATSAPP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(before + 30_000);
+    expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(before + 30_000);
+  });
+});
+
+it('a held pass runs the WhatsApp turns and nothing else: every other lane waits for its retry', async () => {
+  await harness('whatsapp-second-message-held-pass-only', async ({ instance, state, replies }) => {
+    state.storage.kv.put(ALARM_FAILED_LANE_KEY, 'pass');
+    state.storage.kv.put(ALARM_RETRY_DUE_KEY, Date.now() + 10 * 60_000);
+    expect((await post(instance, 'wamid.held.only', 'Find me flights to Goa.')).status).toBe(200);
+    const ran: string[] = [];
+    for (const lane of ['recoverWhatsappPending', 'expireAgentMail', 'reconcileAgentMailRules', 'drainLink', 'drainApp', 'drainIMessage', 'drainAgentMail', 'drainJobs', 'drainInbox', 'appOwnerLookup'])
+      vi.spyOn(instance as unknown as Record<string, () => Promise<void>>, lane).mockImplementation(async () => { ran.push(lane); });
+    await instance.alarm();
+    expect(replies()).toEqual(['Reply to turn 1.']);
+    expect(ran).toEqual([]);
   });
 });
 
