@@ -25,6 +25,7 @@ const fixture = vi.hoisted(() => ({
   requests: [] as LLMGatewayRequest['request'][],
   script: undefined as ((request: LLMGatewayRequest['request'], asked: string) => { text: string; calls?: Call[] }) | undefined,
   outage: false,
+  refuse: false,
 }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -34,6 +35,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const asked = String(request.messages.at(-1)?.content ?? '');
     if (fixture.outage) return { ok: false as const, code: 'transient' as const, error: 'synthetic provider outage' };
+    if (fixture.refuse) return { ok: false as const, code: 'invalid_args' as const, error: 'synthetic request refusal' };
     const step = fixture.script?.(request, asked) ?? { text: 'SKIP' };
     return done(step.text, step.calls);
   } };
@@ -54,7 +56,7 @@ const wire = { authority: 'current' as 'current' | 'revoked', sent: [] as string
 const clock = { now: AT };
 
 beforeEach(() => {
-  fixture.requests = []; fixture.script = undefined; fixture.outage = false; wire.authority = 'current'; wire.sent = [];
+  fixture.requests = []; fixture.script = undefined; fixture.outage = false; fixture.refuse = false; wire.authority = 'current'; wire.sent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -158,6 +160,45 @@ describe('a due reminder runs a fresh check-back turn', () => {
       await transportPass(owner, state);
       expect(wire.sent).toEqual([]);
       expect(outbox(state)).toEqual([]);
+      expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'failed' }]);
+    });
+  });
+
+  it('tells the model when the reminder was due and what time it is now, in the owner\'s local time', async () => {
+    await withOwner('check-back-reminder-lateness', async (owner, state) => {
+      await dueReminder(state);
+      fixture.script = looksThen(FOUND);
+      clock.now += 4.5 * 3_600_000;
+      await schedulePass(owner, state);
+      const [first] = checkBackRequests();
+      const asked = String(first!.messages.at(-1)!.content);
+      expect(asked).toContain('due at 2026-10-03 08:30');
+      expect(asked).toContain('now 2026-10-03 13:30');
+    });
+  });
+
+  it('a model outage never holds a reminder back: the owner gets their own words at once, marked as sent without the model', async () => {
+    await withOwner('check-back-reminder-outage', async (owner, state) => {
+      await dueReminder(state);
+      fixture.outage = true;
+      await schedulePass(owner, state);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([`Reminder: ${NOTE}\n\n(I couldn't reach my model to add more.)`]);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM schedule WHERE kind = 'reminder'").one()).toEqual({ n: 0 });
+      expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'ok' }]);
+      clock.now += 25 * 3_600_000;
+      await schedulePass(owner, state); await transportPass(owner, state);
+      expect(wire.sent).toHaveLength(1);
+    });
+  });
+
+  it('a request fault is not an outage: the reminder keeps its retry and never falls back to the note', async () => {
+    await withOwner('check-back-reminder-fault', async (owner, state) => {
+      await dueReminder(state);
+      fixture.refuse = true;
+      await schedulePass(owner, state);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([]);
       expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'failed' }]);
     });
   });
