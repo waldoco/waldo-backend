@@ -34,6 +34,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
+import { unfinishedReply } from '../src/conversation/tool-loop';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -572,7 +573,7 @@ it('an iMessage turn that runs out of time while the model works answers with it
   shortDeadline(300);
   proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
   await replyFor(w, 'Plan my afternoon');
-  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  expect(JSON.parse((await sendNext(w)).body).text).toBe(unfinishedReply('time_exhausted', []));
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
   expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
