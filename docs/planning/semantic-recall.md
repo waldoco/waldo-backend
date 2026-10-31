@@ -92,15 +92,27 @@ reach "Dr Rao does the teeth cleaning". The owner wants recall by meaning now, o
 
 ## Cost and latency
 
-- **Cost:** about 30 tokens a claim and 50 a query. At $0.0118 per million tokens, 1,000 claims cost under $0.001 to
-  backfill, and a query under $0.000001.
+- **Cost:** about 30 tokens a claim and 50 a query. At $0.012 per million input tokens (Cloudflare's Workers AI pricing
+  page, read 31 Oct 2026; the model page's $0.0118 is its 1,075 neurons at $0.011 per 1,000), 1,000 claims cost under
+  $0.001 to backfill, and a query under $0.000001.
+- **Ledger:** every embedding call is priced in `llm/pricing.ts` and logged as a `memory_embedding` event, which the
+  owner object's cost rollup adds to `waldo.cost_ledger_daily` and to the month's spend the ceiling reads. The sweep is
+  `background` work; a query is recorded as `turn`, whatever kind of turn asked (a job or heartbeat included). Workers AI reports no token count for an embedding, so the tokens
+  are an estimate, UTF-8 bytes over four. A call is counted when sent, so one that timed out still counts.
 - **Latency:** one embedding call per owner turn, before the reply's model call: about 50–200 ms [inference; measure on
-  staging], capped by the 1.5 s timeout. The scan is about 1 ms for 2,000 claims [inference].
+  staging], capped by the 1.5 s timeout. The scan is about 1 ms for 2,000 claims [inference]. Each query's
+  `memory_embedding` event carries the call's `ms`, the rows scanned and the scan time, with no text, so staging
+  measures both once the flag is on.
+- **Eval:** `WALDO_EVAL_SEMANTIC=on` runs the nightly with the leg on (the concept fake in a recorded run; Workers AI over
+  REST in a live one, which needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`), and the staging profile follows
+  `MEMORY_SEMANTIC_RECALL`. m08 is the paraphrase case to compare on and off.
 
 ## Risks
 
 - A slow embedder adds up to 1.5 s before the reply on each owner turn.
-- Embedding calls are not in the cost ledger or the owner spend ceiling.
+- A correction retires a claim in a statement whose trigger also deletes its vector, and DO SQLite counts trigger writes
+  in `rowsWritten`; `correct()` counts the rows its retire returns instead. A future exact-count writer on `claims`
+  must do the same for any statement that changes `status`, `origin`, `text` or `aliases`, or deletes.
 - A batch the embedder refuses whole is retried whole on every kick, so claims behind it wait. Claims are short, so this
   is unlikely with bge-m3's 60,000-token context; isolating a failed batch is a follow-up.
 - Each owner-DO setup builds its own instance and kicks a sweep, so two can embed the same claims. It is idempotent and
