@@ -85,9 +85,15 @@ export const DAY_PLAN_INSTRUCTION = [
   'Reply with JSON only: {"cards":[{"id":"<card id>","time":"HH:MM" or "skip","reason":"<short why>"}]}, one entry per card listed.',
 ].join('\n');
 
-export const dayPlanInput = (context: Readonly<{ localNow: string; calendar: string; cards: readonly DayCard[]; proactivity: string }>): string => [
-  `Now: ${context.localNow}. ${context.proactivity}. Plan these cards for today:`,
-  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}`).join('\n'),
+// With `replan` (each card's current time, or null when skipped), the calendar changed during the day: the cards listed are
+// still to come, and each keeps its time unless the change calls for another.
+export const dayPlanInput = (context: Readonly<{ localNow: string; calendar: string; cards: readonly DayCard[]; proactivity: string;
+  replan?: Readonly<Partial<Record<CardId, string | null>>> }>): string => [
+  context.replan
+    ? `Now: ${context.localNow}. ${context.proactivity}. Today's calendar just changed. These cards are still to come today; keep each one's planned time unless the change calls for another, which must be a time after now, or skip one the change made unnecessary:`
+    : `Now: ${context.localNow}. ${context.proactivity}. Plan these cards for today:`,
+  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}${context.replan
+    ? `, planned ${context.replan[card.id] ?? 'skip'}` : ''}`).join('\n'),
   `<calendar>\n${context.calendar}\n</calendar>`,
 ].join('\n\n');
 
