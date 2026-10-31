@@ -1,6 +1,6 @@
 import PostalMime from 'postal-mime';
 import { describe, expect, it } from 'vitest';
-import { WALDO_LOGO_PNG_BASE64 } from '../src/channels/agent-mail/logo';
+import { WALDO_MARK_PNG_BASE64 } from '../src/channels/agent-mail/mark';
 import {
   AGENT_MAIL_BODY_MAX, AGENT_MAIL_HTML_MAX, AGENT_MAIL_MAX_RECIPIENTS, AGENT_MAIL_MIME_MAX, renderAgentMail,
   type AgentMailDraft, type AgentMailRecipients, type AgentMailSender, type AgentMailWire,
@@ -49,7 +49,7 @@ const expectRoundTrip = async (result: Extract<ReturnType<typeof renderAgentMail
 };
 
 describe('renderAgentMail', () => {
-  it('renders the draft as multipart/alternative of text and related HTML with the logo inline by CID', async () => {
+  it('renders the draft as multipart/alternative of text and related HTML with Waldo\'s mark inline by CID', async () => {
     const result = ok(render());
     const { mime } = result;
     expect(headerNames(mime)).toEqual(['From', 'To', 'Cc', 'Subject', 'Date', 'Message-ID', 'MIME-Version', 'Content-Type']);
@@ -64,10 +64,10 @@ describe('renderAgentMail', () => {
     const mail = await expectRoundTrip(result);
     expect(mail.messageId).toBe(WIRE.messageId);
     expect(mail.attachments).toHaveLength(1);
-    const [logo] = mail.attachments;
-    expect(logo).toMatchObject({ mimeType: 'image/png', disposition: 'inline', contentId: '<waldo-logo@mail.test.invalid>', content: WALDO_LOGO_PNG_BASE64 });
-    expect(result.preview.html).toContain('<img src="cid:waldo-logo@mail.test.invalid" width="32" height="28" alt="Waldo"');
-    expect(result.parts.attachments).toEqual([{ content: WALDO_LOGO_PNG_BASE64, filename: 'waldo.png', type: 'image/png', disposition: 'inline', contentId: 'waldo-logo@mail.test.invalid' }]);
+    const [mark] = mail.attachments;
+    expect(mark).toMatchObject({ mimeType: 'image/png', disposition: 'inline', contentId: '<waldo-mark@mail.test.invalid>', content: WALDO_MARK_PNG_BASE64 });
+    expect(result.preview.html).toContain('<img src="cid:waldo-mark@mail.test.invalid" width="61" height="48" alt="Waldo"');
+    expect(result.parts.attachments).toEqual([{ content: WALDO_MARK_PNG_BASE64, filename: 'waldo.png', type: 'image/png', disposition: 'inline', contentId: 'waldo-mark@mail.test.invalid' }]);
     expect(result.parts).toMatchObject({ from: { email: SENDER.address, name: "Waldo, Priya's assistant" }, to: TO.to, cc: TO.cc, subject: result.preview.subject, text: result.preview.text, html: result.preview.html, headers: {} });
   });
 
@@ -79,7 +79,8 @@ describe('renderAgentMail', () => {
     expect(preview.html).toMatch(/<th [^>]*>Slot<\/th><th [^>]*>Room<\/th><\/tr><tr><td [^>]*>Fri 15:00<\/td><td [^>]*>Juniper<\/td>/);
     expect(preview.html).toContain('<a href="https://docs.example.test/review?id=42&#38;v=2" style="color:#1A1A1A;text-decoration:underline;text-decoration-color:#FB943F">the shared doc</a> <span style="color:#6B6B68">(https://docs.example.test/review?id=42&#38;v=2)</span>');
     expect(preview.html).toContain('>Accept the new time</a>');
-    expect(preview.html).toContain('<strong style="color:#1A1A1A">Waldo</strong><br>Priya\'s assistant<br>priya@mail.test.invalid</p>');
+    expect(preview.html).toMatch(/<img src="cid:waldo-mark@mail\.test\.invalid" [^>]*><\/td><td [^>]*><strong style="color:#1A1A1A">Waldo<\/strong>, Priya's assistant<br>priya@mail\.test\.invalid<\/td>/);
+    expect(preview.html.indexOf('cid:')).toBeGreaterThan(preview.html.indexOf('Accept the new time'));
 
     expect(preview.text).toBe([
       'New time: Friday, 3pm',
@@ -90,7 +91,7 @@ describe('renderAgentMail', () => {
       'The notes are at the shared doc (https://docs.example.test/review?id=42&v=2), and the old invite is https://cal.example.test/e/9.',
       'Thanks,',
       'Accept the new time: https://cal.example.test/accept/9',
-      "-- \nWaldo\nPriya's assistant\npriya@mail.test.invalid",
+      "-- \nWaldo, Priya's assistant\npriya@mail.test.invalid",
     ].join('\n\n') + '\n');
   });
 
@@ -153,7 +154,7 @@ describe('renderAgentMail', () => {
       expect(preview.html).toContain('max-width:100%');
       expect(preview.html).toContain("font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif");
       expect(preview.html).not.toMatch(/rgba?\(/);
-      expect([...preview.html.matchAll(/<img [^>]*src="([^"]*)"/g)].map(match => match[1])).toEqual(['cid:waldo-logo@mail.test.invalid']);
+      expect([...preview.html.matchAll(/<img [^>]*src="([^"]*)"/g)].map(match => match[1])).toEqual(['cid:waldo-mark@mail.test.invalid']);
     });
     it('is 7-bit with CRLF line ends, header lines within 78 and body lines within 76', () => {
       expect(mime).toMatch(/^[\x00-\x7f]*$/);
@@ -162,7 +163,7 @@ describe('renderAgentMail', () => {
       expect(head.split('\r\n').filter(line => !line.startsWith('From:')).every(line => line.length <= 78)).toBe(true);
       expect(body.split('\r\n').every(line => line.length <= 76)).toBe(true);
     });
-    it('shows the logo even with remote images blocked: nothing in the message is fetched', () => {
+    it('shows the mark even with remote images blocked: nothing in the message is fetched', () => {
       expect([...preview.html.matchAll(/(?:src|background)="([^"]*)"/g)].every(match => match[1]!.startsWith('cid:'))).toBe(true);
     });
   });

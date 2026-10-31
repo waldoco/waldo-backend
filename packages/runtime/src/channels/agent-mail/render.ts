@@ -1,8 +1,8 @@
-import { WALDO_LOGO_PNG_BASE64, WALDO_LOGO_HEIGHT, WALDO_LOGO_WIDTH } from './logo';
+import { WALDO_MARK_HEIGHT, WALDO_MARK_PNG_BASE64, WALDO_MARK_WIDTH } from './mark';
 
 // Turns a draft Waldo wrote into the exact mail that leaves Waldo's own mailbox. Pure: the same input always gives the
 // same bytes, so the approval card, the stored message and the send are one thing. The model writes every word; the
-// frame adds only the logo, the layout and a signature saying whose assistant Waldo is. Every field the model or a
+// frame adds only a wordmark, the layout and a signature with Waldo's mark saying whose assistant Waldo is. Every field the model or a
 // directory supplies is untrusted: text is escaped, links must be http(s) and show where they go, header values lose
 // control characters, and an address that is not plainly an address refuses the whole render.
 
@@ -71,7 +71,7 @@ const INK = '#1A1A1A', MUTED = '#6B6B68', CANVAS = '#F4F3F0', CARD = '#FFFFFF', 
 const FONT = "ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 // '=_' never occurs in quoted-printable or base64 output, so these fixed boundaries cannot collide with a part's body.
 const ALT = '=_waldo_alt', REL = '=_waldo_rel';
-const LOGO_FILE = 'waldo.png';
+const MARK_FILE = 'waldo.png';
 
 const ADDRESS = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const validAddress = (value: string) => value.length <= 254 && value.indexOf('@') <= 64 && ADDRESS.test(value);
@@ -256,15 +256,16 @@ const htmlDocument = (subject: string, blocks: readonly Block[], callout: readon
   const calloutHtml = callout ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0"><tr><td style="background-color:${ACCENT_SUBTLE};border-radius:12px;padding:14px 16px">${htmlInline(callout)}</td></tr></table>` : '';
   const actionHtml = action ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 8px 0"><tr><td style="background-color:${INK};border-radius:12px"><a href="${escape(action.href)}" style="display:inline-block;padding:12px 20px;color:${ON_INK};font-weight:bold;text-decoration:none">${escape(action.caption)}</a></td></tr></table>`
     + `<p style="margin:0 0 16px 0;font-size:13px;color:${MUTED};word-break:break-all">${escape(action.href)}</p>` : '';
-  const signature = `<p style="margin:8px 0 0 0;padding:16px 0 0 0;border-top:1px solid ${BORDER};font-size:13px;line-height:1.5;color:${MUTED}">`
-    + `<strong style="color:${INK}">Waldo</strong>${first ? `<br>${escape(first)}'s assistant` : ''}<br>${escape(address)}</p>`;
+  const signature = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 0 0;border-top:1px solid ${BORDER}"><tr><td style="padding:16px 0 0 0">`
+    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="vertical-align:middle;padding:0 12px 0 0">`
+    + `<img src="cid:${contentId}" width="${WALDO_MARK_WIDTH}" height="${WALDO_MARK_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none"></td>`
+    + `<td style="vertical-align:middle;font-size:13px;line-height:1.5;color:${MUTED}"><strong style="color:${INK}">Waldo</strong>${first ? `, ${escape(first)}'s assistant` : ''}<br>${escape(address)}</td>`
+    + '</tr></table></td></tr></table>';
   return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">'
     + `<title>${escape(subject)}</title></head>\n<body style="margin:0;padding:0;background-color:${CANVAS}">\n`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${CANVAS}"><tr><td align="center" style="padding:24px 12px">\n`
     + `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%">\n`
-    + `<tr><td style="padding:0 4px 16px 4px"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>`
-    + `<td style="vertical-align:middle"><img src="cid:${contentId}" width="${WALDO_LOGO_WIDTH}" height="${WALDO_LOGO_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none"></td>`
-    + `<td style="vertical-align:middle;padding:0 0 0 10px;font-family:${FONT};font-size:18px;font-weight:bold;color:${INK}">Waldo</td></tr></table></td></tr>\n`
+    + `<tr><td style="padding:0 4px 14px 4px;font-family:${FONT};font-size:18px;font-weight:bold;color:${INK}">Waldo</td></tr>\n`
     + `<tr><td style="background-color:${CARD};border:1px solid ${BORDER};border-radius:16px;padding:28px;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n`
     + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n</td></tr></table>\n</body></html>`;
 };
@@ -300,7 +301,7 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
   const first = sender.ownerFirstName ? [...oneLine(sender.ownerFirstName)].slice(0, NAME_MAX).join('').trim() || null : null;
   const fromName = signatureName(first);
   const domain = sender.address.slice(sender.address.lastIndexOf('@') + 1).toLowerCase();
-  const contentId = `waldo-logo@${domain}`;
+  const contentId = `waldo-mark@${domain}`;
 
   const html = htmlDocument(subject, blocks, callout, action, first, sender.address, contentId);
   if (new TextEncoder().encode(html).length > AGENT_MAIL_HTML_MAX) return fail('too_large');
@@ -308,7 +309,7 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     ...(callout ? [textInline(callout)] : []),
     ...blocks.map(textBlock),
     ...(action ? [`${action.caption}: ${action.href}`] : []),
-    `-- \nWaldo${first ? `\n${first}'s assistant` : ''}\n${sender.address}`,
+    `-- \n${fromName}\n${sender.address}`,
   ].join('\n\n') + '\n';
 
   const references: string[] = [];
@@ -340,12 +341,12 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     '',
     quotedPrintable(html),
     `--${REL}`,
-    `Content-Type: image/png; name="${LOGO_FILE}"`,
+    `Content-Type: image/png; name="${MARK_FILE}"`,
     'Content-Transfer-Encoding: base64',
     `Content-ID: <${contentId}>`,
-    `Content-Disposition: inline; filename="${LOGO_FILE}"`,
+    `Content-Disposition: inline; filename="${MARK_FILE}"`,
     '',
-    base64Lines(WALDO_LOGO_PNG_BASE64),
+    base64Lines(WALDO_MARK_PNG_BASE64),
     `--${REL}--`,
     `--${ALT}--`,
     '',
@@ -358,7 +359,7 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     preview: { from: { name: fromName, address: sender.address }, to, cc, subject, text, html },
     parts: {
       from: { email: sender.address, name: fromName }, to, cc, subject, text, html, headers: threading,
-      attachments: [{ content: WALDO_LOGO_PNG_BASE64, filename: LOGO_FILE, type: 'image/png', disposition: 'inline', contentId }],
+      attachments: [{ content: WALDO_MARK_PNG_BASE64, filename: MARK_FILE, type: 'image/png', disposition: 'inline', contentId }],
     },
   };
 }
