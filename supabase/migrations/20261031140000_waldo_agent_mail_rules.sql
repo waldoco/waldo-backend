@@ -8,6 +8,15 @@ alter table waldo.agent_mail_handles add column notice_version text check (notic
   add column notice_accepted_at timestamptz,
   add constraint agent_mail_handles_notice_accepted check ((notice_version is null) = (notice_accepted_at is null));
 
+-- What an agent mail call signs: the call's name, then each argument with its length in bytes, so no two different sets of
+-- arguments read the same (a handle and a notice version can both hold dots). A null argument reads '.-', which no signed
+-- call produces. The runtime builds the same string (agentMailSigned).
+create function waldo.agent_mail_signed(p_call text, variadic p_parts text[]) returns text
+language sql immutable set search_path = '' as $$
+  select p_call || coalesce(string_agg('.' || coalesce(octet_length(part)::text || ':' || part, '-'), '' order by n), '')
+  from unnest(p_parts) with ordinality as t(part, n)
+$$;
+
 -- Claims one handle for the owner. A different handle the owner held is released in the same transaction (its release
 -- record keeps it from anyone for 180 days); the owner's current handle claimed again after its rule failed is retried.
 -- Cloudflare holds at most 200 routing rules per zone: new claims stop at 190, leaving room for the team's own addresses.
@@ -15,7 +24,7 @@ create function waldo.claim_agent_mail_handle(p_do_name text, p_handle text, p_n
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid; v_current text; v_state text;
 begin
-  if not waldo.router_signed('mailclaim.' || p_do_name || '.' || p_handle || '.' || p_notice_version, p_at, p_sig) then
+  if not waldo.router_signed(waldo.agent_mail_signed('mailclaim', p_do_name, p_handle, p_notice_version), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   if p_notice_version is null or p_notice_version !~ '^[A-Za-z0-9._-]{1,64}$' then raise exception 'notice version' using errcode = '22023'; end if;
@@ -43,7 +52,7 @@ end $$;
 create function waldo.release_agent_mail_handle(p_do_name text, p_at bigint, p_sig text) returns text
 language plpgsql security definer set search_path = '' as $$
 begin
-  if not waldo.router_signed('mailrelease.' || p_do_name, p_at, p_sig) then
+  if not waldo.router_signed(waldo.agent_mail_signed('mailrelease', p_do_name), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   delete from waldo.agent_mail_handles h using waldo.owners o where h.owner_id = o.id and o.do_name = p_do_name;
@@ -54,7 +63,7 @@ create function waldo.agent_mail_handle(p_do_name text, p_at bigint, p_sig text)
 returns table (handle text, rule_state text)
 language plpgsql stable security definer set search_path = '' as $$
 begin
-  if not waldo.router_signed('mailhandle.' || p_do_name, p_at, p_sig) then
+  if not waldo.router_signed(waldo.agent_mail_signed('mailhandle', p_do_name), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   return query select h.handle, h.rule_state from waldo.agent_mail_handles h join waldo.owners o on o.id = h.owner_id
@@ -66,7 +75,7 @@ end $$;
 create function waldo.settle_agent_mail_rule(p_do_name text, p_handle text, p_state text, p_at bigint, p_sig text) returns boolean
 language plpgsql security definer set search_path = '' as $$
 begin
-  if not waldo.router_signed('mailsettle.' || p_do_name || '.' || p_handle || '.' || p_state, p_at, p_sig) then
+  if not waldo.router_signed(waldo.agent_mail_signed('mailsettle', p_do_name, p_handle, p_state), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   if p_state not in ('live', 'failed', 'unknown') then raise exception 'rule state' using errcode = '22023'; end if;
@@ -79,13 +88,14 @@ end $$;
 create function waldo.agent_mail_held_handles(p_handles text, p_at bigint, p_sig text) returns setof text
 language plpgsql stable security definer set search_path = '' as $$
 begin
-  if not waldo.router_signed('mailheld.' || p_handles, p_at, p_sig) then
+  if not waldo.router_signed(waldo.agent_mail_signed('mailheld', p_handles), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   return query select h.handle from waldo.agent_mail_handles h where h.handle = any (string_to_array(p_handles, ','));
 end $$;
 
 -- Signed like route_agent_mail: the Worker's publishable key is the anon role, and the router signature is the gate.
+revoke all on function waldo.agent_mail_signed(text, text[]) from public, anon, authenticated, service_role;
 revoke all on function waldo.claim_agent_mail_handle(text, text, text, bigint, text) from public, anon, authenticated, service_role;
 revoke all on function waldo.release_agent_mail_handle(text, bigint, text) from public, anon, authenticated, service_role;
 revoke all on function waldo.agent_mail_handle(text, bigint, text) from public, anon, authenticated, service_role;

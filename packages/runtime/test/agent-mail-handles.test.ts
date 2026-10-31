@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_MAIL_HANDLE_CHANGES_PER_DAY, agentMailDirectory, agentMailDisplayName, agentMailHandleView, claimAgentMailHandle, releaseAgentMailHandle,
+  AGENT_MAIL_HANDLE_CHANGES_PER_DAY, agentMailDirectory, agentMailSigned, agentMailDisplayName, agentMailHandleView, claimAgentMailHandle, releaseAgentMailHandle,
   type AgentMailHandleDirectory,
 } from '../src/channels/agent-mail/handles';
 import { AGENT_MAIL_RULE_DUE_KEY, agentMailRuleHandles, type HeldHandle } from '../src/channels/agent-mail/rules';
@@ -102,7 +102,7 @@ describe('agent mail directory calls', () => {
     answer = ['b', 'a'];
     expect(await directory.held(['b', 'a'])).toEqual(new Set(['a', 'b']));
     const at = Math.floor(NOW / 1000);
-    for (const [index, message] of ['mailclaim.owner-do.priya.2026-10-31', 'mailhandle.owner-do', 'mailsettle.owner-do.priya.failed', 'mailheld.a,b'].entries()) {
+    for (const [index, message] of ['mailclaim.8:owner-do.5:priya.10:2026-10-31', 'mailhandle.8:owner-do', 'mailsettle.8:owner-do.5:priya.6:failed', 'mailheld.3:a,b'].entries()) {
       expect(seen[index]!.body.p_sig).toBe(await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, at, message));
     }
     answer = 'granted';
@@ -110,6 +110,11 @@ describe('agent mail directory calls', () => {
     answer = [{ handle: 'priya', rule_state: 'releasing' }];
     await expect(directory.current()).rejects.toThrow('agent mail directory answer');
     expect(agentMailDirectory({}, 'owner-do', fetcher)).toBeNull();
+  });
+  it('signs each argument with its length, so no two splits of dotted text sign alike, exactly as the directory builds it', () => {
+    expect(agentMailSigned('mailclaim', 'owner-do', 'priya.k', '2026-10-31')).toBe('mailclaim.8:owner-do.7:priya.k.10:2026-10-31');
+    expect(agentMailSigned('mailsettle', 'do', 'a.b', 'c')).not.toBe(agentMailSigned('mailsettle', 'do', 'a', 'b.c'));
+    expect(agentMailSigned('mailhandle', 'é')).toBe('mailhandle.2:é');
   });
 });
 
