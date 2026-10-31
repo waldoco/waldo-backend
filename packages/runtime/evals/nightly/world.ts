@@ -378,7 +378,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   };
 
   return {
-    clock, conversation, memory, handlers, healthChange,
+    clock, conversation, memory, handlers, healthChange, sql,
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
     ready: Promise.all([mcpReady, chat.seed(conversation)]),
