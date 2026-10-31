@@ -12,10 +12,10 @@ it('after an external workspace read a skill still loads, without widening lifec
  const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('skill-selection-after-read'));
  await runInDurableObject(stub,async(_,state)=>{
   let closed=false;const scope={runId:'run',attempt:'attempt',deadline:Date.now()+15*60_000,signal:new AbortController().signal,admit(){if(closed)throw new Error('closed');},commit<T>(work:()=>T){this.admit();return work();}};
-  const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills install document-email-preparation@3',assertCurrent:async()=>scope.admit()};
+  const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills install document-email-preparation@1',assertCurrent:async()=>scope.admit()};
   const cap=createScopedCuratedSkillCapability(state.storage.sql,turn,scope);
   const ctx={authenticatedUserId:'owner',turnId:'turn',runScope:scope,trigger:'user_message' as const,canaryTokens:canaries,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:1}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null as 'external'|null,sanitise};
-  const version={name:'document-email-preparation',version:3};
+  const version={name:'document-email-preparation',version:1};
   expect(await dispatchTool({id:'install',name:'skills_install',args:version},ctx,{handlers:cap.handlers})).toMatchObject({ok:true});
   const externalList={name:'workspace_list' as const,description:'Fixture private metadata',schema:workspaceListArgsSchema,trigger_allowlist:['user_message'] as const,autonomy_gated:false,handle:async()=>({ok:true as const,data:{files:[]},source_taint:'external' as const})};
   const events:Array<{name:string;ok:boolean}>=[];let step=0;
@@ -31,7 +31,7 @@ it('after an external workspace read a skill still loads, without widening lifec
   for(const overrides of [{authenticatedUserId:'other'},{turnId:'other'},{runScope:{...scope,runId:'other'}},{runScope:{...scope,admit:()=>{}}}])expect(await call(version,overrides)).toMatchObject({ok:false});
   expect(await call({...version,version:2})).toMatchObject({ok:false});expect(await call({...version,name:'uploaded-skill'})).toMatchObject({ok:false});
   expect(await dispatchTool({id:'tainted-install',name:'skills_install',args:version},ctx,{handlers:cap.handlers})).toMatchObject({ok:false});
-  const disabled=createScopedCuratedSkillCapability(state.storage.sql,{...turn,ownerText:'/skills disable document-email-preparation@3'},scope);
+  const disabled=createScopedCuratedSkillCapability(state.storage.sql,{...turn,ownerText:'/skills disable document-email-preparation@1'},scope);
   expect(await dispatchTool({id:'tainted-disable',name:'skills_disable',args:version},ctx,{handlers:disabled.handlers})).toMatchObject({ok:false});
   expect(await dispatchTool({id:'owner-disable',name:'skills_disable',args:version},{...ctx,toolArgSourceTaint:null},{handlers:disabled.handlers})).toMatchObject({ok:true});
   expect(await call(version)).toMatchObject({ok:false});expect(await cap.prompt(canaries)).toBe('');

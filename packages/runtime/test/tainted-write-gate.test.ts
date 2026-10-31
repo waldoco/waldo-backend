@@ -103,7 +103,7 @@ describe('a tainted turn sends every write to the owner card', () => {
 
   it('choosing a reviewed procedure runs under outside text: it carries instructions, not a tool', async () => {
     const { handler, runs } = recording('skills_load');
-    expect(await dispatchTool({ id: 'load', name: 'skills_load', args: { name: 'day-brief', version: 3 } }, tainted(), { handlers: [handler] })).toMatchObject({ ok: true });
+    expect(await dispatchTool({ id: 'load', name: 'skills_load', args: { name: 'day-brief', version: 2 } }, tainted(), { handlers: [handler] })).toMatchObject({ ok: true });
     expect(runs).toHaveLength(1);
   });
 
