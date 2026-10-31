@@ -359,9 +359,9 @@ describe('the owner turning the sweep off', () => {
 // With the day state the apply turn answers with typed effects: revise a day card that already reached the owner, say an
 // update, push with either, or nothing. Code holds the owner's quiet hours and which cards reached them; the model judges
 // what is worth it.
-type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; pushLines: { line: string; mail: readonly string[] }[] }>;
+type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; pushLines: { line: string; mail: readonly string[] }[]; settled: { n: number } }>;
 const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], surface = 'app'): DayApply => {
-  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, pushLines: DayApply['pushLines'] = [];
+  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, pushLines: DayApply['pushLines'] = [], settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [];
   const handler = updateSweepApplier({
     updates: h.updates, timezone: 'UTC', now: () => h.clock.at, sourceFollowups: () => true, gate: () => h.gate.code,
@@ -372,18 +372,20 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
       pushLine: async (line, mail) => { pushLines.push({ line, mail }); return `checked: ${line}`; }, chose: (_trace, code) => { chose.push(code); },
+      settled: () => { settled.n += 1; },
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
-    turns, delivered: [], reply, log, effects, chose, quiet, pushLines,
+    turns, delivered: [], reply, log, effects, chose, quiet, pushLines, settled,
     lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { update_sweep: handler } }).then(() => undefined),
   };
 };
-const MOVED: CalendarChange = { id: 'e-sync', title: 'Sync with Krati', start: '2026-10-20T17:00:00Z', end: '2026-10-20T17:30:00Z', all_day: false, status: 'confirmed', created: '2026-10-01T00:00:00Z' };
+const MOVED: CalendarChange = { id: 'e-sync', title: 'Sync with Krati', start: '2026-10-20T17:00:00Z', end: '2026-10-20T17:30:00Z', all_day: false, status: 'confirmed', created: '2026-10-01T00:00:00Z',
+  description: 'Bring the signed quote and the Q3 numbers', location: 'Krati\'s office, 4th floor' };
 
 describe('applying a sweep job with the day state', () => {
   it('golden: a revision of the delivered Brief, with a push checked against the mail the turn read', async () => {
@@ -399,6 +401,7 @@ describe('applying a sweep job with the day state', () => {
       expect(a.turns[0]!.text).toContain('"revise"');
       expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', push: 'checked: Your sync with Krati moved to 17:00' }]);
       expect(a.pushLines[0]!.mail.join('\n')).toContain('Signed copy attached');
+      expect(a.pushLines[0]!.mail).toEqual(expect.arrayContaining(['Bring the signed quote and the Q3 numbers', 'Krati\'s office, 4th floor']));
       expect(a.chose).toEqual(['revise+push']);
       expect(judged(h.sql)).toEqual([1]);
     });
@@ -463,6 +466,33 @@ describe('applying a sweep job with the day state', () => {
       await a.lane();
       expect([a.effects, a.chose]).toEqual([[], ['say+quiet']]);
       expect(h.updates.unfolded('UTC')).toContain('Quote signed');
+    });
+  });
+
+  it('every way a job settles wakes the sweep, so a change that waited on it is read now', async () => {
+    for (const [text, result, gate] of [['{}', FOUND, null], [JSON.stringify({ say: 'x' }), FOUND, null], ['{}', NOTHING, null], ['{}', FOUND, 'held_quiet']] as const) await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      await h.check();
+      report(h, result);
+      const a = applyingDay(h);
+      a.reply.text = text;
+      h.gate.code = gate;
+      await a.lane();
+      expect(a.settled.n).toBe(1);
+    });
+  });
+
+  it('on a surface that raises no push, a push is neither checked nor traced', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      await h.check();
+      report(h, FOUND);
+      const a = applyingDay(h, ['card:brief'], 'whatsapp');
+      a.reply.text = JSON.stringify({ say: 'Asha signed.', push: 'Asha signed' });
+      await a.lane();
+      expect(a.effects).toEqual([expect.objectContaining({ text: 'Asha signed.' })]);
+      expect(a.effects[0]).not.toHaveProperty('push');
+      expect([a.pushLines, a.chose]).toEqual([[], ['say']]);
     });
   });
 
