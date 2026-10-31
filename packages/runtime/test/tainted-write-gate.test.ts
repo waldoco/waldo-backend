@@ -5,6 +5,7 @@ import { EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, buildSessionState, taintGateBl
 import { approvalDesk } from '../src/channels/approvals';
 import { googleTaskHandlers } from '../src/tools/live/tasks';
 import { googleHandlers } from '../src/tools/live/google';
+import { sendAgentMailHandler } from '../src/tools/live/agent-mail';
 import { sendMessageHandler } from '../src/tools/live/messaging';
 import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, recordNeedsOwnerCard } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -120,9 +121,10 @@ describe('a tainted turn sends every write to the owner card', () => {
   // The record's own_card exemption names a fact about the live handler; the dispatcher reads that fact per call. They agree.
   it('every tool whose record says it raises its own card has a live handler that declares it', () => {
     const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined, proposeGoogleTaskChange: async () => 'p', proposeMessage: async () => 'p' };
-    const live = [...googleHandlers({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), ...googleTaskHandlers(desk as never), sendMessageHandler(desk as never)];
+    const live = [...googleHandlers({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), ...googleTaskHandlers(desk as never), sendMessageHandler(desk as never),
+      sendAgentMailHandler({ domain: () => null, handle: async () => null, ownerName: () => null, replyReferences: () => null, desk: desk as never })];
     const ownCard = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted?.exempt === 'own_card').map(([tool]) => tool).sort();
-    expect(ownCard).toEqual(['propose_calendar_change', 'propose_google_task_change', 'send_email', 'send_message']);
+    expect(ownCard).toEqual(['propose_calendar_change', 'propose_google_task_change', 'send_agent_mail', 'send_email', 'send_message']);
     for (const tool of ownCard) expect(live.find((handler) => handler.name === tool)?.proposal_only, tool).toBe(true);
   });
 
@@ -166,7 +168,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     expect(carded.sort()).toEqual([
       'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
-      'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_email', 'send_message',
+      'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
       'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());

@@ -327,7 +327,7 @@ describe('every app action and approval decision is classified by the same table
       expect(oneLine(rule.why), kind).toBe(true);
     }
     expect(Object.entries(classified).filter(([, rule]) => rule.gated === true).map(([kind]) => kind).sort())
-      .toEqual(['browser_submit', 'calendar_shared', 'email_send', 'mcp_call', 'message_send', 'tainted_action']);
+      .toEqual(['agent_mail_send', 'browser_submit', 'calendar_shared', 'email_send', 'mcp_call', 'message_send', 'tainted_action']);
   });
 
   it('gates only approving, and approving a send whatever else it carries', () => {
