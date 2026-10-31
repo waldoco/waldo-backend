@@ -8,7 +8,7 @@ import { modelCost } from '../llm/pricing';
 // broker_calls has no producer yet; the column exists so the rollup shape does not change when one lands.
 export type CostRollupRow = {
   day: string; kind: CostKind; model: string;
-  calls: number; input: number; output: number; cached: number; web_searches: number;
+  calls: number; input: number; output: number; cached: number; cache_write: number; web_searches: number;
   browser_ms: number; sandbox_ms: number; broker_calls: number; usd: number;
 };
 
@@ -36,7 +36,7 @@ export const costRollupDelta = (entry: TurnLogEntry, at: number): CostRollupRow 
   // A paid tool the spend ceiling held: one call on model held:<tool>, costing nothing.
   if (entry.hop === 'spend_hold') {
     const tool = entry.code?.match(/^spend_ceiling_reached:([a-z_]+)$/)?.[1];
-    return tool ? { day, kind: entry.cost_kind ?? 'turn', model: `held:${tool}`, calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 } : null;
+    return tool ? { day, kind: entry.cost_kind ?? 'turn', model: `held:${tool}`, calls: 1, input: 0, output: 0, cached: 0, cache_write: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 } : null;
   }
   const { usage } = entry;
   const browserMs = entry.browser_ms ?? 0;
@@ -44,20 +44,21 @@ export const costRollupDelta = (entry: TurnLogEntry, at: number): CostRollupRow 
   if (!usage && browserMs <= 0 && sandboxMs <= 0) return null;
   return {
     day, kind: entry.cost_kind ?? 'turn', model: usage?.model ?? '',
-    calls: usage ? 1 : 0, input: usage?.input ?? 0, output: usage?.output ?? 0, cached: usage?.cached ?? 0,
+    calls: usage ? 1 : 0, input: usage?.input ?? 0, output: usage?.output ?? 0, cached: usage?.cached ?? 0, cache_write: usage?.cache_write ?? 0,
     web_searches: usage?.web_searches ?? 0, browser_ms: browserMs, sandbox_ms: sandboxMs, broker_calls: 0,
     usd: usage ? modelCost(usage)?.total ?? 0 : 0,
   };
 };
 
-const SUMMED = ['calls', 'input', 'output', 'cached', 'web_searches', 'browser_ms', 'sandbox_ms', 'broker_calls', 'usd'] as const;
+const SUMMED = ['calls', 'input', 'output', 'cached', 'cache_write', 'web_searches', 'browser_ms', 'sandbox_ms', 'broker_calls', 'usd'] as const;
 const sameBucket = (a: CostRollupRow, b: CostRollupRow) => a.day === b.day && a.kind === b.kind && a.model === b.model;
 
 const merge = (rows: readonly CostRollupRow[], delta: CostRollupRow): CostRollupRow[] => {
   const index = rows.findIndex((row) => sameBucket(row, delta));
   if (index < 0) return [...rows, delta];
   const summed = { ...rows[index]! };
-  for (const field of SUMMED) summed[field] += delta[field];
+  // A row an earlier DO version left pending has no cache_write.
+  for (const field of SUMMED) summed[field] = (summed[field] ?? 0) + delta[field];
   return rows.map((row, i) => (i === index ? summed : row));
 };
 
