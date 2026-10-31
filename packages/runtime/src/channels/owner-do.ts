@@ -1007,8 +1007,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     let known: boolean;
     try { known = new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
-    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass.
-    if (known && observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now())) await this.rearmEveryWake();
+    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass; a refused thread leaves a plain resend due.
+    if (known && (observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now()) || new IMessageFinalOutbox(this.ctx.storage).dueAt() !== null)) await this.rearmEveryWake();
     return known;
   }
   private async drainIMessage(alarmEnd?: number): Promise<void> {
