@@ -114,13 +114,15 @@ a woven node that would also confirm the cited mail and calendar claims, which t
 **D5-b resolved (30 Oct 2026, owner rulings O3 and O7; memory redesign §2):** option A, generalised from woven nodes to every
 node. `node.confirm` grounds no support. It writes one `node_statement` claim whose text is the node's current
 `label: summary`, with `source: 'confirmed'`, `origin: 'owner'` and `source_ref: node:<id>:<surface>:node.confirm`, and the
-node cites it. A node with any Waldo-read support (origin `untrusted`, or a `welcome:` ref, which survives a per-claim
-confirm) is confirmed, and enters the every-turn block, only while it cites a live statement whose text equals its current
-wording. A nightly rewrite of the wording drops it back to Waldo's read; confirming the notes under it one by one never
-confirms it. The statement is never listed, recalled, pinned, shown to the nightly model or counted as promotion evidence, and
+node cites it. Every node, whatever its supports, is confirmed only while it cites a live statement whose text equals its
+current wording: the wording is Waldo's until the owner says yes to it, even over notes the owner stated or confirmed one by
+one, so no path (the nightly promotion included) launders per-note confirms into a confirmed pattern. A node with any
+outside-born support (origin `untrusted`, or a `welcome:` ref) enters the every-turn block only once confirmed. A nightly
+re-save that keeps the wording keeps the statement cited; a rewrite drops the statement and the node goes back to Waldo's
+read. The owner's own correction is their yes to the new wording. The statement is never listed, recalled, pinned, shown to the nightly model or counted as promotion evidence, and
 it goes with its node on forget or correction. Nodes confirmed before this change keep confirmed only when a support carries
-the pattern's own confirm marker (`confirmed: owner, app:node.confirm` or `console:node.confirm`); those confirmed note by note
-go back to Waldo's read.
+the pattern's own confirm marker (`confirmed: owner, app:node.confirm` or `console:node.confirm`); those confirmed note by note,
+or never confirmed and resting on the owner's own words, go back to Waldo's read.
 
 ### Trust and origin rules, summarized
 
