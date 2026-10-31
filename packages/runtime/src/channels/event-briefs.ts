@@ -1,8 +1,8 @@
 import type { TaskResult } from '@waldo/contracts';
 import { calendarPromptProjection, sha256Hex, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { quoted } from '../prompt/turn-prompt';
-import { numericHealthIn, sanitise } from '../scribe/sanitiser';
-import { PUSHES } from './expo-push';
+import { sanitise } from '../scribe/sanitiser';
+import { PUSHES, pushTitle } from './expo-push';
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from './reminders';
@@ -126,11 +126,10 @@ export type PrepGate = 'held_quiet' | 'held_budget';
 export type PrepCode = 'queued' | 'no_note' | 'malformed_reply' | 'stale' | 'not_admitted' | 'known' | 'already_decided' | 'too_large'
   | PrepGate | 'enqueued' | 'existing' | 'held_open_job' | 'held_topic' | 'held_breaker';
 // The app push for a prep note. While names are off it is the fixed line. With them on, it names the meeting and its local
-// start; a title carrying a health value, or nothing left once email addresses are taken out, falls back to the fixed line.
-const PREP_PUSH_TITLE_CHARS = 60;
+// start; a title pushTitle will not show falls back to the fixed line.
 export const prepPushBody = (prep: Readonly<{ title: string | undefined; start: string; timezone: string; named: boolean }>): string => {
-  const title = (prep.title ?? '').replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, PREP_PUSH_TITLE_CHARS).trim();
-  if (!prep.named || !title || numericHealthIn(title) || !Number.isFinite(Date.parse(prep.start))) return PUSHES.prep.body;
+  const title = pushTitle(prep.title);
+  if (!prep.named || !title || !Number.isFinite(Date.parse(prep.start))) return PUSHES.prep.body;
   return `Prep: ${title} at ${localIso(Date.parse(prep.start), prep.timezone).slice(11, 16)}`;
 };
 // One meeting occurrence's identity: its outbox key, and the event_briefs row that records the digest it was prepped on.

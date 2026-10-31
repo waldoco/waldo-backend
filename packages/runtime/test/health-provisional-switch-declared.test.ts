@@ -30,3 +30,10 @@ describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('0');
   });
 });
+
+describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
+  it('is declared off for production and staging until migration 20261031130000 is applied and the gate turns it on', () => {
+    expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('0');
+  });
+});

@@ -6,7 +6,7 @@ import { claimStore } from '../src/memory/claims';
 import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { COST_MONTH_KEY, COST_ROLLUP_KEY, type CostRollupRow } from '../src/observability/cost-rollup';
-import { estimatedTokens, semanticRecall, workersAiEmbedder } from '../src/memory/semantic-recall';
+import { estimatedTokens, semanticRecall, SWEEP_RETRY_KEY, SWEEP_RETRY_MS, workersAiEmbedder } from '../src/memory/semantic-recall';
 import { ensureSchema } from '../src/tracer/schema';
 import { fakeEmbeddings } from '../src/testing/fake-embeddings';
 
@@ -91,5 +91,25 @@ it('prices the turn\'s embedding call into the cost ledger and the month the spe
     const query = modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(['When is my dentist appointment?']), output: 0, cached: 0 })!.total;
     expect(rows).toEqual([expect.objectContaining({ kind: 'turn', calls: 1, input: estimatedTokens(['When is my dentist appointment?']), usd: query })]);
     expect(state.storage.kv.get<{ usd: number }>(COST_MONTH_KEY)!.usd).toBeGreaterThanOrEqual(query);
+  });
+});
+
+it('keeps a failed sweep\'s retry time in the owner object\'s KV, where every runtime of that owner reads it', async () => {
+  directory();
+  const name = 'semantic-recall-owner-do-retry';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    await state.storage.put('origin', 'https://fixture.invalid');
+    memory.add({ kind: 'fact', text: DENTIST, evidence: 'teeth', source: 'stated', origin: 'owner', source_ref: 'owner, tg-2' }, '2026-10-26T08:00:00Z');
+    const ai = fakeEmbeddings();
+    ai.fail = true;
+    const before = Date.now();
+    const owner = new OwnerDO(state, { ...env, MEMORY_SEMANTIC_RECALL: '1', AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-retry', text: 'Anything on today?' }) }));
+    expect(sent.status, await sent.clone().text()).toBe(202);
+    await vi.waitFor(() => expect(state.storage.kv.get<number>(SWEEP_RETRY_KEY)).toBeGreaterThanOrEqual(before + SWEEP_RETRY_MS), { timeout: 10_000, interval: 20 });
+    expect(ai.inputs.filter((text) => text === DENTIST)).toHaveLength(1);
   });
 });
