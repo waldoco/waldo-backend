@@ -21,6 +21,7 @@ import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
 import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
+import { semanticRecall, workersAiEmbedder, type EmbeddingRunner } from '../../src/memory/semantic-recall';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
@@ -86,16 +87,18 @@ const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestIn
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 // node:sqlite behind the Durable Object's SqlStorage shape, with the same rowsWritten count and a transactionSync that
-// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO.
+// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO. A BLOB
+// goes in and comes back as an ArrayBuffer, as the DO's does.
 const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => T) => T }> => {
   const db = new DatabaseSync(':memory:');
   const sql = {
     exec(query: string, ...bindings: unknown[]) {
       const statement = db.prepare(query);
-      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[];
+      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value)) as never[];
       const writes = /^\s*(insert|update|delete|replace)\b/i.test(query) && !/\breturning\b/i.test(query);
       const changed = writes ? Number(statement.run(...values).changes) : 0;
-      const rows = writes ? [] : statement.all(...values) as Record<string, unknown>[];
+      const blobs = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value instanceof Uint8Array ? value.slice().buffer : value]));
+      const rows = writes ? [] : (statement.all(...values) as Record<string, unknown>[]).map(blobs);
       return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: writes ? changed : rows.length, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
@@ -167,7 +170,8 @@ const consentRows = (status: string) => ['storage_compute', 'model_processing'].
 const item = (mail: SeedMail): MailItem => ({ id: mail.id, thread_id: mail.thread_id, from: mail.from, subject: mail.subject, snippet: mail.body.slice(0, 160), at: mail.at });
 const message = (mail: SeedMail): ThreadMessage => ({ id: mail.id, from: mail.from, subject: mail.subject, at: mail.at, body: mail.body });
 
-export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims') => {
+// embeddings: semantic recall on, over this runner, built as the owner object builds it.
+export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims', embeddings?: EmbeddingRunner) => {
   const events = (seed.events ?? []).map((event) => ({ owner_id: OWNER, ...event, all_day: event.all_day ?? false }));
   const mail = [...(seed.mail ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Health sharing: null before any step shares it; 'withdrawn' after one withdraws it.
@@ -275,6 +279,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   }
   for (const topic of seed.held_topics ?? []) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, start);
   const memory = memoryMode === 'claims' ? claims : undefined;
+  const semantic = memory && embeddings ? semanticRecall({ sql, transaction: transactionSync, embedder: workersAiEmbedder(embeddings) }) : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
@@ -325,7 +330,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const handlers = [
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -383,10 +388,11 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   };
 
   return {
-    clock, conversation, memory, handlers, healthChange, sql,
+    clock, conversation, memory, handlers, healthChange, sql, semantic,
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
-    ready: Promise.all([mcpReady, chat.seed(conversation)]),
+    // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
+    ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync()]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.

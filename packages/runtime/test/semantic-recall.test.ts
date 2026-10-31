@@ -11,7 +11,7 @@ import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { COST_ROLLUP_KEY, costRollup, type CostRollupRow } from '../src/observability/cost-rollup';
 import { estimatedTokens, fuseRanked, semanticRecall, semanticRecallFromEnv, semanticTraceEntry, workersAiEmbedder, type SemanticEvent, type SemanticRecall } from '../src/memory/semantic-recall';
-import { fakeEmbeddings, type FakeEmbeddings } from './support/fake-embeddings';
+import { fakeEmbeddings, type FakeEmbeddings } from '../src/testing/fake-embeddings';
 
 // Synthetic fixtures only: no owner text, and the one health reading is made up.
 const AT = '2026-10-26T09:00:00.000Z';

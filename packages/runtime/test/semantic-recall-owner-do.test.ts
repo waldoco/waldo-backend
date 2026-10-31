@@ -5,7 +5,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { semanticRecall, workersAiEmbedder } from '../src/memory/semantic-recall';
 import { ensureSchema } from '../src/tracer/schema';
-import { fakeEmbeddings } from './support/fake-embeddings';
+import { fakeEmbeddings } from '../src/testing/fake-embeddings';
 
 // An app turn carries a run scope, so the owner object builds a nested responder for it. With the flag on and Workers AI
 // bound, that turn's recall must still carry the meaning leg: a question that shares no word with a claim recalls it.
