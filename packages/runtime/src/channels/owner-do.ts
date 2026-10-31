@@ -1346,14 +1346,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // as the chat shows it, read under the app session's own admission. The excerpt is not worth failing the day read for:
   // when the chat cannot be read, a card with a delivery leaves latest out, which says this Worker cannot tell, while a
   // card with none still says null.
-  // A build that reads revisions (`revised`) gets each revised card's count and time, and its newest revision's row as latest.
+  // A build that reads revisions (`revised`) gets each revised card's count and time, and its newest revision's row as latest:
+  // none when that revision reached the owner outside the app, never the original's words under the revision's time.
   private async appCardsLatest(view: ConsoleView, name: string, hash: string, revised = false): Promise<ConsoleView['cards']> {
     const day = view.now.slice(0, 10), plans = dayPlanBook(this.ctx.storage.sql);
     const revisions = revised ? plans.revisions(day) : new Map<string, never>();
     const marked = (card: ConsoleView['cards'][number]) => { const found = revisions.get(card.id); return found ? { ...card, revision: found.revision, revisedAt: found.revised_at } : card; };
-    const delivered = new Map([...cardDeliveries(plans, this.ctx.storage.kv, day)].map(([card, delivery]) => {
-      const row = revisions.get(card)?.message_id;
-      return [card, row ? { message_id: row, delivered_at: revisions.get(card)!.revised_at } : delivery] as const;
+    const originals = cardDeliveries(plans, this.ctx.storage.kv, day);
+    const delivered = new Map(view.cards.flatMap(({ id }) => {
+      const found = revisions.get(id), original = originals.get(id);
+      const delivery = found ? (found.message_id ? { message_id: found.message_id, delivered_at: found.revised_at } : undefined) : original;
+      return delivery ? [[id, delivery] as const] : [];
     }));
     if (!delivered.size) return view.cards.map(card => ({ ...marked(card), latest: null }));
     const shown = await this.appMainChatShown(name, hash, 'app_cards_latest');
@@ -1386,7 +1389,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return linkingAppRows(route, {
       card: (card, appRow) => dayPlanBook(this.ctx.storage.sql).delivered(card.day, card.card, appRow, Date.now()),
       update: (recordId, appRow) => updateBook(this.ctx.storage.sql).linked(recordId, appRow),
-      revision: (revision, appRow) => dayPlanBook(this.ctx.storage.sql).revisedRow(revision.day, revision.card, appRow),
+      revision: (revision, appRow, record) => dayPlanBook(this.ctx.storage.sql).revisedRow(revision.day, revision.card, appRow, record),
       ...(langfuseOtlpConfig(this.env) ? { row: (appRow: string, trace: string) => rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now()) } : {}),
     });
   }
@@ -5220,7 +5223,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.calendarPrep && delivered && channel === 'app') this.ctx.waitUntil(push('prep', undefined, prepPushBody({ title: record.calendarPrep.title, start: record.calendarPrep.start,
         timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' })));
       // A revision counts once it reached the owner on any surface; its push, only from the app, beside the drain like a prep note's.
-      if (record.revision && delivered) plans.revised(record.revision.day, record.revision.card, Date.now());
+      if (record.revision && delivered) plans.revised(record.revision.day, record.revision.card, Date.now(), record.id);
       if (record.updatePush && delivered && REVISES_CARDS[channel]) this.ctx.waitUntil(push('update', undefined, record.updatePush.line, record.updatePush.card));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
