@@ -1,4 +1,4 @@
-import { skillSchema, toolNameSchema, triggerTypeSchema, TOOL_PERMISSIONS, type Skill } from '@waldo/contracts';
+import { skillSchema, toolNameSchema, type Skill } from '@waldo/contracts';
 
 export const BUNDLED_SKILL_MAX_BYTES = 8192;
 export type BundledSkillFrontmatter = Readonly<{ name: string; description: string; tools: string[] }>;
@@ -27,7 +27,10 @@ export function parseSkillFrontmatter(source: string): { metadata: BundledSkillF
 export function parseBundledSkill(source: string): Skill {
   const { metadata, body } = parseSkillFrontmatter(source);
   const skill = skillSchema.parse({ name: metadata.name, version: metadata.name==='document-email-preparation'?1:2, provenance: 'system', identity_locked: true, provisional: false,
-    trigger_types: metadata.name==='document-email-preparation'?['user_message','brief']:triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('skills_load')),
+    // A stored row's version and triggers are its identity, and every deployed build checks them exactly: a change makes the
+    // rows one build wrote unreadable to another, a rollback included. The owner runtime runs every turn, chat or machine, as
+    // user_message, which is the only trigger a skill needs.
+    trigger_types: metadata.name==='document-email-preparation'?['user_message','brief']:['user_message'],
     trigger_condition: metadata.description, required_tools: metadata.tools, required_connectors: [],
     effectiveness: 1, invocations: 0, last_used: null, body_markdown: body, created_at: metadata.name==='document-email-preparation'?'2026-10-01T00:00:00Z':'2026-10-03T00:00:00Z' });
   Object.freeze(skill.trigger_types); Object.freeze(skill.required_tools); Object.freeze(skill.required_connectors);

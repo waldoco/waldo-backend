@@ -54,7 +54,7 @@ import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from 
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,appConnectReceipt,appDisconnectReceipt,googleConnectReceipt,granolaConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
-import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
+import { createJobSkillCapability, createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
@@ -1165,7 +1165,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Each surface's runtime names the chain its jobs write, the one its owner turns read, whichever binding admitted the owner.
   private jobHostFor(chain: OwnerJobHost['chain']): OwnerJobHost {
-    return { admit: () => this.admitOwnerJob(), chain };
+    const sql = this.ctx.storage.sql;
+    return { admit: () => this.admitOwnerJob(), chain,
+      // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent }) };
   }
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
