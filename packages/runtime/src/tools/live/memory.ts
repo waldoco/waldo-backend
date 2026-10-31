@@ -1,6 +1,7 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
 import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
+import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
 import { jobsCarry } from '../../tasks/jobs';
@@ -130,7 +131,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // The meaning leg fails open to the words; its ids are read back through recall's own filter before they are fused.
         let near: readonly number[] = [];
         if (query !== undefined && deps.semantic) { near = await deps.semantic.near(query).catch(() => []); await ready(ctx); }
-        const lexical = match === null ? store.claims().concat(store.claims('promoted')) : sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid WHERE claim_recall MATCH ? AND claims.status IN ('active','promoted') AND COALESCE(claims.origin, '') != 'untrusted' ORDER BY bm25(claim_recall), claims.last_seen_at DESC, claims.id DESC`, match).toArray();
+        const lexical = match === null ? store.claims().concat(store.claims('promoted')) : sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid WHERE claim_recall MATCH ? AND claims.status IN ('active','promoted') AND COALESCE(claims.origin, '') != 'untrusted' AND claims.kind != '${NODE_STATEMENT}' ORDER BY bm25(claim_recall), claims.last_seen_at DESC, claims.id DESC`, match).toArray();
         const rows = near.length ? fuseRanked([lexical, store.recall('', near.length, near)], (claim) => claim.id) : lexical;
         const selected = rows.filter(claim => claim.origin !== 'untrusted' && !claim.valid_to && !hidden(claim) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind))).slice(0, limit).map(provenance);
         // Whole claims only: one that would push the result past the budget is named, never cut into partial words.

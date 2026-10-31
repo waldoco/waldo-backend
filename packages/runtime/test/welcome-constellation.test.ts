@@ -276,14 +276,16 @@ const built = async (sql: SqlStorage, transaction: <R>(work: () => R) => R) => {
 };
 
 describe('welcome nodes: confirm, correct, forget', () => {
-  it('confirm makes every support the owner\'s own word', async () => {
+  it('confirm records the owner\'s yes to the node\'s wording and leaves the read under it as Waldo\'s', async () => {
     await withSql(async (sql, transaction) => {
       const { claims, node } = await built(sql, transaction);
       const id = node('Monday planning ritual').id;
+      const read = welcomeSupportIds(claims, id);
       expect(confirmWelcomeNode(claims, id, new Date(T0).toISOString())).toBe(true);
       const ids = JSON.parse(node('Monday planning ritual').supporting_spots) as number[];
-      expect(claims.allClaims().filter((claim) => ids.includes(claim.id)).map((claim) => [claim.origin, claim.verification_status])).toEqual([['owner', 'owner-grounded']]);
-      expect(welcomeSupportIds(claims, id)).toEqual([]);
+      expect(claims.allClaims().filter((claim) => ids.includes(claim.id)).map((claim) => [claim.kind, claim.origin, claim.verification_status]))
+        .toEqual([['observation', 'untrusted', 'provisional'], ['node_statement', 'owner', 'owner-grounded']]);
+      expect(welcomeSupportIds(claims, id)).toEqual(read);
       expect(nodeConfirmation(claims.allClaims(), node('Monday planning ritual'))).toBe('confirmed');
       expect(confirmWelcomeNode(claims, 9_999, new Date(T0).toISOString())).toBe(false);
     });
