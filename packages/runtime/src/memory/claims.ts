@@ -1303,7 +1303,7 @@ const CLAIM_RULES = [
 
 const PIN_RULES = [
   'Two pinned blocks are shown to Waldo on every turn; every other claim stays in memory and is found by search when a message needs it. Curate the blocks with pin and unpin.',
-  `owner_profile, up to ${PROFILE_BLOCK_MAX_CHARS} characters: who the owner is, their stable preferences and routines, and how much autonomy they give Waldo.`,
+  `owner_profile, up to ${PROFILE_BLOCK_MAX_CHARS} characters: who the owner is, their stable preferences and routines, the goals they have stated and still hold (health and training goals included: the day's cards and health planning work toward them), and how much autonomy they give Waldo.`,
   `owner_facts, up to ${FACTS_BLOCK_MAX_CHARS} characters: standing decisions, and the people and places the owner relies on.`,
   'Only owner-grounded claims of kind fact, preference, routine, goal or health can be pinned. pin sets a claim\'s block and its order (lower comes first); pinning a pinned claim moves or reorders it. unpin takes a claim out of its block, never out of memory.',
   'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. Waldo shows the newest unpinned claims in whatever room the pins leave.',

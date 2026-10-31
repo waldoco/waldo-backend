@@ -155,17 +155,18 @@ export type DayPlanBook = ReturnType<typeof dayPlanBook>;
 export const defaultPlan = (cards: readonly DayCard[]): readonly CardPlan[] =>
   cards.map((card) => ({ card: card.id, time: card.defaultTime, reason: 'default time' }));
 
-export const parseDayPlan = (raw: string, cards: readonly DayCard[]): readonly CardPlan[] => {
+// A card the reply leaves out or times badly falls back to its default; with `keep`, a re-plan's, it is left as it is.
+export const parseDayPlan = (raw: string, cards: readonly DayCard[], keep = false): readonly CardPlan[] => {
   const { cards: planned } = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { cards?: unknown };
   if (!Array.isArray(planned)) throw new Error('day plan has no cards');
   const byId = new Map(planned.map((entry: { id?: unknown; time?: unknown; reason?: unknown }) => [entry?.id, entry]));
-  return cards.map((card) => {
+  return cards.flatMap((card): CardPlan[] => {
     const entry = byId.get(card.id);
     const time = typeof entry?.time === 'string' ? entry.time.trim() : '';
     const reason = typeof entry?.reason === 'string' && entry.reason ? entry.reason : 'no reason given';
-    if (time === 'skip') return { card: card.id, time: null, reason };
-    if (isClock(time)) return { card: card.id, time, reason };
-    return { card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` };
+    if (time === 'skip') return [{ card: card.id, time: null, reason }];
+    if (isClock(time)) return [{ card: card.id, time, reason }];
+    return keep ? [] : [{ card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` }];
   });
 };
 
@@ -190,6 +191,49 @@ export const applyDayPlan = async (
     applied.push(entry);
   }
   return applied;
+};
+
+// The reason a card's time carries when the owner set it for today: a re-plan keeps it, as it keeps a pin.
+export const SET_FOR_TODAY = 'set by you for today';
+// What a re-plan after today's calendar changed may move: a card the planner timed (or skipped) that is still pending and not
+// yet due, with its current time. One the owner set for today or pinned keeps its time, as does a card held for quiet hours,
+// waiting on the model, or already sent; a card with no plan yet waits for the day's own plan.
+export type MovableCard = Readonly<{ card: DayCard; time: string | null }>;
+export const movableCards = (book: DayPlanBook, timezone: string, now: number): readonly MovableCard[] => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const pins = book.pins();
+  const rows = new Map(book.read(day).map(row => [row.card, row]));
+  return DAY_CARDS.flatMap((card): MovableCard[] => {
+    const row = rows.get(card.id);
+    if (!row || row.state !== 'pending' || pins[card.id] || row.reason === SET_FOR_TODAY) return [];
+    const at = row.time === null ? null : localToEpoch(`${day}T${row.time}`, timezone);
+    return row.time === null || (at !== null && at > now) ? [{ card, time: row.time }] : [];
+  });
+};
+// A re-plan applies only to the cards it may move. A time already past keeps the card where it was: a re-plan moves a card or,
+// when the model says so, skips it; it never sends one early by accident or cancels it for being late.
+export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[],
+  movable: readonly MovableCard[], enabled = true): Promise<readonly CardPlan[]> => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const ids = new Set(movable.map(entry => entry.card.id));
+  const ahead = plan.filter(entry => {
+    if (!ids.has(entry.card)) return false;
+    if (entry.time === null) return true;
+    const at = localToEpoch(`${day}T${entry.time}`, timezone);
+    return at !== null && at > now;
+  });
+  return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
+};
+
+// One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
+// change is always planned on and a burst costs at most two model calls.
+export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {
+  let queued = false;
+  return (arg: A): void => {
+    if (queued) return;
+    queued = true;
+    enqueue(() => { queued = false; return work(arg); });
+  };
 };
 
 export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<boolean> => {

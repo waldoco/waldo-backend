@@ -159,6 +159,13 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
   reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
+  // Body composition as get_health gives it: body mass and lean mass in kilograms, body fat as a percentage.
+  reading(String.raw`\b(?:body|lean(?:\s+body)?)\s+mass\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
+  reading(String.raw`\bbody\s+fat(?:\s+(?:percentage|percent))?\b${READING_GAP}\d{1,2}(?:[.,]\d+)?(?:\s*(?:%|percent\b))?|\b\d{1,2}(?:[.,]\d+)?\s*(?:%|percent)\s+body\s+fat\b`),
+  // Stand hours count only as the Watch's measure, never a stretch of standing ("stood in line for 2 hours").
+  reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
+  // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
   reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*${DURATION}`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
