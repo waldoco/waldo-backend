@@ -288,9 +288,42 @@ describe('produceHealthScores', () => {
     const today = h.inputs[0]!.days.find(d => d.day === TODAY)!;
     expect(today.workouts).toEqual([{ startAt: `${TODAY}T06:00:00.000Z`, endAt: `${TODAY}T06:45:00.000Z` }]);
     expect(today.hourly).toHaveLength(8);
-    expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvMethod: 'rmssd' });
+    expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvReadings: [{ value: expect.any(Number), method: 'rmssd' }] });
     // Without a calendar reader only physical load is known: 8 hours x 12 movement minutes plus the 45-minute run.
     expect(today.demand).toEqual({ meetingMinutes: null, messageCount: null, openTaskMinutes: null, physicalLoad: 96 + 45 });
+  });
+
+  describe('an hour with HRV of both methods', () => {
+    // A Watch hour carries the platform's SDNN and, from its beat-to-beat series, RMSSD: two readings of one window.
+    const sdnnBeside = (samples: Sample[]) => samples.flatMap(s => (s.signal === 'hrv_window' ? [{ ...s, method: 'sdnn', value: 40 }, s] : [s]));
+    const reversed = (samples: Sample[]) => samples.flatMap(s => (s.signal === 'hrv_window' && s.method === 'sdnn' ? [] : s.signal === 'hrv_window' ? [s, { ...s, method: 'sdnn', value: 40 }] : [s]));
+    const runOn = async (samples: Sample[]) => {
+      const h = harness(seriesOf(samples));
+      await run(h);
+      const input = h.inputs[0]!;
+      return { input, today: input.days.find(d => d.day === TODAY)!, form: [computeDailyScores({ ...input, provisional: false }).form, computeDailyScores({ ...input, provisional: true }).form] };
+    };
+    const byMethod = (readings: readonly { method: string }[]) => [...readings].sort((a, b) => a.method.localeCompare(b.method));
+
+    it('reaches Form with both, whichever arrives first', async () => {
+      for (const samples of [sdnnBeside(history(25)), reversed(sdnnBeside(history(25)))]) {
+        const { today } = await runOn(samples);
+        expect(today.hourly).toHaveLength(8);
+        for (const bucket of today.hourly) expect(byMethod(bucket.hrvReadings)).toEqual([{ value: expect.any(Number), method: 'rmssd' }, { value: 40, method: 'sdnn' }]);
+      }
+    });
+
+    it('leaves Form as RMSSD alone gives it: SDNN beside it is never read in its place', async () => {
+      const alone = await runOn(history(25));
+      expect(alone.form.map(form => form.state)).toEqual(['available', 'available']);
+      for (const samples of [sdnnBeside(history(25)), reversed(sdnnBeside(history(25)))]) expect((await runOn(samples)).form).toEqual(alone.form);
+    });
+
+    it('keeps the later of a repeat within a method, never across methods', async () => {
+      const start_at = `${TODAY}T08:00:00.000Z`, end_at = `${TODAY}T09:00:00.000Z`;
+      const { today } = await runOn([...history(25), sample('hrv_window', TODAY, { start_at, end_at, value: 41, method: 'sdnn' }), sample('hrv_window', TODAY, { start_at, end_at, value: 42, method: 'sdnn' })]);
+      expect(byMethod(today.hourly[0]!.hrvReadings)).toEqual([{ value: expect.any(Number), method: 'rmssd' }, { value: 42, method: 'sdnn' }]);
+    });
   });
 
   describe('hour windows sent again on another grid', () => {

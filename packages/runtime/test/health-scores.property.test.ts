@@ -9,7 +9,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00
 const finite = (min: number, max: number) => fc.double({ min, max, noNaN: true, noDefaultInfinity: true });
 
 const bucket = (day: string, hour: number, hr: number | null, hrv: number | null, move: number | null, energy: number | null): HourlyBucket => ({
-  startAt: new Date(Date.parse(`${day}T00:00:00Z`) + hour * 3_600_000).toISOString(), heartRate: hr, hrv, hrvMethod: hrv === null ? null : 'rmssd', daylightMinutes: move, movementMinutes: move, activeEnergyKcal: energy,
+  startAt: new Date(Date.parse(`${day}T00:00:00Z`) + hour * 3_600_000).toISOString(), heartRate: hr, hrvReadings: hrv === null ? [] : [{ value: hrv, method: 'rmssd' }], daylightMinutes: move, movementMinutes: move, activeEnergyKcal: energy,
 });
 const optional = (min: number, max: number) => fc.option(finite(min, max), { nil: null });
 const dayArb = (age: number): fc.Arbitrary<DayRecord> => {
