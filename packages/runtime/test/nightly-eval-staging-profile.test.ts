@@ -183,7 +183,20 @@ describe('what a trial costs', () => {
     const markdown = scorecardMarkdown(card, gateScorecard(card, thresholdsFor('recorded', 1)), 'recorded');
     expect(markdown).toContain('Cost and rounds per trial');
     expect(markdown).toContain('| t03-reminder |');
-    expect(markdown).toContain('Subset `t03-reminder`: 1 scenarios.');
+    expect(markdown).toContain('Subset `t03-reminder`. 1 scenarios.');
     expect(JSON.stringify(card)).not.toContain('Recorded reply');
+  });
+});
+
+describe('a run that is cut off', () => {
+  it('has handed the scorecard so far to progress after every scenario, and names its shard', async () => {
+    const scenarios = NIGHTLY_SCENARIOS.filter((item) => item.id === 't03-reminder' || item.id === 't01-calendar-free-hour');
+    const seen: number[] = [];
+    const card = await runNightly(scenarios, {
+      trials: 1, budget: callBudget(100), gateway: () => scriptedGateway({ rules: [], unmatchedText: 'Recorded reply.' }), judge: async () => ({ outcome: 'judge_error' }), candidate: 'recorded', judgeModel: 'recorded',
+      shard: '1/2', progress: (partial) => seen.push(partial.scenarios.length),
+    });
+    expect(seen).toEqual([1, 2]);
+    expect(card.shard).toBe('1/2');
   });
 });

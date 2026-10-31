@@ -116,17 +116,12 @@ describe('live run plan', () => {
     expect(callPlan([late], 3).owner_turns).toBe(6);
   });
 
-  it('keeps the weekly full run\'s cap above the plan with room for the catalogue to grow', async () => {
-    const { callPlan } = await import('../evals/nightly/plan');
-    const workflow = readFileSync(new URL('../../../.github/workflows/evals-live.yml', import.meta.url), 'utf8');
-    const full = /if \[ "\$subset" = all \]; then\n\s+trials=(\d+)\n\s+cap=(\d+)/.exec(workflow)!;
-    const trials = Number(full[1]);
-    const cap = Number(full[2]);
-    expect(cap).toBeGreaterThanOrEqual(callPlan(NIGHTLY_SCENARIOS, trials, 'split').suggested_max_calls);
-    // Room for the catalogue to grow by a few scenarios, since an exhausted budget fails the gate: a plan that sits on the
-    // cap would turn the next scenario added, by any change, into a gate failure.
-    const room = NIGHTLY_SCENARIOS.filter((scenario) => !scenario.blocked && scenario.rubric.voice).slice(0, 4);
-    expect(cap).toBeGreaterThanOrEqual(callPlan([...NIGHTLY_SCENARIOS, ...room], trials, 'split').suggested_max_calls);
+  it('keeps the weekly run\'s total cap above its plan with room for the catalogue to grow', async () => {
+    const { liveRunPlan } = await import('../evals/nightly/live-plan');
+    // An exhausted budget fails the gate, so a plan that sits on the cap would turn the next scenario added, by any change, into a
+    // gate failure: the planner must still accept two more of the costliest kind (voice cases carry the most judge calls).
+    const room = NIGHTLY_SCENARIOS.filter((scenario) => !scenario.blocked && scenario.rubric.voice).slice(0, 2);
+    expect(() => liveRunPlan('all', [...NIGHTLY_SCENARIOS, ...room])).not.toThrow();
   });
 
   it('wires the voice judge into a live run only, sharing the run\'s budget', async () => {

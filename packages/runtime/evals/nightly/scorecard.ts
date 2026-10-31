@@ -47,7 +47,7 @@ const rates = (rows: readonly ScenarioRow[]): Rates => {
   };
 };
 
-export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage; profile?: 'staging'; subset?: string }>) => {
+export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage; profile?: 'staging'; subset?: string; shard?: string }>) => {
   const scenarios = results.map((result) => row(result, run.trials));
   return {
     version: 1 as const,
@@ -55,6 +55,7 @@ export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ ca
     judge_model: run.judge,
     ...(run.profile ? { profile: run.profile } : {}),
     ...(run.subset ? { subset: run.subset } : {}),
+    ...(run.shard ? { shard: run.shard } : {}),
     trials_per_scenario: run.trials,
     scenarios,
     pains: Object.fromEntries(PAINS.map((pain) => [pain, rates(scenarios.filter((entry) => entry.pain === pain))])) as Record<Pain, Rates>,
