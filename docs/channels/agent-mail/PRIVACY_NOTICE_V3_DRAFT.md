@@ -14,6 +14,8 @@ Agent mail is opt-in per user. Claiming an address is the switch: a user without
 >
 > **What Waldo ignores.** All other mail is discarded unread, without a reply or a bounce. Waldo keeps only a daily count of how many such messages arrived, for 30 days. Waldo reads at most 50 messages a day for you; mail beyond that is discarded the same way and counted.
 >
+> **Mail Waldo sends.** When you approve it, Waldo can send mail from your Waldo address to other people. It is signed as your assistant ("Waldo, <your first name>'s assistant"), and before each send Waldo shows you the exact message, with its recipients, and sends nothing until you approve that message.
+>
 > **Mail is not you.** Anyone can write any From line, so Waldo treats every mail as outside content, never as an instruction from you. A mail can't make Waldo act for you. If something in it calls for an action (a reply, a calendar change, a reminder), Waldo asks you first.
 >
 > **How Waldo reads it.** Waldo reads the message the way it reads your Gmail when you ask it to: the sender and recipients, the subject, the body and up to four attachments. It sends them to the AI model provider that runs Waldo, under the same terms as your chat messages. Waldo then tells you what matters in your chat, and that message is kept like the rest of your chat.
