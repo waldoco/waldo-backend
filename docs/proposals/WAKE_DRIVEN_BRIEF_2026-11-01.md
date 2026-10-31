@@ -1,12 +1,12 @@
 # Wake-driven Brief
 
-Status: **Proposed**. Design only, no code. The owner asked for it ("Yes, design it"). It builds on S8c-1 (#1780).
+Status: **Proposed**. Design only, no code. Code references are pinned to `beta-mvp` at `b80f0f1a`; ADR-0081 references to waldo-brain `7faba7e`. The owner asked for it ("Yes, design it"). It builds on S8c-1 (#1780).
 
 ## The ask
 
 The owner's words: when the owner wears their wearable and wakes up, "Waldo should automatically understand that now they have woken up… start creating the brief and then send those notifications when the user wakes up and starts their phone".
 
-Today the Brief's time is planned the night before (`planToday`, nightly at 03:00 and at boot). S8c-1 re-plans it when today's calendar changes. Waking up is not used anywhere: nothing in the backend stores or emits a "woke" signal [verified at `3352cee9`; the only wake logic is `scores/energy-windows.ts:56`, inside the health-plane recompute].
+Today the Brief's time is planned the night before (`planToday`, nightly at 03:00 and at boot). S8c-1 re-plans it when today's calendar changes. Waking up is not used anywhere: nothing in the backend stores or emits a "woke" signal [verified at `b80f0f1a`; the only wake logic is `scores/energy-windows.ts:56`, inside the health-plane recompute].
 
 ## Shape in one paragraph
 
@@ -49,7 +49,7 @@ Each claim below names Apple's documentation. Anything not confirmed on a device
 
 **When it fails**, each of these leaves the planned time to fire the Brief:
 - **The Watch syncs late.** When Watch sleep reaches the iPhone is not documented [unverified]. One developer reports a delay of "many minutes" ([forum thread 763329](https://developer.apple.com/forums/thread/763329)). The signal comes late.
-- **No Watch, or a ring or WHOOP only.** WHOOP and Oura come in through provider sync (`owner-do.ts:1676`) on the same recompute path. Their nights arrive when the provider posts them.
+- **No Watch, or a ring or WHOOP only.** WHOOP and Oura come in through provider sync (`owner-do.ts:1677`) on the same recompute path. Their nights arrive when the provider posts them.
 - **Phone off, Low Power Mode, or Background App Refresh off.** Low Power Mode pauses background activity ([backgroundRefreshStatus](https://developer.apple.com/documentation/uikit/uiapplication/backgroundrefreshstatus)). Whether it also stops HealthKit delivery is [unverified].
 - **The app was force-quit.** It is not relaunched for HealthKit; an Apple DTS engineer says so on [forum thread 775325](https://developer.apple.com/forums/thread/775325), not in the docs.
 
@@ -62,12 +62,12 @@ Each claim below names Apple's documentation. Anything not confirmed on a device
 ### Where "the night is in" is decided (ADR-0081)
 
 - **Computed in the health plane.** The decision is a health computation, so it lives there, in the recompute that already runs after every ingest (`health/recompute.ts:69-76`, debounced to one run a minute).
-  - The producer already picks the night: the newest asleep reading for the waking day (`health/producer.ts:150-156`).
+  - The producer already picks the night: the newest asleep reading for the waking day (`health/producer.ts:153-159`).
 - **How the producer knows the night changed.** It must remember which night it chose last time; a counter alone can't tell it that.
   - The derived row in the health plane (Supabase) keeps a `night_ref`: a digest of the chosen night's source, session and end.
   - On each run the producer compares the new digest with the stored one, writes the new one, and returns `nightChanged: true` with its outcome.
   - `night_ref` stays in the health plane. It is **not** returned by `health_context_read`, whose output also feeds prompts, so that RPC's matrix entry and fixtures are unchanged.
-- **Not routed through today's wake gate.** Today's wakes run only while the owner has health proposals on (`owner-do.ts:4811`, `wakes.enabled`), and every reason goes to the health trigger (`healthWoken` → `armHealthTrigger`).
+- **Not routed through today's wake gate.** Today's wakes run only while the owner has health proposals on (`owner-do.ts:4833`, `wakes.enabled`), and every reason goes to the health trigger (`healthWoken` → `armHealthTrigger`).
   - The night signal gets its own callback: `nightRecorded(day)`, called when a run returns `nightChanged` for today.
   - It is gated on `WAKE_BRIEF`, the owner's `daily_brief` and model-use consent, not on `health_proposals`.
   - Backfilled rows never call it (ADR-0081 §5, `:355`).
