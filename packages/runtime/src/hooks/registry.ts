@@ -390,22 +390,32 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
 
     const parsed = schema.safeParse(payload.args);
     if (!parsed.success) {
-      // Model-authored args are safe to echo: the message is the model's recovery path, so name
-      // the failing fields and the format the schema expects instead of an opaque halt.
-      const rawIssues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues;
-      const issues = rawIssues
-        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-        .join('; ');
-      // The datetime hint only when a datetime actually failed validation: appended blindly it
-      // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
-      // UTC offset that was never the problem).
-      const datetimeFailed = rawIssues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
-      const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
-      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly${hint}`, 'invalid_args');
+      return halt(invalidArgumentsCause((parsed as { success: false; error: { issues: readonly ArgumentIssue[] } }).error.issues), 'invalid_args');
     }
 
     return ok();
   },
+};
+
+export type ArgumentIssue = Readonly<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+export const MAX_ARGUMENT_ISSUES = 6;
+const MAX_ISSUE_PATH_CHARS = 80;
+const MAX_ISSUE_MESSAGE_CHARS = 200;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+// The model's recovery path when its arguments miss a schema: the failing fields and what the schema expected there.
+// Model-authored args are safe to echo, and zod's messages name types and bounds, not the values sent. A call with many
+// bad fields names the first few and counts the rest, so the cause stays well inside the tool error cap.
+export const invalidArgumentsCause = (issues: readonly ArgumentIssue[]): string => {
+  const named = issues.slice(0, MAX_ARGUMENT_ISSUES)
+    .map((issue) => `${clip(issue.path.map(String).join('.'), MAX_ISSUE_PATH_CHARS) || '(root)'}: ${clip(issue.message, MAX_ISSUE_MESSAGE_CHARS)}`);
+  const more = issues.length > MAX_ARGUMENT_ISSUES ? [`and ${issues.length - MAX_ARGUMENT_ISSUES} more`] : [];
+  // The datetime hint only when a datetime actually failed validation: appended blindly it
+  // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
+  // UTC offset that was never the problem).
+  const datetimeFailed = issues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
+  const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
+  return `invalid tool arguments: ${[...named, ...more].join('; ')}; match the tool schema exactly${hint}`;
 };
 
 export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
