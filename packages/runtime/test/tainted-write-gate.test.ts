@@ -54,7 +54,6 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
     ['browse_act', { url: 'https://example.com/form', task: 'Save the attachment', max_actions: 1, command: { operation: 'download', element_ref: 'e2' } }],
     ['browse_act', { url: 'https://example.com/form', task: 'Fill the form', max_actions: 1 }],
   ],
-  'skill selection': [['skills_load', { name: 'meal-activity-log-and-planning', version: 1 }]],
 };
 
 describe('a tainted turn sends every write to the owner card', () => {
@@ -99,6 +98,12 @@ describe('a tainted turn sends every write to the owner card', () => {
     const { handler, runs } = recording('remember');
     const args = { kind: 'preference', text: 'Prefers morning calls', evidence_quote: 'I prefer morning calls' };
     expect(await dispatchTool({ id: 'r', name: 'remember', args }, tainted(), { handlers: [handler] })).toMatchObject({ ok: true });
+    expect(runs).toHaveLength(1);
+  });
+
+  it('choosing a reviewed procedure runs under outside text: it carries instructions, not a tool', async () => {
+    const { handler, runs } = recording('skills_load');
+    expect(await dispatchTool({ id: 'load', name: 'skills_load', args: { name: 'day-brief', version: 2 } }, tainted(), { handlers: [handler] })).toMatchObject({ ok: true });
     expect(runs).toHaveLength(1);
   });
 
@@ -162,7 +167,7 @@ describe('a tainted turn sends every write to the owner card', () => {
       'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'skills_load', 'start_task',
+      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
@@ -180,7 +185,7 @@ const rows = (state: DurableObjectState) => state.storage.sql.exec<{ id: string;
 describe('propose_action carries every carded write', () => {
   it('each carded write goes on one card and runs once when the owner approves; "call it directly" holds exactly when the gate admits it', async () => {
     await runInDurableObject(stub('carry'), async (_instance, state) => {
-      const calls = Object.values(WRITES).flat().filter(([tool]) => tool !== 'browse_act' && tool !== 'skills_load');
+      const calls = Object.values(WRITES).flat().filter(([tool]) => tool !== 'browse_act');
       for (const [tool, args] of calls) {
         const { handler, runs } = recording(tool);
         const handlers = [handler];

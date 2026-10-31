@@ -463,7 +463,7 @@ export const recordNeedsOwnerCard = async (
 ): Promise<boolean> => {
   if (record.claim === null) return false;
   switch (record.tainted?.exempt) {
-    case 'draft': case 'honest_origin': return false;
+    case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
     default: return true;
