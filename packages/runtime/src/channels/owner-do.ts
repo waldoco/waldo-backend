@@ -5097,8 +5097,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The sweep job's apply: the update-card turn on the job's changes, with the sweep's tools and the health logs as turn
     // context, tainted. Its card goes through the final outbox under the job's key, and is recorded sent once delivered.
     const today = () => localIso(Date.now(), clock.timezone).slice(0, 10);
+    // The owner's zone is read at each apply: a job written before they changed it is judged on their clock now.
     const updateSweepApply = updateSweepApplier({
-      updates, timezone: clock.timezone, now: () => Date.now(), sourceFollowups: sweepSourceFollowups,
+      updates, get timezone() { return clock.timezone; }, now: () => Date.now(), sourceFollowups: sweepSourceFollowups,
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
       transaction: work => storage.transactionSync(work),
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),

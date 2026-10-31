@@ -58,10 +58,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-const wire = { pushes: [] as { body: string; data: unknown }[], sent: [] as string[], meals: [] as unknown[] };
+const wire = { pushes: [] as { body: string; data: unknown }[], sent: [] as string[], meals: [] as unknown[], expoDown: false };
 let clock = 0;
 beforeEach(() => {
-  wire.pushes = []; wire.sent = []; wire.meals = []; fixture.listed = []; fixture.changed = []; fixture.mail = []; fixture.prompts = []; fixture.requests = [];
+  wire.pushes = []; wire.sent = []; wire.meals = []; wire.expoDown = false; fixture.listed = []; fixture.changed = []; fixture.mail = []; fixture.prompts = []; fixture.requests = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -75,6 +75,7 @@ beforeEach(() => {
     if (fn === 'assert_channel_presence') return Response.json(false);
     if (url === 'https://exp.host/--/api/v2/push/send') {
       wire.sent.push(String(init?.body));
+      if (wire.expoDown) return new Response('unavailable', { status: 503 });
       for (const message of JSON.parse(String(init?.body)) as { body: string; data: unknown }[]) wire.pushes.push({ body: message.body, data: message.data });
       return Response.json({ data: [{ status: 'ok', id: 'ticket-1' }] });
     }
@@ -286,4 +287,88 @@ it('a settled job wakes the sweep; a tick inside the judge gap pulls it to the g
       expect(sweepJobs()).toHaveLength(2);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
+});
+
+// Time, with the owner's zone read live. Across the night US clocks fall back (1 Nov 2026, 02:00 EDT to 01:00 EST) the
+// Brief delivered at 00:30 EDT is still that day's when a move at 01:30 EST revises it. After the owner moves to a zone where
+// the Brief's day has not begun, the turn sees their new clock and no card reached them today, so it cannot revise one.
+const moveAfterBrief = async (name: string, zone: string, briefAt: string, moveAt: string, zoneAfterBrief?: string) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const originalNow = Date.now;
+    clock = Date.parse(briefAt) - 2 * 60_000;
+    Date.now = () => clock;
+    try {
+      claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
+      state.storage.kv.put('do_name', name);
+      state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+      state.storage.kv.put('timezone', zone);
+      state.storage.kv.put('timezone_confirmed', true);
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', UPDATE_PUSH_NAMES: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+        OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: zone, WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: 'synthetic-expo-access',
+        GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
+      await owner.setup('app').ready;
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const due = async (id: string, kind: 'brief' | 'pre_activity_spot') => {
+        state.storage.sql.exec('DELETE FROM schedule');
+        await scheduler.schedule({ id, kind, payloadRefs: { id }, occurrenceAt: clock - 1000, dueAt: clock - 1000, recurrence: null });
+      };
+      const alarm = async () => { state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
+      const meeting = { ...SYNC, start: new Date(Date.parse(moveAt) + 3 * 3_600_000).toISOString(), end: new Date(Date.parse(moveAt) + 3.5 * 3_600_000).toISOString() };
+      const day = (at: number, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
+      fixture.listed = [meeting];
+      fixture.push = PUSH;
+      await due(BRIEF_SWEEP_ID, 'pre_activity_spot');
+      await alarm();
+      clock = Date.parse(briefAt);
+      dayPlanBook(state.storage.sql).save(day(clock, zone), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due('card:brief', 'brief');
+      await alarm();
+      clock += 1000;
+      await alarm();
+      expect(dayPlanBook(state.storage.sql).reached(day(clock, zone), 'card:brief')).toBe(true);
+      if (zoneAfterBrief) state.storage.kv.put('timezone', zoneAfterBrief);
+      clock = Date.parse(moveAt);
+      const moved = { ...meeting, start: new Date(Date.parse(meeting.start) + 3_600_000).toISOString(), end: new Date(Date.parse(meeting.end) + 3_600_000).toISOString() };
+      fixture.listed = [moved];
+      fixture.changed = [{ ...moved, status: 'confirmed', created: '2026-10-01T00:00:00Z' }];
+      await due(BRIEF_SWEEP_ID, 'pre_activity_spot');
+      await alarm();
+      const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
+      const [job] = state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray();
+      expect(jobs.report(jobs.startAttempt(job!.id)!, FOUND, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      clock += 60_000;
+      await alarm();
+      clock += 1000;
+      await alarm();
+      return {
+        prompt: fixture.prompts[0] ?? '',
+        revisions: dayPlanBook(state.storage.sql).revisions(day(Date.parse(briefAt), zone)),
+        effects: JSON.stringify(state.storage.sql.exec("SELECT * FROM trace_log WHERE hop = 'update_effects'").toArray()),
+      };
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+
+it('across the night clocks fall back, a move revises the Brief delivered before it, on the same local day', async () => {
+  const seen = await moveAfterBrief('day-state-dst', 'America/New_York', '2026-11-01T04:30:00Z', '2026-11-01T06:30:00Z');
+  expect(seen.prompt).toContain('[Update check, 2026-11-01T01:3');
+  expect(seen.revisions.get('card:brief')).toMatchObject({ revision: 1 });
+  expect(seen.effects).toContain('revise+push');
+});
+
+it('after the owner moves to a zone where the Brief\'s day has not begun, the turn sees the new clock and revises nothing', async () => {
+  const seen = await moveAfterBrief('day-state-zone-change', 'UTC', '2026-10-20T07:00:00Z', '2026-10-20T07:20:00Z', 'Pacific/Honolulu');
+  expect(seen.prompt).toContain('[Update check, 2026-10-19T21:2');
+  expect(seen.prompt).not.toContain('The Brief reached them');
+  expect(seen.revisions.size).toBe(0);
+  expect(seen.effects).toContain('revise_undelivered');
+});
+
+it('a push Expo refuses leaves the revision in place', async () => {
+  wire.expoDown = true;
+  const seen = await moveAfterBrief('day-state-expo-down', 'UTC', '2026-10-20T07:00:00Z', '2026-10-20T07:20:00Z');
+  expect(seen.revisions.get('card:brief')).toMatchObject({ revision: 1 });
+  await vi.waitFor(() => expect(wire.sent.some(body => body.includes('"trigger":"update"'))).toBe(true));
+  expect(wire.pushes).toEqual([]);
 });
