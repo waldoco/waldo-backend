@@ -112,8 +112,9 @@ const base = (thread: string | null) => thread === null ? CHAT_URL : `${CHAT_URL
 const pageQuery = (cursor: string | null, limit: number) => { const query = new URLSearchParams({ limit: String(limit) }); if (cursor) query.set('cursor', cursor); return query; };
 const json = (body: object): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-// Today's cards as the app's day view gives them, for Today's messages: what each delivered to Main chat, and whether the daily brief is on.
-export const fetchAppDay = async (signal?: AbortSignal) => readAppDay(await request(`${CHAT_URL}/day`, { signal, headers: { 'x-waldo-app-contract': 'controls=3' } }));
+// Today's cards as the app's day view gives them, for Today's messages: what each delivered to Main chat, whether Waldo revised it
+// since (controls revision 9, whose latest is the newest revision), and whether the daily brief is on.
+export const fetchAppDay = async (signal?: AbortSignal) => readAppDay(await request(`${CHAT_URL}/day`, { signal, headers: { 'x-waldo-app-contract': 'controls=9' } }));
 export const fetchChatPage = async (cursor: string | null, limit: number, signal?: AbortSignal): Promise<ChatPage> =>
   readChatPage(await request(`${CHAT_URL}?${pageQuery(cursor, limit)}`, { signal }));
 export const fetchThreadPage = async (thread: string, cursor: string | null, limit: number): Promise<{ thread: ChatThread; page: ChatPage }> => {

@@ -131,8 +131,8 @@ export const APP_CONTROLS_IDENTITY_REVISION = 7;
 export const APP_CONTROLS_MEMORY_SIGNAL_REVISION = 8;
 // Controls revision 9 (`controls=9`): a day card Waldo revised after delivering it, because the owner's day changed, carries
 // revision (how many revisions reached the owner today) and revised_at (epoch ms, the latest one), together or not at all,
-// and its latest names the newest revision's Main chat row. The original row stays in the chat and in day history. Below 9
-// neither field is sent and latest stays the original delivery.
+// and its latest names the newest revision's Main chat row, or is null when that revision reached the owner outside the app.
+// The original row stays in the chat and in day history. Below 9 neither field is sent and latest stays the original delivery.
 export const APP_CONTROLS_DAY_CARD_REVISION = 9;
 const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;

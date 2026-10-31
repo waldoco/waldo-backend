@@ -369,6 +369,11 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       `SELECT * FROM task_jobs WHERE origin = ? AND status IN (${placeholders(OPEN)}) AND json_extract(brief_json, '$.machine.scope') = ? ORDER BY created_at LIMIT 1`,
       `${MACHINE_ORIGIN}${job}`, ...OPEN, scope,
     ).toArray()[0] ?? null,
+    // When the latest machine job of a job was written, open or settled. A settled row's brief is cut down, so this goes by
+    // origin alone.
+    lastMachine: (job: MachineJob): number | null => sql.exec<{ at: number | null }>(
+      'SELECT MAX(created_at) AS at FROM task_jobs WHERE origin = ?', `${MACHINE_ORIGIN}${job}`,
+    ).toArray()[0]?.at ?? null,
     // The owner turned a machine job off: its open jobs are cancelled. Answers the ids, for their workers to be fenced.
     cancelMachine(job: MachineJob): readonly string[] {
       return sql.exec<{ id: string }>(`SELECT id FROM task_jobs WHERE origin = ? AND status IN (${placeholders(OPEN)})`, `${MACHINE_ORIGIN}${job}`, ...OPEN)

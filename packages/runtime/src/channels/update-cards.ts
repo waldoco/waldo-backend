@@ -9,6 +9,9 @@ const LAST_SEEN_KEPT_MS = 14 * DAY_MS;
 // current times, so a meeting moved out of the next two days is otherwise never seen.
 const DAY_STATE_BACK_MS = DAY_MS;
 const DAY_STATE_AHEAD_MS = 14 * DAY_MS;
+// A kept event moved past the two weeks is read in the year after them: Google returns only what changed since the last read,
+// and the sweep keeps only those it saw before.
+const MOVED_OUT_MS = 366 * DAY_MS;
 // The events the once-a-day read keeps, soonest first.
 const SEED_EVENTS = 250;
 
@@ -177,7 +180,8 @@ export type ChangeRead = Readonly<{
   observed: readonly Readonly<{ source_ref: string; thread_id: string; at: number; message_id: string }>[];
   // With the day state: the owner day, the day's full read of events when it was due, and each changed event as it is now
   // (null when it was cancelled), by id.
-  seen?: Readonly<{ day: string; seed: readonly SeenEvent[] | null; changed: ReadonlyMap<string, SeenEvent | null> }>;
+  // seedCapped: the day's read reached its cap, so the latest events in the window are not kept and their changes carry no before.
+  seen?: Readonly<{ day: string; seed: readonly SeenEvent[] | null; seedCapped: boolean; changed: ReadonlyMap<string, SeenEvent | null> }>;
 }>;
 // The kept title only answers whether it changed. It is an HMAC under a random key made once for the owner's object and kept in
 // its own storage, never logged or exported, so a short, guessable title can't be recovered from it by hashing a dictionary.
@@ -204,7 +208,11 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const [from, to] = dayState ? [now - DAY_STATE_BACK_MS, now + DAY_STATE_AHEAD_MS] : [now, now + 2 * DAY_MS];
-  const items = calendarSince === null ? [] : await google.changedEvents(calendarSince, from, to);
+  const window = calendarSince === null ? [] : await google.changedEvents(calendarSince, from, to);
+  const ids = new Set(window.map(item => item.id));
+  const movedOut = dayState && calendarSince !== null
+    ? (await google.changedEvents(calendarSince, to, to + MOVED_OUT_MS)).filter(item => !ids.has(item.id) && book.lastSeen(item.id) !== null) : [];
+  const items = [...window, ...movedOut];
   const calendar = items.map((item) => toChange(item, calendarSince!));
   const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];
   const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => {
@@ -218,7 +226,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const seed = book.seedDue(dayState.day)
     ? await Promise.all((await dayState.events(new Date(from).toISOString(), new Date(to).toISOString(), SEED_EVENTS, true)).map(seenOf(dayState.titleDigest))) : null;
   const changed = new Map(await Promise.all(items.map(async (item): Promise<[string, SeenEvent | null]> => [item.id, item.status === 'cancelled' ? null : await seenOf(dayState.titleDigest)(item)])));
-  return { changes: [...calendar, ...mail], observed, now, seen: { day: dayState.day, seed, changed } };
+  return { changes: [...calendar, ...mail], observed, now, seen: { day: dayState.day, seed, seedCapped: (seed?.length ?? 0) >= SEED_EVENTS, changed } };
 };
 // Records what the read observed and moves the watermarks. With the day state it also keeps each event as last seen, and
 // returns each calendar change with what the event was before it, read before anything this read saw is kept.
