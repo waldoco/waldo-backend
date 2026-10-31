@@ -1,7 +1,7 @@
 import type { AppTile } from './connect-app';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { PROFILE_KINDS } from '../memory/claims';
-import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
+import { calendarInviteDetails, DRAFT_SEND_KINDS, type ApprovalItem, type ApprovalReview } from './approvals';
 import type { CardLatest, CardViewState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
@@ -341,8 +341,6 @@ const serviceStatus = (view: ConsoleView) => {
 // the safe direction - it can only prevent a send, never cause one - so it offers Don't do this
 // for open send proposals. That also un-strands proposals whose Telegram approval card lost its
 // inline keyboard.
-// The sends whose review is their exact draft: an email from the owner's Gmail, a message, and an email as Waldo.
-export const DRAFT_SEND_KINDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
   (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && DRAFT_SEND_KINDS.includes(item.kind);
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));

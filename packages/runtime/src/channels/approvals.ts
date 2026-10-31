@@ -239,8 +239,9 @@ const reviewMessage = (p: MessageSendProposal) => p.content;
 const reviewAgentMail = (p: AgentMailSendProposal) =>
   [`From: ${p.from.name} <${p.from.address}>`, `To: ${p.to.join(', ')}`, ...(p.cc.length ? [`Cc: ${p.cc.join(', ')}`] : []), `Subject: ${p.subject}`, '', p.body].join('\n');
 const describeAgentMail = (p: AgentMailSendProposal) => `Send email as Waldo from ${p.from.address} to ${p.to.join(', ')}: "${p.subject}"`;
-// The sends whose card is the exact draft: what goes out is checked against the stored payload the card showed.
-const DRAFT_SENDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
+// The sends whose card is their exact draft: an email from the owner's Gmail, a message, and an email as Waldo. What goes
+// out is checked against the stored payload the card showed, and the console may send them from that review.
+export const DRAFT_SEND_KINDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
@@ -598,7 +599,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
     // Whatever its card recorded, even one shown before this rule: a kind the app gates is never approved from chat.
     if (HANDS_TO_APP.has(via.surface) && approvedInApp(entry)) return [];
-    if (via.surface === 'console') return DRAFT_SENDS.includes(entry.kind) || (entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json))) ? live.filter(approves) : [];
+    if (via.surface === 'console') return DRAFT_SEND_KINDS.includes(entry.kind) || (entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json))) ? live.filter(approves) : [];
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
     return (tapped.length ? tapped : mine).filter(approves);
@@ -744,7 +745,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'card_unconfirmed' && entry.card_waits_on != null) return { toast: 'Not out yet', message: `That card has not reached you on ${entry.card_waits_on} yet; it goes out there when you next write. Nothing was done.` };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry, via, action);
-    if (action === 'a' && entry.status === 'open' && DRAFT_SENDS.includes(entry.kind) && !await shownAsStored(entry, via)) {
+    if (action === 'a' && entry.status === 'open' && DRAFT_SEND_KINDS.includes(entry.kind) && !await shownAsStored(entry, via)) {
       setStatus(id, 'failed');
       return changedSend(entry);
     }

@@ -1,6 +1,6 @@
-import {parseConsoleAction,NOTICES,consoleMayApprove,DRAFT_SEND_KINDS,waitingMaySend,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
+import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
 import {HANDOFF_PARAM} from './connect-confirm';
-import type {ApprovalDecision} from './approvals';
+import {DRAFT_SEND_KINDS,type ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 import {whatsAppWaldoNumber} from './whatsapp-send-url';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';

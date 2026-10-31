@@ -1,5 +1,5 @@
-import type { ApprovalReview } from './approvals';
-import { consoleMayApprove, DRAFT_SEND_KINDS, waitingMaySend, type ConsoleView } from './console';
+import { DRAFT_SEND_KINDS, type ApprovalReview } from './approvals';
+import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
