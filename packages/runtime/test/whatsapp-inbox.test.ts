@@ -2,7 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import { WA_UPDATE_BASE } from '../src/channels/whatsapp-api';
-import { WHATSAPP_INBOX_DUE_KEY, WHATSAPP_INBOX_MAX_OPEN, WHATSAPP_RUNNING_CHECK_MS, WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
+import { WHATSAPP_FINISHED_RETENTION_MS, WHATSAPP_INBOX_DUE_KEY, WHATSAPP_INBOX_MAX_OPEN, WHATSAPP_RUNNING_CHECK_MS, WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
 
 const SUBJECT = '15550001111';
 const text = (seq: number, body: string, extra: object = {}) => ({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: Number(SUBJECT), is_bot: false }, chat: { id: Number(SUBJECT), type: 'private' }, text: body, ...extra } });
@@ -91,30 +91,30 @@ it('revoking closes queued and running rows, and a running turn stops at its nex
   expect(storage.kv.get(WHATSAPP_INBOX_DUE_KEY)).toBeUndefined();
 }));
 
-it('forget redacts a queued row\'s text, caption, quoted reply and file name, and counts what a running row still holds', () => withInbox((inbox, storage, clock) => {
+it('forget redacts a waiting row\'s text, caption, quoted reply and file name, and a running row\'s too, and reports nothing left', () => withInbox((inbox, storage, clock) => {
   storage.transactionSync(() => inbox.admit([
     { update: text(1, 'my passport number is X123'), wamid: 'wamid.A' },
     { update: { update_id: WA_UPDATE_BASE + 2, message: { caption: 'X123 scan', document: { file_id: 'm1', file_name: 'X123.pdf' }, reply_to_message: { text: 'you said X123' } } }, wamid: 'wamid.B' },
     { update: text(3, 'nothing to see'), wamid: 'wamid.C' },
   ], SUBJECT));
   const holds = (value: string) => value.includes('X123'), redact = (value: string) => value.replaceAll('X123', '[forgotten]');
+  // The first row is running: its turn holds its own copy, and the stored row is redacted all the same.
+  const running = inbox.claimNext(clock.now + 60_000)!;
   expect(inbox.forget(redact, holds)).toEqual({ rewritten: 2, remaining: 0 });
   expect(JSON.stringify(inbox.records().map(row => row.update))).not.toContain('X123');
+  expect(inbox.get(running.id)?.update).toMatchObject({ message: { text: 'my passport number is [forgotten]' } });
   expect(inbox.get(inbox.records()[1]!.id)?.update).toMatchObject({ message: { caption: '[forgotten] scan', document: { file_id: 'm1', file_name: '[forgotten].pdf' }, reply_to_message: { text: 'you said [forgotten]' } } });
-  for (let row = inbox.claimNext(clock.now + 60_000); row; row = inbox.claimNext(clock.now + 60_000)) inbox.settle(row, true);
-  storage.transactionSync(() => inbox.admit([{ update: text(4, 'X123 again'), wamid: 'wamid.D' }], SUBJECT));
-  const running = inbox.claimNext(clock.now + 60_000)!;
-  // The running row is usually the forget request itself: it is left alone and its text goes when it closes.
   expect(inbox.forget(redact, holds)).toEqual({ rewritten: 0, remaining: 0 });
-  expect(inbox.get(running.id)?.update).toMatchObject({ message: { text: 'X123 again' } });
 }));
 
-it('finished rows past the wamid retention are dropped at the next admission', () => withInbox((inbox, storage, clock) => {
-  admit(inbox, storage, [{ wamid: 'wamid.old', body: 'old' }]);
-  inbox.settle(inbox.claimNext(clock.now + 60_000)!, true);
-  clock.now += 8 * 24 * 60 * 60_000;
-  admit(inbox, storage, [{ wamid: 'wamid.new', body: 'new' }]);
-  expect(inbox.records().map(row => row.wamid)).toEqual(['wamid.new']);
+it('only waiting and running rows count toward the cap; finished rows go a day after they close', () => withInbox((inbox, storage, clock) => {
+  admit(inbox, storage, Array.from({ length: WHATSAPP_INBOX_MAX_OPEN }, (_, index) => ({ wamid: `wamid.${index}`, body: `message ${index}` })));
+  for (let row = inbox.claimNext(clock.now + 60_000); row; row = inbox.claimNext(clock.now + 60_000)) inbox.settle(row, true);
+  admit(inbox, storage, [{ wamid: 'wamid.after', body: 'after a full day of messages' }]);
+  expect(inbox.records()).toHaveLength(WHATSAPP_INBOX_MAX_OPEN + 1);
+  clock.now += WHATSAPP_FINISHED_RETENTION_MS + 1;
+  admit(inbox, storage, [{ wamid: 'wamid.next', body: 'next day' }]);
+  expect(inbox.records().map(row => row.wamid)).toEqual(['wamid.after', 'wamid.next']);
 }));
 
 it('claimNext returns null only when nothing waits: a drain that stops on null takes every waiting row once, in order', () => withInbox((inbox, storage, clock) => {

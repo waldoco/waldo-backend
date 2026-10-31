@@ -233,7 +233,7 @@ import { newSessionCanaryTokens, ownerToolApproval } from './owner-turn';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
-import { WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox, redactWhatsAppInboxEntries, type WhatsAppInboxRecord } from './whatsapp-inbox';
+import { WHATSAPP_RUNNING_CHECK_MS, WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox, redactWhatsAppInboxEntries, type WhatsAppInboxRecord } from './whatsapp-inbox';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import { InMemoryCircuitBreaker, type LLMAttempt } from '../llm/provider';
@@ -2060,11 +2060,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   // WhatsApp turns, one inbox row at a time, under the alarm's own wall clock (whatsapp-inbox). A message that arrives while a
   // turn runs waits as its row and this pass takes it next. A running row whose attempt is live nowhere was cut off: it closes
-  // as interrupted and its owner gets the one notice once that commits. Without a WhatsApp transport nothing is claimed.
+  // as interrupted and its owner gets the one notice once that commits.
   private readonly whatsappAttempts = new Set<string>();
   private async drainWhatsApp(alarmEnd?: number): Promise<void> {
-    if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) return;
     const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
+    // Without a WhatsApp transport nothing can be claimed or sent: waiting rows wake again in a minute, not at the floor.
+    if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) { inbox.deferWake(WHATSAPP_RUNNING_CHECK_MS); return; }
     for (const record of this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts))) await this.whatsappNotice(record);
     while (inbox.next()) {
       // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this turn

@@ -234,6 +234,19 @@ it('a held pass runs the WhatsApp turns and nothing else: every other lane waits
   });
 });
 
+it('without a WhatsApp transport the waiting row is left alone and wakes again in a minute, not at the alarm floor', async () => {
+  await harness('whatsapp-second-message-no-secret', async ({ instance, state, inbox }) => {
+    expect((await post(instance, 'wamid.nosecret.A', 'Find me flights to Goa.')).status).toBe(200);
+    const bare = new OwnerDO(state, { ...env, WHATSAPP_ACCESS_TOKEN: undefined, WHATSAPP_PHONE_NUMBER_ID: undefined });
+    const before = Date.now();
+    await bare.alarm();
+    expect(states(inbox)).toEqual([['wamid.nosecret.A', 'admitted']]);
+    // The arbiter arms from this key; other lanes' own wakes may still come sooner.
+    expect(state.storage.kv.get<number>(WHATSAPP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(before + 60_000);
+    expect(model.turns).toEqual([]);
+  });
+});
+
 // Meta shows the indicator for 25 seconds or until the reply, so a gap longer than that reads as Waldo having stopped.
 const META_TYPING_SHOWS_MS = 25_000;
 

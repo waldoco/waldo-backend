@@ -2,7 +2,7 @@ import { literalTextRedactor } from '@waldo/contracts';
 import { carriesTopic } from '../memory/forget-guard';
 import { WHATSAPP_INBOX_DUE_KEY } from '../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { WA_UPDATE_BASE, WAMID_RETENTION_MS, type WaSyntheticUpdate } from './whatsapp-api';
+import { WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
 
 // Owner-DO side of WhatsApp ingress: one durable row per owner message, written in the same synchronous step that claims its
 // wamid and before Meta gets its 200. The alarm drains the rows one turn at a time, so a message that arrives while another
@@ -14,8 +14,10 @@ export const WHATSAPP_TURN_DEADLINE_MS = 15 * 60_000;
 // While a turn runs and nothing waits behind it, the drain is woken this often, so a turn cut off by an eviction is found
 // and its owner told within about a minute.
 export const WHATSAPP_RUNNING_CHECK_MS = 60_000;
+// Only waiting and running rows count toward the cap. A finished row holds no text and is dropped a day after it closes;
+// wamid dedupe lives in its own claims, so nothing depends on keeping it longer.
 export const WHATSAPP_INBOX_MAX_OPEN = 256;
-const MAX_ROWS = 4096;
+export const WHATSAPP_FINISHED_RETENTION_MS = 24 * 60 * 60_000;
 const PREFIX = 'whatsapp:inbox-record:';
 const SEQ = 'wa_seq';
 
@@ -71,10 +73,9 @@ export class WhatsAppOwnerInbox {
   admit(updates: readonly Readonly<{ update: WaSyntheticUpdate; wamid: string }>[], subject: string): void {
     if (!updates.length) return;
     const now = this.now();
-    let rows = this.records();
-    for (const r of rows) if (!open(r) && (r.closedAt ?? r.admittedAt) < now - WAMID_RETENTION_MS) this.storage.kv.delete(PREFIX + r.id);
-    rows = rows.filter(r => open(r) || (r.closedAt ?? r.admittedAt) >= now - WAMID_RETENTION_MS);
-    if (rows.length + updates.length > MAX_ROWS || rows.filter(open).length + updates.length > WHATSAPP_INBOX_MAX_OPEN) throw new WhatsAppInboxFull();
+    const rows = this.records();
+    for (const r of rows) if (!open(r) && (r.closedAt ?? r.admittedAt) < now - WHATSAPP_FINISHED_RETENTION_MS) this.storage.kv.delete(PREFIX + r.id);
+    if (rows.filter(open).length + updates.length > WHATSAPP_INBOX_MAX_OPEN) throw new WhatsAppInboxFull();
     let seq = this.seq();
     for (const { update, wamid } of updates) {
       const updateId = Number((update as { update_id?: unknown }).update_id);
@@ -156,18 +157,18 @@ export class WhatsAppOwnerInbox {
   }
 
   /**
-   * Literal owner forget: queued rows are redacted before they run. A running row is left alone (it is usually the forget
-   * request itself) and its text goes when it closes; closed rows hold none. Returns the rows rewritten and the not-running
-   * rows still holding a forgotten literal.
+   * Literal owner forget: waiting and running rows are redacted in storage. A running turn already holds its own copy of the
+   * message (it is usually the forget request itself), so redacting its row changes nothing it does; closed rows hold no text.
+   * Returns the rows rewritten and the rows still holding a forgotten literal.
    */
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
     let rewritten = 0;
     for (const r of this.records()) {
-      if (r.state !== 'admitted' || !r.update || !texts(r.update).some(holds)) continue;
+      if (!open(r) || !r.update || !texts(r.update).some(holds)) continue;
       r.update = redacted(r.update, redact);
       this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }
-    return { rewritten, remaining: this.records().filter(r => r.state !== 'running' && texts(r.update).some(holds)).length };
+    return { rewritten, remaining: this.records().filter(r => texts(r.update).some(holds)).length };
   }
 
   private close(r: WhatsAppInboxRecord, state: 'completed' | 'interrupted' | 'revoked'): void {
