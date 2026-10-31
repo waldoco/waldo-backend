@@ -4154,7 +4154,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const turnAttachments = turnAttachmentBook();
     const attachTools = attachmentRoute ? [attachFileHandler({ open: openWorkspace, book: turnAttachments })] : [];
     // One skill book for every surface of this owner: the reviewed catalog, its lifecycle
-    // commands and the workspace receipts reach an app turn exactly as they reach a Telegram turn. The custody key is the
+    // commands and the workspace receipts reach an app, iMessage or WhatsApp turn exactly as they reach a Telegram turn. The custody key is the
     // one the owner's rows were seeded under, so a founder who linked Telegram first keeps the same skills in the app.
     const curatedSkills = (turn: OwnerTurnEnvelope, skillOwner: string, custodyFallback: string, scope: RunEffectScope, assertDispatch: () => Promise<void>, admission?: OwnerMessageAdmission): OwnerSkillCapability => {
       const doName = identity.get<string>('do_name');
@@ -4231,6 +4231,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       };
       await assertOwnerIdentity();
       return curatedSkills(turn, contextOwnerId, contextOwnerId, scope, assertOwnerIdentity);
+    } };
+    // An iMessage turn's skill owner is the principal its inbox record admitted. The identity check binds the book to that
+    // record and this run scope, as the app host binds to its inbox record.
+    const imessageSkillHost: OwnerSkillHost = { prepare: async (turn, contextOwnerId, scope) => {
+      if (probeCapture.current !== null) return undefined;
+      const record = this.activeIMessage;
+      const assertOwnerIdentity = async () => {
+        scope.admit();
+        if (!record || record !== this.activeIMessage || scope !== this.activeScope || record.id !== scope.runId || record.attempt !== scope.attempt
+          || turn.surface !== 'imessage' || turn.text !== iMessageTurnText(record) || turn.traceId !== ownerTurnTrace('imessage', record.updateId)) throw new ClosedRunError();
+      };
+      await assertOwnerIdentity();
+      return curatedSkills(turn, contextOwnerId, contextOwnerId, scope, assertOwnerIdentity);
+    } };
+    // A WhatsApp turn is bound by its run scope, whose commit already closes on an unlink, a rebind or another sender.
+    const whatsappSkillHost: OwnerSkillHost = { prepare: async (turn, contextOwnerId, scope) => {
+      if (probeCapture.current !== null) return undefined;
+      const active = this.activeWhatsApp;
+      const assertOwnerIdentity = async () => {
+        scope.admit();
+        if (!active || active !== this.activeWhatsApp || active.scope !== scope || scope !== this.activeScope || turn.surface !== 'whatsapp') throw new ClosedRunError();
+      };
+      await assertOwnerIdentity();
+      return curatedSkills(turn, contextOwnerId, `whatsapp:${identity.get<string>('whatsapp_subject')}`, scope, assertOwnerIdentity);
     } };
     // The owner principal inside every turn. A Telegram turn is admitted through the same surface admission as an app
     // turn, so its tools, cache key and composed context belong to the directory owner, never to the chat id. Without a
@@ -4338,7 +4362,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel, channel === 'telegram' ? telegramSkillHost : channel === 'app' ? appSkillHost : undefined,
+      undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
       channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeApp;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
