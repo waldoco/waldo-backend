@@ -208,10 +208,10 @@ describe('the rules that pulled against each other are gone', () => {
   // tail (sent every turn already, about 830 bytes), and voice version 2 merged the personality north star (about
   // 2,500 bytes), to 18,803. The cheapest-rung lines (which way to try first, and what a blocked refusal means) add
   // about 230 bytes net of the line they replace, to 19,033. The label read-back rule adds about 280 bytes beside the dose
-  // boundary, to about 19,320. Rule pruning against the eval gate is where the next cuts
-  // come from.
-  it('keeps every delivered behaviour text under 19,350 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_350);
+  // boundary, to about 19,320. A greeting that keeps the conversation going, from the turn context, adds about 130 bytes
+  // to the greeting rule, to about 19,470. Rule pruning against the eval gate is where the next cuts come from.
+  it('keeps every delivered behaviour text under 19,480 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_480);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -220,7 +220,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_350 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_480 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
