@@ -7,7 +7,10 @@ import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
-import { fuseRanked, semanticRecall, semanticRecallFromEnv, workersAiEmbedder, type SemanticRecall } from '../src/memory/semantic-recall';
+import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
+import { modelCost } from '../src/llm/pricing';
+import { COST_ROLLUP_KEY, costRollup, type CostRollupRow } from '../src/observability/cost-rollup';
+import { estimatedTokens, fuseRanked, semanticRecall, semanticRecallFromEnv, semanticTraceEntry, workersAiEmbedder, type SemanticEvent, type SemanticRecall } from '../src/memory/semantic-recall';
 import { fakeEmbeddings, type FakeEmbeddings } from './support/fake-embeddings';
 
 // Synthetic fixtures only: no owner text, and the one health reading is made up.
@@ -206,6 +209,73 @@ describe('semantic recall read path', () => {
       expect(recalled.text).toBe('');
     }, b);
     await inOwner(async ({ semantic }) => { expect(await semantic.near('my dentist')).toEqual([1]); }, a);
+  });
+});
+
+describe('semantic recall cost', () => {
+  const memoryKv = () => {
+    const rows = new Map<string, unknown>();
+    return { rows, get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
+  };
+  const priced = (world: World, events: SemanticEvent[]) =>
+    semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => events.push(event) });
+  const billed = (events: readonly SemanticEvent[]) => events.filter((event) => event.usage);
+
+  it('prices bge-m3 by input tokens only, at the rate on Cloudflare\'s pricing page', () => {
+    expect(modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: 1_000_000, output: 0, cached: 0 })?.total).toBeCloseTo(0.012, 10);
+    expect(estimatedTokens(['abcd', 'abcde'])).toBe(3);
+  });
+
+  it('records one priced event per embedding call: the sweep as background work, the query on the turn, a withheld secret not at all', async () => {
+    await inOwner(async (world) => {
+      const events: SemanticEvent[] = [];
+      const semantic = priced(world, events);
+      owned(world.store, DENTIST);
+      owned(world.store, 'Deploy token is Bearer abcdefghijklmnopqrstuvwxyz0123456789');
+      owned(world.store, GYM);
+      await semantic.sync();
+      await semantic.near('my dentist');
+      expect(billed(events)).toEqual([
+        expect.objectContaining({ ok: true, cost_kind: 'background', usage: { model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens([DENTIST, GYM]), output: 0, cached: 0 } }),
+        expect.objectContaining({ ok: true, usage: { model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(['my dentist']), output: 0, cached: 0 } }),
+      ]);
+      expect(billed(events)[1]).not.toHaveProperty('cost_kind');
+      // The query's event carries how long the scan took and over how many rows: counts only, never a text.
+      expect(billed(events)[1]!.detail).toMatch(/^query rows=2 scan_ms=\d+$/);
+      expect(JSON.stringify(events)).not.toMatch(/Rao|dentist|locker|Bearer/i);
+    });
+  });
+
+  it('counts a call that failed: it may have run and billed', async () => {
+    await inOwner(async (world) => {
+      const events: SemanticEvent[] = [];
+      const semantic = priced(world, events);
+      owned(world.store, DENTIST);
+      world.ai.fail = true;
+      await expect(semantic.sync()).rejects.toThrow();
+      await expect(semantic.near('my dentist')).rejects.toThrow();
+      expect(billed(events).map((event) => [event.ok, event.code, event.usage!.input])).toEqual([[false, 'embed_failed', estimatedTokens([DENTIST])], [false, 'embed_failed', estimatedTokens(['my dentist'])]]);
+    });
+  });
+
+  it('reaches the cost ledger as bge-m3 rows, and the month\'s spend the ceiling reads grows by their price', async () => {
+    await inOwner(async (world) => {
+      const kv = memoryKv();
+      const at = Date.UTC(2026, 9, 31, 10);
+      const ledger = costRollup({ kv, call: async () => 1, doName: 'do-a', newId: () => 'batch-1' });
+      const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => { ledger.record(semanticTraceEntry(event), at); } });
+      owned(world.store, DENTIST);
+      await semantic.sync();
+      await semantic.near('my dentist');
+      const rows = kv.get<{ open: CostRollupRow[] }>(COST_ROLLUP_KEY)!.open;
+      const usd = (texts: readonly string[]) => modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(texts), output: 0, cached: 0 })!.total;
+      expect(rows).toEqual([
+        expect.objectContaining({ day: '2026-10-31', kind: 'background', model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, calls: 1, input: estimatedTokens([DENTIST]) }),
+        expect.objectContaining({ day: '2026-10-31', kind: 'turn', model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, calls: 1, input: estimatedTokens(['my dentist']) }),
+      ]);
+      expect(ledger.monthSpendUsd(at)).toBeCloseTo(usd([DENTIST]) + usd(['my dentist']), 15);
+      expect(ledger.monthSpendUsd(at)).toBeGreaterThan(0);
+    });
   });
 });
 
