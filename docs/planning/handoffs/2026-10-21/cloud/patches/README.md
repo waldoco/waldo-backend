@@ -1,0 +1,4 @@
+# Unpushed lane work, saved as patches
+
+- `c11-1364-nits-wip.patch` (C11, against #1364 at `60f9ad7b` with `d297b2f9` carried): the spend-loss fix in the OpenAI and Anthropic adapters (`searchSpent` kept on a failed continuation), guard tests for both `onlySearched` functions, and a provider test that keeps `tool_search` on a non-`invalid_args` failure. The three spend tests fail before the fix. **Known gap:** it also attaches spend to OpenAI's `oversize` failure, which breaks "classifies an empty truncated output as oversize"; update that test or drop that hunk. Local wants this work in its own PR before `WALDO_TOOL_SEARCH` goes on (together with a schema v12 field that makes a degrade visible).
+- `c11-1364-merge-d297b2f9-evals.patch` (C11): the eval-file conflict resolution when #1364 carries `d297b2f9`. Both sides are kept, and one label gives `name+tool_search (raw_history)`. Check it against local's resolution in #1364's gate comment 6336425145.
