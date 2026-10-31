@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(16);
+select plan(17);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -40,9 +40,10 @@ select is(pg_temp.h('ingest','coach-owner',pg_temp.batch('coach-all-000001',json
   pg_temp.point('fat','body_fat_percentage','percent',14.2),
   pg_temp.point('lean','lean_body_mass','kilograms',61.9),
   pg_temp.hour('stood',1),
-  pg_temp.point('run','workout','minutes',58,'{"activity":"running","energy_kcal":640,"distance_m":12400,"avg_hr_bpm":152,"max_hr_bpm":181,"hr_zones":{"basis":"heart_rate_reserve","lower_bounds_bpm":[120,136,151,166],"seconds":[300,900,1500,600,180]},"effort":{"score":7,"method":"rated"},"running":{"cadence_spm":176}}',58),
+  pg_temp.point('run','workout','minutes',58,'{"activity":"running","energy_kcal":640,"distance_m":12400,"avg_hr_bpm":152,"max_hr_bpm":181,"hr_zones":{"basis":"heart_rate_reserve","lower_bounds_bpm":[120,136,151,166],"seconds":[300,900,1500,600,180]},"effort":{"score":7,"method":"rated"},"running":{"cadence_spm":176},"origin":{"read_api":"healthkit","source_bundle_id":"com.example.watch","source_package_name":null,"source_version":null,"source_revision":null,"device_ref":"synthetic-watch-1","recording_method":"automatic"}}',58),
   pg_temp.point('walk','workout','minutes',20,'{"activity":"walking"}',20))))->>'accepted','6','an older build''s batch of the new signals and two workouts is stored whole');
 select is(pg_temp.stored('run')->'hr_zones'->'seconds','[300,900,1500,600,180]'::jsonb,'a workout''s zones are stored as sent');
+select is(pg_temp.stored('run')->'origin'->>'device_ref','synthetic-watch-1','a workout''s origin is stored, so the read below has one to leave out');
 
 -- Per sample: each bad new reading is named by its signal.
 create temp table mixed as select pg_temp.h('ingest','coach-owner',pg_temp.batch('coach-mixed-0001',jsonb_build_array(
@@ -82,8 +83,8 @@ select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["worko
   'a workout with no detail has no workout key');
 select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["body_mass","stand_hour","sleep_duration"]')->'sources'->0->'samples') s where s ? 'workout'),
   'nor does any other signal');
-select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["workout"]')->'sources'->0->'samples') s where s ? 'origin' or s->'workout' ? 'origin'),
-  'the read carries no origin');
+select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["workout"]')->'sources'->0->'samples') s where s::text like '%synthetic-watch-1%' or s::text like '%com.example.watch%'),
+  'the read carries no part of a workout''s origin');
 select is((select jsonb_agg(s->'value' order by s->>'signal', (s->>'value')::numeric desc) from jsonb_array_elements(pg_temp.series('["body_mass","body_fat_percentage","stand_hour"]')->'sources'->0->'samples') s),
   '[14.2,72.4,1,0]'::jsonb,'body composition and stand hours come back as readings');
 

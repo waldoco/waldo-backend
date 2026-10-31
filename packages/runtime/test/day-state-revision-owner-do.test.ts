@@ -21,22 +21,23 @@ import { ensureSchema } from '../src/tracer/schema';
 // Golden, end to end in the owner object with the day state on: a meeting the sweep saw untouched at the start of the day is
 // moved after the Brief reached the app. The change carries what it was; the apply turn revises the Brief and pushes; the
 // revision lands in Main chat, the push names the change and opens the Brief, and the app's day view shows the revision to a
-// build at controls=9 while an older build still reads the Brief as first delivered. A push line that quotes the mail or the
-// health log the turn read goes out as the fixed line, whatever the model wrote.
+// build at controls=9 while an older build still reads the Brief as first delivered. The push is written by code from the
+// event the turn chose, so a mail and a health log the turn read never reach it, and a stranger's title carrying a link or a
+// health value goes out as the fixed line.
 const OWNER_ID = '7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e';
 const HASH = 'c'.repeat(64);
 const EXPO_TOKEN = 'ExponentPushToken[synthetic-day-state]';
 const INSTALLATION = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const BRIEF = 'Your sync with Krati at 10:00 is the main thing today.';
 const REVISED = 'Your 10:00 with Krati moved to 3, so your morning is open.';
-const PUSH = 'Your 10:00 with Krati moved to 15:00';
+const PUSH = { event: 'e-sync' };
 const SYNC: CalendarItem = { id: 'e-sync', title: 'Sync with Krati', status: 'confirmed', start: '2026-10-20T10:00:00Z', end: '2026-10-20T10:30:00Z', all_day: false, attendees: 2 };
 const FOUND: TaskResult = { status: 'done', summary: 'The Krati sync moved.', findings: [{ text: 'The sync with Krati moved from 10:00 to 15:00 today.', source_ref: 'event:e-sync' }], proposals: [], left: [] };
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 
 const MAIL: MailItem = { id: 'm-1', thread_id: 't-1', from: 'Asha <asha@client.example>', subject: 'Quote', snippet: 'the lab results came back and your cholesterol is fine', at: '2026-10-20T07:05:00Z' };
 const MEAL = { id: 1, kind: 'meal', logged_at: '2026-10-20T06:30:00Z', payload: { description: 'oatmeal with blueberries before the long run', calories_estimate: 420 } };
-const fixture = vi.hoisted(() => ({ listed: [] as CalendarItem[], changed: [] as CalendarChange[], mail: [] as MailItem[], prompts: [] as string[], requests: [] as string[], push: '' }));
+const fixture = vi.hoisted(() => ({ listed: [] as CalendarItem[], changed: [] as CalendarChange[], mail: [] as MailItem[], prompts: [] as string[], requests: [] as string[], push: {} as unknown }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -89,12 +90,14 @@ type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fet
 type Card = Readonly<{ id: string; latest?: { excerpt: string } | null; revision?: number; revised_at?: number }>;
 
 it.each([
-  { case: 'names the change', push: PUSH, body: PUSH, mail: false, meal: false, never: [] as string[] },
-  { case: 'quotes a mail it read', push: 'Asha says the lab results came back fine', body: PUSHES.update.body, mail: true, meal: false, never: ['lab results', 'Asha'] },
-  { case: 'quotes a health log line', push: 'After oatmeal with blueberries before the run, the sync moved', body: PUSHES.update.body, mail: false, meal: true, never: ['oatmeal', 'blueberries'] },
-])('golden: a meeting moved after the Brief revises the Brief and pushes; a push line that $case', async ({ case: line, push, body, mail, meal, never }) => {
-  const name = `day-state-revision-${line.replace(/\W+/g, '-')}`;
-  fixture.push = push;
+  { case: 'names the moved meeting', title: SYNC.title, body: 'Sync with Krati moved to 15:00', mail: false, meal: false, never: [] as string[] },
+  { case: 'never carries the mail or the health log the turn read', title: SYNC.title, body: 'Sync with Krati moved to 15:00', mail: true, meal: true,
+    never: ['lab results', 'cholesterol', 'Asha', 'oatmeal', 'blueberries'] },
+  { case: 'is the fixed line for a stranger\'s title carrying a link and a health value', title: 'Recovery chat: HRV 42 ms, verify at evil.co/x', body: PUSHES.update.body,
+    mail: false, meal: false, never: ['Recovery', 'HRV', 'evil'] },
+])('golden: a meeting moved after the Brief revises the Brief and pushes; the push $case', async ({ case: line, title, body, mail, meal, never }) => {
+  const name = `day-state-revision-${line.replace(/\W+/g, '-')}`.slice(0, 80);
+  fixture.push = PUSH;
   if (meal) wire.meals = [MEAL];
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
@@ -126,7 +129,7 @@ it.each([
       };
 
       // The first sweep of the day sees the meeting as it is, untouched; the Brief then reaches the app.
-      fixture.listed = [SYNC];
+      fixture.listed = [{ ...SYNC, title }];
       await due(BRIEF_SWEEP_ID, 'pre_activity_spot');
       await alarm();
       plans.save('2026-10-20', { card: 'card:brief', time: '07:00', reason: 'planned' });
@@ -139,7 +142,7 @@ it.each([
 
       // The meeting moves to 15:00. The next sweep records the change with what it was, and writes a reader job.
       clock += 10 * 60_000;
-      const moved = { ...SYNC, start: '2026-10-20T15:00:00Z', end: '2026-10-20T15:30:00Z' };
+      const moved = { ...SYNC, title, start: '2026-10-20T15:00:00Z', end: '2026-10-20T15:30:00Z' };
       fixture.listed = [moved];
       fixture.changed = [{ ...moved, status: 'confirmed', created: '2026-10-01T00:00:00Z' }];
       if (mail) fixture.mail = [MAIL];
@@ -150,7 +153,7 @@ it.each([
       const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
       const [job] = state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray();
       expect(job).toBeDefined();
-      expect(readHeldChanges(state.storage.sql, clock, 'UTC').changes).toContainEqual(expect.objectContaining({ source: 'calendar', kind: 'changed', title: SYNC.title }));
+      expect(readHeldChanges(state.storage.sql, clock, 'UTC').changes).toContainEqual(expect.objectContaining({ source: 'calendar', kind: 'changed' }));
       expect(jobs.report(jobs.startAttempt(job!.id)!, FOUND, { rounds: 1, costUsd: 0 })).toBe('accepted');
 
       // The brain's apply turn sees the move from 10:00, revises the Brief, and the revision reaches the app with its push.

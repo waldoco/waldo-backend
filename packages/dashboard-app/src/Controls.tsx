@@ -6,7 +6,7 @@ import { Explained, InfoTip } from './InfoTip';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
 import { ActivityControls, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
-import { DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
+import { AgentMailControls, DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
 import { forgetCardsRevealed } from './day-cards-model';
 
 type ActionProps = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
@@ -134,8 +134,11 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
             <div className="disclosure-body"><p><Explained about="iMessage" text="Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code."/></p>
               <div className="control-actions"><a className="quiet-link" href="#/connections/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a><a className="quiet-link" href="#/connections/phone">Your phone</a></div></div></details></li>
           <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><ConnectorMark id="whatsapp" label="WhatsApp"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
-            <div className="disclosure-body"><p><Explained about="WhatsApp" text="Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Link WhatsApp opens a chat with Waldo with a one-time code filled in; send it from the WhatsApp number you want linked."/></p>
-              <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>{whatsapp?.state === 'linked' ? 'Link a different number' : 'Link WhatsApp'}</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}</div></div></details></li>
+            <div className="disclosure-body"><p><Explained about="WhatsApp" text="Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Link WhatsApp opens a chat with Waldo with a one-time code filled in; send it from the WhatsApp number you want linked. If you haven’t verified a number yet, that send verifies this one as yours."/></p>
+              <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>{whatsapp?.state === 'linked' ? 'Link a different number' : 'Link WhatsApp'}</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}<a className="quiet-link" href="#/connections/phone">Your phone</a></div></div></details></li>
+          <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="envelope"/></span><span className="value">Your Waldo address</span></summary>
+            <div className="disclosure-body"><p><Explained about="Your Waldo address" text="An email address of Waldo’s own. Mail you send or copy to it reaches your Waldo, which tells you what matters and asks before acting on it."/></p>
+              <div className="control-actions"><a className="quiet-link" href="#/connections/agent_mail">Manage your Waldo address</a></div></div></details></li>
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
             <div className="disclosure-body"><p><Explained about="This console" text="Chat with Waldo right here. It’s the same conversation as the Waldo app."/></p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
@@ -234,6 +237,7 @@ const headings: Record<ControlsView, { title: string; description: string }> = {
   files: { title: 'Files.', description: 'What you’ve sent Waldo.' },
   imessage: { title: 'iMessage.', description: 'Text your Waldo from your own iPhone.' },
   phone: { title: 'Your phone.', description: 'The number on file, and how to verify it.' },
+  agent_mail: { title: 'Your Waldo address.', description: 'An email address of Waldo’s own, for mail you send or copy to it.' },
   devices: { title: 'Devices.', description: 'The Macs paired with your Waldo through Kennel.' },
 };
 export function ControlsPanel({ view, embedded=false, section }: { view: ControlsView; embedded?:boolean; section?: 'connections'|'sessions' }) {
@@ -289,6 +293,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
                 : state.data.view === 'imessage' ? <IMessageControls record={state.data} busy={disabled} onAction={act}/>
                   : state.data.view === 'devices' ? <DevicesControls record={state.data} busy={disabled} onAction={act}/>
                   : state.data.view === 'phone' ? <PhoneControls record={state.data} busy={disabled} onAction={act}/>
+                  : state.data.view === 'agent_mail' ? <AgentMailControls record={state.data} busy={disabled} onAction={act}/>
                     : <FilesControls record={state.data} busy={disabled} onAction={act}/> : null;
   return <>
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}

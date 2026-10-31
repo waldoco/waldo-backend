@@ -27,14 +27,14 @@ export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
 export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','schedule.resume','card.retry','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
- imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set','imessage.enroll']};
+ imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set','imessage.enroll'],agent_mail:['agent_mail.claim','agent_mail.release']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code'],agent_mail:['notice']};
 // One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
 const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
 // targets (null: top level only). The fresh read's list is the eligibility check, so the console view is never built.
-const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null};
+const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null,agent_mail:null};
 const listedAction=(action:ConsoleAction,data:unknown,rows:string|null):boolean=>{
  const listing=data as Readonly<Record<string,unknown>>|null,has=(actions:unknown)=>Array.isArray(actions)&&actions.includes(action.action);
  if(action.id==='')return has(listing?.actions);

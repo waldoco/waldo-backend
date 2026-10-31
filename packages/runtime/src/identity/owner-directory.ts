@@ -47,15 +47,19 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
 
-/** redeem_link_code's own refusal; any other unique_violation (an index race) stays uncertain. */
+/** redeem_link_code's own refusals; any other unique_violation (an index race) stays uncertain. */
 const CLAIMED_ELSEWHERE = 'presence already linked to another owner';
+/** A WhatsApp link from a number another owner holds, by an owner who has proven no number of their own. */
+const NUMBER_HELD = 'phone number held by another owner';
 /** A refused directory call, with the PostgreSQL code PostgREST reported. The message is reduced to whether it was
  * redeem_link_code's own refusal: a database message can quote a subject, so it is never kept where it could be serialized. */
 export class OwnerDirectoryError extends Error {
   readonly claimedElsewhere: boolean;
+  readonly numberHeld: boolean;
   constructor(readonly status: number, readonly sqlState: string | null, dbMessage: string | null) {
     super(`owner directory ${status}`);
     this.claimedElsewhere = sqlState === '23505' && dbMessage === CLAIMED_ELSEWHERE;
+    this.numberHeld = sqlState === '23505' && dbMessage === NUMBER_HELD;
   }
 }
 
