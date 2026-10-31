@@ -19,6 +19,7 @@ import type { JudgeInput } from './judge';
 import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
 import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -100,8 +101,9 @@ const metricsOf = ({ groups, ...meter }: Meter): TrialMetrics => ({ ...meter, gr
 
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
-  const world = evalWorld(scenario.world, scenario.start, deps.memory);
+// embeddings turns semantic recall on.
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner }>): Promise<TrialRecord> => {
+  const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
@@ -117,7 +119,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const skills = trialSkillBook(world.sql);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability, ...(world.semantic ? { semanticRecall: world.semantic } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';

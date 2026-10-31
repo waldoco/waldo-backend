@@ -126,7 +126,7 @@ import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forge
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
-import { semanticRecallFromEnv } from '../memory/semantic-recall';
+import { semanticRecallFromEnv, semanticTraceEntry } from '../memory/semantic-recall';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
@@ -4056,7 +4056,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Semantic recall, behind MEMORY_SEMANTIC_RECALL. Its sweep embeds what any writer stored since the last one; it runs once
     // here, after each stored claim and after each recall that used it.
     const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), defer: (work) => this.ctx.waitUntil(work),
-      log: (event) => log({ trace: 'memory:semantic', hop: event.hop, ms: 0, ok: event.ok, detail: event.detail, ...(event.code ? { code: event.code } : {}) }) });
+      log: (event) => log(semanticTraceEntry(event)) });
     semantic?.kick();
     // A forget left pending by an earlier build, or a claim marked for removal, gets the purge job; an armed job keeps its time.
     if ((memory.pendingTopics().length || memory.claims('purging').length) && scheduler.lookup(FORGET_PURGE_ID).state === 'absent') this.ctx.waitUntil(this.forgetPurgeJob().track([]));
