@@ -1,3 +1,4 @@
+import { DAYTIME_RUN, type RunBook } from '../channels/background-runs';
 import { consolidateSources, type SourcesDeps } from '../channels/nightly-sources';
 import { localIso } from '../channels/reminders';
 import type { ObservedEvent } from '../channels/update-sweep';
@@ -27,6 +28,8 @@ export const daytimeMemory = (deps: Readonly<{
   capped: () => boolean;
   // What the nightly source pass is built with, for this pass's trace.
   sources: (trace: string) => SourcesDeps;
+  // Where a pass that asked the model, or failed, is recorded; one that found nothing new leaves no record.
+  runs?: Pick<RunBook, 'start' | 'finish'>;
 }>) => {
   const today = () => localIso(deps.now(), deps.timezone()).slice(0, 10);
   const callsToday = () => {
@@ -48,18 +51,25 @@ export const daytimeMemory = (deps: Readonly<{
       if (!deps.enabled()) return 'off';
       if (deps.capped()) return 'spend_capped';
       if (callsToday() >= DAYTIME_CALLS_PER_DAY) return 'day_spent';
+      let run: string | undefined;
+      const begin = () => { run ??= deps.runs?.start('memory_daytime', entry.id).id; };
+      let outcome: Awaited<ReturnType<typeof consolidateSources>>;
       try {
         deps.kv.put(LAST_KEY, deps.now());
         const trace = `${entry.id}:${entry.occurrence_at}`;
         const sources = deps.sources(trace);
         // A call is counted before it is made, so one that fails still counts.
-        return await consolidateSources({ ...sources, ask: (updates) => {
+        outcome = await consolidateSources({ ...sources, ask: (updates) => {
           deps.kv.put(CALLS_KEY, { day: today(), calls: callsToday() + 1 });
+          begin();
           return sources.ask(updates);
         } }, trace, 1);
       } catch {
-        return 'failed';
+        outcome = 'failed';
       }
+      if (outcome === 'failed') begin();
+      if (run !== undefined) { const settled = DAYTIME_RUN.settled(outcome); deps.runs?.finish(run, settled.status, settled.summary); }
+      return outcome;
     },
   };
 };

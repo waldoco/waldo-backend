@@ -1,6 +1,5 @@
 import type { HealthTriggerOutcome } from '../health/trigger';
 import type { OwnerClock } from '../tools/live/get-context';
-import type { DaytimeOutcome } from '../memory/consolidator';
 
 // A5b (BUILD_PLAN_2026-09-25: "Background task tracking - tasks table, trace hops, console
 // list"). Every background execution - a delegate_task child, a reminder/loop/standing-order
@@ -104,7 +103,9 @@ export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
     failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
   } as const)[outcome],
 };
-export const DAYTIME_RUN: RunSummary<DaytimeOutcome> = {
+// A daytime pass is recorded only when it asked the model or failed, so passes that found nothing new do not fill the
+// night's run history.
+export const DAYTIME_RUN: RunSummary<'empty' | 'consolidated' | 'more' | 'raced' | 'failed'> = {
   threw: 'daytime memory pass failed',
   settled: outcome => ({
     empty: { status: 'completed', summary: 'nothing new from mail or calendar' },
@@ -112,9 +113,6 @@ export const DAYTIME_RUN: RunSummary<DaytimeOutcome> = {
     more: { status: 'completed', summary: 'read part of the new changes; the rest waits' },
     raced: { status: 'completed', summary: 'another memory pass had already read these changes' },
     failed: { status: 'failed', summary: 'daytime memory pass did not finish; the changes wait' },
-    off: { status: 'completed', summary: 'daytime memory is off' },
-    spend_capped: { status: 'completed', summary: 'held: this month\'s spend limit is reached' },
-    day_spent: { status: 'completed', summary: 'held: today\'s daytime passes are spent' },
   } as const)[outcome],
 };
 // One fixed line per health-trigger outcome: codes become words here, never zone words or values. A new outcome has no

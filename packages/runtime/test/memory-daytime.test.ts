@@ -143,6 +143,29 @@ describe('the pass', () => {
     });
   });
 
+  it('records a run only when it asked the model or failed, so passes that found nothing new leave no record', async () => {
+    await inOwner(async (world) => {
+      const recorded: string[][] = [];
+      let started = 0;
+      const runs = { start: (kind: string, parent: string | null) => { recorded.push([kind, String(parent)]); return { id: `bg:${started += 1}` } as never; },
+        finish: (id: string, status: string, summary: string) => { recorded.push([id, status, summary]); return true; } };
+      const sources = () => ({ kv: world.state.storage.kv, updates: updateBook(world.state.storage.sql), claims: claimStore(world.state.storage.sql, (fn) => world.state.storage.transactionSync(fn)),
+        transaction: <R>(fn: () => R) => world.state.storage.transactionSync(fn), timezone: 'UTC', now: () => world.clock.at, health: true, log: () => undefined,
+        ask: async () => { if (world.fail.on) throw new Error('synthetic provider outage'); return addOne('Has a weekly design review'); } });
+      const recording = daytimeMemory({ kv: world.state.storage.kv, scheduler: world.scheduler, now: () => world.clock.at, timezone: () => 'UTC', enabled: () => true, capped: () => false, sources, runs });
+      expect(await recording.run({ id: MEMORY_DAYTIME_ID, occurrence_at: NOON })).toBe('empty');
+      expect(recorded).toEqual([]);
+      record(world.state, NOON - 1);
+      expect(await recording.run({ id: MEMORY_DAYTIME_ID, occurrence_at: NOON })).toBe('consolidated');
+      world.fail.on = true; world.clock.at += DAYTIME_GAP_MS; record(world.state, world.clock.at - 1);
+      expect(await recording.run({ id: MEMORY_DAYTIME_ID, occurrence_at: world.clock.at })).toBe('failed');
+      expect(recorded).toEqual([
+        ['memory_daytime', MEMORY_DAYTIME_ID], ['bg:1', 'completed', 'read the new mail and calendar changes'],
+        ['memory_daytime', MEMORY_DAYTIME_ID], ['bg:2', 'failed', 'daytime memory pass did not finish; the changes wait'],
+      ]);
+    });
+  });
+
   it('never throws, so the scheduler never retries it and no failure notice goes out', async () => {
     await inOwner(async (world) => {
       record(world.state, NOON - HOUR);
