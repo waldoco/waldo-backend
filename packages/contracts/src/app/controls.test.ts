@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -373,7 +373,7 @@ describe("today's update cards", () => {
     version: 1, state: 'available', revision, view: 'day',
     data: { timezone: 'Europe/London', date: '2026-10-13', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
   });
-  const update = { message_id: 'entry-9', delivered_at: 1_791_900_000_000, excerpt: 'Update\nThe 3pm review moved to 4pm, so the afternoon block is shorter.' };
+  const update = { message_id: 'entry-9', delivered_at: 1_791_900_000_000, excerpt: 'The 3pm review moved to 4pm, so the afternoon block is shorter.' };
   const updates = (items: object[], total = items.length, checked_at: number | null = 1_791_900_600_000) => ({ updates: { items, total, checked_at } });
   const parses = (extra: object) => appControlProjectionV1Schema.safeParse(day(extra)).success;
 
@@ -609,5 +609,47 @@ describe('controls revision 7: who the owner is, and Google disconnect', () => {
     const { id: _id, ...bare } = disconnect;
     for (const action of [bare, { ...disconnect, id: '' }, { ...disconnect, id: 'x'.repeat(257) }, { ...disconnect, view: 'day' }, { ...disconnect, value: 'calendar' }, { ...disconnect, volume: 'low' }, { ...disconnect, confirmation: 'DELETE' }, { ...disconnect, code: '123456' }])
       expect(appControlActionV1Schema.safeParse(action).success).toBe(false);
+  });
+});
+
+describe('the agent_mail view', () => {
+  const claim = { view: 'agent_mail', action: 'agent_mail.claim', value: 'priya', notice: '2026-10-31', revision, request_id: 'mail-0001' };
+  const release = { view: 'agent_mail', action: 'agent_mail.release', revision, request_id: 'mail-0002' };
+  const notice = { version: '2026-10-31', text: 'What your Waldo address receives, and what Waldo keeps.' };
+  const data = { enabled: true, domain: 'mail.example.invalid', handle: 'priya', address: 'priya@mail.example.invalid', rule: 'pending', notice, display_name: "Waldo, Priya's assistant", actions: ['agent_mail.claim', 'agent_mail.release'] };
+  const unclaimed = { enabled: true, domain: 'mail.example.invalid', notice, display_name: 'Waldo', actions: ['agent_mail.claim'] };
+  const off = { enabled: false, display_name: 'Waldo', actions: [] };
+  const shows = (shown: object) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'agent_mail', data: shown }).success;
+
+  it('is revision 10', () => expect(APP_CONTROLS_AGENT_MAIL_REVISION).toBe(10));
+
+  it('reads the address, each rule state, and the notice a claim accepts', () => {
+    expect(appControlQueryV1Schema.safeParse({ view: 'agent_mail' }).success).toBe(true);
+    for (const rule of ['pending', 'live', 'failed', 'unknown']) expect(shows({ ...data, rule }), rule).toBe(true);
+    for (const shown of [unclaimed, off, { ...data, rule_reason: 'not_configured' }]) expect(shows(shown), JSON.stringify(shown)).toBe(true);
+  });
+
+  it('refuses a rule state outside the four, and fields that do not belong together', () => {
+    for (const bad of [{ ...data, rule: 'releasing' }, { ...data, rule: null }, { ...data, rule: 'LIVE' }, { ...data, extra: true }, { ...data, actions: ['agent_mail.rename'] },
+      { ...data, display_name: '' }, { ...data, enabled: undefined }, { ...data, handle: null }, { ...unclaimed, rule: 'live' }, { ...unclaimed, handle: 'priya' },
+      { ...data, rule: 'live', rule_reason: 'not_configured' }, { ...data, notice: undefined }, { ...off, domain: 'mail.example.invalid' }, { ...data, notice: { ...notice, version: 'v 1' } }])
+      expect(shows(bad), JSON.stringify(bad)).toBe(false);
+  });
+
+  it('a claim names the handle and the notice version; a release names nothing', () => {
+    expect(appControlActionV1Schema.safeParse(claim).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...claim, value: 'x'.repeat(APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1) }).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(release).success).toBe(true);
+    for (const bad of [
+      { ...claim, value: undefined }, { ...claim, value: '  ' }, { ...claim, value: 'x'.repeat(APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 + 1) }, { ...claim, notice: undefined }, { ...claim, notice: 'v 1' }, { ...claim, id: 'priya' },
+      { ...claim, code: '424242' }, { ...release, value: 'priya' }, { ...release, notice: '2026-10-31' }, { ...release, id: 'priya' }, { ...claim, view: 'account' }, { ...release, view: 'phone' },
+      { view: 'agent_mail', action: 'phone.set', value: '+14155550100', revision, request_id: 'mail-0003' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('every receipt reads apart from the others', () => {
+    const messages = Object.values(APP_AGENT_MAIL_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    expect(APP_AGENT_MAIL_RECEIPTS_V1.unknown.state).toBe('unconfirmed');
   });
 });

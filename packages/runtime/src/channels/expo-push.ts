@@ -1,13 +1,13 @@
 import { withRequestTimeout } from '../identity/request-timeout';
+import { numericHealthIn } from '../scribe/sanitiser';
 import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 // Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
 // the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
-// a caller's body in place of its fixed line, which may name a meeting, its times and its people; the caller checks it
-// (channels/event-briefs.ts prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it
-// revised.
+// a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
+// prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it revised.
 export const PUSHES = {
   brief: { body: 'Your Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
   approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
@@ -15,6 +15,17 @@ export const PUSHES = {
   update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
+
+// A meeting's title as a push may show it on the lock screen. The owner chose to see titles there, but a stranger's invite
+// writes its own: a title with anything shaped like a host (a link with or without its scheme, an email address) or a health
+// value is not shown at all, and the caller sends its fixed line. A destination rule, held where the body is written.
+export const PUSH_TITLE_CHARS = 60;
+const HOST = /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.\p{L}{2,24}(?![\p{L}\p{N}])|:\/\/|@/u;
+export const pushTitle = (title: unknown): string | null => {
+  const plain = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim() : '';
+  if (!plain || HOST.test(plain) || numericHealthIn(plain)) return null;
+  return plain.length <= PUSH_TITLE_CHARS ? plain : `${plain.slice(0, PUSH_TITLE_CHARS - 1).trim()}…`;
+};
 export const PUSH_DAILY_LIMIT = 3;
 // Pushes for anything but a day card or an approval have their own ceiling: a backstop against a runaway sender. Whether one
 // is sent at all is the model's judgment.

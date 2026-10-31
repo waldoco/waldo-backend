@@ -39,10 +39,10 @@ describe('update cards', () => {
       await expect(collectChanges(book, broken, t1 + 60_000)).rejects.toThrow('google 500');
       expect(book.since('calendar_since')).toBe(t1);
 
-      book.record('2026-09-23', t1, changes.slice(0, 1), 'Update\nDesign review added at 15:00.');
+      book.record('2026-09-23', t1, changes.slice(0, 1), 'Design review added at 15:00.');
       book.record('2026-09-23', t1 + 1, changes.slice(3), null);
       const unfolded = book.unfolded(tz);
-      expect(unfolded).toContain('sent as update: Update Design review added at 15:00.');
+      expect(unfolded).toContain('sent as update: Design review added at 15:00.');
       expect(unfolded).toContain('not sent\n- mail new:');
       book.fold(t1 + 1);
       expect(book.unfolded(tz)).toBe('');
