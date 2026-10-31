@@ -62,8 +62,11 @@ describe('console pattern confirm and correct', () => {
     const after = await (await o.read(target)).json() as Read;
     expect(after.data.actions).toEqual(['node.correct', 'node.forget']);
     expect(after.data.review.confirmation).toBe('confirmed');
-    const evidence = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ evidence: string }>("SELECT evidence FROM claims WHERE source_ref LIKE 'welcome:gmail:%'").toArray().map((row) => row.evidence));
-    expect(evidence).toEqual([expect.stringContaining('confirmed: owner, console:node.confirm'), expect.stringContaining('confirmed: owner, console:node.confirm')]);
+    const rows = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ kind: string; origin: string; source_ref: string }>('SELECT kind, origin, source_ref FROM claims ORDER BY id').toArray());
+    expect(rows).toEqual([
+      { kind: 'observation', origin: 'untrusted', source_ref: 'welcome:gmail:t1' }, { kind: 'observation', origin: 'untrusted', source_ref: 'welcome:gmail:t2' },
+      { kind: 'node_statement', origin: 'owner', source_ref: `node:${id}:console:node.confirm` },
+    ]);
   });
 
   it('correct needs a recent email code, then rewrites both the label and the summary in the owner\'s words', async () => {
@@ -119,6 +122,43 @@ describe('console pattern confirm and correct', () => {
     expect(block).not.toContain('their words · confirmed] Investor');
   });
 
+  it('confirming each note under a read from mail one by one confirms the notes, never the pattern', async () => {
+    const o = await owner('console-node-per-note');
+    const id = await o.seedRead(), target = await o.scoped(id);
+    for (const support of await o.supportsOf(id)) expect((await o.act(await o.claimRef(support), 'spot.confirm')).status).toBe(200);
+    expect(await o.turnBlock()).not.toContain('Investor mornings');
+    const read = await (await o.read(target)).json() as Read;
+    expect(read.data.review.confirmation).toBe('waldos_read');
+    expect(read.data.actions).toEqual(['node.confirm', 'node.correct', 'node.forget']);
+  });
+
+  it('the owner\'s yes to a pattern\'s words is not a claim any claim action can reach', async () => {
+    const o = await owner('console-node-statement-actions');
+    const id = await o.seedRead(), target = await o.scoped(id);
+    await o.codeAge(60_000);
+    expect((await o.act(target, 'node.confirm')).status).toBe(200);
+    const statement = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ id: number; text: string; status: string }>("SELECT id, text, status FROM claims WHERE kind = 'node_statement'").one());
+    const ref = await o.claimRef(statement.id);
+    expect((await o.read(ref)).status).toBe(404);
+    for (const [action, value] of [['spot.confirm'], ['spot.edit', 'Owner wording'], ['spot.dismiss'], ['spot.pin', 'profile'], ['spot.forget']] as const) {
+      const sent = await o.stub.fetch(root + CONTROL_ACTION_PATH, { method: 'POST', headers: { cookie: `waldo_console=${o.token}`, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf: (await (await o.read(target)).json() as Read).csrf, revision: 'a'.repeat(64), view: 'memory', action, id: ref, request_id: `${action.replace('.', '-')}-${crypto.randomUUID()}`, ...(value === undefined ? {} : { value }) }) });
+      expect(sent.status).not.toBe(200);
+    }
+    expect(await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ id: number; text: string; status: string }>("SELECT id, text, status FROM claims WHERE kind = 'node_statement'").one())).toEqual(statement);
+    expect((await (await o.read(target)).json() as Read).data.review.confirmation).toBe('confirmed');
+  });
+
+  it('forgetting a confirmed pattern takes the owner\'s yes to its words with it', async () => {
+    const o = await owner('console-node-forget-statement');
+    const id = await o.seedRead(), target = await o.scoped(id);
+    expect((await o.act(target, 'node.confirm')).status).toBe(200);
+    expect((await o.act(target, 'node.forget')).status).toBe(200);
+    const left = await runInDurableObject(o.stub, (_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claims WHERE kind = 'node_statement' OR text LIKE '%Investor mornings%'").one().n);
+    expect(left).toBe(0);
+    expect(await o.turnBlock()).not.toContain('Investor mornings');
+  });
+
   it('only the owner can read or act on their pattern', async () => {
     const a = await owner('console-node-owner-a'), b = await owner('console-node-owner-b');
     const id = await a.seedRead(), target = await a.scoped(id);
@@ -128,5 +168,6 @@ describe('console pattern confirm and correct', () => {
       body: new URLSearchParams({ csrf: 'x'.repeat(64), revision: 'a'.repeat(64), view: 'memory', action: 'node.confirm', id: target, request_id: 'cross-owner-confirm' }) });
     expect(crossed.status).toBe(401);
     expect(await a.turnBlock()).not.toContain('Investor mornings');
+    expect(await runInDurableObject(a.stub, (_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claims WHERE kind = 'node_statement'").one().n)).toBe(0);
   });
 });

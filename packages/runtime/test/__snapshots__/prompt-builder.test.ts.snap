@@ -7,7 +7,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector, propose_action, send_message. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector, propose_action, send_message, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -45,7 +45,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: read_memory, search_episodes. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: read_memory, search_episodes, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -83,7 +83,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, read_memory, propose_action, send_message. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, read_memory, propose_action, send_message, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -121,7 +121,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: execute_action, write_task, update_task, draft_document, create_artifact, revise_artifact, draft_email, propose_schedule, write_sheet_cell, send_message. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: execute_action, write_task, update_task, draft_document, create_artifact, revise_artifact, draft_email, propose_schedule, write_sheet_cell, send_message, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -159,7 +159,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector, web_search, browse_page, read_document, list_artifacts, read_artifact, search_tools. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector, web_search, browse_page, read_document, list_artifacts, read_artifact, search_tools, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -197,7 +197,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_tasks, propose_action. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_tasks, propose_action, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -235,7 +235,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_tasks, update_task, propose_action. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_tasks, update_task, propose_action, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -273,7 +273,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, read_memory, update_task, propose_action. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, read_memory, update_task, propose_action, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -311,7 +311,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, read_memory, search_connector, propose_action. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, read_memory, search_connector, propose_action, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -349,7 +349,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, query_calendar, connect_service, read_memory, propose_schedule, propose_action, send_message. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, query_calendar, connect_service, read_memory, propose_schedule, propose_action, send_message, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
@@ -387,7 +387,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_memory, search_episodes, search_connector, skills_load. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]
