@@ -598,7 +598,13 @@ export class RuntimeLLMProvider {
         if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push(failure(plan, gatewayResult.code, gatewayResult.spent));
         if (gatewayResult.code === 'invalid_args') {
-          return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          // A provider reached only because an earlier one was unhealthy may be unable to send this request at all (an attachment
+          // type it has no wire for). That says nothing about the request being bad, so the walk goes on to the floor.
+          const reachedByOutage = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
+            && PROVIDER_HEALTH_CODES.has(attempt.code) && attempt.provider !== plan.step.provider);
+          if (!reachedByOutage) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          settledModels.add(modelKey(plan.step));
+          continue;
         }
         const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
         // While another provider is still ahead in the route, a model gets its short backoff resend but no longer wait:
