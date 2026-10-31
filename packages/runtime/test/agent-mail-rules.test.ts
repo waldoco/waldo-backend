@@ -158,6 +158,8 @@ describe('agent mail routing rules', () => {
     await w.pass();
     expect(w.holders.get('priya')?.state).toBe('failed');
     expect(w.logs).toEqual([{ code: 'failed', cloudflare: [1400] }]);
+    // Cloudflare's refusal message quotes the rules, addresses included; only its numeric code is kept.
+    expect(JSON.stringify(w.logs)).not.toContain(`@${DOMAIN}`);
     expect(w.due()).toBeUndefined();
   });
 
@@ -207,6 +209,26 @@ describe('agent mail routing rules', () => {
     expect(w.cloudflare.addresses()).toEqual([`priya.k@${DOMAIN}`]);
     expect(w.holders.get('priya.k')?.state).toBe('live');
     expect(agentMailRuleHandles(w.kv as never)).toEqual(['priya.k']);
+  });
+
+  it('never deletes a rule that is not Waldo\'s for that handle, even one pointing at this Worker', async () => {
+    const w = world([rule('r1201', 'team rule', `gone@${DOMAIN}`), rule('r1202', `${PREFIX}gone`, `gone@${DOMAIN}`)]);
+    intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+    await w.pass();
+    expect(w.cloudflare.rules.map(r => r.id)).toEqual(['r1201']);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual([]);
+  });
+
+  it('a delete never gives up: past the create limit it keeps retrying, at most a day apart', async () => {
+    const w = world([rule('r1301', `${PREFIX}gone`, `gone@${DOMAIN}`)]);
+    intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+    w.cloudflare.failures.DELETE = Array.from({ length: AGENT_MAIL_RULE_TRIES + 4 }, () => 500 as const);
+    for (let pass = 0; pass < AGENT_MAIL_RULE_TRIES + 4; pass++) await w.pass();
+    expect(agentMailRuleHandles(w.kv as never)).toEqual(['gone']);
+    expect(w.due()).toBe(1_000_000 + 24 * 60 * 60_000);
+    await w.pass();
+    expect(w.cloudflare.rules).toEqual([]);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual([]);
   });
 
   it('never deletes the rule of a handle another owner now holds', async () => {

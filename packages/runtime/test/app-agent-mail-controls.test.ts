@@ -47,14 +47,14 @@ function world() {
 }
 type Call = Promise<{ status: number; body: Record<string, unknown> }>;
 const app = (flag: string | ReturnType<typeof mailEnv>, run: (o: { read(): Call; act(body: Record<string, unknown>): Call; storage: DurableObjectState['storage']; wakes(): number }) => Promise<void>,
-  options: { revision?: number; signedInAt?: string } = {}) =>
+  options: { revision?: number; signedInAt?: string; owner?: string } = {}) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-mail-${crypto.randomUUID()}`)), async (_i, state) => {
     let wakes = 0;
     const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt: options.signedInAt ?? new Date().toISOString(), storage: state.storage, assertCurrent: async () => {},
       sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 60_000 }], view: unused, act: unused,
       account: { owner: 'owner-app-mail', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
       phone: mailEnv('1'), whatsappUnlinked: unused,
-      agentMail: { env: typeof flag === 'string' ? mailEnv(flag) : flag, kv: state.storage.kv, owner: 'owner-app-mail', ownerName: () => 'Priya Sharma', wake: async () => { wakes++; } } };
+      agentMail: { env: typeof flag === 'string' ? mailEnv(flag) : flag, kv: state.storage.kv, owner: options.owner ?? 'owner-app-mail', ownerName: () => 'Priya Sharma', wake: async () => { wakes++; } } };
     const headers = { [APP_CONTRACT_HEADER]: `controls=${options.revision ?? APP_CONTROLS_AGENT_MAIL_REVISION}` };
     const call = async (request: Request) => { const response = await appControlsRequest(request, host); return { status: response.status, body: await response.json() as Record<string, unknown> }; };
     await run({
@@ -156,4 +156,16 @@ it('with routing not configured a claim is recorded and stays pending, saying wh
     expect(appControlProjectionV1Schema.parse((await read()).body).data).toMatchObject({ handle: 'priya', rule: 'pending', rule_reason: 'not_configured' });
     expect(w.cloudflare()).toBe(0);
   });
+});
+
+it('an owner object with no directory name offers no address and claims nothing', async () => {
+  const w = world();
+  await app('1', async ({ read, act, storage }) => {
+    const projection = appControlProjectionV1Schema.parse((await read()).body);
+    expect(projection.data).toEqual({ enabled: false, display_name: "Waldo, Priya's assistant", actions: [] });
+    expect((await act({ view: 'agent_mail', action: 'agent_mail.claim', value: 'priya', notice: NOTICE, revision: projection.revision, request_id: 'mail-request-12' })).body).toMatchObject({ error: 'no_longer_eligible' });
+    expect((await act({ view: 'agent_mail', action: 'agent_mail.release', revision: projection.revision, request_id: 'mail-request-13' })).body).toMatchObject({ error: 'no_longer_eligible' });
+    expect(w.rpc).toEqual([]);
+    expect(agentMailRuleHandles(storage.kv)).toEqual([]);
+  }, { owner: '' });
 });
