@@ -1,5 +1,6 @@
 import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
 import { carriesSecretOrCanary, HEALTH_SPAN_MARKER, redactNumericHealth } from '../scribe/sanitiser';
+import { NODE_STATEMENT } from './node-sources';
 
 // Semantic recall: a meaning-based leg beside the claims FTS index, so "my dentist" can reach "Dr Rao, who does my teeth".
 // Vectors live in the owner's own Durable Object next to the claims they describe, so a claim's vector goes with it in the
@@ -83,7 +84,7 @@ export const semanticRecall = ({ sql, transaction, embedder, defer, log }: Reado
   sql.exec('CREATE TRIGGER IF NOT EXISTS claim_vectors_text AFTER UPDATE OF text, aliases ON claims BEGIN DELETE FROM claim_vectors WHERE claim_id = old.id; END');
   sql.exec("CREATE TRIGGER IF NOT EXISTS claim_vectors_status AFTER UPDATE OF status, origin ON claims WHEN new.status NOT IN ('active', 'promoted') OR COALESCE(new.origin, '') = 'untrusted' BEGIN DELETE FROM claim_vectors WHERE claim_id = old.id; END");
   const model = embedder.model;
-  const RECALLABLE = "c.status IN ('active', 'promoted') AND COALESCE(c.origin, '') != 'untrusted'";
+  const RECALLABLE = `c.status IN ('active', 'promoted') AND COALESCE(c.origin, '') != 'untrusted' AND c.kind != '${NODE_STATEMENT}'`;
 
   // One bounded pass: embed recallable claims with no vector for this model. It is the only writer of claim_vectors and the
   // only retry owner; a failed call leaves the rows missing, and the next kick picks them up. Lexical recall never waits on it.
