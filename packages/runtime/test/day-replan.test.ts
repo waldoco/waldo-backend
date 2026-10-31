@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyDayPlan, applyReplan, dayPlanBook, movableCards, parseDayPlan, SET_FOR_TODAY, type DayPlanBook } from '../src/channels/day-cards';
+import { applyDayPlan, applyReplan, coalesced, dayPlanBook, movableCards, parseDayPlan, SET_FOR_TODAY, type DayPlanBook } from '../src/channels/day-cards';
 import { dayPlanInput, DAY_CARDS } from '../src/prompt/day-cards';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -44,6 +44,17 @@ describe('what a re-plan may move', () => {
       await applyReplan(scheduler, book, 'UTC', now, [{ card: 'card:brief', time: '06:50', reason: 'should have gone earlier' }], movableCards(book, 'UTC', now));
       expect(book.read('2026-10-20')[0]).toMatchObject({ time: '08:00', reason: 'model plan' });
       expect(scheduler.read('card:brief')?.due_at).toBe(Date.parse('2026-10-20T08:00:00Z'));
+    });
+  });
+
+  it('a re-plan that lands while a card is due changes nothing', async () => {
+    const due = Date.parse('2026-10-20T08:00:00Z');
+    await withPlan('UTC', due, async ({ book, scheduler }) => {
+      await applyDayPlan(scheduler, book, 'UTC', due - 3_600_000, [{ card: 'card:brief', time: '08:00', reason: 'model plan' }], false);
+      expect(movableCards(book, 'UTC', due)).toEqual([]);
+      await applyReplan(scheduler, book, 'UTC', due, [{ card: 'card:brief', time: '08:30', reason: 'later' }], movableCards(book, 'UTC', due));
+      expect(book.read('2026-10-20')[0]).toMatchObject({ time: '08:00', reason: 'model plan' });
+      expect(scheduler.read('card:brief')?.due_at).toBe(due);
     });
   });
 
@@ -117,5 +128,25 @@ describe('reading a re-plan reply', () => {
     const reply = JSON.stringify({ cards: [{ id: 'card:brief', time: 'soon', reason: 'x' }, { id: 'card:midday', time: '13:00', reason: 'lunch moved' }] });
     expect(parseDayPlan(reply, DAY_CARDS, true)).toEqual([{ card: 'card:midday', time: '13:00', reason: 'lunch moved' }]);
     expect(parseDayPlan(reply, DAY_CARDS).map(entry => entry.time)).toEqual(['08:00', '13:00', '21:30']);
+  });
+});
+
+describe('re-plans that come together', () => {
+  it('requests while one waits share it; a request while one runs queues one more: one plus one', async () => {
+    const jobs: (() => Promise<void>)[] = [];
+    const runs: string[] = [];
+    let release = () => undefined as void;
+    const request = coalesced<string>(job => { jobs.push(job); }, async trace => { runs.push(trace); await new Promise<void>(done => { release = done; }); });
+    request('a'); request('b'); request('c');
+    expect(jobs).toHaveLength(1);
+    const first = jobs[0]!();
+    request('d'); request('e');
+    expect(jobs).toHaveLength(2);
+    release(); await first;
+    const second = jobs[1]!();
+    release(); await second;
+    expect(runs).toEqual(['a', 'd']);
+    request('f');
+    expect(jobs).toHaveLength(3);
   });
 });

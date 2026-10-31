@@ -225,6 +225,17 @@ export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timez
   return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
 };
 
+// One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
+// change is always planned on and a burst costs at most two model calls.
+export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {
+  let queued = false;
+  return (arg: A): void => {
+    if (queued) return;
+    queued = true;
+    enqueue(() => { queued = false; return work(arg); });
+  };
+};
+
 export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<boolean> => {
   const day = localIso(now, timezone).slice(0, 10);
   if (book.read(day).length > 0) return false;
