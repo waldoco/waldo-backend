@@ -6,7 +6,7 @@ import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { forgetPurge } from '../src/memory/forget-purge';
 import { semanticRecallFromEnv, type SemanticRecall } from '../src/memory/semantic-recall';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
-import { fakeEmbeddings, type FakeEmbeddings } from './support/fake-embeddings';
+import { fakeEmbeddings, type FakeEmbeddings } from '../src/testing/fake-embeddings';
 
 // Semantic recall through the real memory tools, with the flag on: a paraphrase finds the claim, and once the owner forgets
 // it, its row in claim_vectors is gone in the forget's own commit and no question brings it back. Synthetic fixtures only.

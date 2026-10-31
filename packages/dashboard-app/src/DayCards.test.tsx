@@ -50,6 +50,12 @@ describe('one card, every state', () => {
     expect(html).not.toContain('Read it all in Chat');
   });
 
+  it('a card Waldo revised says when it was updated, not when it first arrived', () => {
+    const html = view({ card: brief({ sent: true, state: 'sent' }), latest: letter({ message_id: 'row-9', excerpt: 'Brief, updated: the review moved to two.', revised_at: Date.UTC(2026, 9, 28, 10, 15) }) });
+    expect(html).toContain('Updated 10:15 AM');
+    expect(html).not.toContain('Arrived');
+  });
+
   it('plays a new message in word by word, the words hidden from screen readers and timed at the app\'s pace', () => {
     const html = view({ card: brief({ sent: true, state: 'sent' }), latest: letter(), play: true });
     expect(html).toMatch(/<span class="card-word" aria-hidden="true" style="--at:0ms">Morning\.<\/span>/);

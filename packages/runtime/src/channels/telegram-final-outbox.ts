@@ -53,6 +53,10 @@ export type FinalRecord = {
   mailFollowup?: MailFollowupReceipt;
   // An update card written by a sweep job: its update_cards row, recorded sent once the card is delivered.
   update?: { recordId: number };
+  // An update that revises a day card already delivered today: the day plan counts the revision once it is delivered.
+  revision?: { day: string; card: CardId };
+  // The push an update raises once it reaches the app: its checked line, and the day card it revised.
+  updatePush?: { line: string; card?: CardId };
   calendarPrep?: CalendarPrepReceipt;
   // A health-only note: it goes out only while the owner still shares health and has health proposals on.
   healthNotice?: { day: string };

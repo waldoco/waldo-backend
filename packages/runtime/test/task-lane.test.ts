@@ -248,7 +248,7 @@ describe('the jobs lane', () => {
       await runJobsLane(deps());
       await runJobsLane(deps());
       expect([...sent.keys()]).toEqual([`task:${id}:note:1`]);
-      expect(sent.get(`task:${id}:note:1`)).toBe('Still working on "Inbox since Monday" in the background (0 steps so far). I\'ll tell you when it\'s done.');
+      expect(sent.get(`task:${id}:note:1`)).toBe('Still working on "Inbox since Monday". I\'ll tell you when it\'s done.');
       clock.at += 10 * 60_000;
       heartbeat();
       await runJobsLane(deps());

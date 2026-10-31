@@ -2,7 +2,8 @@
 // Main chat, read from the app's day view, cut and cleaned the same way, and played in word by word at the setup notice's pace the
 // first time this browser sees each one.
 
-export type CardLatest = { message_id: string; delivered_at: number; excerpt: string };
+// revised_at: Waldo revised the card after it first went out, and this is its newest revision (controls revision 9).
+export type CardLatest = { message_id: string; delivered_at: number; excerpt: string; revised_at?: number };
 /** What the app's day view adds for Today: each card's latest delivery by id (absent: the Worker could not tell), and whether the daily brief is on. */
 export type AppDay = { latest: ReadonlyMap<string, CardLatest | null>; dailyBrief: boolean | null };
 
@@ -26,7 +27,11 @@ export function readAppDay(value: unknown): AppDay {
   const latest = new Map<string, CardLatest | null>();
   for (const card of value.data.cards) {
     if (!object(card) || typeof card.id !== 'string') throw unreadable();
-    if (card.latest !== undefined) latest.set(card.id, latestOf(card.latest));
+    if ((card.revision === undefined) !== (card.revised_at === undefined) || (card.revision !== undefined && !(Number.isSafeInteger(card.revision) && Number(card.revision) >= 1
+      && Number.isSafeInteger(card.revised_at) && Number(card.revised_at) > 0))) throw unreadable();
+    if (card.latest === undefined) continue;
+    const delivery = latestOf(card.latest);
+    latest.set(card.id, delivery && card.revised_at !== undefined ? { ...delivery, revised_at: Number(card.revised_at) } : delivery);
   }
   const schedules = value.data.schedules;
   return { latest, dailyBrief: object(schedules) && typeof schedules.daily_brief === 'boolean' ? schedules.daily_brief : null };
