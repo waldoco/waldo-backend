@@ -370,7 +370,7 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
     turn: async (trace, text, current) => { await current(); turns.push({ trace, text }); return reply.text; },
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
     dayState: {
-      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), surface,
+      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
       pushLine: async (line, mail) => { pushLines.push({ line, mail }); return `checked: ${line}`; }, chose: (_trace, code) => { chose.push(code); },
     },
   });

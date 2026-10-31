@@ -159,9 +159,9 @@ export type UpdateSweepApplyDeps = Readonly<{
   dayState?: Readonly<{
     // The owner's quiet hours: a revision still lands, a message and a push do not.
     quiet(): boolean;
-    // Where today's day cards stand, for the turn, and the surface the owner reads Waldo on.
+    // Where today's day cards stand, for the turn, and whether the owner's surface shows a revised card in place.
     cards(): string;
-    surface: string;
+    revisesCards: boolean;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
     // The push line as it may go out (updatePushLine), given the mail the turn read.
@@ -196,7 +196,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
         return 'delivered';
       }
       const quiet = day.quiet();
-      const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, surface: day.surface });
+      const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, revisesCards: day.revisesCards });
       const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
       const skip = (code: UpdateEffectCode) => { day.chose(io.trace, code); judged(row, io.settle); return 'skipped' as const; };
       if (chosen === 'invalid') return skip('effects_invalid');

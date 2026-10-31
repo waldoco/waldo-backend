@@ -388,6 +388,9 @@ const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel ===
 // messages wait for the bridge). There a day card or a standing-order report goes through the final outbox, which records a
 // delivery only once one happens, and no update card is written while it would only wait.
 const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindowOpen>>> = { whatsapp: whatsappWindowOpen, imessage: () => false };
+// Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
+// as a new message, which is itself the notification, so quiet hours hold it there.
+const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // Message ids only, never message text.
 type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
@@ -5020,11 +5023,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // With the day state the Close no longer holds what comes after it: the model judges whether a change then matters, and on
     // the app quiet hours keep only the message and the push back, so a revision still lands. Elsewhere a send is the only way
     // a revision reaches the owner, so quiet hours hold it there.
-    const dayState = this.env.WALDO_DAY_STATE === '1';
+    const dayState = this.env.WALDO_DAY_STATE === '1', revisesCards = REVISES_CARDS[channel] === true;
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
-        : volume === 'low' ? 'held_volume' : quiet() && !(dayState && channel === 'app') ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
+        : volume === 'low' ? 'held_volume' : quiet() && !(dayState && revisesCards) ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
     };
     const updateCheck = async (trace: string) => {
       const client = await google.client();
@@ -5097,8 +5100,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           ...(effect?.push ? { updatePush: { line: effect.push, ...(card ? { card } : {}) } } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ...(dayState ? { dayState: {
-        quiet: () => channel === 'app' && quiet(),
-        cards: dayCards, surface: channel,
+        quiet: () => revisesCards && quiet(),
+        cards: dayCards, revisesCards,
         delivered: card => plans.reached(today(), card),
         pushLine: async (line, mail) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...mail, await healthLogLines()] }),
         chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),
@@ -5202,7 +5205,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' })));
       // A revision counts once it reached the owner on any surface; its push, only from the app, beside the drain like a prep note's.
       if (record.revision && delivered) plans.revised(record.revision.day, record.revision.card, Date.now());
-      if (record.updatePush && delivered && channel === 'app') this.ctx.waitUntil(push('update', undefined, record.updatePush.line, record.updatePush.card));
+      if (record.updatePush && delivered && REVISES_CARDS[channel]) this.ctx.waitUntil(push('update', undefined, record.updatePush.line, record.updatePush.card));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
         if (delivered) updates.pushed(record.update.recordId, record.payload.text, Date.now());
