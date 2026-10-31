@@ -61,13 +61,30 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
   WALDO_EVAL_ONLY=h03-notification-no-numbers npx -y pnpm@10.34.4 eval:nightly
 ```
 
-**In CI (`evals-live.yml`).** GitHub runs `schedule` workflows, and lists `workflow_dispatch` workflows for manual runs, only from the repository's default branch. That branch is `main`, not `beta-mvp`, so the workflow does nothing while it lives only on `beta-mvp`. Ways forward, for the owner to choose:
+**In CI (`evals-live.yml`).** GitHub runs `schedule` workflows, and lists `workflow_dispatch` workflows for manual runs, only from the repository's default branch, `main`, and `main` carries no eval code. So the workflow lives on both branches as the same file, and every run checks out the branch named by its `ref` input (default `beta-mvp`) before it runs anything. A dispatch takes two inputs: `subset` (`all`, `live`, or scenario ids separated by commas; default `live`) and `ref`.
 
-1. **Land `evals-live.yml` on `main`, then dispatch it manually with `ref: beta-mvp`.** A dispatch runs the workflow file and code from the ref you pick. This suits the first baseline.
-2. **Schedule it from `main`, with the job checking out `beta-mvp` explicitly.** A schedule always runs the default branch's latest commit, so without an explicit checkout it tests `main`'s code.
-3. **Make `beta-mvp` the default branch.**
+| Trigger | Runs | Trials | Shards | Cap on calls |
+| --- | --- | --- | --- | --- |
+| Nightly schedule (02:00 IST) | the live-judged subset | 2 | 1 | 600 |
+| Weekly schedule (Sunday 03:00 IST) | the whole catalogue | 3 | 4 | 4,400 in all, split across the shards |
+| Dispatch, `subset` = `all` | the whole catalogue | 3 | 4 | as the weekly run |
+| Dispatch, any other `subset` | what it names | 2 | 1 | 600 |
 
-The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,755 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together. [inference] At 6 s a call the candidate side is at most about 176 minutes; the judges' 255 trial waves at up to 30 s each add about 128 more, so the high estimate is about 304 minutes and 360 still fits.
+The workflow holds none of these numbers. Its plan job runs `evals/nightly/live-plan.ts` in the checked-out tree, which prints the trials, the shards and each shard's cap, so the default-branch copy of the workflow cannot drift from the plan a test holds them to. The total is shared out in proportion to each shard's own plan estimate, so no shard's cap is under its plan; a plan that needs more than the total is refused before any call.
+
+The `subset` input reaches the workflow only through an environment variable. The plan step checks it against `[a-z0-9,-]` before writing it anywhere, and the runner checks it against the catalogue before it builds a model. A run that exhausts its cap fails the gate, so a long id list under the 600 cap fails loudly rather than spending more.
+
+## The staging profile and the live-judged subset
+
+`WALDO_EVAL_PROFILE=staging` runs the eval the way the staging Worker builds a turn. It reads `env.staging.vars` from `packages/runtime/wrangler.jsonc` at run time and sets the harness loader (`WALDO_TOOL_LOADER`), compaction, the forget barrier and the Anthropic fallback (the judge key, so the judge model may not be Sonnet 5.5 or Haiku 5.5). The candidate on the card reads `<model>+staging`. `evals/nightly/staging-profile.ts` classifies every staging variable as mapped, not turn-shaping, or a known gap with a reason; a test fails when a variable is in none of the three, so a new flag cannot reach staging unclassified. The known gaps are streaming, the proactive sweeps, the iMessage surface, the live tool registry and the nightly memory pass; the eval does not model them.
+
+`WALDO_EVAL_SUBSET=live` runs the scenarios that carry `live_subset: true`. `pnpm eval:plan` takes the same variable, so `WALDO_EVAL_SUBSET=live WALDO_EVAL_TRIALS=2 pnpm eval:plan` prints the nightly plan. A subset card is gated against the size of its subset.
+
+The scorecard now carries, for each scenario and as counts only: model rounds, `find_tools`, `use_tool`, groups loaded, peak tool-result characters, input, cached and cache-write tokens, output tokens, USD (priced by `src/llm/pricing.ts`, each fallback call at its own model's rate) and the number of calls the fallback model answered. The Markdown prints them per trial.
+
+A hosted runner stops a job at 360 minutes, and a stopped job loses what it had not yet written. [inference] Run as one job, the full catalogue at 3 trials is about 380 minutes: up to 2,175 candidate calls at about 6 s each (the 10 October latency baseline) is about 218 minutes, and 327 scenario-trials whose judge waves take up to 30 s each add about 164. The earlier figure of 304 minutes was for a smaller catalogue. So the weekly run is cut into four shards, one job each, dealt out by expected cost so they take about the same time: about 95 minutes each at the same estimates, and a test holds each under 150. Jobs time out at 330 minutes. The runner writes the scorecard so far after every scenario, and each shard uploads `scorecard.json` and `scorecard.md` as an artifact even when it fails, so a cut-off job leaves what it measured. Each shard is gated on its own size; a pass-rate floor, once one exists, needs the shards' scorecards read together.
+
+A dispatch runs the code of the `ref` it names with both provider keys in the environment, so dispatch is for people who can already push to the repository.
 
 ## Calls and cost per run
 
@@ -80,7 +97,7 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 | Judge calls | 1,329 | 348 |
 | Suggested `WALDO_EVAL_MAX_CALLS` | 3100 | 2200 |
 
-A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 85 runnable scenarios (88 in the catalogue) the plan suggests 3100, and room for four more scenarios takes it to 3300. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
+A test holds each shard's cap at or above the plan's suggestion for what it runs, and the planner accepts four more scenarios in the weekly run, since an exhausted budget fails the gate. The plan assumes 2 to 5 calls a turn; a turn may make up to 25 rounds, and the first live run's per-scenario round counts replace that assumption. For split at 85 runnable scenarios (88 in the catalogue) the plan suggests 3100, and room for four more scenarios takes it to 3300. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
 **Cost estimate.** [inference] This is an estimate, not a measurement.
 
