@@ -144,11 +144,8 @@ it.each([
       if (mail) fixture.mail = [MAIL];
       await due(BRIEF_SWEEP_ID, 'pre_activity_spot');
       await alarm();
-      // The harness's wake hint: traced once per source the sweep saw, by kind and count, never the meeting or the mail.
-      const hint = JSON.stringify(state.storage.sql.exec("SELECT * FROM trace_log WHERE hop = 'observed'").toArray());
-      expect(JSON.parse(hint)).toHaveLength(mail ? 2 : 1);
-      for (const kind of mail ? ['calendar', 'mail'] : ['calendar']) expect(hint).toContain(kind);
-      for (const text of ['Krati', 'cholesterol', 'Asha']) expect(hint).not.toContain(text);
+      // The harness's wake hint has no subscriber yet, so emitting it leaves nothing behind.
+      expect(state.storage.sql.exec("SELECT * FROM trace_log WHERE hop = 'observed'").toArray()).toEqual([]);
       const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
       const [job] = state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray();
       expect(job).toBeDefined();

@@ -480,6 +480,20 @@ describe('applying a sweep job with the day state', () => {
     });
   });
 
+  it('on a surface that raises no push, a push is neither checked nor traced', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      await h.check();
+      report(h, FOUND);
+      const a = applyingDay(h, ['card:brief'], 'whatsapp');
+      a.reply.text = JSON.stringify({ say: 'Asha signed.', push: 'Asha signed' });
+      await a.lane();
+      expect(a.effects).toEqual([expect.objectContaining({ text: 'Asha signed.' })]);
+      expect(a.effects[0]).not.toHaveProperty('push');
+      expect([a.pushLines, a.chose]).toEqual([[], ['say']]);
+    });
+  });
+
   it('on a surface that cannot edit a card, the turn is told a revision goes out as a short note', async () => {
     for (const surface of ['app', 'whatsapp']) await withSweep(async (h) => {
       h.events.push(MOVED);

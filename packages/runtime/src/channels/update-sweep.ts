@@ -103,6 +103,10 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
 export type ObservedEvent = Readonly<{ kind: 'chat' | 'mail' | 'calendar' | 'health' | 'connector'; refs: readonly string[]; taint: 'owner' | 'external'; at: number; localDay: string }>;
 export const observedEvents = (checked: SweepChecked, localDay: string, at: number): readonly ObservedEvent[] =>
   (checked.recorded?.sources ?? []).map(kind => ({ kind, refs: [`update:${checked.recorded!.id}`], taint: 'external', at, localDay }));
+export type ObservedSubscriber = (event: ObservedEvent) => void;
+export const emitObserved = (subscribers: readonly ObservedSubscriber[], events: readonly ObservedEvent[]): void => {
+  for (const event of events) for (const subscriber of subscribers) subscriber(event);
+};
 
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({
   job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: UPDATE_SWEEP_JOB_TEXT,
@@ -224,7 +228,8 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const effect = chosen.revise ? 'revise' : chosen.say ? 'say' : null;
       if (!effect) return skip('none');
       if (quiet && effect === 'say') return skip('say+quiet');
-      const push = chosen.push && !quiet ? await day.pushLine(chosen.push, changes.filter(change => change.source === 'mail').map(change => change.detail)) : undefined;
+      // A push goes only from a surface that raises one; elsewhere the message is the notification.
+      const push = chosen.push && !quiet && day.revisesCards ? await day.pushLine(chosen.push, changes.filter(change => change.source === 'mail').map(change => change.detail)) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { CalendarChange, CalendarItem, GoogleClient } from '../src/connectors/google';
 import { titleDigester, touchesDay, updateBook, type Change, type UpdateBook } from '../src/channels/update-cards';
 import { sha256Hex } from '../src/connectors/google';
-import { observedEvents, updateSweepCheck } from '../src/channels/update-sweep';
+import { emitObserved, observedEvents, updateSweepCheck } from '../src/channels/update-sweep';
 import { jobBook } from '../src/tasks/jobs';
 
 // The day state: the sweep keeps what each calendar event last looked like, so a change says what it was as well as what it
@@ -215,6 +215,25 @@ describe('the observed event', () => {
       const id = h.sql.exec<{ id: number }>('SELECT id FROM update_cards ORDER BY id DESC LIMIT 1').one().id;
       expect(observedEvents(checked, '2026-10-20', h.clock.at)).toEqual([{ kind: 'calendar', refs: [`update:${id}`], taint: 'external', at: h.clock.at, localDay: '2026-10-20' }]);
       expect(JSON.stringify(observedEvents(checked, '2026-10-20', h.clock.at))).not.toContain('Krati');
+    });
+  });
+
+  it('carries ids and kinds only, and reaches each subscriber; with none, emitting does nothing', async () => {
+    await withDay(async (h) => {
+      h.listed.push(SYNC);
+      await h.check(true);
+      h.clock.at += 10 * 60_000;
+      h.changed.push(moved({ title: 'Therapy with Dr Rao', description: 'IVF consult' } as Partial<CalendarChange>));
+      const events = observedEvents(await h.check(true), '2026-10-20', h.clock.at);
+      for (const event of events) {
+        expect(Object.keys(event).sort()).toEqual(['at', 'kind', 'localDay', 'refs', 'taint']);
+        for (const ref of event.refs) expect(ref).toMatch(/^update:\d+$/);
+      }
+      for (const text of ['Therapy', 'Rao', 'IVF']) expect(JSON.stringify(events)).not.toContain(text);
+      const seen: unknown[] = [];
+      emitObserved([event => seen.push(event)], events);
+      expect(seen).toEqual(events);
+      expect(() => emitObserved([], events)).not.toThrow();
     });
   });
 

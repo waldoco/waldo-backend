@@ -148,7 +148,7 @@ import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './
 import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
-import { observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedEvent, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
@@ -5038,8 +5038,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
         : volume === 'low' ? 'held_volume' : quiet() && !(dayState && revisesCards) ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
     };
-    // An ingestion committed: the harness's wake hint, ids only. It is traced now; memory's daytime consolidator subscribes here.
-    const observed = (trace: string, event: ObservedEvent) => log({ trace, hop: 'observed', ms: 0, ok: true, code: event.kind, detail: `refs=${event.refs.length}` });
+    // Who wakes on the harness's hint that an ingestion committed. Memory's daytime consolidator subscribes here; with no one
+    // subscribed, emitting writes nothing, calls nothing and arms no alarm.
+    const observers: readonly ObservedSubscriber[] = [];
     const updateCheck = async (trace: string) => {
       const client = await google.client();
       if (client === null) return;
@@ -5062,7 +5063,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })) });
         log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}` });
         if (check.wakeAt !== undefined) storage.kv.put(UPDATE_JUDGE_WAKE_KEY, check.wakeAt);
-        for (const event of observedEvents(check, day, now)) observed(trace, event);
+        emitObserved(observers, observedEvents(check, day, now));
         if (check.code === 'enqueued') {
           log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: check.job!.id, job_profile: 'reader' });
           await armTaskJobsWake(storage, Date.now());
