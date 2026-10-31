@@ -1,7 +1,8 @@
 import {
-  listHealthLogsArgsSchema, logMealArgsSchema, logWorkoutArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ListHealthLogsArgs, type LogMealArgs, type LogWorkoutArgs, type ToolHandler, type ToolName,
+  listHealthLogsArgsSchema, logMealArgsSchema, logWorkoutArgsSchema, setSleepNeedArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ListHealthLogsArgs, type LogMealArgs, type LogWorkoutArgs, type SetSleepNeedArgs, type SetSleepNeedResult, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
+import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso, localToEpoch } from './reminders';
@@ -142,3 +143,22 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     },
   } satisfies ToolHandler<ListHealthLogsArgs, ListResult, ToolDispatcherContext>,
 ];
+
+// The owner's own sleep need, from chat on any surface. The figure goes to the health plane's setting and nowhere else; the
+// model hears a word back. A write the health plane did not store as asked is a failure, never a "saved".
+export const sleepNeedHandler = (write: (payload: string) => Promise<unknown>) => ({
+  name: 'set_sleep_need',
+  description: 'Save the sleep need the owner tells you they have ("I need about 8 hours"), or clear it when they ask. It is kept in their health settings only, never in memory.',
+  schema: setSleepNeedArgsSchema,
+  trigger_allowlist: allowlist('set_sleep_need'),
+  autonomy_gated: false,
+  mutates_state: true,
+  async handle(args) {
+    // The health plane answers the stored need with when it changed; only the need is checked.
+    const answer = await write(JSON.stringify({ sleep_need_minutes: args.minutes }));
+    const stored = typeof answer === 'object' && answer !== null && 'sleep_need_minutes' in answer
+      ? healthSleepNeedMinutesV1Schema.nullable().safeParse(answer.sleep_need_minutes) : null;
+    if (!stored?.success || stored.data !== args.minutes) return { ok: false, code: 'transient', error: 'the sleep need was not saved' };
+    return { ok: true, data: { state: args.minutes === null ? 'cleared' : 'set' }, source_taint: null };
+  },
+} satisfies ToolHandler<SetSleepNeedArgs, SetSleepNeedResult, ToolDispatcherContext>);

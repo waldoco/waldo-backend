@@ -122,6 +122,29 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(rpcs.filter(r => r.fn === 'health_context_write').length).toBeGreaterThan(2);
   });
 
+  it('reads the owner\'s health settings only with the coaching switch on, signed, and computes on the need they stated', async () => {
+    const run = async (over: Record<string, string>) => {
+      rpcs.length = 0;
+      const d = deferrals();
+      await ingest(batch, d.defer, over);
+      await Promise.all(d.work);
+      return { settings: rpcs.filter(r => r.fn === 'health_settings_read'), writes: rpcs.filter(r => r.fn === 'health_context_write').map(r => JSON.parse(String(r.body.p_payload))) };
+    };
+    const off = await run({ HEALTH_PROVISIONAL_SCORES: '1' });
+    expect(off.settings).toEqual([]);
+    expect(off.writes.length).toBeGreaterThan(0);
+    for (const row of off.writes) expect(row.sleep_debt?.need_basis ?? 'blended_average').not.toBe('owner_confirmed');
+    answers.health_settings_read = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
+    const on = await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    expect(on.settings).toHaveLength(1);
+    expect(on.settings[0]!.body.p_sig).toBe(await routerSignature(SECRET, on.settings[0]!.body.p_at as number, `health.settings_read.owner-1.${md5Hex('{}')}`));
+    const live = on.writes.filter(row => row.sleep_debt?.state === 'available');
+    expect(live.length).toBeGreaterThan(0);
+    for (const row of live) expect(row.sleep_debt.need_basis).toBe('owner_confirmed');
+    answers.health_settings_read = new Error('down');
+    expect((await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' })).writes).toEqual([]);
+  });
+
   it('writes the read instant and the consent epoch it read, so the database can fence on both', async () => {
     const d = deferrals();
     await ingest(batch, d.defer);

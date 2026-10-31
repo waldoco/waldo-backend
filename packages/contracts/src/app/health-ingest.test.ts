@@ -4,7 +4,8 @@ import {
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
-  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
+  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
+  HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -431,11 +432,22 @@ describe('health scores history (revision 4)', () => {
   });
 });
 
+describe('health settings', () => {
+  it('holds the owner\'s stated sleep need in whole minutes, in the range the score engine trusts, or none', () => {
+    expect([HEALTH_SLEEP_NEED_MIN_MINUTES_V1, HEALTH_SLEEP_NEED_MAX_MINUTES_V1]).toEqual([360, 600]);
+    for (const value of [{ sleep_need_minutes: 480 }, { sleep_need_minutes: 360 }, { sleep_need_minutes: 600 }, { sleep_need_minutes: null }]) {
+      expect(healthSettingsV1Schema.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+    rejected(healthSettingsV1Schema, [{}, { sleep_need_minutes: 359 }, { sleep_need_minutes: 601 }, { sleep_need_minutes: 480.5 }, { sleep_need_minutes: '480' },
+      { sleep_need_minutes: 480, owner_id: 'x' }, { sleep_need_hours: 8 }]);
+  });
+});
+
 describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
-      'GET /app/v1/health/scores/history',
+      'GET /app/v1/health/scores/history', 'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);

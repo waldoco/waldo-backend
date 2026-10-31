@@ -37,3 +37,10 @@ describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('1');
   });
 });
+
+describe('HEALTH_COACHING in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+    expect(parsed.vars.HEALTH_COACHING).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('0');
+  });
+});
