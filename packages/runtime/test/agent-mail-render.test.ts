@@ -118,6 +118,17 @@ describe('renderAgentMail', () => {
     expect(result.parts.headers).toEqual({ 'In-Reply-To': references.at(-1), References: references.join(' ') });
   });
 
+  it('keeps the newest References that fit Cloudflare\'s 2,048-byte header value', async () => {
+    const references = Array.from({ length: 100 }, (_, i) => `<${String(i).padStart(3, '0')}-${'r'.repeat(40)}@example.test>`);
+    const result = ok(render({}, {}, TO, { inReplyTo: references.at(-1), references }));
+    const kept = result.parts.headers.References!.split(' ');
+    expect(new TextEncoder().encode(result.parts.headers.References!).length).toBeLessThanOrEqual(2048);
+    // Each id is 59 bytes, 60 with its separator: 34 fit in 2,048 (2,039 bytes) and a 35th would make 2,099.
+    expect(kept).toHaveLength(34);
+    expect(kept).toEqual(references.slice(-kept.length));
+    expect((await parsed(result.mime)).references!.split(/\s+/)).toEqual(kept);
+  });
+
   it('signs as Waldo alone when the owner has no first name', async () => {
     const result = ok(render({}, { ownerFirstName: null }));
     expect(result.preview.from.name).toBe('Waldo');

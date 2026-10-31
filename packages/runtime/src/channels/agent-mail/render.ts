@@ -58,12 +58,15 @@ export const AGENT_MAIL_BODY_MAX = 50_000;
 // whole draft, signature included, on the recipient's screen.
 export const AGENT_MAIL_HTML_MAX = 100_000;
 export const AGENT_MAIL_MIME_MAX = 1024 * 1024;
+// Cloudflare Email Service refuses a custom header value over 2,048 bytes; References keeps the newest ids that fit.
+const REFERENCES_MAX_BYTES = 2048;
 const NAME_MAX = 64;
 const ACTION_LABEL_MAX = 80;
 const URL_MAX = 2048;
 const TABLE_COLUMNS_MAX = 8;
 
-// Light-mode tokens from waldo-landing app/globals.css, flattened to opaque hex because Outlook for Windows drops rgba().
+// Light-mode tokens from waldo-landing app/globals.css. The translucent ones are flattened onto white: Gmail drops a whole
+// style attribute over the space-separated rgba() form, and opaque hex depends on no client's colour parsing.
 const INK = '#1A1A1A', MUTED = '#6B6B68', CANVAS = '#F4F3F0', CARD = '#FFFFFF', BORDER = '#EDEDED', ACCENT = '#FB943F', ACCENT_SUBTLE = '#FFF4EC', ON_INK = '#FAFAF8';
 const FONT = "ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 // '=_' never occurs in quoted-printable or base64 output, so these fixed boundaries cannot collide with a part's body.
@@ -308,7 +311,9 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     `-- \nWaldo${first ? `\n${first}'s assistant` : ''}\n${sender.address}`,
   ].join('\n\n') + '\n';
 
-  const threading = { ...(wire.inReplyTo ? { 'In-Reply-To': wire.inReplyTo } : {}), ...(wire.references?.length ? { References: wire.references.join(' ') } : {}) };
+  const references: string[] = [];
+  for (let i = (wire.references?.length ?? 0) - 1, size = -1; i >= 0 && (size += wire.references![i]!.length + 1) <= REFERENCES_MAX_BYTES; i -= 1) references.unshift(wire.references![i]!);
+  const threading = { ...(wire.inReplyTo ? { 'In-Reply-To': wire.inReplyTo } : {}), ...(references.length ? { References: references.join(' ') } : {}) };
   const mime = [
     `From: ${displayName(fromName)} <${sender.address}>`,
     addressHeader('To', to),
@@ -317,7 +322,7 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     `Date: ${rfc5322Date(wire.date)}`,
     `Message-ID: ${wire.messageId}`,
     ...(wire.inReplyTo ? [`In-Reply-To: ${wire.inReplyTo}`] : []),
-    ...(wire.references?.length ? [idsHeader('References', wire.references)] : []),
+    ...(references.length ? [idsHeader('References', references)] : []),
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${ALT}"`,
     '',
