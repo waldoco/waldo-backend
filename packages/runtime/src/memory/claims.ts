@@ -356,7 +356,25 @@ const stringsOf = (value: unknown): string[] =>
 export const memoryRevision = (sql: Sql): number =>
   tableExists(sql, 'memory_revision') ? sql.exec<{ value: number }>('SELECT value FROM memory_revision WHERE id = 1').toArray()[0]?.value ?? 0 : 0;
 
-export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
+const MEMORY_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(?:claims|constellation_nodes|constellation_edges)\b/i;
+const RETURNING = /\bRETURNING\b/i;
+
+export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
+  // A count, never content. Every write that changes the owner's claims, patterns or links moves it in the writer's own
+  // transaction, whoever wrote (chat, the nightly pass, the welcome build, the console), so an open app screen knows to read
+  // memory again. Every such write in this store goes through `sql` below, which moves it; re-reading a claim (seen) writes
+  // through `db` and does not. No trigger does this: a trigger's write would count in every statement's rowsWritten.
+  db.exec('CREATE TABLE IF NOT EXISTS memory_revision (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
+  const bump = () => db.exec('INSERT INTO memory_revision (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1');
+  // A RETURNING statement runs as its rows are read, and nothing may run in between, so it moves the count first: the
+  // writer's transaction takes both or neither.
+  const sql: Sql = { exec: (query: string, ...bindings: unknown[]) => {
+    if (!MEMORY_WRITE.test(query)) return db.exec(query, ...bindings);
+    if (RETURNING.test(query)) { bump(); return db.exec(query, ...bindings); }
+    const cursor = db.exec(query, ...bindings);
+    if (cursor.rowsWritten > 0) bump();
+    return cursor;
+  } } as Sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
@@ -449,16 +467,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_edges (
     from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, relation TEXT NOT NULL, strength REAL NOT NULL, evidence_count INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (from_id, to_id, relation))`);
-  // A count, never content. Every write to the owner's claims, patterns and links moves it inside the writer's own
-  // transaction, whoever wrote (chat, the nightly pass, the welcome build, the console), so an open app screen knows to read
-  // memory again. Re-reading a claim moves only its seen count, and does not move this. A trigger's write counts in a
-  // statement's rowsWritten, so a writer here checks what it changed by the rows its statement RETURNS.
-  sql.exec('CREATE TABLE IF NOT EXISTS memory_revision (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
-  for (const [name, on] of [
-    ['claims_insert', 'AFTER INSERT ON claims'], ['claims_delete', 'AFTER DELETE ON claims'], ['claims_update', 'AFTER UPDATE ON claims WHEN old.seen_count IS new.seen_count'],
-    ['nodes_insert', 'AFTER INSERT ON constellation_nodes'], ['nodes_delete', 'AFTER DELETE ON constellation_nodes'], ['nodes_update', 'AFTER UPDATE ON constellation_nodes'],
-    ['edges_insert', 'AFTER INSERT ON constellation_edges'], ['edges_delete', 'AFTER DELETE ON constellation_edges'], ['edges_update', 'AFTER UPDATE ON constellation_edges'],
-  ] as const) sql.exec(`CREATE TRIGGER IF NOT EXISTS memory_revision_${name} ${on} BEGIN INSERT INTO memory_revision (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1; END`);
   // A statement already being forgotten is left to the purge that holds its words.
   const dropStatements = (nodeId: number): void => {
     sql.exec(`DELETE FROM claims WHERE kind = '${NODE_STATEMENT}' AND source_ref LIKE ? AND status != 'purging'`, `node:${nodeId}:%`);
@@ -525,7 +533,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, null, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases));
     },
     seen(id: number, at: string): void {
-      sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
+      db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
     // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
@@ -537,7 +545,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       return sql.exec(`UPDATE claims SET origin = 'owner', verification_status = 'owner-grounded',
         source = CASE WHEN source IN ('inferred', 'waldo_confirmed') THEN 'confirmed' ELSE source END,
         source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
-        WHERE id = ? AND status IN ('active', 'promoted') RETURNING id`, how, how, at, id).toArray().length === 1;
+        WHERE id = ? AND status IN ('active', 'promoted')`, how, how, at, id).rowsWritten === 1;
     },
     // The owner's yes to a node's current wording, said where `where` names (app:node.confirm). It grounds none of the notes
     // under the node: a note Waldo read stays Waldo's read. A yes to earlier wording is superseded and no longer cited. Every
@@ -585,8 +593,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // A correction replaces the same fact, so the old row's pin moves to the row that now carries it.
         if (twin) {
           if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
-          const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' RETURNING id", at, id).toArray();
-          if (retiredOnly.length !== 1) throw new Error('correction conflict');
+          const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
+          if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
           repointNodes(old, twin.id);
           return true;
@@ -594,8 +602,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
         const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null).one().id;
-        const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' RETURNING id", at, id).toArray();
-        if (retired.length !== 1) throw new Error('correction conflict');
+        const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
+        if (retired.rowsWritten !== 1) throw new Error('correction conflict');
         repointNodes(old, replacement);
         return true;
       });
@@ -611,7 +619,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       return true;
     },
     unpin(id: number): boolean {
-      return sql.exec('UPDATE claims SET pinned = NULL, pin_order = NULL WHERE id = ? AND pinned IS NOT NULL RETURNING id', id).toArray().length === 1;
+      return sql.exec('UPDATE claims SET pinned = NULL, pin_order = NULL WHERE id = ? AND pinned IS NOT NULL', id).rowsWritten === 1;
     },
     forget(id: number): void {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
