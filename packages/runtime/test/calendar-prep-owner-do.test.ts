@@ -48,7 +48,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters', 'daily-cap', 'large-profile'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
+it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters', 'many-meetings', 'large-profile'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
   const name = `calendar-prep-${mode}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
@@ -119,11 +119,12 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
           const all = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
           all.find(r => r.calendarPrep)!.status = 'attempting'; state.storage.kv.put(FINAL_OUTBOX_KEY, all);
         }
-        if (mode === 'daily-cap') {
+        // No daily cap: each meeting the model judges worth a note gets one.
+        if (mode === 'many-meetings') {
           fixture.event = { ...fixture.event!, id: 'event-2' }; await incoming();
           fixture.event = { ...fixture.event!, id: 'event-3' }; await incoming();
-          expect(rows()).toHaveLength(2);
-          expect(state.storage.sql.exec('SELECT local_date, count FROM class_state').one()).toEqual({ local_date: '2026-10-03', count: 2 });
+          expect(rows()).toHaveLength(3);
+          expect(state.storage.sql.exec('SELECT local_date, count FROM class_state').one()).toEqual({ local_date: '2026-10-03', count: 3 });
         }
         await drain();
         if (['disabled', 'owner-opt-out', 'low-volume'].includes(mode)) {
@@ -184,7 +185,7 @@ it('actual default owner DO freezes grounded local-time prep and rechecks quiet/
   });
 });
 
-type CounterCase = { name: string; zone?: string; now?: string; day?: string; last?: number | string | null; marker?: unknown; tables?: string[]; ready: boolean; flag?: string; advanceTo?: string; updates?: boolean; inspection?: boolean; capped?: boolean };
+type CounterCase = { name: string; zone?: string; now?: string; day?: string; last?: number | string | null; marker?: unknown; tables?: string[]; ready: boolean; flag?: string; advanceTo?: string; updates?: boolean; inspection?: boolean };
 const counterCases: CounterCase[] = [
   { name: 'historical legacy UTC counters', ready: true },
   { name: 'historical budget-only counters', tables: ['daily_push_budget'], ready: true },
@@ -223,8 +224,8 @@ const counterCases: CounterCase[] = [
   { name: 'invalid old zone', marker: 'Invalid/Zone', ready: false, inspection: true },
   { name: 'empty old zone', marker: '', ready: false, inspection: true },
   { name: 'nonstring old zone', marker: 1, ready: false, inspection: true },
-  // Today's rows already hold the day's two pre-activity sends: read at once, they hold the prep before any model call.
-  { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true, capped: true },
+  // Today's rows already hold two pre-activity sends: with no daily cap, the prep is still asked for.
+  { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true },
   { name: 'flag zero preserves legacy counters', flag: '0', ready: false },
 ];
 
@@ -264,8 +265,7 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
       expect((await fire(100)).status).toBe(200);
       expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toEqual(scenario.ready ? zone : scenario.marker);
       const decisions = () => fixture.requests.filter(r => r.request.messages.at(-1)?.content.includes('[Meeting prep decision'));
-      expect(decisions()).toHaveLength(scenario.ready && !scenario.capped ? 1 : 0);
-      if (scenario.capped) expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check' AND trace LIKE 'briefs:%'").toArray()).toEqual([{ note: 'held_budget' }]);
+      expect(decisions()).toHaveLength(scenario.ready ? 1 : 0);
       if (!scenario.ready && !scenario.flag) {
         const hold = state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'brief_sweep' AND ok = 0 ORDER BY id DESC LIMIT 1").one();
         expect(hold.note).toContain(scenario.inspection ? 'inspection required' : 'await both civil-day rollovers');
@@ -291,7 +291,7 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
       }
       if (scenario.ready) {
         await fire(102);
-        expect(decisions()).toHaveLength(scenario.capped ? 0 : 1);
+        expect(decisions()).toHaveLength(1);
         expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
       }
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }

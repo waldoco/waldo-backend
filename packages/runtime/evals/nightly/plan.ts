@@ -26,7 +26,7 @@ export const callPlan = (scenarios: readonly NightlyScenario[], trials: number, 
   const runnable = scenarios.filter((scenario) => !scenario.blocked);
   // A late answer is the retry turn that answers once a model is back; the outage turn before it makes no model call. A day
   // card is one card job, and a health change one trigger decision.
-  const turns = runnable.reduce((sum, scenario) => sum + scenario.steps.filter((step) => 'say' in step || 'fire_due' in step || 'late_answer' in step || 'card' in step || 'health_change' in step).length, 0) * trials;
+  const turns = runnable.reduce((sum, scenario) => sum + scenario.steps.filter((step) => 'say' in step || 'fire_due' in step || 'late_answer' in step || 'card' in step || 'health_change' in step || 'outside_job' in step).length, 0) * trials;
   const judge = runnable.reduce((sum, scenario) => sum + judgeCallsPerTrial(scenario, mode), 0) * trials;
   const candidate = { low: turns * CALLS_PER_TURN.low, high: turns * CALLS_PER_TURN.high };
   return {

@@ -98,6 +98,17 @@ export const updateBook = (sql: Sql) => {
       return sql.exec<{ at: number; changes: string }>("SELECT at, changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT ?", at, limit).toArray()
         .map((row) => ({ at: row.at, changes: JSON.parse(row.changes) as Change[] }));
     },
+    // Whether the owner's day moved after `at` for a meeting with `people`: a calendar change that touches `day`, or new mail
+    // from one of them. Other mail leaves the meeting as it was judged.
+    changedSince(at: number, day: string, timezone: string, people: readonly string[]): boolean {
+      const senders = new Set(people.map(person => person.toLowerCase()));
+      // The address in a From header, "Name <address>" or the bare address, compared whole.
+      const senderOf = (from: unknown) => { const header = String(from ?? '').trim(); return (/<([^<>]+)>$/.exec(header)?.[1] ?? header).trim().toLowerCase(); };
+      return sql.exec<{ changes: string }>("SELECT changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT 50", at).toArray()
+        .some(row => (JSON.parse(row.changes) as Change[]).some(change => change.source === 'mail'
+          ? senders.has(senderOf((JSON.parse(change.detail) as { from?: unknown }).from))
+          : touchesDay(change, day, timezone)));
+    },
     fold(upTo: number): void {
       sql.exec('UPDATE update_cards SET folded = 1 WHERE at <= ?', upTo);
     },

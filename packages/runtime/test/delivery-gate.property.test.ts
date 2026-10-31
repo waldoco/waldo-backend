@@ -255,8 +255,8 @@ describe('DeliveryGate fast-check properties', () => {
     expect(countedSends).toBe(5);
   });
 
-  it('keeps pre_activity_spot capped at two even for Pro Max', () => {
-    const admissions = [0, 1, 2].map((classCount) =>
+  it('leaves pre_activity_spot uncapped and uncooled: whether a meeting gets a note is the model\'s call', () => {
+    const admissions = [0, 1, 2, 5].map((classCount) =>
       admit(
         {
           push_class: PRE_ACTIVITY_SPOT,
@@ -270,8 +270,7 @@ describe('DeliveryGate fast-check properties', () => {
       ),
     );
 
-    expect(admissions.slice(0, 2).every((admission) => admission.verdict === 'send')).toBe(true);
-    expect(admissions[2]).toMatchObject({ verdict: 'hold', reason: 'class_cap_exhausted' });
+    expect(admissions.every((admission) => admission.verdict === 'send')).toBe(true);
   });
 
   it('preserves the candidate expiration in lifetime-drop and daily-cap-hold stamps', () => {
@@ -283,7 +282,7 @@ describe('DeliveryGate fast-check properties', () => {
       1,
     );
     const dailyCap = admit(
-      { ...candidateFor('pre_activity_spot', 0), expires_at: expiresAt },
+      { ...candidateFor('intervention_knock', 0), expires_at: expiresAt },
       'pro_max',
       0,
       2,
