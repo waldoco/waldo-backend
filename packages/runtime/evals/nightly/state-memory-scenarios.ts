@@ -103,7 +103,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [readOnly, claimsUntouched],
   },
   {
-    id: 'm05-forget-then-ask', title: 'A forgotten fact stays gone, by direct ask and by paraphrase, and nothing else goes with it', pain: 'context', start: START, world: {},
+    id: 'm05-forget-then-ask', live_subset: true, title: 'A forgotten fact stays gone, by direct ask and by paraphrase, and nothing else goes with it', pain: 'context', start: START, world: {},
     steps: [
       { say: 'My locker code at the climbing gym is Bluefin 4471.' },
       { say: 'Separate thing: I keep my spare chalk bag in locker 12.' },
