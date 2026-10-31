@@ -24,6 +24,7 @@ import { argumentDigest } from '../src/tools/dispatcher';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { reportMachineJobs } from './helpers/heartbeat-job';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // The forgotten literal comes only from what the model wrote, never from the loop title or the reminder note: a loop whose
 // title carried it would be dropped by the purge, and the outbox would then refuse the check-back for that reason instead.
@@ -147,7 +148,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
     const loops = loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now });
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-    const internals = owner as unknown as { turn(...args: unknown[]): Promise<void>; whatsappInflight: Set<Promise<void>>; serial(work: () => Promise<void>): Promise<void>;
+    const internals = owner as unknown as { turn(...args: unknown[]): Promise<void>; serial(work: () => Promise<void>): Promise<void>;
       setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const realTurn = internals.turn.bind(owner);
     let runTurn = false;
@@ -165,8 +166,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
             body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
           }));
           expect(response.status).toBe(200);
-          await Promise.all([...internals.whatsappInflight]);
-          await internals.serial(async () => undefined);
+          await drainWhatsAppTurns(owner);
           runTurn = false;
         },
         // The tick writes a check-back job on the first pass; its worker reports (stood in for here) for the passes after.

@@ -436,7 +436,7 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
       const [copy] = copies(state);
       // The owner links a new number and writes from it: its window opens, and the reply path first releases what waits for
-      // WhatsApp, as runWhatsappClaimed does.
+      // WhatsApp, as the WhatsApp drain does before each turn.
       rebindWhatsApp(owner, state, NEW_SUBJECT);
       state.storage.kv.put('wa_last_inbound_ms', ctx.now);
       const internal = owner as unknown as { setup(channel: 'whatsapp'): { finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }; outboxRoute(surface: 'whatsapp'): OutboxRoute };
