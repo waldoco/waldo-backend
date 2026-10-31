@@ -166,10 +166,13 @@ it('a literal forget redacts a message still waiting for its turn', async () => 
     expect((await post(instance, 'wamid.forget.A', 'Find me flights to Goa.')).status).toBe(200);
     const drained = drainWhatsAppTurns(instance);
     await vi.waitFor(() => expect(model.turns).toHaveLength(1), { timeout: 10_000, interval: 20 });
-    expect((await post(instance, 'wamid.forget.B', 'my locker code is 4417, remind me later')).status).toBe(200);
-    // The forget purge's store list reaches the inbox, so a forget that cannot clean it would throw here.
-    await (instance as unknown as { hideRetainedText(texts: readonly string[]): Promise<void> }).hideRetainedText(['4417']);
-    expect(JSON.stringify(inbox.records().find(row => row.wamid === 'wamid.forget.B')?.update)).not.toContain('4417');
+    // A plain literal that ingress keeps as written (a code would already be quarantined at admission), so only the forget
+    // purge can take it out of the row.
+    expect((await post(instance, 'wamid.forget.B', 'my locker is in the blue room, remind me later')).status).toBe(200);
+    const queued = () => JSON.stringify(inbox.records().find(row => row.wamid === 'wamid.forget.B')?.update);
+    expect(queued()).toContain('blue room');
+    await (instance as unknown as { hideRetainedText(texts: readonly string[]): Promise<void> }).hideRetainedText(['blue room']);
+    expect(queued()).not.toContain('blue room');
     gate.resolve();
     await drained;
   });
@@ -200,6 +203,9 @@ it.each(['pass', 'whatsapp', 'mail'] as const)('a held %s lane never holds a Wha
     state.storage.kv.put(ALARM_FAILED_LANE_KEY, held);
     state.storage.kv.put(ALARM_RETRY_DUE_KEY, Date.now() + 10 * 60_000);
     expect((await post(instance, `wamid.held.${held}`, 'Find me flights to Goa.')).status).toBe(200);
+    // Admission armed its own early alarm, which a re-arm keeps; clearing it makes the assertion read the arbiter's choice,
+    // as at the end of a pass that left rows waiting.
+    await state.storage.deleteAlarm();
     await rearmSharedAlarm(state.storage, null, Date.now());
     expect(await state.storage.getAlarm()).toBeLessThan(Date.now() + 1_000);
     await instance.alarm();
@@ -244,6 +250,24 @@ it('without a WhatsApp transport the waiting row is left alone and wakes again i
     // The arbiter arms from this key; other lanes' own wakes may still come sooner.
     expect(state.storage.kv.get<number>(WHATSAPP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(before + 60_000);
     expect(model.turns).toEqual([]);
+  });
+});
+
+it('without a WhatsApp transport a running row cut off by an eviction is left for when the transport returns, and the alarm does not refire at the floor', async () => {
+  await harness('whatsapp-second-message-no-secret-running', async ({ instance, state, inbox }) => {
+    expect((await post(instance, 'wamid.nosecret.cut', 'Find me flights to Goa.')).status).toBe(200);
+    // Its turn was running in an instance that is gone, and its wake is already due.
+    inbox.claimNext(Date.now() + WHATSAPP_TURN_DEADLINE_MS);
+    state.storage.kv.put(WHATSAPP_INBOX_DUE_KEY, Date.now() - 1_000);
+    const bare = new OwnerDO(state, { ...env, WHATSAPP_ACCESS_TOKEN: undefined, WHATSAPP_PHONE_NUMBER_ID: undefined });
+    for (let pass = 0; pass < 3; pass++) {
+      const before = Date.now();
+      await bare.alarm();
+      expect(state.storage.kv.get<number>(WHATSAPP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(before + 60_000);
+      expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(before + 1_000);
+    }
+    // Recovery waits for the transport, so the notice it owes can go out.
+    expect(states(inbox)).toEqual([['wamid.nosecret.cut', 'running']]);
   });
 });
 
