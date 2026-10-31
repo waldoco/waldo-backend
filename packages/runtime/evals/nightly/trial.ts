@@ -16,6 +16,8 @@ import type { JobBook, RetryBrief } from '../../src/tasks/jobs';
 import { promiseRetry, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
+import { trialSkillBook } from './skills';
+import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
 import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
@@ -110,9 +112,10 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   let retry: RetryBrief | undefined;
   const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
   const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
+  const skills = trialSkillBook(world.sql);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items' });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
@@ -121,6 +124,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     for (const step of scenario.steps) {
       if ('say' in step) {
         turn += 1;
+        skills.turn(ownerTurnTrace('app', turn));
         transcript.push({ role: 'owner', text: step.say });
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
         // The post-reply compaction hook; a store built with compaction off makes it a no-op.
@@ -132,6 +136,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         // The owner's turn runs while no model answers, so its floor reply promises a time and writes the retry; the
         // retry then runs as the owner object runs it once a model is back, with the tools an apply turn gets.
         turn += 1;
+        skills.turn(ownerTurnTrace('app', turn));
         transcript.push({ role: 'owner', text: step.late_answer });
         outage.down = true;
         retry = undefined;
@@ -142,10 +147,12 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         world.advance(new Date(world.clock.now().getTime() + RETRY_FIRST_TRY_MS).toISOString());
         transcript.push({ role: 'world', text: `No model answered at the time. The time is now ${world.localNow()} (${TIMEZONE}) and models answer again.` });
         const tools = world.handlers.map((handler) => handler.name).filter((name) => name !== 'start_task' && name !== 'cancel_task');
+        skills.turn(`${scenario.id}-retry-${turn}`);
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.prompt(`${scenario.id}-retry-${turn}`, 1, retryTurnText(retry, TIMEZONE), time, tools as never, undefined, undefined, undefined, undefined, true) });
       } else if ('fire_due' in step) {
         for (const reminder of world.due()) {
           world.markFired(reminder.id);
+          skills.turn(`${scenario.id}-${reminder.id}`);
           transcript.push({ role: 'world', text: `The reminder "${reminder.note}" fires.` });
           transcript.push({ role: 'waldo', surface: 'notification', text: await responder.remind(`${scenario.id}-${reminder.id}`, 1, reminder.note, time) });
         }
@@ -159,6 +166,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         if (notice) transcript.push({ role: 'waldo', surface: 'notification', text: notice });
       } else if ('card' in step) {
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
+        skills.turn(`${scenario.id}-${step.card}`);
         const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card), time, undefined, undefined, undefined, undefined, 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
@@ -171,7 +179,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     status = deps.budget.exhausted() ? 'budget_exhausted' : 'harness_error';
     if (status === 'harness_error') error = failure instanceof Error ? failure.constructor.name : typeof failure;
   }
-  const names = new Set(world.handlers.map((handler) => `tool_${handler.name}`));
+  const names = new Set([...world.handlers, ...skills.capability.handlers].map((handler) => `tool_${handler.name}`));
   const tools = entries.filter((entry) => names.has(entry.hop));
   return {
     status, ...(error ? { error } : {}), transcript,
