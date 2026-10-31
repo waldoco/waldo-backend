@@ -193,3 +193,9 @@ describe('the pass', () => {
     });
   });
 });
+
+it('ships off in production and on in staging', async () => {
+  // @ts-expect-error vite-only API
+  const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
+  expect(raw.match(/"MEMORY_DAYTIME_CONSOLIDATOR": "([^"]*)"/g)).toEqual(['"MEMORY_DAYTIME_CONSOLIDATOR": "0"', '"MEMORY_DAYTIME_CONSOLIDATOR": "1"']);
+});
