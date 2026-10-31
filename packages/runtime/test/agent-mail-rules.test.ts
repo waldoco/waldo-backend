@@ -219,6 +219,14 @@ describe('agent mail routing rules', () => {
     expect(agentMailRuleHandles(w.kv as never)).toEqual([]);
   });
 
+  it('never deletes a rule with Waldo\'s name and address that delivers to another Worker, in a pass or the sweep', async () => {
+    const w = world([rule('r1301', `${PREFIX}gone`, `gone@${DOMAIN}`, 'someone-else')]);
+    intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+    await w.pass();
+    expect(await sweepAgentMailRules(w.setup, w.directory.held)).toEqual({ removed: 0, state: 'ok' });
+    expect(w.cloudflare.rules.map(r => r.id)).toEqual(['r1301']);
+  });
+
   it('a delete never gives up: past the create limit it keeps retrying, at most a day apart', async () => {
     const w = world([rule('r1301', `${PREFIX}gone`, `gone@${DOMAIN}`)]);
     intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
