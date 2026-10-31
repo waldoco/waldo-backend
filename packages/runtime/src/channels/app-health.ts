@@ -27,6 +27,7 @@ export type AppHealthInput = Readonly<{
   defer?: (work: Promise<unknown>) => void;
   notifySamples?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
+  trainingLoad?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
   readDemand?: ProducerDeps['readDemand'];
   // Tells the owner's Durable Object that today's derived row moved zone, so the health trigger can look at it.
@@ -194,7 +195,7 @@ const scoresHistory = async ({ request, url, doName, rpc }: AppHealthInput): Pro
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -203,6 +204,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
+    ...(trainingLoad ? { trainingLoad } : {}),
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
   }, { now: Date.now(), timezone });

@@ -1,6 +1,7 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
+import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
 
@@ -25,6 +26,8 @@ export type ProducerDeps = Readonly<{
   readHistory?: (days: number) => Promise<unknown>;
   // How many past days one run may backfill; the rest wait for the next run.
   backfillLimit?: number;
+  // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
+  trainingLoad?: boolean;
 }>;
 
 // Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.
@@ -50,7 +53,9 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean }>;
+// workout is a workout's zones and effort as the read returns them, null for any other signal or a workout without them.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
+type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'effort'>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -62,6 +67,17 @@ const stagesOf = (raw: unknown): SleepStages | null => {
   const r = asRecord(raw);
   return r && STAGES.every(stage => typeof r[stage] === 'number' && Number.isFinite(r[stage]) && r[stage] >= 0) ? Object.fromEntries(STAGES.map(stage => [stage, r[stage]])) as SleepStages : null;
 };
+// A workout's zones and effort, each dropped on its own when it is not the shape the contract admits.
+const workoutDetailOf = (raw: unknown): WorkoutDetail => {
+  const r = asRecord(raw);
+  const seconds = asRecord(r?.hr_zones)?.seconds;
+  const effort = asRecord(r?.effort);
+  return {
+    zoneSeconds: Array.isArray(seconds) && seconds.length === 5 && seconds.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) ? seconds as number[] : null,
+    effort: effort && typeof effort.score === 'number' && effort.score >= 1 && effort.score <= 10 && (effort.method === 'rated' || effort.method === 'estimated')
+      ? { score: effort.score, method: effort.method } : null,
+  };
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -71,6 +87,7 @@ const reading = (raw: unknown): Reading | null => {
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
     samsungWriter: r.samsung_writer === true,
+    workout: r.signal === 'workout' ? workoutDetailOf(r.workout) : null,
   };
 };
 
@@ -316,6 +333,17 @@ const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): obj
 const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): object =>
   forToday && basis.accepted && scores.windows && scores.windows.length > 0 ? { windows: scores.windows, windows_version: ENERGY_WINDOWS_VERSION } : {};
 
+// Signals only a body-worn sensor makes. A day the phone alone saw (movement, daylight) shows the phone was about, not that
+// a session would have been recorded, so it is not an observed day.
+const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
+// The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
+// Another source's workouts never mix in.
+const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
+  throughDay: yesterday,
+  observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
+  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, effort: r.workout?.effort ?? null })),
+});
+
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
@@ -458,7 +486,10 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today);
+      const row = {
+        ...rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+      };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (writeOutcome(answer) === 'written') logWritten(row);
