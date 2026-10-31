@@ -97,7 +97,7 @@ reach "Dr Rao does the teeth cleaning". The owner wants recall by meaning now, o
   $0.001 to backfill, and a query under $0.000001.
 - **Ledger:** every embedding call is priced in `llm/pricing.ts` and logged as a `memory_embedding` event, which the
   owner object's cost rollup adds to `waldo.cost_ledger_daily` and to the month's spend the ceiling reads. The sweep is
-  `background` work; a query bills to the turn's kind. Workers AI reports no token count for an embedding, so the tokens
+  `background` work; a query is recorded as `turn`, whatever kind of turn asked (a job or heartbeat included). Workers AI reports no token count for an embedding, so the tokens
   are an estimate, UTF-8 bytes over four. A call is counted when sent, so one that timed out still counts.
 - **Latency:** one embedding call per owner turn, before the reply's model call: about 50–200 ms [inference; measure on
   staging], capped by the 1.5 s timeout. The scan is about 1 ms for 2,000 claims [inference]. Each query's

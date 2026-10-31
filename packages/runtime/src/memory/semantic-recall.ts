@@ -71,7 +71,7 @@ const cosine = (a: Float32Array, b: readonly number[]): number => {
 
 type Snapshot = Readonly<{ id: number; text: string; aliases: string | null }>;
 // memory_embed: a sweep's outcome. memory_embedding: one embedding call, priced; the sweep's is background work, and a
-// query's bills to the turn that asked.
+// query's is recorded as turn work, whatever kind of turn asked.
 export type SemanticEvent = Readonly<{ hop: 'memory_embed' | 'memory_embedding'; ok: boolean; code?: string; detail: string; ms?: number; usage?: TurnModelUsage; cost_kind?: 'background' }>;
 export type SemanticLog = (event: SemanticEvent) => void;
 // The owner object's trace entry for an event, which its cost ledger prices by the usage it carries.
