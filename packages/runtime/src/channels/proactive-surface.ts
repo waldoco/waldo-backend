@@ -99,12 +99,13 @@ export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: Fi
   !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
-// A day card or an update card that reaches the app through this route links the app message it became, as a card sent
-// straight to the app does. `row`, when given, links every app message the route delivers to the trace of the job that
-// queued it.
+// A day card, an update card or a card's revision that reaches the app through this route links the app message it became,
+// as a card sent straight to the app does. `row`, when given, links every app message the route delivers to the trace of
+// the job that queued it.
 export type AppRowLinks = Readonly<{
   card(card: NonNullable<FinalRecord['dayCard']>, appRow: string): void;
   update(recordId: number, appRow: string): void;
+  revision?(revision: NonNullable<FinalRecord['revision']>, appRow: string, record: string): void;
   row?(appRow: string, trace: string): void;
 }>;
 export const linkingAppRows = (route: OutboxRoute, link: AppRowLinks): OutboxRoute => ({
@@ -115,6 +116,7 @@ export const linkingAppRows = (route: OutboxRoute, link: AppRowLinks): OutboxRou
     if (ack !== null && ack !== 'held' && typeof appRow === 'string') {
       if (record.dayCard) link.card(record.dayCard, appRow);
       if (record.update) link.update(record.update.recordId, appRow);
+      if (record.revision) link.revision?.(record.revision, appRow, record.id);
       link.row?.(appRow, record.trace);
     }
     return ack;

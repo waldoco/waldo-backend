@@ -29,10 +29,11 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
-  MEMORY_SEMANTIC_RECALL: mapped('the eval has no semantic leg, so the profile refuses a staging that turns it on'),
+  MEMORY_SEMANTIC_RECALL: mapped("'1' runs the trials with semantic recall on, over the run's embedder"),
 
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
+  WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial; staging has it off'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
@@ -48,6 +49,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
 
   WALDO_ENVIRONMENT: inert('names the deployment'),
   PREP_PUSH_NAMES: inert('the app push text raised after a prep note is delivered; the model never sees it'),
+  UPDATE_PUSH_NAMES: inert('the app push text raised after an update is delivered; the model never sees it'),
   WALDO_PUBLIC_ORIGIN: inert(IDENTITY),
   WALDO_OWNER_DO_NAMESPACE: inert(IDENTITY),
   WALDO_RELEASE: inert('release stamp'),
@@ -94,16 +96,17 @@ export type StagingProfile = Readonly<{
   toolSearch?: true;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
+  semantic: boolean;
 }>;
 
 // The owner object's own precedence: the harness loader wins over provider tool search.
 export const stagingProfile = (vars: StagingVars): StagingProfile => {
-  if (vars.MEMORY_SEMANTIC_RECALL === '1') throw new Error('staging turns semantic recall on and the eval has no semantic leg');
   const harness = vars.WALDO_TOOL_LOADER === 'harness';
   return {
     label: 'staging', model: WALDO_CHAT_MODEL,
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
+    semantic: vars.MEMORY_SEMANTIC_RECALL === '1',
   };
 };
