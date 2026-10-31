@@ -996,12 +996,12 @@ export const createOwnerResponder = (
         turnReplyOwnAuthored = false;
       }
     },
-    async remind(id, conversationRef, note, time, surface) {
-      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface), conversationRef);
+    async remind(id, conversationRef, note, time, surface, timing) {
+      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface, timing), conversationRef);
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
-      return converse(id, conversationRef, reminderCheckBackText(note), time, false, surface, CHECK_BACK_TOOLS);
+      return converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface, CHECK_BACK_TOOLS);
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments) {
       const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments), conversationRef);

@@ -25,6 +25,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00
 const plane = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(), debt: new Map<string, number>(), drivers: new Map<string, string[]>(), consent: true,
   event: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string,
+  calls: [] as string[], written: [] as Record<string, unknown>[], settings: null as unknown,
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -72,6 +73,7 @@ let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
   plane.rows.clear(); plane.debt.clear(); plane.drivers.clear(); plane.consent = true; plane.event = REVIEW; plane.requests = []; printed.length = 0;
+  plane.calls = []; plane.written = []; plane.settings = null;
   plane.decision = move;
   for (const day of [-3, -2]) plane.rows.set(addDays(TODAY, day), { recovery: pillar, form: pillar, weight: { reason: 'calendar_demand_unavailable' } });
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
@@ -82,9 +84,12 @@ beforeEach(() => {
     const payload = typeof body.p_payload === 'string' ? JSON.parse(body.p_payload) as Record<string, unknown> : {};
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
+    if (fn) plane.calls.push(fn);
     if (fn === 'health_series_read') return Response.json(series(String(payload.to)));
+    if (fn === 'health_settings_read') return Response.json(plane.settings);
     if (fn === 'health_context_write') {
       const day = String(payload.day);
+      plane.written.push(payload);
       plane.rows.set(day, { recovery: payload.recovery, form: payload.form, weight: payload.weight });
       return Response.json({ written: true, changed: [] });
     }
@@ -107,14 +112,14 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   [...state.storage.kv.list()],
 ]);
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
-const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void>; pass(): Promise<void>; recompute(): Promise<void> }) => Promise<void>) => {
+const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void>; pass(): Promise<void>; recompute(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
   const doName = `health-wakes-do-${sequence++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    const owner = new OwnerDO(state, CONFIG as never) as unknown as Owner;
+    const owner = new OwnerDO(state, config as never) as unknown as Owner;
     const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     // One upload and the recompute window it arms, run through the real scheduler.
@@ -199,5 +204,33 @@ describe('a wake beyond a zone change, on the owner object', () => {
       expect([wakes(state), triggerEntry(state)]).toEqual([[], []]);
       expect(printed.join('\n')).not.toContain(SENTENCE);
     });
+  });
+});
+
+// The owner's stated sleep need on the owner object's recompute: read only with the coaching switch on, and every row computed
+// on it. Every value is synthetic.
+describe('the stated sleep need on the owner object', () => {
+  it('reads no settings with the coaching switch off', async () => {
+    await withOwner(async ({ recompute }) => {
+      await recompute();
+      expect(plane.written.length).toBeGreaterThan(0);
+      expect(plane.calls).not.toContain('health_settings_read');
+    });
+  });
+
+  it('computes on the stated need with it on, and writes nothing when the settings read fails', async () => {
+    plane.settings = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
+    await withOwner(async ({ recompute }) => {
+      await recompute();
+      expect(plane.calls).toContain('health_settings_read');
+      const debts = plane.written.map(row => row.sleep_debt as { state?: string; need_basis?: string } | undefined).filter(debt => debt?.state === 'available');
+      expect(debts.length).toBeGreaterThan(0);
+      for (const debt of debts) expect(debt!.need_basis).toBe('owner_confirmed');
+    }, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    plane.settings = { error: 'not_linked' }; plane.written = [];
+    await withOwner(async ({ recompute }) => {
+      await recompute();
+      expect(plane.written).toEqual([]);
+    }, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
   });
 });

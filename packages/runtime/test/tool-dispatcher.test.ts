@@ -23,6 +23,7 @@ import {
   type WriteTaskArgs,
 } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   dispatchTool,
   formatToolDefinitions,
@@ -31,7 +32,7 @@ import {
   type ToolDispatcherContext,
   type RuntimeToolCall,
 } from '../src/tools/dispatcher';
-import type { HookRegistry } from '../src/hooks/registry';
+import { invalidArgumentsCause, MAX_ARGUMENT_ISSUES, type HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 import { webSearchHandler } from '../src/tools/live/web-search';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
@@ -1111,6 +1112,43 @@ describe('ToolDispatcher', () => {
       reason: 'invalid_args',
     });
     expect(handled).toBe(false);
+  });
+
+  it('names the failing field when the handler schema refuses arguments the registry schema accepted', async () => {
+    let handled = false;
+    const handler: ToolHandler<GetCrsArgs, unknown, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived CRS summary.',
+      schema: z.strictObject({ range_days: z.int().min(1).max(30).default(1) }),
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      async handle() {
+        handled = true;
+        return { ok: true, data: { summary: 'form steady' }, source_taint: null };
+      },
+    };
+
+    const result = await dispatchTool(
+      { id: 'call-handler-schema', name: 'get_crs', args: { range_days: 60 } },
+      dispatcherContext('brief'),
+      { handlers: [handler], extraHooks: [] },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      ...shaped('invalid_args', 'invalid tool arguments: range_days: Too big: expected number to be <=30; match the tool schema exactly'),
+      code: 'invalid_args',
+      reason: 'invalid_args',
+    });
+    expect(handled).toBe(false);
+  });
+
+  it('bounds the argument detail: a few issues, each cut short, then how many more', () => {
+    const issues = Array.from({ length: 10 }, (_, index) => ({ path: ['items', index, 'x'.repeat(300)], message: `Invalid input: ${'y'.repeat(500)}` }));
+    const cause = invalidArgumentsCause(issues);
+    expect(cause.startsWith('invalid tool arguments: items.0.')).toBe(true);
+    expect(cause.slice('invalid tool arguments: '.length).split('; ').filter((part) => part.startsWith('items.'))).toHaveLength(MAX_ARGUMENT_ISSUES);
+    expect(cause).toContain(`and ${10 - MAX_ARGUMENT_ISSUES} more`);
+    expect(cause.length).toBeLessThan(MAX_TOOL_ERROR_CHARS);
   });
 
   it('keeps the datetime hint for an actual datetime validation failure', async () => {

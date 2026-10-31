@@ -4,8 +4,9 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { WorkspaceState } from '@waldo/workspace';
 import { OwnerDO } from '../src/channels/owner-do';
 import { WHATSAPP_PARTIAL_NOTICE } from '../src/channels/whatsapp-api';
-import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
+import { WHATSAPP_TURN_DEADLINE_MS, WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
 import { toolOutput } from './fixtures/tool-output';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { input: string | { type?: string; call_id?: string; output?: string }[]; text?: { format?: { name?: string } } };
 type Call = { type: 'function_call'; call_id: string; name: string; arguments: string };
@@ -62,7 +63,7 @@ async function harness(work: (h: Harness) => Promise<void>) {
       throw new Error(`local fixture denies unexpected network: ${url}`);
     });
     let instance = new OwnerDO(state, fixtureEnv);
-    const settle = async () => { await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]); };
+    const settle = async () => { await drainWhatsAppTurns(instance); };
     const admit = (ids: string[], doNameHeader = true) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT, ...(doNameHeader ? { 'x-waldo-do-name': name } : {}) },
       body: JSON.stringify({ messages: ids.map(id => ({ from: SUBJECT, id, type: 'text', text: { body: 'Save a note to my workspace.' } })) }),
@@ -121,21 +122,22 @@ it.each([
   await harness(async h => {
     const paused = h.pausePut();
     expect((await h.admit(['wamid.fence.1'])).status).toBe(200);
+    const drained = h.settle();
     await paused.reached;
     change(h.state);
     paused.release();
-    await h.settle();
+    await drained;
     expect(h.manifest()?.files ?? []).toEqual([]);
     expect(h.sent.filter(s => s.to === `+${OTHER}`)).toEqual([]);
     expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual(Array(notices).fill({ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }));
     expect(h.sent.filter(s => s.text === 'Saved it.')).toEqual([]);
-    expect([...h.state.storage.kv.list({ prefix: 'wa_pending:' })]).toEqual([]);
+    expect(new WhatsAppOwnerInbox(h.state.storage).records().map(row => row.state)).toEqual(['interrupted']);
   });
 });
 
 it.each([
   ['past its deadline', (h: Harness, release: () => Promise<void>) => {
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + TURN_TIMEOUT_MS);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WHATSAPP_TURN_DEADLINE_MS);
     return release().finally(() => clock.mockRestore());
   }],
   ['stopped', (h: Harness, release: () => Promise<void>) => {
@@ -146,8 +148,9 @@ it.each([
   await harness(async h => {
     const paused = h.pausePut();
     expect((await h.admit(['wamid.late.1'])).status).toBe(200);
+    const drained = h.settle();
     await paused.reached;
-    await close(h, async () => { paused.release(); await h.settle(); });
+    await close(h, async () => { paused.release(); await drained; });
     expect(h.manifest()?.files ?? []).toEqual([]);
     expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }]);
     expect(h.sent.filter(s => s.text === 'Saved it.')).toEqual([]);
@@ -158,22 +161,22 @@ it('a WhatsApp turn cut off by eviction yields one notice and is never replayed'
   await harness(async h => {
     const paused = h.pausePut();
     expect((await h.admit(['wamid.evict.1'])).status).toBe(200);
+    const warm = h.settle();
     await paused.reached;
-    const pending = [...h.state.storage.kv.list({ prefix: 'wa_pending:' })].map(([, record]) => record);
-    expect(pending).toEqual([{ subject: SUBJECT, admittedAt: expect.any(Number), ids: ['wamid.evict.1'] }]);
-    // A cold instance owns none of the live runs: the first one's record is now an evicted run's.
-    const warm = h.instance;
+    const inbox = new WhatsAppOwnerInbox(h.state.storage);
+    expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.evict.1', 'running']]);
+    // A cold instance owns none of the live runs: the first one's row is now an evicted run's.
     const cold = h.restart();
     const turns = vi.spyOn(cold as unknown as { turn(): Promise<void> }, 'turn');
     await cold.alarm();
     expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }]);
-    expect([...h.state.storage.kv.list({ prefix: 'wa_pending:' })]).toEqual([]);
+    expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.evict.1', 'interrupted']]);
     expect((await h.admit(['wamid.evict.1'])).status).toBe(200);
     await h.settle();
     expect(turns).not.toHaveBeenCalled();
     // The cut-off run resumes on the old instance: it is fenced, and recovery's notice stays the only one.
     paused.release();
-    await Promise.all([...(warm as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    await warm;
     expect(h.manifest()?.files ?? []).toEqual([]);
     expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toHaveLength(1);
     expect(h.sent.filter(s => s.text === 'Saved it.')).toEqual([]);

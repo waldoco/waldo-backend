@@ -83,6 +83,7 @@ export const toolNameSchema = z.enum([
   'log_meal',
   'log_workout',
   'list_health_logs',
+  'set_sleep_need',
   // set/list/cancel_standing_order 47-49 (A7): typed standing orders, owner-confirmed turns
   // only; every-turn injection is read-only context, scheduled runs fire machine turns.
   'set_standing_order',
@@ -284,6 +285,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'log_meal',
     'log_workout',
     'list_health_logs',
+    'set_sleep_need',
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',

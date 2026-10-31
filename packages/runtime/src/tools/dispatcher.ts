@@ -36,7 +36,9 @@ import {
 import {
   HookHaltError,
   HOOK_REGISTRY,
+  invalidArgumentsCause,
   runHooks,
+  type ArgumentIssue,
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
@@ -298,11 +300,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   let args: unknown;
   try {
     args = handler.schema.parse(preToolPayload.args);
-  } catch {
+  } catch (error) {
+    // A handler's schema can be stricter than the registry's, which the PreToolUse hook already checked.
+    const issues = (error as { issues?: unknown } | null)?.issues;
     return failDispatch(
       call.id,
       tool.data,
-      toolError('invalid_args'),
+      toolError('invalid_args', Array.isArray(issues) ? invalidArgumentsCause(issues as readonly ArgumentIssue[]) : undefined),
       'invalid_args',
       'invalid_args',
     );

@@ -67,21 +67,31 @@ const loadJump = (before: HealthSnapshot | null, after: HealthSnapshot, today: s
   && before.load !== null && after.load !== null && before.load.version === after.load.version
   && Math.abs(after.load.score - before.load.score) > LOAD_JUMP_MIN_MOVE;
 
-type Debt = Readonly<{ minutes: number; version: string; trend: DerivedSleepDebtTrend | undefined }>;
+type Debt = Readonly<{ minutes: number; version: string; trend: DerivedSleepDebtTrend | undefined; basis: unknown; compiledAt: number }>;
 const debtOf = (answer: unknown, day: string): Debt | null => {
   const scores = record(record(answer)?.scores), debt = record(scores?.sleep_debt);
+  const compiledAt = typeof scores?.compiled_at === 'string' ? Date.parse(scores.compiled_at) : NaN;
   return scores?.day === day && debt?.state === 'available' && typeof debt.debt_minutes === 'number' && Number.isFinite(debt.debt_minutes) && debt.debt_minutes >= 0
-    && typeof debt.algorithm_version === 'string' ? { minutes: debt.debt_minutes, version: debt.algorithm_version, trend: derivedSleepDebtTrendSchema.safeParse(debt.trend).data } : null;
+    && typeof debt.algorithm_version === 'string'
+    ? { minutes: debt.debt_minutes, version: debt.algorithm_version, trend: derivedSleepDebtTrendSchema.safeParse(debt.trend).data, basis: debt.need_basis, compiledAt } : null;
 };
-const rising = (newest: Debt | null, middle: Debt | null, oldest: Debt | null): boolean =>
-  newest !== null && middle !== null && oldest !== null && newest.version === middle.version && middle.version === oldest.version && newest.minutes > middle.minutes && middle.minutes > oldest.minutes;
+// Two days' figures are one step only when they were computed on the same need: the same version and need basis, and both
+// rows compiled on the same side of the owner's last change of their stated need. A figure that rose because the need
+// moved is not a night that went worse. A row compiled at the instant of the change may hold either need, so it is on no side.
+type Step = (newer: Debt, older: Debt) => boolean;
+const sideOf = (compiledAt: number, needChangedAt: number) => (!Number.isFinite(compiledAt) || compiledAt === needChangedAt ? null : compiledAt > needChangedAt);
+const stepWithin = (needChangedAt: number | null): Step => (newer, older) => newer.version === older.version && newer.basis === older.basis
+  && (needChangedAt === null || (sideOf(newer.compiledAt, needChangedAt) !== null && sideOf(newer.compiledAt, needChangedAt) === sideOf(older.compiledAt, needChangedAt)));
+const rising = (step: Step, newest: Debt | null, middle: Debt | null, oldest: Debt | null): boolean =>
+  newest !== null && middle !== null && oldest !== null && step(newest, middle) && step(middle, oldest) && newest.minutes > middle.minutes && middle.minutes > oldest.minutes;
 
 // Sleep debt is building the day the row's own direction word first says so, against yesterday's word of the same version. A row with no readable word, from before the
 // producer wrote one, is judged by its figures: they have risen on each of the last two steps and were not already doing so
 // a day earlier, so a long run of worse nights is one wake. Only whole days of one method on consecutive local days count; a
 // missing, partial or figureless row ends the question. Rows are read by calendar day and only as far as the answer needs.
-const debtBuilding = async (today: string, read: (day: string) => Promise<unknown>): Promise<boolean> => {
+const debtBuilding = async (today: string, read: (day: string) => Promise<unknown>, needChangedAt: number | null): Promise<boolean> => {
   const at = async (back: number) => { const day = shiftDay(today, -back); return debtOf(await read(day), day); };
+  const step = stepWithin(needChangedAt);
   const latest = await at(0);
   if (!latest) return false;
   if (latest.trend !== undefined) {
@@ -90,16 +100,18 @@ const debtBuilding = async (today: string, read: (day: string) => Promise<unknow
     return !(before?.version === latest.version && before.trend === 'building');
   }
   const middle = await at(1);
-  if (!middle || middle.version !== latest.version || latest.minutes <= middle.minutes) return false;
+  if (!middle || !step(latest, middle) || latest.minutes <= middle.minutes) return false;
   const oldest = await at(2);
-  if (!rising(latest, middle, oldest)) return false;
-  return !rising(middle, oldest, await at(3));
+  if (!rising(step, latest, middle, oldest)) return false;
+  return !rising(step, middle, oldest, await at(3));
 };
 
+// needChangedAt is when the owner last changed their stated sleep need, null when they never stated one or it is not in use,
+// and 'unknown' when it could not be read, which leaves the debt question unasked rather than read across a change.
 export const detectHealthWakes = async (input: Readonly<{
-  before: HealthSnapshot | null; after: HealthSnapshot; today: string; readDebt: (day: string) => Promise<unknown>;
+  before: HealthSnapshot | null; after: HealthSnapshot; today: string; readDebt: (day: string) => Promise<unknown>; needChangedAt?: number | null | 'unknown';
 }>): Promise<HealthWakeReason[]> => [
   ...driverWakes(input.before, input.after, input.today),
   ...(loadJump(input.before, input.after, input.today) ? ['load_jump' as const] : []),
-  ...(await debtBuilding(input.today, input.readDebt) ? ['sleep_debt_building' as const] : []),
+  ...(input.needChangedAt !== 'unknown' && await debtBuilding(input.today, input.readDebt, input.needChangedAt ?? null) ? ['sleep_debt_building' as const] : []),
 ];
