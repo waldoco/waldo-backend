@@ -57,12 +57,26 @@ describe('the update push line', () => {
     ['a short link', 'Urgent: verify your account at bit.ly/3abcDEF'],
     ['a link with its scheme', 'Sync https://meet.example/abc?pwd=s3cr3t'],
     ['an email address', 'Sync with krati@example.com'],
+    ['a zero-width space before the dot', 'Verify at evil\u200b.co/x'],
+    ['a fullwidth full stop', 'Verify at evil\uff0eco/login'],
+    ['an ideographic full stop', 'Verify at evil\u3002co'],
+    ['a halfwidth ideographic full stop', 'Verify at evil\uff61co'],
+    ['a one dot leader', 'Login at evil\u2024co'],
+    ['a bracketed dot', 'Verify evil[.]co/login'],
+    ['a space before the dot', 'Verify at evil .co/x'],
+    ['a right-to-left override before the dot', 'Pay at evil\u202e.co'],
+    ['a fullwidth at sign', 'Mail krati\uff20gmail'],
+    ['a health value in fullwidth digits', 'Review HRV \uff14\uff12 ms'],
   ])('a stranger\'s title carrying %s gives the fixed line, rather than cutting it out', (_case, title) => {
     expect(line([event({ title })])).toBe(PUSHES.update.body);
   });
 
+  it('shows a title without the invisible characters it carried', () => {
+    expect(line([event({ title: 'Sync\u200b with\u2060 Krati' })])).toBe('Sync with Krati moved to 15:00');
+  });
+
   it('keeps titles that only look dotted, and caps a long one', () => {
-    for (const title of ['Dr. Rao', 'Lunch with A.K.', 'Q3.5 planning']) expect(line([event({ title })])).toBe(`${title} moved to 15:00`);
+    for (const title of ['Dr. Rao', 'Lunch with A.K.', 'Q3.5 planning', 'St. James sync', '3.30 sync']) expect(line([event({ title })])).toBe(`${title} moved to 15:00`);
     expect(line([event({ title: `Planning ${'and more '.repeat(20)}` })]).length).toBeLessThanOrEqual(PUSH_TITLE_CHARS + ' moved to Thu 22 Oct 15:00'.length);
   });
 

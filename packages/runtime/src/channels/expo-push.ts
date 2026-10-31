@@ -19,11 +19,16 @@ export type PushKind = keyof typeof PUSHES;
 // A meeting's title as a push may show it on the lock screen. The owner chose to see titles there, but a stranger's invite
 // writes its own: a title with anything shaped like a host (a link with or without its scheme, an email address) or a health
 // value is not shown at all, and the caller sends its fixed line. A destination rule, held where the body is written.
+// The checks read a folded copy, so a lookalike cannot slip past them: NFKC turns fullwidth and leader dots, a fullwidth "@"
+// and fullwidth digits into their plain forms, the ideographic stops become ".", and a defanged "[.]" or " .co" reads as the
+// dot it stands for. Invisible format characters (zero-width, bidi controls) are dropped from the title shown as well.
 export const PUSH_TITLE_CHARS = 60;
 const HOST = /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.\p{L}{2,24}(?![\p{L}\p{N}])|:\/\/|@/u;
+const folded = (text: string) => text.normalize('NFKC').replace(/\u3002/g, '.').replace(/[[({]\.[\])}]/g, '.').replace(/\s+\.(?=\p{L})/gu, '.');
 export const pushTitle = (title: unknown): string | null => {
-  const plain = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim() : '';
-  if (!plain || HOST.test(plain) || numericHealthIn(plain)) return null;
+  const plain = typeof title === 'string' ? title.replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim() : '';
+  const probe = folded(plain);
+  if (!plain || HOST.test(probe) || numericHealthIn(probe)) return null;
   return plain.length <= PUSH_TITLE_CHARS ? plain : `${plain.slice(0, PUSH_TITLE_CHARS - 1).trim()}…`;
 };
 export const PUSH_DAILY_LIMIT = 3;

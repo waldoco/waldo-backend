@@ -69,6 +69,7 @@ describe('the prep push body', () => {
     expect(prepPushBody({ title: 'Sync with asha@example.test and ben@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'Verify your account at evil.co/x', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'Call zoom.us/j/8812345678?pwd=Xy12ab', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Verify at evil\uff0eco/login', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: undefined, start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
