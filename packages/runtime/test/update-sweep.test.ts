@@ -219,7 +219,7 @@ describe('the sweep check writes a machine job', () => {
 
 type Apply = Readonly<{ turns: { trace: string; text: string }[]; delivered: { id: string; text: string; recordId: number }[]; reply: { text: string }; log: TurnLogEntry[]; lane(): Promise<void> }>;
 const applying = (h: Harness): Apply => {
-  const turns: Apply['turns'] = [], delivered: Apply['delivered'] = [], reply = { text: 'Update\nAsha signed the quote and wants to start Monday.' }, log: TurnLogEntry[] = [];
+  const turns: Apply['turns'] = [], delivered: Apply['delivered'] = [], reply = { text: 'Asha signed the quote and wants to start Monday.' }, log: TurnLogEntry[] = [];
   const handler = updateSweepApplier({
     updates: h.updates, timezone: 'UTC', now: () => h.clock.at, sourceFollowups: () => true, gate: () => h.gate.code,
     transaction: work => h.storage.transactionSync(work),
@@ -395,11 +395,11 @@ describe('applying a sweep job with the day state', () => {
       await h.check();
       const job = report(h, FOUND);
       const a = applyingDay(h);
-      a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Brief, updated: the Krati sync is now 17:00.' }, push: 'Your sync with Krati moved to 17:00' });
+      a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.' }, push: 'Your sync with Krati moved to 17:00' });
       await a.lane();
       expect(a.turns[0]!.text).toContain('The Brief reached them in the app at 08:00');
       expect(a.turns[0]!.text).toContain('"revise"');
-      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Brief, updated: the Krati sync is now 17:00.', revision: 'card:brief', push: 'checked: Your sync with Krati moved to 17:00' }]);
+      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', push: 'checked: Your sync with Krati moved to 17:00' }]);
       expect(a.pushLines[0]!.mail.join('\n')).toContain('Signed copy attached');
       expect(a.pushLines[0]!.mail).toEqual(expect.arrayContaining(['Bring the signed quote and the Q3 numbers', 'Krati\'s office, 4th floor']));
       expect(a.chose).toEqual(['revise+push']);
@@ -424,7 +424,7 @@ describe('applying a sweep job with the day state', () => {
   it.each([
     ['nothing', '{}', 'none'],
     ['SKIP', 'SKIP', 'none'],
-    ['prose', 'Update\nAsha signed the quote.', 'effects_invalid'],
+    ['prose', 'Asha signed the quote.', 'effects_invalid'],
     ['both a revision and a message', JSON.stringify({ revise: { card: 'card:brief', text: 'x' }, say: 'y' }), 'effects_invalid'],
     ['a push alone', JSON.stringify({ push: 'Something changed' }), 'effects_invalid'],
     ['a card that is not a day card', JSON.stringify({ revise: { card: 'card:weekly', text: 'x' } }), 'effects_invalid'],
@@ -450,9 +450,9 @@ describe('applying a sweep job with the day state', () => {
       report(h, FOUND);
       const a = applyingDay(h);
       a.quiet.on = true;
-      a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Brief, updated.' }, push: 'Moved' });
+      a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Your sync with Krati moved to 17:00.' }, push: 'Moved' });
       await a.lane();
-      expect(a.effects).toEqual([expect.objectContaining({ text: 'Brief, updated.', revision: 'card:brief' })]);
+      expect(a.effects).toEqual([expect.objectContaining({ text: 'Your sync with Krati moved to 17:00.', revision: 'card:brief' })]);
       expect(a.effects[0]).not.toHaveProperty('push');
       expect(a.chose).toEqual(['revise+quiet']);
     });

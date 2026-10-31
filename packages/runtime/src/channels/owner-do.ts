@@ -190,6 +190,7 @@ import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
+import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
@@ -352,7 +353,7 @@ const TASK_JOBS_DORMANT_RECHECK_MS = 15 * 60_000;
 type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding; authority?: OwnerRuntimeAuthority; current(): boolean }> | Readonly<{ kind: 'dormant' | 'retry' }>;
 
 // The notice for a run that stopped before it finished, so its outcome is unknown.
-const RUN_DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const RUN_DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 
 const validZone = (zone: string): boolean => {
   try {
@@ -723,13 +724,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!eligible) continue;
       const noticeId = `${ordinary ? 'failure' : 'steer-failure'}:${child.id}:${child.attempt}`;
       const noticeText = ordinary
-          ? child.reason === 'common_execution_indeterminate' ? 'The task expired before its result could be verified for delivery. A private result may already be saved. I did not send the unverified final or run the work again. Check the saved result before retrying changes.'
-            : child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
+          ? child.reason === 'common_execution_indeterminate' ? INTERRUPTED_NOTICES.unconfirmed
+            : child.reason === 'owner_stopped' ? INTERRUPTED_NOTICES.stopped
             : child.reason === 'execution_closed' ? RUN_DID_NOT_FINISH
-            : 'Your request was interrupted, and its outcome is uncertain. Some changes may have completed. Please check the result before retrying.'
+            : INTERRUPTED_NOTICES.uncertain
           : child.reason === 'not_consumed'
           ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
-          : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.';
+          : INTERRUPTED_NOTICES.steer;
       await this.setup().finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
         payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\n${this.requestReceived(child.admittedAt)}` : '') },
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
