@@ -84,7 +84,7 @@ const wellFormed = (value: string) => value.replace(/\p{Surrogate}/gu, '\ufffd')
 // C0 and C1 controls, DEL and the Unicode line and paragraph separators all end a header line in some parser.
 const oneLine = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/ {2,}/g, ' ').trim();
 
-type Inline = Readonly<{ kind: 'text'; text: string } | { kind: 'strong'; children: readonly Inline[] } | { kind: 'em'; children: readonly Inline[] } | { kind: 'link'; label: string; href: string }>;
+type Inline = Readonly<{ kind: 'text'; text: string } | { kind: 'strong'; children: readonly Inline[] } | { kind: 'em'; children: readonly Inline[] } | { kind: 'link'; caption: string; href: string }>;
 type Block = Readonly<
   | { kind: 'paragraph'; lines: readonly (readonly Inline[])[] }
   | { kind: 'list'; ordered: boolean; items: readonly (readonly (readonly Inline[])[])[] }
@@ -113,12 +113,12 @@ const inline = (source: string): Inline[] => {
     const [whole, label, target, strong, star, under, bare] = match;
     if (label !== undefined) {
       const href = safeHref(target!);
-      if (href) out.push({ kind: 'link', label, href }); else text(whole);
+      if (href) out.push({ kind: 'link', caption: label, href }); else text(whole);
     } else if (strong !== undefined) out.push({ kind: 'strong', children: inline(strong) });
     else if (star !== undefined || under !== undefined) out.push({ kind: 'em', children: inline((star ?? under)!) });
     else {
       const href = safeHref(bare!);
-      if (href) out.push({ kind: 'link', label: bare!, href }); else text(whole);
+      if (href) out.push({ kind: 'link', caption: bare!, href }); else text(whole);
     }
   }
   text(source.slice(at));
@@ -165,12 +165,12 @@ const htmlInline = (nodes: readonly Inline[]): string => nodes.map(node =>
   node.kind === 'text' ? escape(node.text)
     : node.kind === 'strong' ? `<strong>${htmlInline(node.children)}</strong>`
       : node.kind === 'em' ? `<em>${htmlInline(node.children)}</em>`
-        : node.label === node.href || safeHref(node.label) === node.href ? `<a href="${escape(node.href)}" style="${LINK_STYLE}">${escape(node.href)}</a>`
-          : `<a href="${escape(node.href)}" style="${LINK_STYLE}">${escape(node.label)}</a> <span style="color:${MUTED}">(${escape(node.href)})</span>`).join('');
+        : node.caption === node.href || safeHref(node.caption) === node.href ? `<a href="${escape(node.href)}" style="${LINK_STYLE}">${escape(node.href)}</a>`
+          : `<a href="${escape(node.href)}" style="${LINK_STYLE}">${escape(node.caption)}</a> <span style="color:${MUTED}">(${escape(node.href)})</span>`).join('');
 const textInline = (nodes: readonly Inline[]): string => nodes.map(node =>
   node.kind === 'text' ? node.text
     : node.kind === 'strong' || node.kind === 'em' ? textInline(node.children)
-      : node.label === node.href || safeHref(node.label) === node.href ? node.href : `${node.label} (${node.href})`).join('');
+      : node.caption === node.href || safeHref(node.caption) === node.href ? node.href : `${node.caption} (${node.href})`).join('');
 
 const P = 'margin:0 0 16px 0';
 const htmlBlock = (block: Block): string => {
@@ -179,7 +179,7 @@ const htmlBlock = (block: Block): string => {
     const tag = block.ordered ? 'ol' : 'ul';
     return `<${tag} style="margin:0 0 16px 0;padding:0 0 0 24px">${block.items.map(item => `<li style="margin:0 0 6px 0">${item.map(htmlInline).join('<br>')}</li>`).join('')}</${tag}>`;
   }
-  const cell = (tag: 'th' | 'td', nodes: readonly Inline[]) => `<${tag} align="left" style="padding:6px 12px 6px 0;border-bottom:1px solid ${BORDER};text-align:left;vertical-align:top${tag === 'th' ? ';font-weight:600' : ''}">${htmlInline(nodes)}</${tag}>`;
+  const cell = (tag: 'th' | 'td', nodes: readonly Inline[]) => `<${tag} align="left" style="padding:6px 12px 6px 0;border-bottom:1px solid ${BORDER};text-align:left;vertical-align:top${tag === 'th' ? ';font-weight:bold' : ''}">${htmlInline(nodes)}</${tag}>`;
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 16px 0;font-size:14px;line-height:1.45">`
     + `<tr>${block.head.map(nodes => cell('th', nodes)).join('')}</tr>${block.rows.map(row => `<tr>${block.head.map((_, i) => cell('td', row[i] ?? [])).join('')}</tr>`).join('')}</table>`;
 };
@@ -252,9 +252,9 @@ const base64Lines = (base64: string) => base64.match(/.{1,76}/g)!.join('\r\n');
 
 const signatureName = (first: string | null) => first ? `Waldo, ${first}'s assistant` : 'Waldo';
 
-const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ label: string; href: string }> | null, first: string | null, address: string, contentId: string) => {
+const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ caption: string; href: string }> | null, first: string | null, address: string, contentId: string) => {
   const calloutHtml = callout ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0"><tr><td style="background-color:${ACCENT_SUBTLE};border-radius:12px;padding:14px 16px">${htmlInline(callout)}</td></tr></table>` : '';
-  const actionHtml = action ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 8px 0"><tr><td style="background-color:${INK};border-radius:12px"><a href="${escape(action.href)}" style="display:inline-block;padding:12px 20px;color:${ON_INK};font-weight:600;text-decoration:none">${escape(action.label)}</a></td></tr></table>`
+  const actionHtml = action ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 8px 0"><tr><td style="background-color:${INK};border-radius:12px"><a href="${escape(action.href)}" style="display:inline-block;padding:12px 20px;color:${ON_INK};font-weight:bold;text-decoration:none">${escape(action.caption)}</a></td></tr></table>`
     + `<p style="margin:0 0 16px 0;font-size:13px;color:${MUTED};word-break:break-all">${escape(action.href)}</p>` : '';
   const signature = `<p style="margin:8px 0 0 0;padding:16px 0 0 0;border-top:1px solid ${BORDER};font-size:13px;line-height:1.5;color:${MUTED}">`
     + `<strong style="color:${INK}">Waldo</strong>${first ? `<br>${escape(first)}'s assistant` : ''}<br>${escape(address)}</p>`;
@@ -264,7 +264,7 @@ const htmlDocument = (subject: string, blocks: readonly Block[], callout: readon
     + `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%">\n`
     + `<tr><td style="padding:0 4px 16px 4px"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>`
     + `<td style="vertical-align:middle"><img src="cid:${contentId}" width="${WALDO_LOGO_WIDTH}" height="${WALDO_LOGO_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none"></td>`
-    + `<td style="vertical-align:middle;padding:0 0 0 10px;font-family:${FONT};font-size:18px;font-weight:600;color:${INK}">Waldo</td></tr></table></td></tr>\n`
+    + `<td style="vertical-align:middle;padding:0 0 0 10px;font-family:${FONT};font-size:18px;font-weight:bold;color:${INK}">Waldo</td></tr></table></td></tr>\n`
     + `<tr><td style="background-color:${CARD};border:1px solid ${BORDER};border-radius:16px;padding:28px;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n`
     + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n</td></tr></table>\n</body></html>`;
 };
@@ -291,11 +291,11 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
   if (blocks.length === 0) return fail('empty_body');
   const calloutText = draft.callout?.trim() ? oneLine(draft.callout) : null;
   const callout = calloutText ? inline(calloutText) : null;
-  let action: { label: string; href: string } | null = null;
+  let action: { caption: string; href: string } | null = null;
   if (draft.action) {
     const label = oneLine(draft.action.label), href = safeHref(draft.action.url.trim());
     if (!label || [...label].length > ACTION_LABEL_MAX || !href) return fail('invalid_action');
-    action = { label, href };
+    action = { caption: label, href };
   }
   const first = sender.ownerFirstName ? [...oneLine(sender.ownerFirstName)].slice(0, NAME_MAX).join('').trim() || null : null;
   const fromName = signatureName(first);
@@ -307,7 +307,7 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
   const text = [
     ...(callout ? [textInline(callout)] : []),
     ...blocks.map(textBlock),
-    ...(action ? [`${action.label}: ${action.href}`] : []),
+    ...(action ? [`${action.caption}: ${action.href}`] : []),
     `-- \nWaldo${first ? `\n${first}'s assistant` : ''}\n${sender.address}`,
   ].join('\n\n') + '\n';
 
