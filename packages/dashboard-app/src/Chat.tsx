@@ -20,7 +20,7 @@ const clock = (at: number, zone: string) => new Intl.DateTimeFormat('en', { time
 const exact = (at: number, zone: string) => new Intl.DateTimeFormat('en', { timeZone: zone, dateStyle: 'medium', timeStyle: 'short' }).format(at);
 const elapsed = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const CHANNEL: Record<string, string> = { telegram: 'Telegram', imessage: 'iMessage', whatsapp: 'WhatsApp' };
-const KIND: Record<string, string> = { calendar_change: 'Calendar change', email_send: 'Email', message_send: 'Message', browser_submit: 'Web form', mcp_call: 'Connected tool', google_task_change: 'Google Tasks change' };
+const KIND: Record<string, string> = { calendar_change: 'Calendar change', email_send: 'Email', message_send: 'Message', agent_mail_send: 'Email as Waldo', browser_submit: 'Web form', mcp_call: 'Connected tool', google_task_change: 'Google Tasks change' };
 const humanize = (kind: string) => kind.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
 // Suggestions use only what Waldo can do today: Calendar, Gmail, Tasks, reminders and the web.

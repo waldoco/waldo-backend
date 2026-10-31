@@ -51,6 +51,14 @@ describe('full waiting proposal review', () => {
     expect(none).toContain('No chat request recorded yet.');
   });
 
+  it('shows a send as Waldo with its sender and offers to send it as Waldo', () => {
+    const asWaldo: WaitingRecord = { ...waiting, data: { timezone: null, proposals: [{ id: 'waldo', kind: 'agent_mail_send', summary: 'Send email as Waldo', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'],
+      review: { kind: 'agent_mail_send', from: { name: "Waldo, Sam's assistant", address: 'sam@mail.test.invalid' }, to: ['lee@test.invalid'], cc: ['kim@test.invalid'], subject: 'Friday', body: '<b>See you</b>' } }] } };
+    const html = renderToStaticMarkup(<WaitingControls record={asWaldo} busy={false} onAction={noop}/>);
+    expect(html).toContain('Waldo, Sam&#x27;s assistant &lt;sam@mail.test.invalid&gt;'); expect(html).toContain('lee@test.invalid'); expect(html).toContain('kim@test.invalid');
+    expect(html).toContain('&lt;b&gt;See you&lt;/b&gt;'); expect(html).toContain('>Send this email as Waldo<'); expect(html).toContain('>Change it<'); expect(html).toContain('Dismiss proposal');
+  });
+
   it('renders exact reviewed words, sender and recipients, and the decisions each draft offers', () => {
     const html = renderToStaticMarkup(<WaitingControls record={waiting} busy={false} onAction={noop}/>);
     expect(html).toContain('to@test.invalid'); expect(html).toContain('cc@test.invalid'); expect(html).toContain('bcc@test.invalid'); expect(html).toContain('me@test.invalid');
