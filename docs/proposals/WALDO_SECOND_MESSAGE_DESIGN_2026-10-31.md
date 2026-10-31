@@ -143,6 +143,125 @@ So "four parallel research workers return one merged brief" fails today [verifie
 
 A folded B closes as "answered in the reply to <A>". On the app this is an additive app.v1 receipt field or `closed_reason` value. The gate allocates the revision, and the app lane hears before any new enum value ships.
 
+## Reuse vs build: what Cloudflare already ships
+
+The owner asked for this section, through the gate. Sources were read on 2026-10-31:
+
+- npm `agents@0.32.0`, `@cloudflare/ai-chat@0.12.2` and `@cloudflare/think@0.23.0`, from the shipped `dist/` and `docs/` on unpkg.
+- developers.cloudflare.com and blog.cloudflare.com.
+
+Quotes are verbatim and short. GitHub `main` was not read, so unreleased changes are not covered. No spike was run (see "Spikes" below).
+
+### 1. Agents SDK `subAgent()` and an `Agent` base for `OwnerDO`
+
+What the sources say:
+- **Experimental and already deprecated in the released package.** `dist/agent-routing-*.d.ts` marks `subAgent`, `abortSubAgent` and `deleteSubAgent` "@experimental The API surface may change before stabilizing" and "@deprecated Use … this.dynamicAgents.get() instead". The docs page does not say this, so docs and source disagree.
+- **Peers are not facets.** The same file says: "For independent peers such as one-DO-per-chat, use `getAgentByName` instead."
+- **Where facets run.** The docs (`agents/agent-class/sub-agents`) say: "Child agents are created as facets of the parent — they share the same machine but have fully isolated SQLite storage." The d.ts adds: "Facets run in separate colocated isolates".
+- **Storage is shared with the parent.** "The supervisor's database and the facet's database are stored together as part of the same overall Durable Object" (`dynamic-workers/usage/durable-object-facets`).
+- **Alarms belong to the parent.** "The top-level parent still owns the physical Durable Object alarm because facets do not have independent alarm slots."
+- **`Agent` takes over `fetch()` and `alarm()`.**
+  - The layering is "DurableObject > Server > Agent", and `Server` "already implements `fetch`".
+  - The Lifecycle docs say: "Do not call `ctx.storage.setAlarm()` on an object that uses the Lifecycle."
+  - They also say: "If your class keeps its own `fetch()` or `alarm()`, those run instead, and the Lifecycle never starts."
+- **Startup needs a name.** "Startup fails for an object that has no name. This happens with IDs from `newUniqueId()` or `idFromString()`."
+
+What converting `OwnerDO` to extend `Agent` would break [inference from the sources above plus our source]:
+
+- **The alarm.** `OwnerDO` multiplexes about 23 due keys and its own retry and backoff onto the one physical alarm (`scheduler/alarm-slot.ts`, `owner-do.ts:2771`). The Lifecycle wants that slot. We either keep our `alarm()`, which turns off schedules, fibers and facet alarm routing (so we gain nothing), or we port every lane to `schedule()`. Porting rewrites the hottest, most-tested code in the owner's single-writer root.
+- **Waking from a worker.** `TaskWorkerDO` reaches the owner through `OWNER_DO.idFromString(...)` (`tasks/worker-do.ts:45`). Under the Lifecycle, a cold start from that path can fail.
+- **`fetch()`.** It is one long route table (app, console, WhatsApp, Telegram, OAuth, iMessage RPC). `Server`'s `fetch` would sit in front of it.
+- **SQLite and KV.** The SDK adds `cf_agents_*` tables and `cf_agents:*` KV keys. Nothing in `src/` uses that prefix, so nothing collides today [verified: no `cf_agents` matches].
+- **DO migration.** A base-class swap probably needs no new migration entry, because migrations track class names [inference: no doc covers it].
+
+Does a same-machine facet keep "a crash or 128 MB overrun kills one worker, not the owner's turn"?
+- **Docs: unanswered.** "Separate colocated isolates" suggests memory is isolated. Nothing says a child's OOM never resets the parent, or that each facet gets its own 128 MB.
+- **Today: yes, structurally.** `TaskWorkerDO` is a separate namespace, so it is a separate object and isolate. It has its own alarm in 10-minute slices, and its storage is deleted when it ends.
+
+What the SDK would replace in the job protocol, and what stays ours:
+- **The SDK would replace** the worker's alarm slicing and re-arm, and its start/abort/delete lifecycle (`abortSubAgent`, `deleteSubAgent`). That is about the 62 lines of `worker-do.ts`.
+- **What stays ours,** because it is the authority boundary, not plumbing:
+  - The job row written before I/O.
+  - Lease tokens and the fence.
+  - Apply-once reports.
+  - The rule that every tool call runs on the owner through `taskTool` (`tasks/brain.ts`).
+  - The one retry owner.
+
+  The SDK has no concept of these.
+
+**Recommendation: do not adopt, for now.**
+- Converting `OwnerDO` puts the single-writer root's alarm and fetch under a 0.x framework, to save very little.
+- Moving `TaskWorkerDO` to facets saves about 62 lines, takes an experimental, already-deprecated API, makes the owner's alarm the worker's alarm, and leaves crash isolation unproven.
+- Revisit when `dynamicAgents` is stable and Cloudflare documents facet failure isolation.
+
+### 2. Concurrency in `AIChatAgent` and Think: second message during a turn
+
+- **Queue by default; A is never aborted by a new message.** `ai-chat` `index.d.ts`: "`"queue"` (default) — queue every submit and process them in order."
+- **The alternatives are fixed per class, not per message.** The same file lists `"latest"`, `"merge"`, `"drop"` and `{ strategy: "debounce" }`.
+- **`merge` joins waiting messages only.** It joins trailing user messages "into one combined user turn before the latest queued turn runs". It never reaches into the running turn.
+- **Order: persist B, then queue.** `persistMessages` runs before `_runExclusiveChatTurn`. `TurnQueue` is an in-memory promise chain (`agents/dist/chat/index.js`), the same shape as our `serial()`.
+- **Stopping A is a client action.** It happens on a `chat-request-cancel` message (`this._abortRegistry.cancel(event.id)`).
+- **No steer anywhere.** "steer" appears zero times in `ai-chat` 0.12.2 or `agents/chat` 0.32.0. Think 0.23.0 uses the same `messageConcurrency`.
+- **Project Think** (https://blog.cloudflare.com/project-think/, 15 Apr 2026):
+  - It says "Project Think is experimental" and "The features described in this post are in preview".
+  - For input mid-run it lists only abort/cancel.
+  - What it adds is durability: a fiber is "registered in SQLite before execution begins, checkpointable at any point via stash()".
+
+**Recommendation: build (a) ourselves.** Nothing shipped lets the model fold B into a running turn. Cloudflare's design is a fixed admission policy plus a client cancel, which is our app path today.
+
+Two things to borrow, not import:
+- The policy vocabulary: queue, latest, merge, drop.
+- Their "persist first, then queue" order, which our app and iMessage inboxes already follow and which WhatsApp lacks (slice 3).
+
+### 3. Workflows for long tasks
+
+What the sources say:
+- **GA.** "Workflows is now *Generally Available*" (changelog, 2025-04-07).
+- **Callable from a plain Durable Object.** "Within a Durable Object" is a listed trigger. `create`, `get`, `status` and `sendEvent` are plain binding calls, so the DO's base class stays as it is.
+- **The Agent wrapper is not plain-DO compatible.** `AgentWorkflow` requires an `Agent`: "AgentWorkflow requires __agentName, __agentBinding, and __workflowName".
+- **Steps and limits** (Workers Paid):
+  - `step.do` takes `retries` and `timeout`.
+  - Steps: "10,000 default, configurable up to 25,000".
+  - Wall clock per step: "Unlimited". CPU per step: 30 s, "configurable to 5 minutes".
+  - "1MiB" per step result or event. Instance state: 1 GB.
+  - `waitForEvent` defaults to "24 hours".
+- **Docs that conflict.** The Agents `run-workflows` page says "10 MB per workflow" and "30 minutes per step". Retention dropped to "seven days by default" for instances created from 2026-09-10.
+- **Idempotent creation.** A duplicate `create()` id "Throws an error if the provided ID is already used", so a job-keyed instance id is idempotent.
+
+**Fit [inference]:**
+- A task group (slice 8) maps naturally onto one Workflow: one `step.do` per member brief, run in parallel, then a merge step. That is the "four workers, one merged brief" criterion, without the job book holding the apply turn.
+- Each member's tool calls must still go to the owner's `taskTool` RPC, inside a step, so the lease and fence stay ours.
+- Step retries must be `limit: 0`, or keyed by the job's attempt, or Workflows becomes a second retry owner.
+- A long single task gains little over `TaskWorkerDO`, which already slices and checkpoints.
+
+**Recommendation: spike Workflows for slice 8 only, before building task groups on the job book.** It needs `wrangler.jsonc` workflow bindings, not the `agents` dependency. The spike runs on a scratch branch.
+
+### 4. Everything else
+
+| Shipped piece | What it would remove | Verdict |
+|---|---|---|
+| Agents `schedule()` (cron, delay; "stored in SQLite and run from the Lifecycle's job queue") | Our scheduler lanes | No. It needs the `Agent` base and owns the alarm (item 1). |
+| Fibers (`runFiber`, `stash`) | Our durable inbox rows and recovery notices | No. They need the Lifecycle, and "The original closure cannot be replayed automatically", "No automatic retries". Our admitted, running, interrupted rows already give the same guarantee with honest receipts. |
+| Durable Object alarms ("a single alarm at a time"; at-least-once, "up to 6 retries") | n/a | This constraint is why we multiplex. It stays. |
+| Browser Run session reuse (`keep_alive` "up to 20 minutes"; `connect()`; DO-held sessions) | Browser session plumbing | Already used: `keep_alive` and `sdk.connect` in `cloudflare-browser-adapter.ts:55` and `cloudflare-general-browser.ts:167`. Nothing more to remove. |
+
+### Ranking
+
+| Option | User value | Effort | Risk to the single-writer root | Call |
+|---|---|---|---|---|
+| Workflows for task groups (slice 8) | High: the merged-brief criterion | M | Low: authority stays in `OwnerDO` through RPC | Spike, then decide |
+| Borrow `messageConcurrency` vocabulary and persist-first order | Medium | S | None | Adopt as design input |
+| Facets / `dynamicAgents` for task workers | Low: about 62 lines saved | M | Medium: the owner's alarm becomes the worker's alarm; isolation unproven | Not now |
+| `OwnerDO` extends `Agent` (schedules, fibers, `schedule()`) | Low | XL | High: alarm and fetch takeover of the root | Reject |
+
+### Spikes
+
+None run. The questions the docs leave open are not ones a local spike can settle:
+
+- **Facet out-of-memory isolation** needs production isolate limits; workerd locally does not enforce 128 MB the same way [inference].
+- **Whether our `compatibility_date` (2026-06-16) exposes `ctx.facets`** only matters if we adopt facets, which this section does not recommend.
+- **The Workflows task-group spike** is proposed above. It is to run on a scratch branch, with workflow bindings only. Adding the `agents` dependency to beta-mvp needs the owner's explicit yes, and nothing here asks for it.
+
 ## Ranked build plan
 
 Each slice is its own issue, PR and gate review.
@@ -156,7 +275,7 @@ Each slice is its own issue, PR and gate review.
 | 5 | **Golden test: reply while a 10-minute task runs.** | tests only | S | Turns a done criterion from inference to verified. |
 | 6 | **`start_task` always loaded, elapsed-time context, scenario evals.** | prompt, tool loader, evals | M | Makes (b) happen by model choice. |
 | 7 | **Generalised fold / queue / stop** with `owner_message_heard`. Replaces Telegram's auto-steer. | `owner-turn.ts`, `owner-do.ts`, contracts | L | The full (a). Needs 2 and 3 first; additive app.v1 receipt field via the gate. |
-| 8 | **Task groups with one merged apply turn;** caps as a budget envelope. | `tasks/`, job book | L | The (c) criterion. Needs persistence review. |
+| 8 | **Task groups with one merged brief;** caps as a budget envelope. Spike Workflows first (Reuse vs build §3); fall back to job-book groups. | `tasks/`, job book or a Workflow binding | L | The (c) criterion. Needs persistence or binding review. |
 | 9 | **Report routing to the asking surface.** | `drainJobs` | S | Owner decision D3 first. |
 
 ## Owner decisions
