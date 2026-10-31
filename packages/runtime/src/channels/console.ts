@@ -213,9 +213,10 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it. revision and revisedAt say
+// the card was revised after it was delivered (controls revision 9), and latest then names the newest revision's row.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number }>;
+  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number; revision?: number; revisedAt?: number }>;
 
 export type ConsoleView = Readonly<{
   release: string;

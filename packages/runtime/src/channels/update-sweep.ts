@@ -1,9 +1,13 @@
 import type { ToolName } from '@waldo/contracts';
+import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
 import { machineResultText, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
-import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
+import { SKIP_UPDATE, updateCardPrompt, updateEffectsPrompt } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
+import { numericHealthIn } from '../scribe/sanitiser';
+import { PUSHES } from './expo-push';
+import { DAY_CARDS } from '../prompt/day-cards';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
 import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type Change, type UpdateBook } from './update-cards';
@@ -89,6 +93,24 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
+// What an update push may say. It may name the change (a meeting's title, its times, its people); it never carries an email
+// address, a health value, or four words in a row from a mail or health line the turn read. Anything else, and every line
+// while the owner has not turned named updates on, is the fixed line. A destination rule, so it holds at the send.
+export const UPDATE_PUSH_CHARS = 140;
+const SHARED_WORDS = 4;
+const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+const shingles = (text: string) => { const w = words(text); return w.slice(0, Math.max(0, w.length - SHARED_WORDS + 1)).map((_, i) => w.slice(i, i + SHARED_WORDS).join(' ')); };
+export const updatePushLine = (line: string, rules: Readonly<{ named: boolean; forbidden: readonly string[] }>): string => {
+  const fixed = PUSHES.update.body;
+  const plain = line.replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!rules.named || !plain || numericHealthIn(plain)) return fixed;
+  const seen = new Set(rules.forbidden.flatMap(shingles));
+  if (shingles(plain).some(shingle => seen.has(shingle))) return fixed;
+  if (plain.length <= UPDATE_PUSH_CHARS) return plain;
+  const cut = plain.slice(0, UPDATE_PUSH_CHARS - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).trim()}…`;
+};
+
 // The apply turn's tools: with source follow-ups it may open a source-bound loop (a card, since the turn is tainted);
 // otherwise it reads, and asks the owner on a card for any change.
 export const updateSweepTools = (sourceFollowups: boolean): readonly ToolName[] =>
@@ -98,6 +120,30 @@ export const updateSweepApplyText = (localNow: string, changes: readonly Change[
   result: Parameters<typeof machineResultText>[0], withheld: readonly string[] = []): string =>
   `${updateCardPrompt(localNow, { changes: changeLines(changes), ...context })}\n\n${machineResultText(result, withheld)}`;
 
+// What the apply turn may choose with the day state: revise a day card that reached the owner today, or say an update, and
+// with either a push; or nothing ({} or SKIP). The schema is the contract between the turn and the code that delivers it.
+const UPDATE_TEXT_CHARS = 4_000;
+const effectText = z.string().trim().min(1).max(UPDATE_TEXT_CHARS);
+const dayCardIds = DAY_CARDS.map(card => card.id) as [string, ...string[]];
+export const updateEffectsSchema = z.strictObject({
+  revise: z.strictObject({ card: z.enum(dayCardIds), text: effectText }).optional(),
+  say: effectText.optional(),
+  push: z.string().trim().min(1).max(500).optional(),
+}).refine(chosen => !(chosen.revise && chosen.say), { error: 'revise or say, not both' })
+  .refine(chosen => !chosen.push || chosen.revise || chosen.say, { error: 'a push opens a revision or a message' });
+export type UpdateEffects = z.infer<typeof updateEffectsSchema>;
+export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => {
+  const text = reply.trim();
+  if (!text || text === SKIP_UPDATE) return {};
+  const body = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)?.[1] ?? text;
+  try {
+    const parsed = updateEffectsSchema.safeParse(JSON.parse(body));
+    return parsed.success ? parsed.data : 'invalid';
+  } catch { return 'invalid'; }
+};
+// What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
+export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
+
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
   gate(): SweepGate | null;
@@ -106,7 +152,20 @@ export type UpdateSweepApplyDeps = Readonly<{
   // The update-card turn on the owner's chain, with updateSweepTools and the job's taint: its raw reply.
   turn(trace: string, text: string, current: () => Promise<void>): Promise<string>;
   // Queues the card under its key for the update record, `commit` in the same transaction; a key already queued only commits.
-  deliver(id: string, trace: string, text: string, recordId: number, commit: () => void): Promise<void>;
+  // With the day state it may be a revision of a day card, and carry the push line to raise once it is delivered.
+  deliver(id: string, trace: string, text: string, recordId: number, commit: () => void, effect?: Readonly<{ revision?: string; push?: string }>): Promise<void>;
+  // Set when the day state is on.
+  dayState?: Readonly<{
+    // The owner's quiet hours: a revision still lands, a message and a push do not.
+    quiet(): boolean;
+    // Where today's day cards stand, for the turn.
+    cards(): string;
+    // Whether a day card reached the owner today, so it can be revised.
+    delivered(card: string): boolean;
+    // The push line as it may go out (updatePushLine), given the mail the turn read.
+    pushLine(line: string, mail: readonly string[]): Promise<string>;
+    chose(trace: string, code: UpdateEffectCode): void;
+  }>;
 }>;
 
 // The sweep job's apply. The gate runs again here, since quiet hours or the day's last card can come while the worker
@@ -125,10 +184,28 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const changes = deps.updates.jobChanges(recordId!, refs);
       if (!changes.length) { deps.transaction(io.settle); return { held: 'held_stale' }; }
       const sourceFollowups = deps.sourceFollowups();
-      const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
-      const reply = (await deps.turn(io.trace, text, io.current)).trim();
-      if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
-      await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, () => { deps.updates.judgedJob(recordId!, refs); io.settle(); });
+      const commit = () => { deps.updates.judgedJob(recordId!, refs); io.settle(); };
+      const day = deps.dayState;
+      if (!day) {
+        const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
+        const reply = (await deps.turn(io.trace, text, io.current)).trim();
+        if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
+        await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
+        return 'delivered';
+      }
+      const quiet = day.quiet();
+      const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet });
+      const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
+      const skip = (code: UpdateEffectCode) => { day.chose(io.trace, code); judged(row, io.settle); return 'skipped' as const; };
+      if (chosen === 'invalid') return skip('effects_invalid');
+      if (chosen.revise && !day.delivered(chosen.revise.card)) return skip('revise_undelivered');
+      const effect = chosen.revise ? 'revise' : chosen.say ? 'say' : null;
+      if (!effect) return skip('none');
+      if (quiet && effect === 'say') return skip('say+quiet');
+      const push = chosen.push && !quiet ? await day.pushLine(chosen.push, changes.filter(change => change.source === 'mail').map(change => change.detail)) : undefined;
+      day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
+      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
+        { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
       return 'delivered';
     },
     noNews: judged,
