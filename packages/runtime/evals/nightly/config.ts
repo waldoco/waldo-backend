@@ -70,7 +70,7 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   // WALDO_EVAL_TOOL_SEARCH=on runs the brain's flag-on menu (core tools up front, the rest found by tool search), as
   // WALDO_TOOL_SEARCH=on does for an owner; the scorecard names it so the two menus' results are never mixed up.
   const toolSearch = profile ? profile.toolSearch === true : env.WALDO_EVAL_TOOL_SEARCH === 'on';
-  const menu = profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
+  const menu = profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), ...(profile.loaderCarry ? { loaderCarry: true } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
     : toolSearch ? { toolSearch: true } : {};
   // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, as WALDO_COMPACTION=on does
   // for the app; the scorecard names it so the two runs are never mixed up.

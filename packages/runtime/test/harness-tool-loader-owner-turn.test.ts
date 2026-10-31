@@ -253,7 +253,7 @@ describe('loader carry-over from one owner turn to the next', () => {
   const FIRST = 'show my reminders';
   const SECOND = 'and my reminders again?';
   const HEADER = 'Tool definitions you loaded on your previous turn';
-  const flags = { WALDO_TOOL_LOADER: 'harness', WALDO_LOADER_CARRY: 'on' } as const;
+  const flags = { WALDO_TOOL_LOADER: 'harness', WALDO_LOADER_CARRY: '1' } as const;
   const lastMessage = (request: LLMGatewayRequest['request']) => request.messages.at(-1)!.content;
   const answers = (text: string) => (request: LLMGatewayRequest['request']) => Boolean(request.tools?.length) && lastMessage(request).startsWith(text);
   const loadsThenUses = (group: string, tool: string, said: string, carriedUse: boolean) => (request: LLMGatewayRequest['request']): Scripted | undefined => {

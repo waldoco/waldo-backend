@@ -28,6 +28,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_LOADER: mapped("'harness' loads core tools up front and the rest through find_tools and use_tool"),
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
+  WALDO_LOADER_CARRY: mapped("'1' with the harness loader gives each trial an owner book, so a turn carries the previous turn's loaded tool definitions"),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SEMANTIC_RECALL: mapped('the eval has no semantic leg, so the profile refuses a staging that turns it on'),
 
@@ -93,6 +94,7 @@ export type StagingProfile = Readonly<{
   model: ModelName;
   toolLoader?: 'harness';
   toolSearch?: true;
+  loaderCarry?: true;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
 }>;
@@ -103,7 +105,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
   const harness = vars.WALDO_TOOL_LOADER === 'harness';
   return {
     label: 'staging', model: WALDO_CHAT_MODEL,
-    ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
+    ...(harness ? { toolLoader: 'harness' as const, ...(vars.WALDO_LOADER_CARRY === '1' ? { loaderCarry: true as const } : {}) } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
   };

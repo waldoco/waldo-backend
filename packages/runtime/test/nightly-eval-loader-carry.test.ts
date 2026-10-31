@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
-import { carryBook } from '../src/tools/loader';
 import { callBudget } from '../evals/nightly/budget';
 import { runTrial, type TrialScenario } from '../evals/nightly/trial';
 
@@ -19,7 +18,7 @@ const again: ScriptRule = { match: /and again/, rounds: [{ text: 'Same.' }] };
 
 const run = async (steps: TrialScenario['steps']) => {
   const gateway = scriptedGateway({ rules: [loadsAndUses, outsideJob, again], unmatchedText: 'Noted.' });
-  const record = await runTrial(scenario(steps), { gateway, budget: callBudget(80), toolLoader: 'harness', loaderCarry: carryBook() });
+  const record = await runTrial(scenario(steps), { gateway, budget: callBudget(80), toolLoader: 'harness', loaderCarry: true });
   const messages = (said: string) => gateway.requests().filter((request) => request.request.response_format === undefined && request.request.tools?.length)
     .map((request) => request.request.messages.at(-1)!.content).filter((content) => content.startsWith(said));
   return { record, messages };

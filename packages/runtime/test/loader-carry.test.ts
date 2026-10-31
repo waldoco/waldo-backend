@@ -41,6 +41,15 @@ describe('the block of carried definitions', () => {
     expect(routed.via).toBeUndefined();
   });
 
+  it('grants nothing by being carried: a tool this turn still admits goes on to dispatch as a direct call, and one it dropped never does', () => {
+    const loader = harnessToolLoader(ADMITTED);
+    const direct = loader.route({ call_id: 'c1', name: USE_TOOL, arguments: JSON.stringify({ name: 'list_reminders', arguments: {} }) });
+    expect(direct).toMatchObject({ via: USE_TOOL, call: { name: 'list_reminders' } });
+    expect(direct.answer).toBeUndefined();
+    const dropped = harnessToolLoader(ADMITTED.filter((admitted) => admitted.name !== 'list_reminders')).route({ call_id: 'c2', name: USE_TOOL, arguments: JSON.stringify({ name: 'list_reminders', arguments: {} }) });
+    expect(dropped.answer).toMatchObject({ ok: false, error_code: 'unknown_tool' });
+  });
+
   it('keeps the offered list and the block inside the definitions budget, leaving out a definition that does not fit', () => {
     const offered = estimatedTokens(harnessToolLoader(ADMITTED).offered);
     const huge = tool('cancel_reminder', 10_000);
