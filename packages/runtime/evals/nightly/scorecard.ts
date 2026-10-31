@@ -1,22 +1,26 @@
 // The nightly scorecard: counts and rates, plus the class names of harness errors. It never carries reply text,
 // error messages, mail, health or account details, so it can be kept and shared as is.
+import type { TrialMetrics } from './trial';
+
 export type Pain = 'context' | 'follow_through' | 'judgment';
 export const PAINS: readonly Pain[] = ['context', 'follow_through', 'judgment'];
 export type TrialOutcome = 'pass' | 'fail' | 'judge_error' | 'harness_error' | 'blocked' | 'budget_exhausted';
 // voice_failed and receipt_failed count the graded trials the voice judge or a receipt check turned into a fail. judge_passed
 // counts the trials the judges alone passed, before receipts; receipts_skipped the receipt checks a mode could not read (the
 // raw-history baseline has no claim store), so a comparison across modes can use the first and report the others apart.
-export type ScenarioTrials = Readonly<{ id: string; pain: Pain; outcomes: readonly TrialOutcome[]; harness_errors?: readonly string[]; voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number }>;
+// Counts over the trials that ran, with the largest tool result any of them saw; no text.
+export type ScenarioMetrics = TrialMetrics & Readonly<{ trials: number }>;
+export type ScenarioTrials = Readonly<{ id: string; pain: Pain; outcomes: readonly TrialOutcome[]; harness_errors?: readonly string[]; voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number; metrics?: ScenarioMetrics }>;
 export type Usage = Readonly<{ candidate_calls: number; judge_calls: number; budget: number; exhausted: boolean; candidate_tokens: number; judge_tokens: number }>;
 
 type Rates = Readonly<{ scenarios: number; graded: number; pass_rate: number | null; pass_k_rate: number | null }>;
 type ScenarioRow = Readonly<{
   id: string; pain: Pain; status: 'graded' | 'ungraded' | 'blocked' | 'incomplete'; trials: number;
   passed: number; failed: number; ungraded: number; pass_rate: number | null; pass_k: boolean | null; harness_errors?: readonly string[];
-  voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number;
+  voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number; metrics?: ScenarioMetrics;
 }>;
 
-const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed, judge_passed, receipts_skipped }: ScenarioTrials, k: number): ScenarioRow => {
+const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed, judge_passed, receipts_skipped, metrics }: ScenarioTrials, k: number): ScenarioRow => {
   const passed = outcomes.filter((outcome) => outcome === 'pass').length;
   const failed = outcomes.filter((outcome) => outcome === 'fail').length;
   const blocked = outcomes.length > 0 && outcomes.every((outcome) => outcome === 'blocked');
@@ -29,6 +33,7 @@ const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed,
     ...(harness_errors?.length ? { harness_errors } : {}),
     ...(voice_failed === undefined ? {} : { voice_failed }), ...(receipt_failed === undefined ? {} : { receipt_failed }),
     ...(judge_passed === undefined ? {} : { judge_passed }), ...(receipts_skipped === undefined ? {} : { receipts_skipped }),
+    ...(metrics ? { metrics } : {}),
   };
 };
 
@@ -42,12 +47,15 @@ const rates = (rows: readonly ScenarioRow[]): Rates => {
   };
 };
 
-export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage }>) => {
+export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage; profile?: 'staging'; subset?: string; shard?: string }>) => {
   const scenarios = results.map((result) => row(result, run.trials));
   return {
     version: 1 as const,
     candidate_model: run.candidate,
     judge_model: run.judge,
+    ...(run.profile ? { profile: run.profile } : {}),
+    ...(run.subset ? { subset: run.subset } : {}),
+    ...(run.shard ? { shard: run.shard } : {}),
     trials_per_scenario: run.trials,
     scenarios,
     pains: Object.fromEntries(PAINS.map((pain) => [pain, rates(scenarios.filter((entry) => entry.pain === pain))])) as Record<Pain, Rates>,

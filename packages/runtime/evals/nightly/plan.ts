@@ -1,6 +1,6 @@
 // What a live run will spend, before anyone spends it, and what pass-rate floor its scorecard supports after.
 //   tsx evals/nightly/plan.ts                     the call plan for the catalogue at WALDO_EVAL_TRIALS (default 3) and
-//                                                 WALDO_EVAL_JUDGE_MODE (default split)
+//                                                 WALDO_EVAL_JUDGE_MODE (default split); WALDO_EVAL_SUBSET plans a subset
 //   tsx evals/nightly/plan.ts <scorecard.json>    the live floor the first graded scorecard supports
 // No network, no keys. docs/evals/LIVE_BASELINE_RUNBOOK.md explains the numbers.
 import { readFileSync } from 'node:fs';
@@ -9,6 +9,7 @@ import { NIGHTLY_SCENARIOS } from './catalogue';
 import { judgeModeOf, type JudgeMode } from './dimensions';
 import type { NightlyScenario } from './scenarios';
 import type { Scorecard } from './scorecard';
+import { selectScenarios } from './subset';
 import { VOICE_TESTS } from './voice';
 
 // Model calls per owner turn or fired reminder, the memory writer's included: the answer alone at the low end, up to
@@ -59,6 +60,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const [cardPath] = process.argv.slice(2);
   const out = cardPath
     ? suggestedFloor(JSON.parse(readFileSync(cardPath, 'utf8')) as Scorecard)
-    : callPlan(NIGHTLY_SCENARIOS, Number(process.env.WALDO_EVAL_TRIALS ?? '3'), judgeModeOf(process.env.WALDO_EVAL_JUDGE_MODE));
+    : callPlan(selectScenarios(process.env.WALDO_EVAL_SUBSET, NIGHTLY_SCENARIOS), Number(process.env.WALDO_EVAL_TRIALS ?? '3'), judgeModeOf(process.env.WALDO_EVAL_JUDGE_MODE));
   console.log(JSON.stringify(out, null, 2));
 }
