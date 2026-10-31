@@ -653,6 +653,50 @@ describe('welcome build: health that arrives after the health stage ran', () => 
     });
   });
 
+  it('has one retry owner: an empty health stage is read at most twice, whatever else asks for it', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0, reads = 0;
+      const { deps: d } = deps(sql, transaction, {
+        now: () => now, read: { ...others, health: async () => { reads += 1; return { kind: 'settled', state: 'empty' }; } },
+        available: async () => true,
+      });
+      const build = () => welcomeBuild(sql, () => now);
+      build().start();
+      await runWelcome({ ...d, build: build() });
+      now += 60_000;
+      expect(transaction(() => build().lateHealth())).toBe(true);
+      await runWelcome({ ...d, build: build() });
+      now += WELCOME_RECHECK_MS;
+      await runWelcome({ ...d, build: build() });
+      expect(transaction(() => build().reopen('health'))).toBe(false);
+      expect(transaction(() => build().lateHealth())).toBe(false);
+      await runWelcome({ ...d, build: build() });
+      expect(reads).toBe(2);
+      expect(build().view()).toMatchObject({ state: 'done', stages: { health: 'empty' } });
+    });
+  });
+
+  it('a stage reopened after it was skipped keeps its retry spent', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0, state: 'empty' | 'skipped' = 'empty';
+      const { deps: d } = deps(sql, transaction, { now: () => now, read: { ...others, health: async () => ({ kind: 'settled', state }) } });
+      const build = () => welcomeBuild(sql, () => now);
+      build().start();
+      await runWelcome({ ...d, build: build() });
+      now += 60_000;
+      expect(transaction(() => build().lateHealth())).toBe(true);
+      // Sharing was withdrawn before the retry ran, then granted again.
+      state = 'skipped';
+      await runWelcome({ ...d, build: build() });
+      expect(build().view()).toMatchObject({ stages: { health: 'skipped' } });
+      expect(transaction(() => build().reopen('health'))).toBe(true);
+      state = 'empty';
+      await runWelcome({ ...d, build: build() });
+      expect(build().view()).toMatchObject({ state: 'done', stages: { health: 'empty' } });
+      expect(transaction(() => build().lateHealth())).toBe(false);
+    });
+  });
+
   it('never after a day, and never for a health stage that was skipped, revoked or already done', async () => {
     for (const state of ['empty', 'skipped', 'revoked'] as const) {
       await withSql(async (sql, transaction) => {

@@ -87,6 +87,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   DRIVE_READS?: string;
   // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
   MEMORY_SEMANTIC_RECALL?: string;
+  // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.
+  MEMORY_SELECTION?: string;
   AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;

@@ -56,7 +56,7 @@ const profileOf = (env: Env, vars: () => StagingVars): StagingProfile | undefine
   const named = env.WALDO_EVAL_PROFILE;
   if (named === undefined || named === '') return undefined;
   if (named !== 'staging') throw new Error('WALDO_EVAL_PROFILE must be staging when set');
-  if (env.WALDO_EVAL_TOOL_SEARCH !== undefined || env.WALDO_EVAL_COMPACTION !== undefined || env.WALDO_EVAL_SEMANTIC !== undefined) throw new Error('WALDO_EVAL_PROFILE=staging sets the tool menu, compaction and semantic recall; leave WALDO_EVAL_TOOL_SEARCH, WALDO_EVAL_COMPACTION and WALDO_EVAL_SEMANTIC unset');
+  if (env.WALDO_EVAL_TOOL_SEARCH !== undefined || env.WALDO_EVAL_COMPACTION !== undefined || env.WALDO_EVAL_SEMANTIC !== undefined || env.WALDO_EVAL_MEMORY_SELECTION !== undefined) throw new Error('WALDO_EVAL_PROFILE=staging sets the tool menu, compaction, semantic recall and memory selection; leave WALDO_EVAL_TOOL_SEARCH, WALDO_EVAL_COMPACTION, WALDO_EVAL_SEMANTIC and WALDO_EVAL_MEMORY_SELECTION unset');
   return stagingProfile(vars());
 };
 // A recorded run's fake model never fails, so this key only opens the route's second step, as a deployed key does.
@@ -83,15 +83,20 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   // names it, so a run with the leg is never compared as one without.
   if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_SEMANTIC)) throw new Error('WALDO_EVAL_SEMANTIC must be on or off');
   const semantic = profile ? profile.semantic : env.WALDO_EVAL_SEMANTIC === 'on';
+  // WALDO_EVAL_MEMORY_SELECTION=on shows every trial option B's memory, as MEMORY_SELECTION=1 does for an owner; the card
+  // names it, so the two ways of choosing memory are compared, never mixed.
+  if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_MEMORY_SELECTION)) throw new Error('WALDO_EVAL_MEMORY_SELECTION must be on or off');
+  const memorySelection = profile ? profile.memorySelection : env.WALDO_EVAL_MEMORY_SELECTION === 'on';
   const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
   if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
   if (semantic && memory === 'raw_history') throw new Error('raw_history has no claim store for semantic recall to embed');
+  if (memorySelection && memory === 'raw_history') throw new Error('raw_history has no claim store to select from');
   // The raw-history baseline's card names its mode, so it is never read as the normal run's.
   const label = (name: string) => {
-    const menuNamed = (profile ? `${name}+${profile.label}` : `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`) + (semantic ? '+semantic' : '');
+    const menuNamed = (profile ? `${name}+${profile.label}` : `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`) + (semantic ? '+semantic' : '') + (memorySelection ? '+selection' : '');
     return memory === 'raw_history' ? `${menuNamed} (raw_history)` : menuNamed;
   };
-  const memoryMode: Readonly<{ memory?: MemoryMode }> = memory === 'raw_history' ? { memory } : {};
+  const memoryMode: Readonly<{ memory?: MemoryMode; memorySelection?: true }> = memory === 'raw_history' ? { memory } : memorySelection ? { memorySelection: true } : {};
   if (mode === 'recorded') {
     return {
       trials, budget: callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS', '10000')),

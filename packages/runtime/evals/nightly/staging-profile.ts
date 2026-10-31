@@ -29,22 +29,23 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
+  MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
   MEMORY_SEMANTIC_RECALL: mapped("'1' runs the trials with semantic recall on, over the run's embedder"),
 
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
-  WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial; staging has it off'),
+  WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
-  OWNER_PROFILE: gap('the profile view is not rendered in a trial; staging has it off'),
+  OWNER_PROFILE: gap('the profile view is not rendered in a trial'),
   MCP_READ_INTENTS: gap(SYNTHETIC_TOOLS),
   WALDO_MCP_SERVERS: gap('the world seeds its own connected tool server'),
   WALDO_EGRESS_ALLOWLIST: gap('the world has no network, so the egress boundary is held by its own tests, not by a trial'),
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
-  HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial; staging has it off'),
-  HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes; staging has it off'),
-  MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial; staging has it off'),
+  HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
+  HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
+  MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
@@ -98,6 +99,7 @@ export type StagingProfile = Readonly<{
   toolSearch?: true;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
+  memorySelection: boolean;
   semantic: boolean;
 }>;
 
@@ -109,6 +111,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
+    memorySelection: vars.MEMORY_SELECTION === '1',
     semantic: vars.MEMORY_SEMANTIC_RECALL === '1',
   };
 };

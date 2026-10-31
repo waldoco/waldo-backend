@@ -171,10 +171,10 @@ it('a change carrying a topic a forget still holds never reaches the model', asy
   });
 });
 
-it('ships off in every wrangler environment', async () => {
+it('ships off in production and on in staging', async () => {
   // @ts-expect-error vite-only API
   const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"']);
+  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "1"']);
 });
 
 it('reads no constellation node drawn from health beside the changes, as for any job built from outside content', async () => {
@@ -225,6 +225,17 @@ describe('the pass on its own', () => {
     kv: state.storage.kv, updates: updateBook(state.storage.sql), claims: claimStore(state.storage.sql, (work) => state.storage.transactionSync(work)),
     transaction: <R>(work: () => R) => state.storage.transactionSync(work), timezone: 'UTC', now: () => NOW, health: true,
     ask: async () => addOne('Has a weekly design review'), log: () => undefined, ...over,
+  });
+
+  // Evidence that quotes the changes grounds as shared content; this one quotes nothing, so it is a paraphrase of outside
+  // content, still untrusted, never Waldo's own read.
+  it('a claim whose evidence is not in the changes is untrusted too', async () => {
+    await withStorage('nightly-sources-ungrounded', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      const paraphrase = JSON.stringify({ add: [{ kind: 'fact', text: 'Meets the design leads every week', source: 'inferred', evidence: 'seems to be a standing sync with the leads', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] });
+      expect(await consolidateSources(deps(state, { ask: async () => paraphrase }), 't')).toBe('consolidated');
+      expect(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.origin, claim.source])).toEqual([['Meets the design leads every week', 'untrusted', 'inferred']]);
+    });
   });
 
   it('the adds and the mark commit together: a stop between them writes nothing, and the rerun writes once', async () => {

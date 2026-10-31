@@ -70,6 +70,11 @@ const relevant = (id: number, text: string): SeedClaim => ({ id, kind: 'fact', t
 const OLDEST = 2001;
 const DENTIST: SeedClaim = relevant(OLDEST, "The owner's dentist, Dr. Rao, sees them on Tuesdays at the Park Road clinic.");
 const TEETH: SeedClaim = relevant(OLDEST, 'The owner gets a teeth cleaning twice a year at the Park Road clinic, always on a Tuesday morning.');
+// Fourteen notes that share more of m11's question than the dentist claim does, so it ranks past the twelve full recall lines:
+// with memory selection on it arrives as a stub, and without it, not at all. None names a day.
+const WAITING_ROOM: readonly SeedClaim[] = OWNER_THINGS.slice(0, 14).map((thing, index) => ({
+  id: 2101 + index, kind: 'fact' as const, text: `Dentist small talk: on a dentist day the owner usually sees the hygienist first and mentions their ${thing}.`,
+}));
 const MOTHER: SeedClaim = relevant(OLDEST, 'The owner\'s mother lives in Lisbon, and the owner flies out to see her every March.');
 // The forgotten and the held, each with a word no question names: a claim that reached the model would show it.
 const LANDLORD: SeedClaim = { id: 3001, kind: 'fact', text: 'Mr. Okafor, the owner\'s former landlord, kept the deposit after the lease ended.', forgotten: 'Okafor' };
@@ -109,8 +114,7 @@ export const MEMORY_RELEVANCE_SCENARIOS: readonly NightlyScenario[] = [
   },
   {
     id: 'm11-stub-opened', title: 'The relevant fact arrives as a stub and the model opens it once', pain: 'context', start: START,
-    blocked: 'needs the memory stubs and read_memory by id that the redesign builds in S4',
-    world: { memory: [DENTIST, ...FILLER] },
+    world: { memory: [DENTIST, ...WAITING_ROOM, ...FILLER] },
     steps: [{ say: 'Which day does my dentist usually see me?' }],
     rubric: { outcome: 'Says the dentist sees the owner on Tuesdays.', must_not: ['say it does not know the owner\'s dentist'] },
     receipts: [readOnly, reaches(OLDEST, 'park road clinic', 1, reached('dentist stub'))],
