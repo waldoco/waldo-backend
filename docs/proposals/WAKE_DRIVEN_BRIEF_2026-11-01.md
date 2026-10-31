@@ -10,7 +10,9 @@ Today the Brief's time is planned the night before (`planToday`, nightly at 03:0
 
 ## Shape in one paragraph
 
-The phone syncs the night's sleep as soon as iOS lets it, which is usually just after the first unlock. The health plane decides from that sleep record that today's night is in, and wakes the owner object with a reason code. The code carries no time and no value. Every Brief that is still waiting then gets one model turn. The turn has a new choice, "send now", alongside "keep" and "move". The owner's planned time is still the deadline when no signal comes. "One Brief a day" stays where it is, on the Brief's own row.
+The phone syncs the night's sleep as soon as iOS lets it, which is usually just after the first unlock. The health plane decides from that sleep record that today's night is in, and tells the owner object with a bare signal. The signal carries no time and no value. A Brief that is still pending then gets one model turn, which may send it now or keep it. In wake mode the planned time is a "latest by": the Brief goes at the wake or at that time, whichever comes first. "One Brief a day" stays where it is, on the Brief's own row.
+
+**Go/no-go first.** The feature rests on one thing not yet seen on a device: whether the night's sleep reaches the backend within minutes of the first unlock. A short on-device spike checks it before any backend work starts (wave W-1 below). If it doesn't hold, most mornings fall back to the planned time, and the feature isn't worth building in this form.
 
 ## 1. App half (waldo-app, Suyash's lane)
 
@@ -33,6 +35,8 @@ Each claim below names Apple's documentation. Anything not confirmed on a device
 - The HealthKit store is unreadable while the phone is locked: `errorDatabaseInaccessible` ([HKError.Code](https://developer.apple.com/documentation/healthkit/hkerror/code/errordatabaseinaccessible), [Protecting user privacy](https://developer.apple.com/documentation/healthkit/protecting-user-privacy)).
 - Apple's platform security guide says the health database is "Protected Unless Open": access ends 10 minutes after lock, and records written while locked are journaled and merged on unlock ([Platform Security](https://support.apple.com/guide/security/protecting-access-to-users-health-data-sec88be9900f/web)).
 - So the night's sleep is normally readable, and synced, **just after the first unlock after waking** [inference, to confirm on device]. That is the "starts their phone" moment the owner described.
+- **Handling a delivery while locked.** An observer that fires while the phone is locked gets `errorDatabaseInaccessible` on its read. The app still calls the completion handler, so HealthKit does not back off. It then relies on the next delivery after unlock, or on `protectedDataDidBecomeAvailable` if the app happens to be running.
+- **The assumption under the whole feature** [inference]: the journal merge on unlock triggers a fresh observer delivery. The W-1 spike checks exactly this.
 
 **There is no "phone unlocked" signal that launches an app.**
 - `applicationProtectedDataDidBecomeAvailable` and its notification only reach an app that is already running ([UIApplicationDelegate](https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationprotecteddatadidbecomeavailable(_:))). Unlock is not among the background-launch reasons ([Preparing your UI to run in the background](https://developer.apple.com/documentation/uikit/preparing-your-ui-to-run-in-the-background)).
@@ -59,29 +63,38 @@ Each claim below names Apple's documentation. Anything not confirmed on a device
 
 - **Computed in the health plane.** The decision is a health computation, so it lives there, in the recompute that already runs after every ingest (`health/recompute.ts:69-76`, debounced to one run a minute).
   - The producer already picks the night: the newest asleep reading for the waking day (`health/producer.ts:150-156`).
-  - It adds one field to today's derived row: `night_rev`, an integer that goes up each time the waking day's chosen night changes (its source, its session or its end). The row holds no time; the counter is not a reading.
-- **Detected from stored rows.** `detectHealthWakes` (`health/wakes.ts:99-105`) compares stored rows only, never the samples. It gains one reason: `night_recorded`, raised when today's `night_rev` is newer than before the run.
-- **What leaves the plane:** the reason code plus the local `day`, exactly what `woken(day, reasons)` carries today (`recompute.ts:29`). No start, end, duration or clock time reaches the owner object, its SQLite, memory, traces, logs or the outbox.
-- **Re-firing.** Unlike today's reasons, which are noted once per reason per day (`trigger.ts:98` `markOnce`), `night_recorded` fires each time the night changes. A 03:00 fragment followed by the real night must not use up the morning. The "one per day" rule belongs to the Brief, not to the signal.
-- **Consent gates.** The wake is subject to the same gates as today's wakes. It is skipped when the owner withdrew model-use consent, and backfilled rows never wake it (ADR-0081 §5, `:355`).
+- **How the producer knows the night changed.** It must remember which night it chose last time; a counter alone can't tell it that.
+  - The derived row in the health plane (Supabase) keeps a `night_ref`: a digest of the chosen night's source, session and end.
+  - On each run the producer compares the new digest with the stored one, writes the new one, and returns `nightChanged: true` with its outcome.
+  - `night_ref` stays in the health plane. It is **not** returned by `health_context_read`, whose output also feeds prompts, so that RPC's matrix entry and fixtures are unchanged.
+- **Not routed through today's wake gate.** Today's wakes run only while the owner has health proposals on (`owner-do.ts:4811`, `wakes.enabled`), and every reason goes to the health trigger (`healthWoken` → `armHealthTrigger`).
+  - The night signal gets its own callback: `nightRecorded(day)`, called when a run returns `nightChanged` for today.
+  - It is gated on `WAKE_BRIEF`, the owner's `daily_brief` and model-use consent, not on `health_proposals`.
+  - Backfilled rows never call it (ADR-0081 §5, `:355`).
+- **What leaves the plane:** the call itself and the local `day`. No start, end, duration or clock time from the sample reaches the owner object, its SQLite, memory, traces, logs or the outbox.
+- **What the owner object does learn.** The signal arrives a few minutes after the wake. The moment Waldo acts on it, and the Brief's send time, are system event times: they land in the schedule row, `day_plan` and the trace row's `at`, like any card's send time. Together they roughly show when the owner woke. The amendment says this outright and allows it. The sample's own `end_at` never crosses.
+- **Re-firing.** Unlike today's reasons, which are noted once per reason per day (`trigger.ts:98` `markOnce`), the night signal fires each time the chosen night changes. A 03:00 fragment followed by the real night must not use up the morning. The "one per day" rule belongs to the Brief, not to the signal.
 
 ### What the owner object does with it
 
-`night_recorded` for today leads to the day-card path. It does not go to the health trigger, which proposes health actions and stays as it is.
+`nightRecorded(day)` for today leads to the day-card path. It does not go to the health trigger, which proposes health actions and stays as it is.
+
+**In wake mode the planned time is a "latest by".** The nightly plan sets the Brief's time after the owner's usual wake, as the latest it should go. The wake turn can only send the Brief now or keep that time; it never moves it later.
 
 1. **Code checks the safety bounds.** These are hard limits, not judgment. Otherwise nothing happens:
-   - today's Brief is still pending, which excludes cards that are sent, held, waiting on the model, or skipped (`movableCards`, `day-cards.ts:201-212`);
+   - today's Brief is still pending, which excludes cards that are sent, held, waiting on the model, or skipped (S8c-1's `movableCards`);
    - the owner did not pin it or set it for today;
    - it is not past the Brief's freshness (local midday, `cardFreshUntil`);
    - the owner has `daily_brief` on;
-   - at most three wake turns a morning, coalesced like S8c-1's re-plans (`coalesced`, at most one running and one waiting).
-2. **The model judges.** It runs as a S8c-1 re-plan turn with the reason "the owner's wearable shows their night is in". The context is digit-free: local now, quiet hours, today's calendar, the planned time, and whether it is a weekend.
-   - The model judges whether this is the morning or a nap or mid-night wake.
-   - It chooses send now, keep the planned time, or move it to a later time.
-   - "Send now" is the new choice. It schedules the Brief at `now`, the way `retryDayCard` schedules a stuck card (`day-cards.ts:317-334`). S8c-1's rule against past times still holds; "now" is not in the past.
-3. **The Brief turn runs as usual.** It writes the content and can still decide to send nothing. Quiet hours still hold it (`plans.held`). The push follows delivery on the app, as today.
+   - at most three wake turns a morning. That is a cost backstop, like `PROACTIVE_PUSH_DAILY_LIMIT`, not a product rule.
+2. **Its own queue.** The wake turn uses its own `coalesced` queue (at most one running and one waiting), not S8c-1's calendar re-plan queue. Otherwise a wake that arrived while a calendar re-plan waited would be absorbed into a prompt that doesn't know the night is in. Neither queue keeps a "night in" flag: the request itself carries it, volatile.
+3. **The model judges.** The prompt says "the owner's wearable shows their night is in". The context is digit-free: local now, quiet hours, today's calendar, the "latest by" time, and whether it is a weekend.
+   - The model judges whether this is the morning, a nap or a mid-night wake.
+   - It chooses send now or keep.
+   - "Send now" schedules the Brief at `now`, the way `retryDayCard` schedules a stuck card. S8c-1's rule against past times still holds; "now" is not in the past.
+4. **The Brief turn runs as usual.** It writes the content and can still decide to send nothing. Quiet hours still hold it (`plans.held`). The push follows delivery on the app, as today.
 
-**Fallback.** With no signal, the planned time fires the Brief exactly as it does today. The nightly plan can keep a "latest by" time, so a Brief that waits for the wake still has a deadline. A signal after the Brief went out does nothing.
+**Fallback.** With no signal, the "latest by" time fires the Brief exactly as the planned time does today. A signal after the Brief went out does nothing.
 
 **One Brief a day.** This is unchanged:
 - `day_plan.sent` and `save … WHERE sent = 0` (`day-cards.ts:97-103`);
@@ -104,11 +117,12 @@ A wake turn only moves a pending card. It never writes a second one.
 
 **Yes.**
 - **The current rule.** ADR-0081's matrix keeps raw samples, timestamps included, out of the owner object (§3, `:84`).
-- **What is new.** A derived "night recorded" event crossing into the owner object, and a turn told that the owner's night is in.
+- **What is new.** A derived "night recorded" signal crossing into the owner object, and a turn told that the owner's night is in.
 - **Nearest precedent.** The 2026-10-27 amendment (§5) let energy windows carry a clock time, because "a clock time is a time of day, not a reading" (`:349`). This amendment allows less:
-  - a digit-free reason code and a local date;
-  - a monotone integer `night_rev` on the derived row;
-  - and in the Brief's turn context, the sentence "the owner's wearable shows their night is in", with no time.
+  - the signal itself, with the local date and nothing else;
+  - a `night_ref` digest on the derived row, which stays in the health plane and is not returned to prompts;
+  - in the Brief's turn context, the sentence "the owner's wearable shows their night is in", with no time;
+  - and, said outright: the time Waldo acts on the signal, and the Brief's send time, are system event times kept like any card's. They roughly show when the owner woke. The sample's own times never cross.
 - **What a Brief does not newly gain.** It may say "good morning" sooner; it gains no new readings. Owner-channel replies may already carry the owner's own readings (owner ruling for beta).
 
 The amendment is drafted as a waldo-brain PR, marked **Proposed**: see the link in this PR's description.
@@ -121,14 +135,15 @@ The amendment is drafted as a waldo-brain PR, marked **Proposed**: see the link 
 - The owner's setting "Brief when I wake", default on once shipped. Owner settings win: a pinned Brief time is never moved by a wake.
 
 **Tests** (backend, time-mocked):
-- **Golden.** Planned 08:00; at 07:05 the night's ingest arrives. `night_recorded` leads to a wake turn, the model says "send now", and the Brief is scheduled at 07:05. The trace carries codes only; no sleep time appears anywhere in DO storage or the trace.
+- **Golden.** "Latest by" 08:00. The night ends at 06:52, and its ingest arrives at 07:05. The night signal leads to a wake turn, the model says "send now", and the Brief is scheduled at 07:05. "06:52" appears nowhere in DO storage, the outbox or the trace. The trace carries codes and counts only.
 - **No Watch / no signal.** The Brief fires at 08:00, as today.
 - **Late sync.** The night arrives at 08:20, after the 08:00 Brief went out: nothing happens.
-- **A 03:00 fragment, then the real night at 07:10.** The first wake turn says keep (the model, with quiet hours in context). The second, triggered by the new `night_rev`, sends. Three turns at most.
+- **A 03:00 fragment, then the real night at 07:10.** The first wake turn says keep (the model, with quiet hours in context). The second, triggered because the chosen night changed, sends. Three turns at most.
+- **A calendar re-plan and a wake together.** A wake that arrives while S8c-1's calendar re-plan is queued still gets its own turn with the night in its prompt.
 - **Travel or zone change.** A night whose `waking_day` is not the owner's local today does not wake today's Brief. DST end and start are covered.
-- **Weekend lie-in.** A night at 10:30 Saturday, with an 09:00 plan: the plan fires first, and the late night does nothing. With "Brief when I wake" and a "latest by" of 11:00, it waits and sends at 10:30.
+- **Weekend lie-in.** Saturday's "latest by" is set after a usual weekend wake, say 11:00. The night ends at 10:30: the wake turn sends at 10:30. With no night by 11:00, the Brief goes at 11:00.
 - **Owner settings.** A pin, "Set for today", `daily_brief` off or quiet hours each keep their effect; the wake only asks.
-- **Consent.** With model-use consent withdrawn, or a backfill, there is no wake.
+- **Gates.** With model-use consent withdrawn, `WAKE_BRIEF` off, or a backfill, there is no wake. With `health_proposals` off and the Brief on, the wake still works.
 - **One a day.** Two wake turns plus the planned time still give one Brief: the `day_plan` row and the outbox key.
 
 **Evals.** These are judged scenarios for the wake turn's choice:
@@ -142,14 +157,15 @@ The amendment is drafted as a waldo-brain PR, marked **Proposed**: see the link 
 
 | Wave | Repo | What | Size |
 |---|---|---|---|
+| W-1 | waldo-app | **Go/no-go spike** on a device: does the night's sleep reach the backend within minutes of the first unlock? | S |
 | W0 | waldo-brain | ADR-0081 amendment accepted (blocks W1) | S |
-| W1 | waldo-backend | `night_rev` in the derived row (Supabase migration + producer), `night_recorded` reason, re-firing semantics | M |
-| W2 | waldo-backend | Wake turn: the safety bounds, the "send now" choice in the re-plan turn, `WAKE_BRIEF` flag, tests and evals | M |
-| W3 | waldo-app | HKObserverQuery and background delivery for sleep, steps and heart rate, registered natively at launch; on-device check of delivery after unlock | M |
-| W4 | both | The owner setting "Brief when I wake" (controls 11, additive) | S |
+| W1 | waldo-backend | `night_ref` in the derived row (Supabase migration; the gate allocates its timestamp), the producer's `nightChanged`, the `nightRecorded` callback and its gates, re-firing | M |
+| W2 | waldo-backend | Wake turn: the safety bounds, its own queue, "send now", wake mode's "latest by", `WAKE_BRIEF` flag, tests and evals | M |
+| W3 | waldo-app | HKObserverQuery and background delivery for sleep, steps and heart rate, registered natively at launch, with the locked-store handling | M |
+| W4 | both | The owner setting "Brief when I wake" (additive controls revision) | S |
 
 **Contract (app.v1, additive only; the app lane gets a heads-up first):**
-- **health 6**, optional: the ingest envelope may carry `trigger: 'background_delivery' | 'foreground' | 'refresh'`. It tells the backend that a sync came from a background delivery just after unlock, which is useful for traces and evals. Old builds omit it. The trigger in §2 does not depend on it.
-- **controls 11**, optional: the day controls gain a `brief.wake` setting and its action. Old builds ignore it.
+- **The ingest contract is unchanged.** Sleep already arrives with what the producer needs.
+- **One additive controls revision**, allocated by the gate: the day controls gain a `brief.wake` setting and its action. Old builds ignore it.
 
 **Relation to S8c-2 (patterns).** The owner's usual wake time could become a plan input as an `HH:MM` clock time under the energy-window exception. That stays with S8c-2 and the owner's pending ruling on its scope.
