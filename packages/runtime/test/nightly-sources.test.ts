@@ -171,10 +171,10 @@ it('a change carrying a topic a forget still holds never reaches the model', asy
   });
 });
 
-it('ships off in every wrangler environment', async () => {
+it('ships off in production and on in staging', async () => {
   // @ts-expect-error vite-only API
   const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"']);
+  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "1"']);
 });
 
 it('reads no constellation node drawn from health beside the changes, as for any job built from outside content', async () => {
