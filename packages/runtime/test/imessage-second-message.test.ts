@@ -13,13 +13,16 @@ import type { IMessageResult } from '@waldo/contracts';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
-// before: work run at the start of the next owner model calls, in order. Each owner reply names the turn it answers.
+// before: work run at the start of the next owner reply calls, in order. An owner reply call carries the tool menu and one of
+// the owner's two messages; the owner object's other model calls (its boot day plan, memory) run on their own timing and must
+// neither count nor take a hold. Each owner reply names the turn it answers.
 const proof = vi.hoisted(() => ({ turns: [] as string[], before: [] as (() => Promise<unknown>)[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
-  const format = input.text?.format?.name;
-  if (!format) { await proof.before.shift()?.(); proof.turns.push(JSON.stringify(input.input ?? '')); }
+  const format = input.text?.format?.name, said = JSON.stringify(input.input ?? '');
+  const owner = !format && Array.isArray(input.tools) && input.tools.length > 0 && ['flights to Goa', 'raining in Pune'].some(words => said.includes(words));
+  if (owner) { await proof.before.shift()?.(); proof.turns.push(said); }
   if (format === 'progress_note') return { id: 'scripted', output: [], output_text: JSON.stringify({ note: null }), usage: { input_tokens: 1, output_tokens: 1 } };
-  const reply = `Reply to turn ${proof.turns.length}.`;
+  const reply = owner ? `Reply to turn ${proof.turns.length}.` : 'Scripted.';
   return { id: 'scripted', output: [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 
