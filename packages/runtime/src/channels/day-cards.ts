@@ -33,6 +33,11 @@ export const dayPlanBook = (sql: Sql) => {
   // from the chat as it is now, and a forgotten or deleted row takes them with it.
   if (!columns.has('delivered_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_message_id TEXT');
   if (!columns.has('delivered_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_at INTEGER');
+  // Revisions of a delivered card, when the owner's day changed after it: how many reached the owner, the latest one's time,
+  // and the Main chat row it became when that was the app. The original delivery stays as it was.
+  if (!columns.has('revision')) sql.exec('ALTER TABLE day_plan ADD COLUMN revision INTEGER');
+  if (!columns.has('revised_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_at INTEGER');
+  if (!columns.has('revised_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_message_id TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -62,6 +67,21 @@ export const dayPlanBook = (sql: Sql) => {
       return new Map(sql.exec<{ card: string; message_id: string; delivered_at: number }>(
         'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
       ).toArray().map(({ card, ...delivery }) => [card, delivery]));
+    },
+    // Whether the card reached the owner today, on any surface, so a change can revise it.
+    reached(day: string, card: string): boolean {
+      return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
+    },
+    revisedRow(day: string, card: CardId, messageId: string): void {
+      sql.exec('UPDATE day_plan SET revised_message_id = ? WHERE day = ? AND card = ?', messageId, day, card);
+    },
+    revised(day: string, card: CardId, at: number): void {
+      sql.exec('UPDATE day_plan SET revision = COALESCE(revision, 0) + 1, revised_at = ? WHERE day = ? AND card = ?', at, day, card);
+    },
+    revisions(day: string): ReadonlyMap<string, Readonly<{ revision: number; revised_at: number; message_id: string | null }>> {
+      return new Map(sql.exec<{ card: string; revision: number; revised_at: number; message_id: string | null }>(
+        'SELECT card, revision, revised_at, revised_message_id AS message_id FROM day_plan WHERE day = ? AND revision IS NOT NULL AND revised_at IS NOT NULL', day,
+      ).toArray().map(({ card, ...revision }) => [card, revision]));
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));

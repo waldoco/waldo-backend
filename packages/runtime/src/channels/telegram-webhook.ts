@@ -100,6 +100,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   CALENDAR_GROUNDED_PREP?: string;
   // '1' lets a prep note's app push name the meeting and its start; anything else sends the fixed line.
   PREP_PUSH_NAMES?: string;
+  // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
+  // revise a delivered day card or push. Anything else keeps the update card as it was.
+  WALDO_DAY_STATE?: string;
+  // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
+  UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & PhoneSmsEnv;
 
