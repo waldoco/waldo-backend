@@ -116,18 +116,20 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
-// What an update push may say. It may name the change (a meeting's title, its times, its people); it never carries a link
-// (a meeting link can hold its passcode), an email address, a health value, or four words in a row from a mail or health
-// line the turn read. Anything else, and every line
-// while the owner has not turned named updates on, is the fixed line. A destination rule, so it holds at the send.
+// What an update push may say. It may name the change (a meeting's title, its times, its people). A line with anything shaped
+// like a host (a link with or without its scheme, an email address: a meeting link can hold its passcode, and a stranger's
+// invite can carry a lure), a health value, or four words in a row from outside text the turn read (mail, an invite's
+// description or location, the health log) is the fixed line, as is every line while the owner has not turned named updates
+// on. A destination rule, so it holds at the send. Text the turn read through its own tools is not in that list.
 export const UPDATE_PUSH_CHARS = 140;
 const SHARED_WORDS = 4;
+const HOST = /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.\p{L}{2,24}(?![\p{L}\p{N}])|:\/\/|@/u;
 const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 const shingles = (text: string) => { const w = words(text); return w.slice(0, Math.max(0, w.length - SHARED_WORDS + 1)).map((_, i) => w.slice(i, i + SHARED_WORDS).join(' ')); };
 export const updatePushLine = (line: string, rules: Readonly<{ named: boolean; forbidden: readonly string[] }>): string => {
   const fixed = PUSHES.update.body;
-  const plain = line.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ').replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!rules.named || !plain || numericHealthIn(plain)) return fixed;
+  const plain = line.replace(/\s+/g, ' ').trim();
+  if (!rules.named || !plain || HOST.test(plain) || numericHealthIn(plain)) return fixed;
   const seen = new Set(rules.forbidden.flatMap(shingles));
   if (shingles(plain).some(shingle => seen.has(shingle))) return fixed;
   if (plain.length <= UPDATE_PUSH_CHARS) return plain;
@@ -168,6 +170,12 @@ export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => 
 // What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
 export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
 
+const outsideText = (change: Change): readonly string[] => {
+  if (change.source === 'mail') return [change.detail];
+  const { description, location } = JSON.parse(change.detail) as { description?: unknown; location?: unknown };
+  return [description, location].filter((text): text is string => typeof text === 'string' && text.length > 0);
+};
+
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
   gate(): SweepGate | null;
@@ -187,8 +195,9 @@ export type UpdateSweepApplyDeps = Readonly<{
     revisesCards: boolean;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
-    // The push line as it may go out (updatePushLine), given the mail the turn read.
-    pushLine(line: string, mail: readonly string[]): Promise<string>;
+    // The push line as it may go out (updatePushLine), given the outside text the turn read in its changes: each mail, and
+    // each invite's description and location.
+    pushLine(line: string, outside: readonly string[]): Promise<string>;
     chose(trace: string, code: UpdateEffectCode): void;
     // The job settled, however it ended: changes that arrived while it was open can be read now, not at the next poll.
     settled(): void;
@@ -229,7 +238,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!effect) return skip('none');
       if (quiet && effect === 'say') return skip('say+quiet');
       // A push goes only from a surface that raises one; elsewhere the message is the notification.
-      const push = chosen.push && !quiet && day.revisesCards ? await day.pushLine(chosen.push, changes.filter(change => change.source === 'mail').map(change => change.detail)) : undefined;
+      const push = chosen.push && !quiet && day.revisesCards ? await day.pushLine(chosen.push, changes.flatMap(outsideText)) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });

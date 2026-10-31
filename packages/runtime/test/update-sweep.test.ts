@@ -384,7 +384,8 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
       machine: { update_sweep: handler } }).then(() => undefined),
   };
 };
-const MOVED: CalendarChange = { id: 'e-sync', title: 'Sync with Krati', start: '2026-10-20T17:00:00Z', end: '2026-10-20T17:30:00Z', all_day: false, status: 'confirmed', created: '2026-10-01T00:00:00Z' };
+const MOVED: CalendarChange = { id: 'e-sync', title: 'Sync with Krati', start: '2026-10-20T17:00:00Z', end: '2026-10-20T17:30:00Z', all_day: false, status: 'confirmed', created: '2026-10-01T00:00:00Z',
+  description: 'Bring the signed quote and the Q3 numbers', location: 'Krati\'s office, 4th floor' };
 
 describe('applying a sweep job with the day state', () => {
   it('golden: a revision of the delivered Brief, with a push checked against the mail the turn read', async () => {
@@ -400,6 +401,7 @@ describe('applying a sweep job with the day state', () => {
       expect(a.turns[0]!.text).toContain('"revise"');
       expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Brief, updated: the Krati sync is now 17:00.', revision: 'card:brief', push: 'checked: Your sync with Krati moved to 17:00' }]);
       expect(a.pushLines[0]!.mail.join('\n')).toContain('Signed copy attached');
+      expect(a.pushLines[0]!.mail).toEqual(expect.arrayContaining(['Bring the signed quote and the Q3 numbers', 'Krati\'s office, 4th floor']));
       expect(a.chose).toEqual(['revise+push']);
       expect(judged(h.sql)).toEqual([1]);
     });
