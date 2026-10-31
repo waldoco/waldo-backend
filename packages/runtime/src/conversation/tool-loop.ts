@@ -35,7 +35,7 @@ export type ToolLoopStep = (
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
 // parallel_batches is 1 on the first call of a dispatch batch and 0 on the calls that ran beside it, so summing it over a
 // turn's tool hops counts its batches.
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; blocked?: RungBlockedOutcome; taint: 'external' | null; parallel_batches: 0 | 1 }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; data?: unknown; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; blocked?: RungBlockedOutcome; taint: 'external' | null; parallel_batches: 0 | 1 }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -444,6 +444,7 @@ export async function runToolLoop(input: Readonly<{
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: settled?.ms ?? Date.now() - started, output, parallel_batches: batchLead ? 1 : 0,
+        ...(result.ok ? { data: (result as { data?: unknown }).data } : {}),
         taint: (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external' ? 'external' : null,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),

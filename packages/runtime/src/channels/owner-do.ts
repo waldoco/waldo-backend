@@ -171,7 +171,8 @@ import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standi
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
-import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
+import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl, type ArtifactExportDownloadDeps } from './artifact-export-download';
+import { APP_FILES_PATH, appFileDownload } from './app-files';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { HEALTH_TRIGGER_RUN, NIGHTLY_RUN, recordedRun, runBook } from './background-runs';
 import { dayHistoryDay, dayHistoryList, startDayHistory, type DayDetail, type DayHistoryDeps, type DaysList } from './day-history';
@@ -203,7 +204,7 @@ import { approvalHandlers } from '../tools/live/raise-approval';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_RATING_REVISION } from '../../../contracts/src/app/core';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -1676,6 +1677,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
     });
   }
+  // This DO's own export store and bucket prefix: the only files the console and app download routes can serve.
+  private exportDownloadDeps(): ArtifactExportDownloadDeps | undefined {
+    if (!this.env.ARTIFACTS) return undefined;
+    const scope = this.ctx.id.toString(), clock = { timezone: 'UTC', now: () => new Date() };
+    const bodies = r2ArtifactBodies(this.env.ARTIFACTS, scope), binaries = r2ArtifactBinaries(this.env.ARTIFACTS, scope);
+    const book = artifactBook(this.ctx.storage.sql, bodies, clock, () => crypto.randomUUID());
+    return { exports: artifactExports(this.ctx.storage.sql, book, bodies, binaries, clock, () => crypto.randomUUID()), binaries, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: scope };
+  }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
     const fail=(status=403)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
@@ -1689,9 +1698,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(knownPrincipal!==undefined&&knownPrincipal!==principal)return fail();
     this.ctx.storage.kv.put('do_name',name);if(knownPrincipal===undefined)this.ctx.storage.kv.put('owner_principal_ref',principal);
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
+    if(path.startsWith(APP_FILES_PATH+'/')){const deps=this.exportDownloadDeps();return deps?(await appFileDownload(request,deps))!:fail(404);}
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
-      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId));}catch{return fail(503);}
+      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,chatRevision(request)));}catch{return fail(503);}
     }
     // Main's receipt and Stop read only main's chain; a thread's message answers through its thread's routes.
     const mainRef=ownerChainRef('app',principal);
@@ -1773,21 +1783,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       this.recoverApp();
       const at={step:'context'},url=new URL(request.url);
-      const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,chatRevision(request)),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
   }
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false) {
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, revision: number) {
     const entries=await this.appChatRows(name,hash,thread,at);
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
     // Only main chat has a rating route, so only main rows are read against the ratings, and only for a build that names them.
-    const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
+    const ratings=revision>=APP_CHAT_RATING_REVISION&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),revision);
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }) {
@@ -1815,7 +1824,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
-  private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
+  private threadsHost(name: string, hash: string, ownerId: string, revision: number): AppThreadsHost {
     const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
@@ -1833,7 +1842,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.appInbox.receipt(name,clientId,ref);
       },
       history:async(thread,cursor,limit)=>{
-        try{return await this.appChatPage(name,hash,thread,cursor,limit,at);}
+        try{return await this.appChatPage(name,hash,thread,cursor,limit,at,revision);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
       // The newest shown text, cut at read time.
@@ -2461,13 +2470,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (url.pathname.startsWith(`${ARTIFACT_EXPORT_PATH}/`)) {
       // Behind the console owner session like the artifact page: this DO's own store and bucket prefix only.
-      if (!this.env.ARTIFACTS) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-      const scope = this.ctx.id.toString();
-      const bodies = r2ArtifactBodies(this.env.ARTIFACTS, scope);
-      const book = artifactBook(this.ctx.storage.sql, bodies, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
-      const binaries = r2ArtifactBinaries(this.env.ARTIFACTS, scope);
-      const exportsStore = artifactExports(this.ctx.storage.sql, book, bodies, binaries, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
-      return (await artifactExportDownload(request, { exports: exportsStore, binaries, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: scope })) ?? new Response('not found', { status: 404 });
+      const deps = this.exportDownloadDeps();
+      if (!deps) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      return (await artifactExportDownload(request, deps)) ?? new Response('not found', { status: 404 });
     }
     if (url.pathname.startsWith(`${ARTIFACT_PATH}/`)) {
       const denied = await artifactReadAdmission(this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());

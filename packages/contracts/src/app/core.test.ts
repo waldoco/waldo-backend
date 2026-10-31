@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_FILES_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -198,6 +198,12 @@ describe('chat revision 2: the reply draft on a running receipt', () => {
 
 describe('chat revision 3: what a running turn is doing, on its receipt', () => {
   const running = { accepted: true, message_id: 'm', state: 'running' } as const;
+  it('chat=4 declares file parts; revision 3 and unparsed headers stay below it', () => {
+    expect(APP_CHAT_FILES_REVISION).toBe(4);
+    expect(appContractRevision('chat=4', 'chat')).toBe(APP_CHAT_FILES_REVISION);
+    expect(appContractRevision('chat=4', 'chat')).toBeGreaterThanOrEqual(APP_CHAT_ACTIVITY_REVISION);
+    for (const header of [null, 'chat=3', 'chat=four', 'chat=04']) expect([header, appContractRevision(header, 'chat') < APP_CHAT_FILES_REVISION]).toEqual([header, true]);
+  });
   it('is declared by chat=3, which still reads the draft, and absent from revision 2, older and unparsed headers', () => {
     expect(APP_CHAT_ACTIVITY_REVISION).toBe(3);
     expect(appContractRevision('chat=3', 'chat')).toBe(APP_CHAT_ACTIVITY_REVISION);

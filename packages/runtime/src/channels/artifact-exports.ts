@@ -1,4 +1,5 @@
-import { exportArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ExportArtifactArgs, type ToolHandler, type ToolName } from '@waldo/contracts';
+import { z } from 'zod';
+import { exportArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ConversationFile, type ExportArtifactArgs, type ToolHandler, type ToolName } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import type { ArtifactBook, ArtifactBodies } from './artifacts';
@@ -58,7 +59,7 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       // writing another file. (PDF bytes embed a creation date, so sha256 differs per render and
       // cannot be the dedupe key; the revision is immutable, so id + revision identifies the content.)
       const lookup = () => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ? AND source_revision = ? AND format = ?', meta.id, meta.revision, 'pdf').toArray()[0];
-      const receipt = (row: ExportRow) => ({ ok: true as const, id: row.id, bytes: row.byte_size, mime_type: row.mime_type, sha256: row.sha256, key: row.r2_key, deduped: true });
+      const receipt = (row: ExportRow) => ({ ok: true as const, id: row.id, title: meta.name, bytes: row.byte_size, mime_type: row.mime_type, sha256: row.sha256, key: row.r2_key, deduped: true });
       const prior = lookup();
       if (prior !== undefined) {
         // The stored receipt is only true while its file still exists. A missing or unreadable object (bucket lifecycle, manual delete,
@@ -87,7 +88,7 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       if (raced !== undefined) return receipt(raced);
       sql.exec('INSERT INTO artifact_exports (id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, meta.id, meta.revision, 'pdf', rendered.mime_type, rendered.bytes.length, rendered.sha256, key, clock.now().getTime());
-      return { ok: true as const, id, bytes: rendered.bytes.length, mime_type: rendered.mime_type, sha256: rendered.sha256, key, deduped: false };
+      return { ok: true as const, id, title: meta.name, bytes: rendered.bytes.length, mime_type: rendered.mime_type, sha256: rendered.sha256, key, deduped: false };
     },
   };
 };
@@ -96,6 +97,14 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 // `link` turns a stored export id into the owner-authenticated download URL (the console route, behind the owner session). Without it the
 // receipt says saved internally, as before.
+const exportedFileSchema = z.object({ file: z.object({ ref: z.string().regex(/^exp:[A-Za-z0-9_-]{1,128}$/), name: z.string().min(1).max(255) }),
+  mime_type: z.literal('application/pdf'), bytes: z.int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/) });
+// The file a successful export_artifact result names, from its typed data.
+export const exportedFile = (data: unknown): ConversationFile | null => {
+  const parsed = exportedFileSchema.safeParse(data);
+  return parsed.success ? { ref: parsed.data.file.ref, name: parsed.data.file.name, mime: parsed.data.mime_type, bytes: parsed.data.bytes, sha256: parsed.data.sha256 } : null;
+};
+
 export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExports>, link?: (exportId: string) => Promise<string | null>) => ({
   name: 'export_artifact',
   description: "Render a saved artifact to a file (format 'pdf', Latin text only) and store it. expected_revision must match the revision you last saw. A failure comes back as an error with the real reason, never as a receipt; success reports status 'exported', size and sha256, and a repeat export of the same revision returns the stored receipt (deduped: true); delivery is 'owner_link' with a URL only when the receipt carries one (the owner opens it signed in); otherwise it is 'saved_internal' with no URL, so say it is saved internally only. Never invent a link.",
@@ -109,7 +118,7 @@ export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExport
     if (r.ok) {
       let url: string | null = null;
       try { url = link ? await link(r.id) : null; } catch { url = null; }
-      return { ok: true, data: { status: 'exported', artifact_id: args.artifact_id, bytes: r.bytes, mime_type: r.mime_type, sha256: r.sha256, deduped: r.deduped,
+      return { ok: true, data: { status: 'exported', artifact_id: args.artifact_id, file: { ref: r.id, name: `${r.title}.pdf` }, bytes: r.bytes, mime_type: r.mime_type, sha256: r.sha256, deduped: r.deduped,
         delivery: url ? { status: 'owner_link', url, audience: 'owner_authenticated' } : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     }
     if (r.code === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id.' };

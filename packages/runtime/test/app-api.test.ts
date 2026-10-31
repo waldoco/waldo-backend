@@ -78,6 +78,17 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards a file read to the credential owner DO as a counted read, and refuses any other method or an unauthenticated read', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const path = `/app/v1/files/${encodeURIComponent('exp:t1')}`;
+    expect(await (await handleApp(new Request(`https://w.test${path}`, { headers: { authorization: `Bearer ${CREDENTIAL}` } }), counted, fakeAuth().auth))!.json()).toEqual({ forwarded: true });
+    expect(new URL(forwards[0]!.url).pathname).toBe(path);expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');expect(keys).toEqual(['app-read:owner-1']);
+    expect((await handleApp(new Request(`https://w.test${path}`, { method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}` } }), env(), fakeAuth().auth))!.status).toBe(405);
+    expect((await handleApp(new Request(`https://w.test${path}`), env(), fakeAuth().auth))!.status).toBe(401);
+    expect(forwards).toHaveLength(1);
+  });
   it('forwards the configured public origin, not the host the app called', async () => {
     forwards.length = 0;
     const configured = { ...(env() as object), WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' } as never;

@@ -218,4 +218,13 @@ describe('redactConversationEntry', () => {
       items: [{ ...entry.receipt!.items[0]!, target: '[forgotten]-plan.md' }, entry.receipt!.items[1]] });
     expect(redactConversationEntry({ ...entry, receipt: undefined }, value => value)).not.toHaveProperty('receipt', expect.anything());
   });
+  it('redacts a stored file\'s name with the same redactor, and keeps its ref and digest', () => {
+    const file = { ref: 'exp:fictional-1', name: 'divorce-plan.pdf', mime: 'application/pdf', bytes: 1024, sha256: 'a'.repeat(64) };
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'ok',
+      appPayload: 'ok', modelProjection: { mode: 'include' }, role: 'assistant', files: [file] };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toContain('divorce');
+    expect(redacted.files).toEqual([{ ...file, name: '[forgotten]-plan.pdf' }]);
+    expect(redactConversationEntry({ ...entry, files: undefined }, value => value)).not.toHaveProperty('files', expect.anything());
+  });
 });
