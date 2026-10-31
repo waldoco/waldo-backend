@@ -16,6 +16,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
@@ -114,7 +115,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
     const records = () => state.storage.kv.get<Record[]>('telegram_final_outbox_v1') ?? [];
     const settled = async () => {
-      await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(owner);
       await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
     };
     let seq = 0;

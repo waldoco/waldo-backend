@@ -1,9 +1,10 @@
-// A WhatsApp message that fails after it is claimed must not vanish: the owner gets a fixed notice, and a payload whose
-// turn never started releases its claim. Webhook already acked Meta, so the visible notice is the recovery path.
+// A WhatsApp message that fails after it is claimed must not vanish: a turn that started and failed gets a fixed notice, and
+// a payload that could not be admitted keeps nothing, so Meta's redelivery runs it.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE } from '../src/channels/whatsapp-api';
+import { WHATSAPP_PARTIAL_NOTICE } from '../src/channels/whatsapp-api';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -24,35 +25,34 @@ const harness = async (name: string, work: (instance: OwnerDO, state: DurableObj
     try { await work(instance, state, turn as never, sent); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 };
-// Admission acks before the turns run; settle waits for them, as the webhook's waitUntil would.
+// Admission acks before the turns run; the drain runs them, as the alarm after the ack would.
 const postMany = async (instance: OwnerDO, ids: string[]) => {
   const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
     method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
     body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
   }));
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  await drainWhatsAppTurns(instance);
   return response;
 };
 const post = (instance: OwnerDO, id: string) => postMany(instance, [id]);
 
-it('a wa_seq write fault before the turn releases the claim, tells the owner, and a redelivery runs', async () => {
-  await harness('whatsapp-seq-write-fault', async (instance, state, turn, sent) => {
-    const store = state.storage as unknown as { put(key: string, value: unknown): Promise<void> };
-    const original = store.put.bind(state.storage);
+it('a storage fault while admitting a payload keeps none of it and tells nobody: Meta gets no 200, and its redelivery runs every message', async () => {
+  await harness('whatsapp-admission-fault', async (instance, state, turn, sent) => {
+    const kv = state.storage.kv as unknown as { put(key: string, value: unknown): void };
+    const original = kv.put.bind(state.storage.kv);
     let faulted = false;
-    // Same fault as Dalda's probe (reported on 1e818330): the first wa_seq write throws before any turn dispatch.
-    const put = vi.spyOn(store, 'put').mockImplementation(async (key, value) => {
+    // The sequence is written last in the admitting step, after both rows: the fault rolls the claims and rows back with it.
+    const put = vi.spyOn(kv, 'put').mockImplementation((key, value) => {
       if (key === 'wa_seq' && !faulted) { faulted = true; throw new Error('storage fault'); }
       return original(key, value);
     });
-    await post(instance, 'wamid.fault.A').catch(() => undefined);
+    await expect(postMany(instance, ['wamid.fault.A', 'wamid.fault.B'])).rejects.toThrow('storage fault');
     put.mockRestore();
     expect(turn).not.toHaveBeenCalled();
-    expect(state.storage.kv.get('wamid:wamid.fault.A')).toBeUndefined();
-    expect(sent.filter(body => body.includes(WHATSAPP_UNSTARTED_NOTICE))).toHaveLength(1);
-    expect(sent.join('')).not.toContain('PRIVATE_WA_TEXT');
-    expect((await post(instance, 'wamid.fault.A')).status).toBe(200);
-    expect(turn).toHaveBeenCalledTimes(1);
+    expect([state.storage.kv.get('wamid:wamid.fault.A'), state.storage.kv.get('wamid:wamid.fault.B'), state.storage.kv.get('wa_seq')]).toEqual([undefined, undefined, undefined]);
+    expect(sent).toEqual([]);
+    expect((await postMany(instance, ['wamid.fault.A', 'wamid.fault.B'])).status).toBe(200);
+    expect(turn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -64,24 +64,6 @@ it('a turn that throws tells the owner once and the same wamid is still not repl
     expect(state.storage.kv.get('wamid:wamid.throw.N')).toBeDefined();
     await post(instance, 'wamid.throw.N');
     expect(turn).toHaveBeenCalledTimes(1);
-  });
-});
-
-it('a fault between two messages in one payload says the first may be partly handled, not "send it again"', async () => {
-  await harness('whatsapp-mid-batch-fault', async (instance, state, turn, sent) => {
-    const store = state.storage as unknown as { put(key: string, value: unknown): Promise<void> };
-    const original = store.put.bind(state.storage);
-    let faulted = false;
-    const put = vi.spyOn(store, 'put').mockImplementation(async (key, value) => {
-      if (key === 'wa_seq' && value === 2 && !faulted) { faulted = true; throw new Error('storage fault'); }
-      return original(key, value);
-    });
-    await postMany(instance, ['wamid.mid.A', 'wamid.mid.B']).catch(() => undefined);
-    put.mockRestore();
-    expect(turn).toHaveBeenCalledTimes(1);
-    expect(sent.filter(body => body.includes(WHATSAPP_PARTIAL_NOTICE))).toHaveLength(1);
-    expect(sent.filter(body => body.includes(WHATSAPP_UNSTARTED_NOTICE))).toHaveLength(0);
-    expect(state.storage.kv.get('wamid:wamid.mid.A')).toBeDefined();
   });
 });
 
@@ -107,7 +89,6 @@ it('actual WhatsApp DO turn and listener propagate uncertain final issue to one 
  },false);
 });
 
-it('words the two notices as Waldo: a safe resend says nothing happened, a partial one says to check first', () => {
-  expect(WHATSAPP_UNSTARTED_NOTICE).toBe("I couldn't get to your last message, so nothing happened. Send it again?");
+it('words the notice as Waldo: a turn that started may have had effects, so it says to check first', () => {
   expect(WHATSAPP_PARTIAL_NOTICE).toBe('I may have only partly handled your last message. Check what went through before you send it again.');
 });

@@ -17,6 +17,7 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
 }
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
+export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';
 
 // The jobs lane's next work: a task attempt to start or restart, a report to apply, a retried turn or a progress note.
 export const TASK_JOBS_DUE_KEY = 'task_jobs_due_v1';
@@ -32,7 +33,7 @@ export const ALARM_FAILED_LANE_KEY = 'owner_alarm_failed_lane_v1';
 export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
-  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
+  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY,
   'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
@@ -48,7 +49,7 @@ export const ALARM_LANES = {
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
   mail: ['agent_mail_due_v1', 'agent_mail_rule_due_v1'],
-  whatsapp: [WHATSAPP_PENDING_DUE_KEY],
+  whatsapp: [WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY],
   jobs: [TASK_JOBS_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
 export type AlarmLane = keyof typeof ALARM_LANES | 'pass';

@@ -5,6 +5,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { tools?: { name?: string }[]; input: string | { type?: string; call_id?: string }[]; text?: { format?: { name?: string } } };
 const model = vi.hoisted(() => ({ requests: [] as RequestBody[], react: null as string | null }));
@@ -66,7 +67,7 @@ const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string,
         body: JSON.stringify({ messages: messages.map(message => ({ from: SUBJECT, timestamp: String(Math.floor(Date.now() / 1000)), ...message })) }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     };
     try { await run(deliver, graph, instance); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });

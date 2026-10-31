@@ -210,13 +210,13 @@ import { APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } fr
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
-import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
+import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
 import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memory';
 import { linkingAppRows, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
-import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
+import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
@@ -232,7 +232,8 @@ import { sanitise } from '../scribe/sanitiser';
 import { newSessionCanaryTokens, ownerToolApproval } from './owner-turn';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
-import { TURN_TIMEOUT_MS, TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
+import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
+import { WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox, redactWhatsAppInboxEntries, type WhatsAppInboxRecord } from './whatsapp-inbox';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import { InMemoryCircuitBreaker, type LLMAttempt } from '../llm/provider';
@@ -660,13 +661,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return jobsKept(this.ctx.storage.sql) && this.tasks.heartbeat(ticket); }
 
   // Binds this owner's WhatsApp to a number, or unbinds it, inside the caller's transactionSync. When the number changes, an
-  // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting.
+  // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting,
+  // and a message queued from that number never runs.
   // Answers the outbox records the old number's state retired, for the caller to settle after the transaction.
   private bindWhatsApp(subject: string | null): readonly string[] {
     const { kv, sql } = this.ctx.storage;
     const moving = subject === null || kv.get<string>('whatsapp_subject') !== subject;
     const retired = bindWhatsAppNumber(kv, subject, this.appBound());
-    if (moving) endCardWaits(sql, 'whatsapp');
+    if (moving) { endCardWaits(sql, 'whatsapp'); new WhatsAppOwnerInbox(this.ctx.storage).revokeOpen(); }
     return retired;
   }
 
@@ -1629,6 +1631,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'job_reports', run: (texts) => redactJobReportEntries(kv, texts, FORGOTTEN).remaining },
       { name: 'whatsapp_held', run: (texts) => forgetHeldWhatsApp(kv, texts).remaining },
       { name: 'whatsapp_context', run: (texts) => forgetWhatsAppContext(kv, texts).remaining },
+      { name: 'whatsapp_inbox', run: (texts) => redactWhatsAppInboxEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
@@ -2055,85 +2058,61 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     else await this.rearmWithSchedule();
   }
 
-  // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
-  // signature and resolved this sender to this owner, and whatsappAdmit has bound the subject;
-  // here each claimed text message becomes the telegram-shaped update the turn pipeline consumes
-  // (subject digits double as the numeric owner/chat id). Approval replies arrive as text
-  // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the
-  // equivalent callback_query. Voice/audio notes ride the same transcriber path as Telegram
-  // (W4): file_id carries the WhatsApp media id and the per-channel downloader in setup()
-  // resolves it through the Graph two-step; images and documents take the shared media path the same way. Types Waldo
-  // cannot open get the shared unsupported reply (whatsappIngressUpdates).
-  private async runWhatsappClaimed(pendingKey: string, claimed: readonly WaIngressMessage[], subject: string): Promise<void> {
-    // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
-    // request cannot read the same wa_seq and hand a different message the same update_id.
-    await this.serial(async () => {
-      // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this reply's
-      // turn sees what the owner has seen.
+  // WhatsApp turns, one inbox row at a time, under the alarm's own wall clock (whatsapp-inbox). A message that arrives while a
+  // turn runs waits as its row and this pass takes it next. A running row whose attempt is live nowhere was cut off: it closes
+  // as interrupted and its owner gets the one notice once that commits. Without a WhatsApp transport nothing is claimed.
+  private readonly whatsappAttempts = new Set<string>();
+  private async drainWhatsApp(alarmEnd?: number): Promise<void> {
+    if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) return;
+    const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
+    for (const record of this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts))) await this.whatsappNotice(record);
+    for (let pending = inbox.next(); pending; pending = inbox.next()) {
+      // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this turn
+      // sees what the owner has seen.
       try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event)), this.ctx.storage.kv.get<string>('whatsapp_subject') ?? ''); } catch { console.error('whatsapp held delivery unavailable'); }
       try { await releaseWhatsAppOutbox(this.setup('whatsapp').finalOutbox, this.outboxRoute('whatsapp'), this.setup('whatsapp').settleFinal); } catch { console.error('whatsapp outbox release unavailable'); }
       try { await this.setup('whatsapp').desk.ownerWrote(); } catch { console.error('whatsapp waiting approval cards unavailable'); }
-      const { updates, seq, sources } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0, id => whatsappSentText(this.ctx.storage.kv, id, Date.now()));
-      // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
-      // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
-      let failure: { error: unknown } | null = null;
-      let started = 0;
-      for (const [index, update] of updates.entries()) {
-        try { await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE); }
-        catch (error) {
-          // The turn never started. Release this payload's claims so a redelivery is processed, and tell the owner.
-          if (started === 0) for (const message of claimed) if (typeof message.id === 'string' && message.id !== '') this.ctx.storage.kv.delete(`wamid:${message.id}`);
-          failure ??= { error }; break;
-        }
-        started += 1;
-        try { await this.whatsappTurn(update, pendingKey, subject, sources[index] ?? ''); } catch (error) { failure ??= { error }; }
-      }
-      try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
-      if (failure) {
-        // A failed or unstarted turn used to leave only a Worker console line. The owner gets one fixed notice (no message
-        // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
-        // to check first. A turn that already started is never replayed. Listener failures propagate here for this fixed notice.
-        // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
-        // A record that is already gone was taken by recovery, which has told the owner. A rebound or unlinked sender is not told.
-        const { kv } = this.ctx.storage;
-        const owned = this.ctx.storage.transactionSync(() => { const held = kv.get(pendingKey) !== undefined; kv.delete(pendingKey); return held; });
-        this.liveWhatsapp.delete(pendingKey);
-        if (owned && kv.get<string>('whatsapp_subject') === subject && kv.get<boolean>('whatsapp_unlinked') !== true) try {
-          const { api, owner } = this.setup('whatsapp');
-          await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
-        } catch { console.error('whatsapp failure notice unavailable'); }
-        throw failure.error;
-      }
-    });
+      const deadline = runClaimDeadline(WHATSAPP_TURN_DEADLINE_MS, alarmEnd); if (deadline === null) break;
+      const record = inbox.claim(pending.id, deadline); if (!record) continue;
+      // How long the owner waited between Meta's 200 and the turn starting, with how many messages wait behind it: counts only.
+      console.log(JSON.stringify({ hop: 'whatsapp_turn_start', ok: true, ms: Date.now() - record.admittedAt, queued: inbox.records().filter(row => row.state === 'admitted').length }));
+      let completed = false;
+      this.whatsappAttempts.add(record.attempt!);
+      try { await this.whatsappTurn(record); completed = true; } catch { console.error('whatsapp turn outcome unconfirmed'); }
+      finally { this.whatsappAttempts.delete(record.attempt!); }
+      if (inbox.settle(record, completed)) await this.whatsappNotice(record);
+    }
+  }
+  // The one notice for a WhatsApp turn that closed without its reply. A turn that started may have had effects, so it says to
+  // check first; it is never replayed. It goes as a reply to the owner's own message, which names that message without
+  // repeating its words, never with the error. One attempt; a number unlinked or moved meanwhile is not told.
+  private async whatsappNotice(record: WhatsAppInboxRecord): Promise<void> {
+    const kv = this.ctx.storage.kv;
+    if (kv.get<string>('whatsapp_subject') !== record.subject || kv.get<boolean>('whatsapp_unlinked') === true) return;
+    try {
+      const { api, owner } = this.setup('whatsapp');
+      await api.sendMessage({ chat_id: owner, text: WHATSAPP_PARTIAL_NOTICE, ...(record.wamid ? { quote_message_id: record.wamid } : {}) });
+    } catch { console.error('whatsapp failure notice unavailable'); }
   }
 
-  // One WhatsApp turn under its own run scope. A commit holds only while this payload's pending record is still held (recovery
-  // deletes it), the admitted sender is still the bound, linked subject, the owner name is unchanged, and the run is neither
-  // aborted nor past its deadline. The scope is aborted when its turn ends, so a turn that outlived its race cannot commit
-  // after the next one starts, and an unlink or rebind mid-turn closes every later tool effect and the final send.
-  private async whatsappTurn(update: unknown, pendingKey: string, subject: string, wamid: string): Promise<void> {
+  // One WhatsApp turn under its row's run scope. A commit holds only while the row is still running under this attempt, before
+  // its deadline, and while the sender is still the bound, linked subject under an unchanged owner name. The scope is aborted
+  // when its turn ends, so a turn that outlived its race cannot commit after the next one starts, and an unlink or rebind
+  // mid-turn closes every later tool effect and the final send.
+  private async whatsappTurn(record: WhatsAppInboxRecord): Promise<void> {
     const { kv } = this.ctx.storage;
-    const run = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: Date.now() + TURN_TIMEOUT_MS };
     const doName = kv.get<string>('do_name');
     const abort = new AbortController();
-    const scope: RunEffectScope = {
-      ...run, signal: abort.signal,
-      admit: () => { scope.commit(() => undefined); },
-      commit: work => this.ctx.storage.transactionSync(() => {
-        if (kv.get<WhatsappPending>(pendingKey)?.subject !== subject || kv.get<string>('whatsapp_subject') !== subject || kv.get<boolean>('whatsapp_unlinked') === true || kv.get<string>('do_name') !== doName
-          || abort.signal.aborted || Date.now() >= run.deadline) throw new ClosedRunError();
-        const result = work();
-        if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('run commit must be synchronous');
-        return result;
-      }),
-    };
+    const scope = new WhatsAppOwnerInbox(this.ctx.storage).scope(record, abort.signal, () =>
+      kv.get<string>('whatsapp_subject') === record.subject && kv.get<boolean>('whatsapp_unlinked') !== true && kv.get<string>('do_name') === doName);
+    const update = record.update!;
     this.activeScope = scope; this.activeAbort = abort;
-    const active = this.activeWhatsApp = { scope, wamid, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
+    const active = this.activeWhatsApp = { scope, wamid: record.wamid, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const expired = new Promise<never>((_, reject) => {
         abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true });
-        timeout = setTimeout(() => abort.abort(), Math.max(0, run.deadline - Date.now()));
+        timeout = setTimeout(() => abort.abort(), Math.max(0, scope.deadline - Date.now()));
       });
       await Promise.race([this.turn(update, 'whatsapp', false, scope), expired]);
     } finally {
@@ -2144,11 +2123,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // Durable admission (#745): the webhook acks Meta only after this returns. In one synchronous storage step it claims the
-  // payload's wamids and writes a pending record (ids only, never message text); the turns then run after the ack. A record that
-  // is still pending after the DO restarted means the turns were cut off: recoverWhatsappPending tells the owner once and never
-  // replays. Admission order is promised, not sender chronology (Meta does not order redeliveries).
-  private readonly liveWhatsapp = new Set<string>();
-  private readonly whatsappInflight = new Set<Promise<void>>();
+  // payload's wamids and writes one inbox row per owner message; the alarm runs them after the ack. Admission order is
+  // promised, not sender chronology (Meta does not order redeliveries). Each claimed message becomes the telegram-shaped
+  // update the turn pipeline consumes (subject digits double as the numeric owner/chat id). Approval replies arrive as text
+  // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the equivalent callback_query. Voice
+  // and audio notes carry the WhatsApp media id as file_id, which the per-channel downloader in setup() resolves through the
+  // Graph two-step; images and documents take the shared media path the same way. Types Waldo cannot open get the shared
+  // unsupported reply (whatsappIngressUpdates).
   // Whether the directory has this sender as this owner's WhatsApp number: true or false, or null when it could not answer.
   // Without a directory there is nothing to reconcile against, so a sender other than the bound one is not this owner's.
   private async whatsappSenderOwned(subject: string): Promise<boolean | null> {
@@ -2180,12 +2161,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
     const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
     this.bindIdentity(request.headers);
-    const pendingKey = `${WHATSAPP_PENDING_PREFIX}${crypto.randomUUID()}`;
-    // The wake is armed before the record exists: a spurious alarm finds nothing, a missing one would strand a record.
-    await armWhatsappPendingWake(this.ctx.storage, Date.now() + WHATSAPP_PENDING_CHECK_MS);
+    const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
+    // The wake is armed before the rows exist: a spurious alarm finds nothing, a missing one would strand a row.
+    await armWhatsappPendingWake(this.ctx.storage, Date.now() + 250);
     let claimed: NonNullable<typeof value.messages> = [];
     let changed = false, rebound = false, retired: readonly string[] = [];
-    this.ctx.storage.transactionSync(() => {
+    // A full inbox rolls the claims back with it, so Meta's retry is admitted once the queue has room.
+    try { this.ctx.storage.transactionSync(() => {
       // The binding is decided again here, against what was read before the awaits: the first admission binds, a reconciled
       // one replaces the number it saw, and a binding that moved meanwhile (a confirm, an unlink, a concurrent rebind to
       // another number) sends this one back to be checked afresh. A concurrent admission from the same number finds it
@@ -2202,21 +2184,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       for (const m of claimed) if (m.from === subject && m.type === 'reaction' && typeof m.reaction?.message_id === 'string') noteWhatsAppReaction(kv, m.reaction.message_id, m.reaction.emoji, Date.now());
       const latestId = [...claimed].reverse().find(m => whatsappTurnMessage(m) && typeof m.id === 'string' && m.id !== '')?.id;
       if (latestId) kv.put(WA_LAST_INBOUND_ID_KEY, latestId);
-      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
-      kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
-    });
+      const { updates, sources } = whatsappIngressUpdates(claimed, subject, inbox.seq(), id => whatsappSentText(kv, id, Date.now()));
+      inbox.admit(updates.map((update, index) => ({ update, wamid: sources[index] ?? '' })), subject);
+    }); } catch (error) { if (error instanceof WhatsAppInboxFull) return new Response('unavailable', { status: 503 }); throw error; }
     if (changed) return new Response('unavailable', { status: 503 });
     // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
     if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
-    if (!claimed.length) return new Response('ok');
-    this.liveWhatsapp.add(pendingKey);
-    const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
-      // A caught failure has already told the owner (#751); the record ends with the run so recovery never double-notifies.
-      this.liveWhatsapp.delete(pendingKey); kv.delete(pendingKey); this.refreshWhatsappDue();
-      this.whatsappInflight.delete(work);
-    });
-    this.whatsappInflight.add(work);
-    this.ctx.waitUntil(work);
     return new Response('ok');
   }
   // Meta's later reports on sends it accepted: window refusals (131047), arrivals on the owner's phone (delivered, read or
@@ -2265,13 +2238,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const any = [...this.ctx.storage.kv.list({ prefix: WHATSAPP_PENDING_PREFIX })].length > 0;
     if (any) this.ctx.storage.kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS); else this.ctx.storage.kv.delete(WHATSAPP_PENDING_DUE_KEY);
   }
-  // A pending record this instance is not running belongs to a DO that was evicted mid-run. We cannot tell whether a turn
-  // had effects, so the owner gets the same "may have only partly handled" notice and the payload is never replayed. The
-  // record is removed before the send: at most one notice attempt, no loop. Runs before the Telegram-linkage guard so a
-  // WhatsApp-only owner is covered, and uses the WhatsApp api directly, never the shared final outbox.
+  // A per-payload pending record from before the inbox (nothing writes one now) belongs to a turn a deploy cut off. We cannot
+  // tell whether it had effects, so the owner gets the same "may have only partly handled" notice and the payload is never
+  // replayed. The record is removed before the send: at most one notice attempt, no loop. Runs before the Telegram-linkage
+  // guard so a WhatsApp-only owner is covered, and uses the WhatsApp api directly, never the shared final outbox.
   private async recoverWhatsappPending(): Promise<void> {
     const { kv } = this.ctx.storage;
-    const dead = [...kv.list<WhatsappPending>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
+    const dead = [...kv.list<WhatsappPending>({ prefix: WHATSAPP_PENDING_PREFIX })];
     for (const [key, record] of dead) {
       kv.delete(key);
       if (kv.get<string>('whatsapp_subject') !== record.subject || kv.get<boolean>('whatsapp_unlinked') === true) continue;
@@ -2800,6 +2773,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const lane: LaneRunner = (id, work) => runLane(id, held, work);
     await this.browserReady;
     await lane('whatsapp', () => this.recoverWhatsappPending());
+    // WhatsApp turns run first, ahead of every slower lane (mail, the app and iMessage drains, nightly work, sweeps, jobs) and
+    // of the link mode and directory checks, which they never waited on: a reply held behind those would arrive minutes late.
+    await this.serialWithin(alarmEnd, () => lane('whatsapp', () => this.drainWhatsApp(alarmEnd)));
     // Before any surface is chosen: mail that cannot run for want of one still expires.
     await lane('mail', async () => this.expireAgentMail());
     await lane('mail', () => this.reconcileAgentMailRules());
@@ -3671,8 +3647,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const turnHooks = ({ whatsapp: whatsappTurnHooks } as Partial<Record<ChannelKind, TurnHooks>>)[channel];
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
-    // The app and iMessage carry no connect button, so there nothing is minted or sent: the model is told where the owner connects.
-    const connectGuidance: Partial<Record<ChannelKind, string>> = { app: APP_CONNECT_GUIDANCE, imessage: IMESSAGE_CONNECT_GUIDANCE };
+    // The app, iMessage and WhatsApp carry no connect button, so there nothing is minted or sent: the model is told where the
+    // owner connects.
+    const connectGuidance: Partial<Record<ChannelKind, string>> = { app: APP_CONNECT_GUIDANCE, imessage: IMESSAGE_CONNECT_GUIDANCE, whatsapp: WHATSAPP_CONNECT_GUIDANCE };
     const offerConnect = async (intent: ConnectIntent): Promise<boolean | string> => {
       const guidance = connectGuidance[channel];
       if (guidance) return guidance;
@@ -3718,7 +3695,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const googleBooks = <T,>(work: () => Promise<T>) => this.googleBooks(work);
-    // A dead grant's notice where no connect button can go (the app, iMessage): plain text, no link, through the delivery outbox,
+    // A dead grant's notice where no connect button can go (the app, iMessage, WhatsApp): plain text, no link, through the delivery outbox,
     // which takes it to the app transcript for an owner the directory admits there, or to iMessage for an owner whose only
     // surface it is. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
     // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none, and
@@ -3751,7 +3728,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (!transition.send) return;
         // A new ticket revokes the owner's open ones, so where no button can carry it nothing is minted.
-        if (nativeSurface(channel)) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
+        if (nativeSurface(channel) || channel === 'whatsapp') { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
