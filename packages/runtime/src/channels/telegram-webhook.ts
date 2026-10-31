@@ -98,6 +98,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
+  // '1' lets a prep note's app push name the meeting and its start; anything else sends the fixed line.
+  PREP_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & PhoneSmsEnv;
 
