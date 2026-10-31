@@ -1,0 +1,167 @@
+From: "Waldo, Priya's assistant" <priya@mail.heywaldo.in>
+To: sam@example.com
+Cc: alex@example.com
+Subject: =?UTF-8?B?TW92aW5nIFRodXJzZGF54oCZcyBkZXNpZ24gcmV2aWV3IHRvIEZy?=
+ =?UTF-8?B?aWRheQ==?=
+Date: Sat, 31 Oct 2026 09:30:00 +0000
+Message-ID: <0f6c2a9e-sample@mail.heywaldo.in>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="=_waldo_alt"
+
+--=_waldo_alt
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+New time: Friday, 3pm in Juniper
+
+Hi Sam,
+
+Priya asked me to move Thursday=E2=80=99s design review to Friday at 3pm, s=
+ince the pricing copy won=E2=80=99t be ready until Thursday evening. The ag=
+enda is the same:
+
+- Header layout
+- Pricing page copy, with the new tiers
+- Next steps and owners
+
+Two rooms are free on Friday:
+
+Slot      | Room    | Seats
+----------|---------|------
+Fri 15:00 | Juniper | 6
+Fri 16:00 | Cedar   | 4
+
+The notes so far are in the shared doc (https://docs.example.com/review?id=
+=3D42), and the original invite is https://cal.example.com/e/9.
+
+Thanks,
+
+Accept the new time: https://cal.example.com/accept/9
+
+--=20
+Waldo
+Priya's assistant
+priya@mail.heywaldo.in
+
+--=_waldo_alt
+Content-Type: multipart/related; boundary="=_waldo_rel"; type="text/html"
+
+--=_waldo_rel
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<!doctype html>
+<html lang=3D"en"><head><meta charset=3D"utf-8"><meta name=3D"viewport" con=
+tent=3D"width=3Ddevice-width,initial-scale=3D1"><meta name=3D"color-scheme"=
+ content=3D"light"><title>Moving Thursday=E2=80=99s design review to Friday=
+</title></head>
+<body style=3D"margin:0;padding:0;background-color:#F4F3F0">
+<table role=3D"presentation" width=3D"100%" cellpadding=3D"0" cellspacing=
+=3D"0" border=3D"0" style=3D"background-color:#F4F3F0"><tr><td align=3D"cen=
+ter" style=3D"padding:24px 12px">
+<table role=3D"presentation" width=3D"600" cellpadding=3D"0" cellspacing=3D=
+"0" border=3D"0" style=3D"width:600px;max-width:100%">
+<tr><td style=3D"padding:0 4px 16px 4px"><table role=3D"presentation" cellp=
+adding=3D"0" cellspacing=3D"0" border=3D"0"><tr><td style=3D"vertical-align=
+:middle"><img src=3D"cid:waldo-logo@mail.heywaldo.in" width=3D"32" height=
+=3D"28" alt=3D"Waldo" style=3D"display:block;border:0;outline:none"></td><t=
+d style=3D"vertical-align:middle;padding:0 0 0 10px;font-family:ui-rounded,=
+'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helveti=
+ca,Arial,sans-serif;font-size:18px;font-weight:600;color:#1A1A1A">Waldo</td=
+></tr></table></td></tr>
+<tr><td style=3D"background-color:#FFFFFF;border:1px solid #EDEDED;border-r=
+adius:16px;padding:28px;font-family:ui-rounded,'SF Pro Rounded',-apple-syst=
+em,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-siz=
+e:15px;line-height:1.55;color:#1A1A1A">
+<table role=3D"presentation" width=3D"100%" cellpadding=3D"0" cellspacing=
+=3D"0" border=3D"0" style=3D"margin:0 0 20px 0"><tr><td style=3D"background=
+-color:#FFF4EC;border-radius:12px;padding:14px 16px">New time: <strong>Frid=
+ay, 3pm</strong> in Juniper</td></tr></table><p style=3D"margin:0 0 16px 0"=
+>Hi Sam,</p>
+<p style=3D"margin:0 0 16px 0">Priya asked me to move <strong>Thursday=E2=
+=80=99s design review</strong> to <em>Friday at 3pm</em>, since the pricing=
+ copy won=E2=80=99t be ready until Thursday evening. The agenda is the same=
+:</p>
+<ul style=3D"margin:0 0 16px 0;padding:0 0 0 24px"><li style=3D"margin:0 0 =
+6px 0">Header layout</li><li style=3D"margin:0 0 6px 0">Pricing page copy, =
+with the new tiers</li><li style=3D"margin:0 0 6px 0">Next steps and owners=
+</li></ul>
+<p style=3D"margin:0 0 16px 0">Two rooms are free on Friday:</p>
+<table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" border=3D"=
+0" style=3D"border-collapse:collapse;margin:0 0 16px 0;font-size:14px;line-=
+height:1.45"><tr><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-=
+bottom:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:600=
+">Slot</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom=
+:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:600">Room=
+</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px s=
+olid #EDEDED;text-align:left;vertical-align:top;font-weight:600">Seats</th>=
+</tr><tr><td align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1=
+px solid #EDEDED;text-align:left;vertical-align:top">Fri 15:00</td><td alig=
+n=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDED;=
+text-align:left;vertical-align:top">Juniper</td><td align=3D"left" style=3D=
+"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDED;text-align:left;ver=
+tical-align:top">6</td></tr><tr><td align=3D"left" style=3D"padding:6px 12p=
+x 6px 0;border-bottom:1px solid #EDEDED;text-align:left;vertical-align:top"=
+>Fri 16:00</td><td align=3D"left" style=3D"padding:6px 12px 6px 0;border-bo=
+ttom:1px solid #EDEDED;text-align:left;vertical-align:top">Cedar</td><td al=
+ign=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDE=
+D;text-align:left;vertical-align:top">4</td></tr></table>
+<p style=3D"margin:0 0 16px 0">The notes so far are in <a href=3D"https://d=
+ocs.example.com/review?id=3D42" style=3D"color:#1A1A1A;text-decoration:unde=
+rline;text-decoration-color:#FB943F">the shared doc</a> <span style=3D"colo=
+r:#6B6B68">(https://docs.example.com/review?id=3D42)</span>, and the origin=
+al invite is <a href=3D"https://cal.example.com/e/9" style=3D"color:#1A1A1A=
+;text-decoration:underline;text-decoration-color:#FB943F">https://cal.examp=
+le.com/e/9</a>.</p>
+<p style=3D"margin:0 0 16px 0">Thanks,</p>
+<table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" border=3D"=
+0" style=3D"margin:4px 0 8px 0"><tr><td style=3D"background-color:#1A1A1A;b=
+order-radius:12px"><a href=3D"https://cal.example.com/accept/9" style=3D"di=
+splay:inline-block;padding:12px 20px;color:#FAFAF8;font-weight:600;text-dec=
+oration:none">Accept the new time</a></td></tr></table><p style=3D"margin:0=
+ 0 16px 0;font-size:13px;color:#6B6B68;word-break:break-all">https://cal.ex=
+ample.com/accept/9</p><p style=3D"margin:8px 0 0 0;padding:16px 0 0 0;borde=
+r-top:1px solid #EDEDED;font-size:13px;line-height:1.5;color:#6B6B68"><stro=
+ng style=3D"color:#1A1A1A">Waldo</strong><br>Priya's assistant<br>priya@mai=
+l.heywaldo.in</p>
+</td></tr>
+</table>
+</td></tr></table>
+</body></html>
+--=_waldo_rel
+Content-Type: image/png; name="waldo.png"
+Content-Transfer-Encoding: base64
+Content-ID: <waldo-logo@mail.heywaldo.in>
+Content-Disposition: inline; filename="waldo.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAEAAAAA4CAMAAAB6xg5AAAACNFBMVEVMaXH7kz/6lD/6kz/7lD/6
+kz//lD//fwD//wD6kz7/jTj3lz/6lD77lD/6lUD7lD/6lD//mTP/nz/7kz7/mT/6lD/6kz/6kz75
+lD/7lD/7kz7/fz/6kz7/kzr6lD76lD//nDr/jTj7kz75lD76lD7/kEL7kj76kz76kz/6lD/7kz76
+lD/6kz/6kz75kz/7lD/7lD77kz78kz36kz/7k0D6kz77kz76lD/7kz7/ljz8kz/6lED/i0X/fyr8
+lD//kTb7lD77lD77kj/7kz7/qlX/lT38kz/6kz76lD/7kz//lD/7kz/6lD78kj36lD76kz/5lD/8
+lD78lD36kz//mTP7lED7lD/6kj76lD76kz/4kj/6lD77lD/3kUH6lT77kz/7lD/4kzz6kz73kj36
+lD77lD/7lD76lD/5lD/6kz/6kz77lD/8kz77lT77lD/6kz/7kz77kj36lD//mUT7kz/6kj37kz76
+lD76lD/6lD/7kz77kz75lTz7kz/6lD/7lUD6kz/6kz/5kz76kz74kD77lD/7k0D5lj/7kz76lD/6
+kz76lD/7lD76kz77lD76kz77lD/7lD74kTz6kz/6kz/6kz76lD73lD/7lD/6kz77kz77lD//mT36
+lD/7kz/7lD/6kz/5lEH7kz/6lkH7kz76lT37kz//kT/7lD/6lD/6lD77lD/7kz76kz/7lD76kz//
+kTz7kz76kkD7lD/8lD/6kz76kz//kUj6lD/5kkH7kz77lD97pE+OAAAAu3RSTlMAgPbp3v4MAgH8
+CSD0zj/NoAUIhxT9+vdlnNQE3xqzug0SRWL7F0nwvvmO8a3gYYiSzF/1U+SffU4RVTcLBl0Om8RQ
+zwMdWOd4hRjR41evaDBWW3AKQ5A9+HQo7MYjNcrCJush75RK5WCyOdlaUo3ugkJ1D0A226c8rpaD
+LpHqS6TyLbclgUcsyLZmcYvz13fS3Cqp4nKsJEhvw1QZvZ3VeSuYM4o61hyJ4XOExzSebRXYO8lZ
+frUHsS/AwuD/BgAAAAlwSFlzAAAe0AAAHtABWDqmfQAAAwlJREFUeNqdl2VDG0EQhkOAGBYIIcWh
+QItLizvFvRSXQmmhlLq7u7u7u3u7f67s7d7dzmWTdG8+Zd+Zebi9m9kdDAbP1pZZ8CB/i0G3LQlG
+2NJv6czvdCJiByt05a/KQrKNBukBRCPVTpvF88tcDACt0fEG2XwUIP4IeQCAFggDDkNAsTAgAQKK
+hAE3IQDFiwJqNYBQxWMbTCmf9A0Y1gB6qF7p2ISXMaW+APM1gGVEHrkiCy0+ABGLIaBQUo+vVATr
+WhAf27j7w/5KVtkDATuk7T9ilEQ11tLTJXWuc+fT2+H8PUQlYc2P/2GOhjHqmxt9lMqqaAWWai4A
+QCfND10IHzaAlu2LQEZchJVuGNhL4j77I60dIK3jUJV10s66YNgwAdiRu9kt2NNwTV4bl0qhATCq
+iQC+cADIT3KZ81Kllf92EhoMg+g55eIBrORPGp5Exw1NPb9P39YoiLlMVX8egP3IqhWAkHlUneAC
+nG0cwGs2IqaKqj+4ALn2gQVFqX7juHJ8R3EB53h7eKe4MzaoqoML2MoDmIuptyOUUW3feIDVHro8
+IQMFvnxsAmJkjHv+kUhPfW5Oi3DTkrLdAGfFDkBLiqYaHBbRM7TmLVPo19fruUzNFX7H4lKR6+Ku
+pggfoY2tIUbkCjk/onNwyJWPS+f0Lz35h5iDZtaiAxDi896PfZZyqbd0myeAlQX8dfcvzyefdGja
+xAfksIAZrdc2kKo46/mEVhbwW+NMBhvcyAWY2tWIjD+aWqgD9djB30PkrBwwpW25aljQWcAZ/0np
+4cGPc3Vrbd+cpmUnQkA6cI4hlG1TVuFlvBKoB/mBJ8HrwdLdPu81YudcDrK9krSH3gFXjWp6cDdt
+9X1Fe/HThhNfuXdCf7N8nUfL83GLfLWSuS2uyjvBlGufCKurrVZOtCR8d5/Bv+bB++R/7R5OypGG
+nhl1UhCwEzipWfp5h1ybaWKATJz0nnTpmJ6xWRqLBmijSrPMdzFAP66oU3Qxjqe8r2KAhrlZq0RZ
+Tf60pov+65BcUug14B+UMTB7+8yJyQAAAABJRU5ErkJggg==
+--=_waldo_rel--
+--=_waldo_alt--
