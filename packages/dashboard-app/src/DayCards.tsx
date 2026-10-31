@@ -73,7 +73,7 @@ export function DayCardsView({ cards, app, zone, now = Date.now(), play, busy, o
   })}</ol>;
 }
 
-type Read = { kind: 'reading' } | { kind: 'failed' } | { kind: 'ready'; day: DayRecord; app: AppDay | null; held: readonly HeldChange[] };
+type Read = { kind: 'reading' } | { kind: 'failed' } | { kind: 'ready'; day: DayRecord; app: AppDay | null; held: readonly HeldChange[] | null };
 
 // Reads today's day view (its card states, and the action route's revision for Try again) and, beside it, the app's day view for what each
 // card delivered to Main chat. The second read failing leaves the words unknown, never the cards: each is still said to have gone out.
@@ -84,7 +84,7 @@ export function DayCards() {
   // Whether each delivered message plays in, decided once per message the first time this mount draws it.
   const [played, setPlayed] = useState<ReadonlyMap<string, boolean>>(new Map());
   const load = useCallback(async () => {
-    const app = fetchAppDay().catch(() => null), held = fetchHeldChanges().catch(() => []);
+    const app = fetchAppDay().catch(() => null), held = fetchHeldChanges().catch(() => null);
     try { setRead({ kind: 'ready', day: await fetchControls('day'), app: await app, held: await held }); } catch { setRead({ kind: 'failed' }); }
   }, []);
   useEffect(() => { void load(); }, [load]);

@@ -15,6 +15,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { jobBook, type JobRow } from '../src/tasks/jobs';
+import { readHeldChanges } from '../src/channels/dashboard-held-changes';
 import { ensureSchema } from '../src/tracer/schema';
 
 // Golden, end to end in the owner object with the day state on: a meeting the sweep saw untouched at the start of the day is
@@ -149,6 +150,7 @@ it.each([
       const jobs = jobBook(state.storage.sql, { now: () => clock, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
       const [job] = state.storage.sql.exec<JobRow>("SELECT * FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray();
       expect(job).toBeDefined();
+      expect(readHeldChanges(state.storage.sql, clock, 'UTC').changes).toContainEqual(expect.objectContaining({ source: 'calendar', kind: 'changed', title: SYNC.title }));
       expect(jobs.report(jobs.startAttempt(job!.id)!, FOUND, { rounds: 1, costUsd: 0 })).toBe('accepted');
 
       // The brain's apply turn sees the move from 10:00, revises the Brief, and the revision reaches the app with its push.
@@ -163,6 +165,8 @@ it.each([
       expect(fixture.requests[0]).toContain(BRIEF);
       if (mail) expect(fixture.prompts[0]).toContain('cholesterol');
       expect(updates()).toEqual([expect.objectContaining({ status: 'delivered', revision: { day: '2026-10-20', card: 'card:brief' } })]);
+      // A change that reached the owner as a revision is not among the console's held changes.
+      expect(readHeldChanges(state.storage.sql, clock, 'UTC').changes).toEqual([]);
       await vi.waitFor(() => expect(wire.pushes).toHaveLength(2));
       expect(wire.pushes[1]).toEqual({ body, data: { trigger: 'update', card_ref: 'card:brief' } });
       for (const text of never) expect(wire.sent[1]).not.toContain(text);
@@ -219,13 +223,16 @@ it.each([
         await owner.alarm();
       };
       const tomorrow = { ...SYNC, start: '2026-10-21T08:00:00Z', end: '2026-10-21T08:30:00Z' };
-      fixture.listed = [tomorrow];
+      // The app's quiet-hours owner has a full calendar: the day's read stops at its cap and says so.
+      const full = dayState === '1' && surface === 'app' && when === 'in quiet hours';
+      fixture.listed = [tomorrow, ...(full ? Array.from({ length: 249 }, (_, i) => ({ ...SYNC, id: `e-fill-${i}` })) : [])];
       await sweep();
       clock += 10 * 60_000;
       fixture.changed = [{ ...tomorrow, status: 'cancelled', created: '2026-10-01T00:00:00Z' }];
       await sweep();
       expect(state.storage.sql.exec("SELECT id FROM task_jobs WHERE origin = 'machine:update_sweep'").toArray().length > 0).toBe(job);
       expect(state.storage.sql.exec('SELECT changes FROM update_cards').toArray()).toHaveLength(1);
+      expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'day_state_seed'").toArray()).toEqual(full ? [{ note: 'seed_capped' }] : []);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

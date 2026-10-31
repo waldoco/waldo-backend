@@ -30,10 +30,11 @@ const owner = async (name: string) => {
   const headers = { cookie: `waldo_console=${token}`, accept: 'application/json' };
   expect((await stub.fetch(`${root}${CONTROLS_PATH}?view=connections`, { headers })).status).toBe(200);
   const read = (query = '', init: RequestInit = {}) => stub.fetch(`${root}${DASHBOARD_HELD_CHANGES_PATH}${query}`, { headers, ...init });
-  const record = (at: number, changes: readonly Change[], delivered = false, day?: string) => runInDurableObject(stub, (_instance, state) => {
+  const record = (at: number, changes: readonly Change[], reached?: 'delivered' | 'folded', day?: string) => runInDurableObject(stub, (_instance, state) => {
     const book = updateBook(state.storage.sql);
     const id = book.record(day ?? new Date(at).toISOString().slice(0, 10), at, changes, null);
-    if (delivered) book.pushed(id, 'Waldo told you', at);
+    if (reached === 'delivered') book.pushed(id, 'Waldo told you', at);
+    if (reached === 'folded') book.fold(at);
   });
   return { stub, read, record };
 };
@@ -44,8 +45,9 @@ describe('the held-changes read', () => {
     const now = Date.now();
     await o.record(now - 2 * HOUR, [calendar({}, 'changed', { start: '2026-10-20T10:00:00Z', end: '2026-10-20T10:30:00Z', all_day: false, title_changed: false, attendees: 3 })]);
     await o.record(now - HOUR, [mail('Quote for the deck')]);
-    await o.record(now - 30 * 60_000, [calendar({ title: 'Delivered one' })], true);
-    await o.record(now - 25 * HOUR, [calendar({ title: 'Yesterday' })], false, '2000-01-01');
+    await o.record(now - 3 * HOUR, [calendar({ title: 'Folded into a card' })], 'folded');
+    await o.record(now - 30 * 60_000, [calendar({ title: 'Delivered one' })], 'delivered');
+    await o.record(now - 25 * HOUR, [calendar({ title: 'Yesterday' })], undefined, '2000-01-01');
     const response = await o.read();
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
@@ -57,7 +59,7 @@ describe('the held-changes read', () => {
         before: { start: '2026-10-20T10:00:00Z', end: '2026-10-20T10:30:00Z', all_day: false } },
     ] });
     const text = JSON.stringify(body);
-    for (const leak of ['lab results', 'Agenda', 'Hill Road', 'attendees', 'title_changed', 'Delivered one', 'Yesterday', 'e-1', 'm-1']) expect(text).not.toContain(leak);
+    for (const leak of ['lab results', 'Agenda', 'Hill Road', 'attendees', 'title_changed', 'Delivered one', 'Folded into a card', 'Yesterday', 'e-1', 'm-1']) expect(text).not.toContain(leak);
   });
 
   it('withholds a title or subject that carries a health value, and keeps the rest', async () => {

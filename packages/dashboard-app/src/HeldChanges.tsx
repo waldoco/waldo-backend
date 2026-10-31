@@ -15,8 +15,12 @@ export const heldLine = (change: HeldChange, zone: string): string => {
   return was && now && was !== now ? `${title}: moved from ${was} to ${now}` : `${title}: changed${now ? `, now ${now}` : ''}`;
 };
 
-/** What Waldo saw change today and did not bring to you, newest first: a held change waits in the record, not in a message. */
-export function HeldChangesView({ changes, zone }: { changes: readonly HeldChange[]; zone: string }) {
+/**
+ * What Waldo saw change today and did not bring to you, newest first: a held change waits in the record, not in a message.
+ * `changes` null: the read failed, which is said, never shown as nothing held.
+ */
+export function HeldChangesView({ changes, zone }: { changes: readonly HeldChange[] | null; zone: string }) {
+  if (changes === null) return <p className="meta">Couldn’t read what Waldo held back today.</p>;
   if (!changes.length) return null;
   return <div className="held-changes">
     <p className="meta">Seen today, not brought to you</p>

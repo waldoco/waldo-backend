@@ -4,7 +4,8 @@ import { localIso } from './reminders';
 import type { Change } from './update-cards';
 
 // The console Today view's held changes: what the update sweep recorded on the owner's day that never reached them, newest
-// first. A console read, not an app contract. Every field is picked by name: times, the change kind, a calendar title, a mail's
+// first: not sent as an update or applied as a revision (either marks the record delivered) and not folded into a card that went
+// out. A console read, not an app contract. Every field is picked by name: times, the change kind, a calendar title, a mail's
 // sender and subject; never a snippet, description, location or attendee. A field that carries a health value is withheld
 // whole, as a machine brief drops one.
 export const DASHBOARD_HELD_CHANGES_PATH = '/console/dashboard/api/v1/held-changes';
@@ -42,7 +43,7 @@ export const readHeldChanges = (sql: Pick<SqlStorage, 'exec'>, now: number, time
   const day = localIso(now, timezone).slice(0, 10);
   const recorded = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'update_cards'").toArray().length > 0;
   const rows = !recorded ? [] : sql.exec<{ at: number; changes: string }>(
-    "SELECT at, changes FROM update_cards WHERE day = ? AND pushed = 0 AND changes != '[]' ORDER BY at DESC, id DESC LIMIT ?", day, HELD_CHANGES_LIMIT).toArray();
+    "SELECT at, changes FROM update_cards WHERE day = ? AND pushed = 0 AND folded = 0 AND changes != '[]' ORDER BY at DESC, id DESC LIMIT ?", day, HELD_CHANGES_LIMIT).toArray();
   const changes = rows.flatMap(row => (JSON.parse(row.changes) as Change[]).map(change => heldChange(change, new Date(row.at).toISOString())))
     .filter(change => change !== null).slice(0, HELD_CHANGES_LIMIT);
   return heldChangesSchema.parse({ version: 1, as_of: new Date(now).toISOString(), timezone, day, changes });

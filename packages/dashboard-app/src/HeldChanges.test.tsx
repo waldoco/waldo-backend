@@ -20,7 +20,8 @@ describe('held changes on the console\'s Today view', () => {
     expect(heldLine({ source: 'mail', at: AT, kind: 'new', from: 'Asha', subject: null }, 'UTC')).toBe('Mail from Asha: (subject withheld)');
   });
 
-  it('shows nothing when nothing was held', () => {
+  it('shows nothing when nothing was held, and says so when the read failed', () => {
+    expect(renderToStaticMarkup(<HeldChangesView changes={null} zone="UTC"/>)).toContain('Couldn’t read what Waldo held back today.');
     expect(renderToStaticMarkup(<HeldChangesView changes={[]} zone="UTC"/>)).toBe('');
     expect(renderToStaticMarkup(<HeldChangesView changes={[moved]} zone="UTC"/>)).toContain('Seen today, not brought to you');
   });
