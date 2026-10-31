@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHealthResultSchema } from '@waldo/contracts';
+import { getHealthResultSchema, HEALTH_READ_MAX_SESSIONS } from '@waldo/contracts';
 import { md5Hex } from '../src/channels/md5';
 import { getHealthHandler, healthReadBook } from '../src/tools/live/health';
 
@@ -257,6 +257,24 @@ describe('get_health', () => {
       const { data } = await ask(['workouts']);
       expect(data.sessions?.[0]).not.toHaveProperty('avg_hr_bpm');
       expect(data.sessions?.[0]).not.toHaveProperty('max_hr_bpm');
+    });
+    it('lists only the sessions of the days asked for, even when the read returns more', async () => {
+      const { data } = await ask(['workouts'], 'daily', '2026-10-11');
+      expect(data.sessions?.map(entry => [entry.day, entry.activity])).toEqual([['2026-10-11', 'walking'], ['2026-10-12', 'running'], ['2026-10-12', 'swimming']]);
+    });
+    it('keeps the newest sessions up to the cap, so a busy month still reads', async () => {
+      const many = Array.from({ length: HEALTH_READ_MAX_SESSIONS + 1 }, (_, i) => {
+        const day = `2026-10-1${i % 3}`;
+        return session(day, 20, 'running', undefined, `${day}T${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`);
+      });
+      const { handler } = fake({ series: { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: many }] } });
+      const result = await handler.handle({ signals: ['workouts'], from: '2026-10-10', to: '2026-10-12', aggregation: 'daily' }, ctx);
+      if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+      const data = getHealthResultSchema.parse(result.data) as Extract<ReturnType<typeof getHealthResultSchema.parse>, { state: 'available' }>;
+      // 34 sessions on the 10th, 34 on the 11th, 33 on the 12th: the one dropped is the oldest.
+      expect(data.sessions).toHaveLength(HEALTH_READ_MAX_SESSIONS);
+      expect(data.sessions?.filter(entry => entry.day === '2026-10-10')).toHaveLength(33);
+      expect(data.sessions?.filter(entry => entry.day === '2026-10-12')).toHaveLength(33);
     });
     it('lists no sessions for a summary or when workouts were not asked', async () => {
       expect((await ask(['workouts'], 'summary')).data).not.toHaveProperty('sessions');

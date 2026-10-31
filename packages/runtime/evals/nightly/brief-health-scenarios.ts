@@ -48,7 +48,7 @@ const noCard = none(['calendar.change.proposed', 'mail.draft', 'mail.send.propos
 
 const PROMPT_LINES = {
   planWithBody: 'Plan with their body only when this request carries their shared health context, and in its words.',
-  silentWithout: 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score.',
+  silentWithout: 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.',
   clash: 'When the calendar asks a lot of them on a day their Form or Recovery is low, that clash is the read of the day: say it plainly, and offer the one change that would ease it most.',
   offerOnly: 'You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it',
   noteWorthIt: 'write it only when hearing it now, rather than at the next main card, would change how they spend today. Otherwise return no_op.',

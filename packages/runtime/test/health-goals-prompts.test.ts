@@ -26,6 +26,13 @@ describe('stated goals in the day\'s runs', () => {
     }
   });
 
+  it('without shared health, a card names a health goal as not readable today rather than staying silent or guessing', () => {
+    for (const card of DAY_CARDS) {
+      const prompt = dayCardPrompt(card, '2026-10-21T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
+      expect(prompt, card.id).toContain('When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.');
+    }
+  });
+
   it('the health trigger and the health note weigh a change against the owner\'s goals, and never invent one', () => {
     const view = healthTriggerView(ROW as never, NOW, TZ);
     expect(view).not.toBeNull();
