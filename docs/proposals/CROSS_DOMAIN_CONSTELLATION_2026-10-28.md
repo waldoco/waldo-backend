@@ -111,6 +111,19 @@ a woven node that would also confirm the cited mail and calendar claims, which t
 | B | Every support, as today | Yes | Zero code, but one tap silently promotes stranger-written claims to the owner's word. **Rejected:** it breaks "memory is correctable context, not permission". |
 | C | Its own claim only | No, while any cited claim is untrusted | Zero extra code, but the owner confirms and still sees nothing change in chat. That is a dead end (DS/11). |
 
+**D5-b resolved (30 Oct 2026, owner rulings O3 and O7; memory redesign §2):** option A, generalised from woven nodes to every
+node. `node.confirm` grounds no support. It writes one `node_statement` claim whose text is the node's current
+`label: summary`, with `source: 'confirmed'`, `origin: 'owner'` and `source_ref: node:<id>:<surface>:node.confirm`, and the
+node cites it. Every node, whatever its supports, is confirmed only while it cites a live statement whose text equals its
+current wording: the wording is Waldo's until the owner says yes to it, even over notes the owner stated or confirmed one by
+one, so no path (the nightly promotion included) launders per-note confirms into a confirmed pattern. A node with any
+outside-born support (origin `untrusted`, or a `welcome:` ref) enters the every-turn block only once confirmed. A nightly
+re-save that keeps the wording keeps the statement cited; a rewrite drops the statement and the node goes back to Waldo's
+read. The owner's own correction is their yes to the new wording. The statement is never listed, recalled, pinned, shown to the nightly model or counted as promotion evidence, and
+it goes with its node on forget or correction. Nodes confirmed before this change keep confirmed only when a support carries
+the pattern's own confirm marker (`confirmed: owner, app:node.confirm` or `console:node.confirm`); those confirmed note by note,
+or never confirmed and resting on the owner's own words, go back to Waldo's read.
+
 ### Trust and origin rules, summarized
 
 - A woven node is never more trusted than its weakest citation until the owner confirms **it**.

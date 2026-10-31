@@ -30,7 +30,7 @@ type GraphCall = Record<string, unknown> & { type?: string; status?: string; con
 
 beforeEach(() => { model.requests = []; model.react = null; });
 
-const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string, unknown>[]) => Promise<void>, graph: GraphCall[]) => Promise<void>) =>
+const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string, unknown>[]) => Promise<void>, graph: GraphCall[], owner: OwnerDO) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
@@ -68,7 +68,7 @@ const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string,
       expect(response.status).toBe(200);
       await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
     };
-    try { await run(deliver, graph); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
+    try { await run(deliver, graph, instance); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 
 const sends = (graph: readonly GraphCall[]) => graph.filter(call => call.status !== 'read');
@@ -149,5 +149,21 @@ it('a static sticker is read as an image and an animated one gets the honest uns
     await deliver({ id: 'wamid.animated', type: 'sticker', sticker: { id: 'media-animated', mime_type: 'image/webp', animated: true } });
     expect(turns().length).toBe(before);
     expect(sends(graph).some(call => /can read text, photos, documents and voice notes/.test(call.text?.body ?? ''))).toBe(true);
+  });
+}, 60_000);
+
+it('a message the delivery outbox sent (an app message copied to WhatsApp, a Brief, a reminder) can be reacted to and swipe-replied to', async () => {
+  await whatsappOwner('wa-outbox-react', async (deliver, graph, owner) => {
+    await deliver(text('hi', 'wamid.hi'));
+    await (owner as unknown as { queueWhatsAppCopy(id: string, text: string, appAt: number): Promise<void> }).queueWhatsAppCopy('wa-copy:brief', 'Three meetings today; the 4pm moved to 5.', Date.now());
+    // Queued records fall due 250 ms after they are written; the owner's next message releases what is due.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await deliver(text('ok', 'wamid.ok'));
+    const copyId = `wamid.out.${graph.findIndex(call => call.text?.body.startsWith('Three meetings')) + 1}`;
+    expect(copyId).not.toBe('wamid.out.0');
+    await deliver({ id: 'wamid.react.copy', type: 'reaction', reaction: { message_id: copyId, emoji: '🙏' } });
+    await deliver(text('can you push the 5pm too?', 'wamid.reply.copy', { from: '15550009999', id: copyId }));
+    expect(lastMessage()).toContain('[Owner reacted 🙏 to your message: \\"Three meetings today; the 4pm moved to 5.');
+    expect(lastTurn()).toContain('Transport-observed author: waldo; forwarded: false.');
   });
 }, 60_000);

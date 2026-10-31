@@ -11,7 +11,7 @@ import { persistInboxWake } from '../src/scheduler/alarm-slot';
 // An app turn runs the same reviewed skill book as a Telegram turn: the catalog is in the system prompt, skills_load
 // works, and the owner's lifecycle state (one custody key) is shared across surfaces.
 const DAY_BRIEF = CURATED_SKILLS.find(skill => skill.name === 'day-brief')!;
-const CATALOG_LINE = 'Reviewed skill catalog (metadata only)';
+const CATALOG_LINE = 'Reviewed skills (metadata only)';
 const REPLY = 'Prepared with the day brief.';
 const model = vi.hoisted(() => ({ systems: [] as string[], tools: [] as string[][], step: 0 }));
 vi.mock('../src/channels/telegram-turn', async load => {
