@@ -9,6 +9,7 @@ import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import type { IMessageResult } from '@waldo/contracts';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
@@ -79,13 +80,13 @@ async function world() {
     expect((await host.capabilities()).status).toBe(200);
   };
   const threaded = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().map(record => record.replyTo !== undefined));
+  const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().map(record => record.result?.state ?? record.state));
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records().map(record => record.state));
-  return { host, pump, handOver, activate, inbox, threaded };
+  return { host, pump, handOver, activate, inbox, threaded, outcomes };
 }
 
-it('queues B behind a running A: no steer reaches A, A is not interrupted, and each message gets its own reply, A first', async () => {
-  const w = await world();
-  await w.activate();
+// The owner sends A, then B while A's turn is held on its first model call; A is released and both turns run.
+async function twoInARow(w: Awaited<ReturnType<typeof world>>) {
   // The hold polls a flag rather than awaiting a promise the test resolves: workerd forbids settling another object's I/O.
   const gate = { held: false, open: false };
   proof.before.push(async () => { gate.held = true; while (!gate.open) await new Promise(resolve => setTimeout(resolve, 10)); });
@@ -102,6 +103,21 @@ it('queues B behind a running A: no steer reaches A, A is not interrupted, and e
   await vi.waitFor(async () => expect((await w.inbox())[0]).toBe('completed'), { timeout: 10_000, interval: 20 });
   await w.pump();
   expect(await w.inbox()).toEqual(['completed', 'completed']);
+}
+// The host takes one delivery and answers it; the bridge's next delivery waits on the outbox's busy retry.
+async function answer(w: Awaited<ReturnType<typeof world>>, result?: (command: { commandId: string; target: unknown }) => IMessageResult) {
+  const { delivery } = await w.host.pull();
+  const command = JSON.parse(delivery!.body) as { commandId: string; target: unknown };
+  expect((await w.host.postResult(delivery!, result ? result(command) : await w.host.execute(delivery!))).status).toBe(200);
+  await new Promise(resolve => setTimeout(resolve, IMESSAGE_BUSY_RETRY_MS + 100));
+  await w.pump(2);
+  return delivery!.body;
+}
+
+it('queues B behind a running A: no steer reaches A, A is not interrupted, and each message gets its own reply, A first', async () => {
+  const w = await world();
+  await w.activate();
+  await twoInARow(w);
 
   // Two separate turns: A's model input never saw B, and B ran as its own turn after A.
   expect(proof.turns).toHaveLength(2);
@@ -110,17 +126,29 @@ it('queues B behind a running A: no steer reaches A, A is not interrupted, and e
   expect(proof.turns[1]).toContain('Reply to turn 1.');
 
   // Both replies reach the host, in order: B's waits while A's is with the bridge, then goes on the outbox's busy retry.
-  const sent: string[] = [];
-  for (let i = 0; i < 2; i++) {
-    const { delivery } = await w.host.pull();
-    const result = await w.host.execute(delivery!);
-    expect((await w.host.postResult(delivery!, result)).status).toBe(200);
-    sent.push(delivery!.body);
-    await new Promise(resolve => setTimeout(resolve, IMESSAGE_BUSY_RETRY_MS + 100));
-    await w.pump(2);
-  }
+  const sent = [await answer(w), await answer(w)];
   expect(sent[0]).toContain('Reply to turn 1.');
   expect(sent[1]).toContain('Reply to turn 2.');
   // B came in before A was answered, so A's reply is frozen to thread onto A's message; B's, to the latest message, is plain.
   expect(await w.threaded()).toEqual([true, false]);
+}, 30_000);
+
+// Only in this case does A's reply thread onto A's message, so only here does a host that reports verified replies get a
+// threaded send. A host that then refuses it (on Photon: the target message cannot be resolved) settles A's reply for good:
+// the outbox keeps the first terminal result and never resends it plain. The owner sees B answered and A never answered.
+it('a host that refuses A\'s threaded reply loses A\'s answer for good, while B\'s plain reply goes out', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, true)).status).toBe(200);
+  await twoInARow(w);
+
+  const first = await answer(w, command => ({ version: 1, commandId: command.commandId, target: command.target as IMessageResult['target'], state: 'rejected', disposition: 'not_started', reason: 'photon_target_unavailable' }));
+  expect(first).toContain('Reply to turn 1.');
+  expect((JSON.parse(first) as { target: { messageGuid?: string } }).target.messageGuid).toBeDefined();
+  const second = await answer(w);
+  expect(second).toContain('Reply to turn 2.');
+
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends.map(send => send.text)).toEqual(['Reply to turn 2.']);
+  expect(await w.outcomes()).toEqual(['rejected', 'local_recorded']);
 }, 30_000);
