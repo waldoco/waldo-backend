@@ -63,15 +63,12 @@ export const MAX_CONCURRENT_READS = 4;
 // caller contract for existing child outcome consumers.
 export type LoopExit = 'completed' | 'budget_exhausted' | 'time_exhausted' | 'withdrawn';
 
-// The reply when a turn's budget ends and the model has no words of its own: what ran, and that the rest can continue.
-export const unfinishedReply = (exit: Extract<LoopExit, 'budget_exhausted' | 'time_exhausted'>, done: readonly string[]): string => {
-  const steps = [...new Set(done)].map((name) => name.replaceAll('_', ' '));
-  return [
-    exit === 'time_exhausted' ? 'I ran out of time before finishing this.' : 'I reached the most steps I take in one go before finishing this.',
-    steps.length > 0 ? `Done so far: ${steps.join(', ')}.` : 'I had not finished a step yet.',
-    'The rest is still open; say "continue" and I will pick it up from here.',
-  ].join(' ');
-};
+// The reply when a turn's budget ends and the model has no words of its own: whether it got anywhere, and that a reply
+// carries on. Tool names stay out; any effect it made is on the turn's receipt line.
+export const unfinishedReply = (exit: Extract<LoopExit, 'budget_exhausted' | 'time_exhausted'>, done: readonly string[]): string =>
+  `${exit === 'time_exhausted' ? 'I ran out of time' : 'I reached my limit for one go'}${done.length > 0
+    ? " partway through this. Reply and I'll pick it up from where I stopped."
+    : " before I got anywhere with this. Reply and I'll try again."}`;
 const CLOSING = 'answer now with what you found or did, what is left, and offer to continue';
 export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for the rest of this turn; use what you have or say what you could not read.';
 // For the browse tools, auth_failed is a configuration fact that cannot clear within a turn (no browser binding, the
@@ -297,7 +294,7 @@ export async function runToolLoop(input: Readonly<{
       input.onSettle?.(exit);
       return guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
         ? unfinishedReply(exit, done)
-        : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
+        : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls);
     }
     let firstCall = true;
     roundStarts.push(turns.length);

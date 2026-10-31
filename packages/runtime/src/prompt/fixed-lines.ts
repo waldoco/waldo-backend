@@ -23,6 +23,17 @@ export const retryParkedNotice = (brief: RetryBrief, timezone: string, reason: P
   return `Something kept going wrong while I answered your message from ${said}, so it is still unanswered. Could you send it again?`;
 };
 
+// An owner turn that stopped before it finished, said as retryParkedNotice says its own uncertain stop, naming what to look
+// at. Each keeps what is known: a change may still go through, may already have gone through, or a result was saved unsent.
+const CHANGING = 'anything I was changing for you, such as your calendar, sent mail or reminders';
+export const INTERRUPTED_NOTICES = {
+  unfinished: `I was interrupted partway through your message, so I can't tell what I'd already done about it, and a change I'd started may still go through. Check ${CHANGING} before you send it again.`,
+  stopped: `Stopped. A change I'd already started may still go through, so check ${CHANGING}.`,
+  uncertain: `I was interrupted partway through your message, so I can't tell what I'd already done about it, and some of it may already have gone through. Check ${CHANGING} before you send it again.`,
+  unconfirmed: 'The task ran out of time before I could confirm its result reached you. The result may already be saved privately, so I didn\'t send it unconfirmed or run the work again. Check for that saved result before you ask again.',
+  steer: `I used the message you added, but I was interrupted before I finished, so I can't tell what I'd already done about it, and a change I'd started may still go through. Check ${CHANGING} before you send it again.`,
+} as const;
+
 // Why a task stopped, as the owner hears it.
 export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   crashed: 'it stopped unexpectedly several times',
@@ -56,9 +67,9 @@ export const interruptedReport = (row: Pick<JobRow, 'brief_json'>, timezone: str
   return `I was interrupted while telling you about ${name}, so I can't tell what I'd already done about it. Check before you start it again.`;
 };
 
-// A long task's progress note.
-export const progressNote = (row: Pick<JobRow, 'brief_json' | 'rounds'>, timezone: string): string => {
+// A long task's progress note. A step count is machinery to the owner, and "0 steps" reads as no progress.
+export const progressNote = (row: Pick<JobRow, 'brief_json'>, timezone: string): string => {
   const { title, started } = taskName(row, timezone);
-  const name = title === null ? `the background task you started at ${started}` : `"${title}" in the background`;
-  return `Still working on ${name} (${row.rounds} step${row.rounds === 1 ? '' : 's'} so far). I'll tell you when it's done.`;
+  const name = title === null ? `the background task you started at ${started}` : `"${title}"`;
+  return `Still working on ${name}. I'll tell you when it's done.`;
 };

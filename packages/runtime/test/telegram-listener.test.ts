@@ -65,7 +65,7 @@ describe('TelegramOwnerListener', () => {
 
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async () => { throw new Error('model down'); }, saveOffset: async () => undefined });
     await expect(failing.handle(ownerTyped({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' }))).resolves.toBe('failed');
-    expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'Sorry - I hit a problem answering that. Please try again in a moment.' });
+    expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'I hit a problem answering that. Try again in a moment.' });
   });
 
   it('moves the receipt to a final reaction from the Telegram allowlist when the turn resolves', async () => {
@@ -179,7 +179,7 @@ describe('TelegramOwnerListener', () => {
     finish('late');
     await vi.advanceTimersByTimeAsync(10);
     const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
-    expect(sends).toEqual(['That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.']);
+    expect(sends).toEqual(['That took too long, and anything I had started may still finish. Try again, or split it into smaller asks.']);
   });
 });
 

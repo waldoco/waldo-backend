@@ -373,7 +373,7 @@ describe("today's update cards", () => {
     version: 1, state: 'available', revision, view: 'day',
     data: { timezone: 'Europe/London', date: '2026-10-13', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
   });
-  const update = { message_id: 'entry-9', delivered_at: 1_791_900_000_000, excerpt: 'Update\nThe 3pm review moved to 4pm, so the afternoon block is shorter.' };
+  const update = { message_id: 'entry-9', delivered_at: 1_791_900_000_000, excerpt: 'The 3pm review moved to 4pm, so the afternoon block is shorter.' };
   const updates = (items: object[], total = items.length, checked_at: number | null = 1_791_900_600_000) => ({ updates: { items, total, checked_at } });
   const parses = (extra: object) => appControlProjectionV1Schema.safeParse(day(extra)).success;
 
