@@ -46,10 +46,12 @@ export type OwnerTurnEnvelope = Readonly<{
   // Set by a channel that shows the reply while it is written; absent, the reply is delivered whole as before.
   replyStream?: ReplyStream;
 }>;
+// When a reminder was due and when it fires, in the owner's local time, for the model to judge: one that fires hours late says so.
+export type ReminderTiming = Readonly<{ due: string; now: string; timezone: string }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
-  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
+  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string, timing?: ReminderTiming): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
   // answers the owner's own message late, never for one Waldo starts itself.

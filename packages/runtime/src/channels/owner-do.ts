@@ -100,7 +100,7 @@ import { ownerName, recordSignupName } from '../onboarding/first-run';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS } from './check-back';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -238,7 +238,7 @@ import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './tele
 import { WHATSAPP_RUNNING_CHECK_MS, WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox, redactWhatsAppInboxEntries, type WhatsAppInboxRecord } from './whatsapp-inbox';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { InMemoryCircuitBreaker, type LLMAttempt } from '../llm/provider';
+import { InMemoryCircuitBreaker, ModelUnavailableError, type LLMAttempt } from '../llm/provider';
 import { observeModelAuth } from '../llm/auth-incident';
 import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
@@ -4527,7 +4527,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       };
       try {
-        const text = checkBackReply(await responder.remind(trace, owner, note, time));
+        const timing = { due: localIso(entry.occurrence_at, clock.timezone), now: localIso(Date.now(), clock.timezone), timezone: clock.timezone };
+        // No model on any provider says nothing about the reminder, so the owner still gets it on time: their own note, marked as
+        // sent without the model. The scheduler never retries it, so the row cannot sit quarantined for a day.
+        const text = await responder.remind(trace, owner, note, time, timing).then(checkBackReply, (error: unknown) => {
+          if (!(error instanceof ModelUnavailableError)) throw error;
+          log({ trace, hop: 'reminder_floor', ms: Date.now() - started, ok: true, code: error.reason });
+          return reminderFloorText(note);
+        });
         // The owner may have cancelled it while the turn ran; a silent decision ends the occurrence like a sent one.
         if (text === null || book.note(entry.id) === null) {
           book.fired(entry);
