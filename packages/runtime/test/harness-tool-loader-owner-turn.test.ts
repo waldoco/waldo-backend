@@ -12,6 +12,7 @@ import { claimStore } from '../src/memory/claims';
 import { HARNESS_TOOLS_LINE } from '../src/prompt/messaging-behavior';
 import { FIND_TOOLS, USE_TOOL } from '../src/tools/loader';
 import { ensureSchema } from '../src/tracer/schema';
+import { TOOL_DEFINITION_BUDGET_TOKENS } from './helpers/tool-budget';
 
 // The owner's own app turn on the real owner object, with every Google feature connected so the tool list is the
 // production one. A scripted model records each request; both adapters then build their wire bodies from it with
@@ -221,7 +222,7 @@ describe('the harness tool loader on the owner turn', () => {
     expect(named.filter((cell) => cell.includes(PROBE))).toEqual([]);
   });
 
-  it('measures the tools per round: under 4k tokens on both wires, the catalogue counted', async () => {
+  it('measures the tools per round: within the budget on both wires, the catalogue counted', async () => {
     const off = (await ownerTurns('harness-measure-off', { WALDO_TOOL_SEARCH: 'off' }, ['what is on today?']))[0]![0];
     const on = (await ownerTurns('harness-measure-on', { WALDO_TOOL_LOADER: 'harness' }, ['what is on today?']))[0]![0];
     const openAI = (await openAIBody(on!)).tools as { type: string; name?: string }[];
@@ -238,8 +239,8 @@ describe('the harness tool loader on the owner turn', () => {
     };
     console.log(`HARNESS_TOOL_SURFACE ${JSON.stringify(report)}`);
     expect(functions.map((tool) => tool.name)).toEqual(expect.arrayContaining([FIND_TOOLS, USE_TOOL, 'search_communication', 'query_calendar']));
-    expect(report.openai_tokens_est).toBeLessThan(4_000);
-    expect(report.anthropic_tokens_est).toBeLessThan(4_000);
+    expect(report.openai_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.anthropic_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.system_added_tokens_est).toBeLessThan(1_000);
     expect(report.before_tokens_est).toBeGreaterThan((report.openai_tokens_est + report.system_added_tokens_est) * 3);
   });
