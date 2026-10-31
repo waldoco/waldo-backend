@@ -93,10 +93,11 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
       expect(update).toContain('~640 kcal, estimate');
       expect(update).toContain('run, 37 min');
       // The apply turn holds the sweep's tools (here without source follow-ups: read, and ask on a card), never the owner's
-      // apply list.
+      // apply list. Choosing a reviewed skill reaches nothing, so it is the one addition every job has.
       const offered = ((JSON.parse(update!) as { tools?: { name: string }[] }).tools ?? []).map(tool => tool.name);
       expect(offered).toContain('propose_action');
-      for (const tool of offered) expect(updateSweepTools(false)).toContain(tool);
+      expect(offered).toContain('skills_load');
+      for (const tool of offered.filter(name => name !== 'skills_load')) expect(updateSweepTools(false)).toContain(tool);
       const stored = storedText(state);
       expect(stored).toContain('Changed event');
       expect(stored).not.toContain('640 kcal');

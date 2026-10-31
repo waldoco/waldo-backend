@@ -44,9 +44,9 @@ it('renders the catalog as one line per skill with name, version and description
    expect(line,s.name).toHaveLength(1);
    expect(line[0]).toContain(s.trigger_condition);
   }
-  expect(catalog.startsWith('Reviewed skill catalog (metadata only)')).toBe(true);
+  expect(catalog.startsWith('Reviewed skills (metadata only)')).toBe(true);
   expect(catalog).toContain('skills_load');
-  expect(catalog).toContain('disabled skills cannot load');
+  expect(catalog).toContain('A disabled skill cannot load');
   expect(catalog).not.toContain('{');
   expect(catalog.length).toBeLessThan(JSON.stringify(book.list()).length);
  });

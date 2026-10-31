@@ -173,9 +173,10 @@ describe('TOOL_PERMISSIONS', () => {
         'search_connector',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
-      fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message'],
-      patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action'],
+      fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+      patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
       pre_brief_sweep: [
         'get_crs',
         'get_health',
@@ -191,6 +192,7 @@ describe('TOOL_PERMISSIONS', () => {
         'read_memory',
         'search_episodes',
         'search_connector',
+        'skills_load',
       ],
       handoff_explore: [
         'get_crs',
@@ -213,8 +215,9 @@ describe('TOOL_PERMISSIONS', () => {
         'list_artifacts',
         'read_artifact',
         'search_tools',
+        'skills_load',
       ],
-      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
+      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
       handoff_act: [
         'execute_action',
         'write_task',
@@ -226,6 +229,7 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_schedule',
         'write_sheet_cell',
         'send_message',
+        'skills_load',
       ],
       handoff_replan: [
         'get_crs',
@@ -235,8 +239,9 @@ describe('TOOL_PERMISSIONS', () => {
         'get_tasks',
         'update_task',
         'propose_action',
+        'skills_load',
       ],
-      intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
+      intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
       user_message: [
         'use_mac',
         'get_crs',
@@ -323,7 +328,7 @@ describe('TOOL_PERMISSIONS', () => {
       'record_owner_finding',
       'list_owner_findings',
       ],
-      dreaming_mode: ['read_memory', 'search_episodes'],
+      dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
       pre_activity_spot: [
         'get_crs',
         'query_calendar',
@@ -332,6 +337,7 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_schedule',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
       work_unit_plan: [],
     });
@@ -407,6 +413,10 @@ describe('TOOL_PERMISSIONS', () => {
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('send_message');
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_action');
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_code');
+  });
+
+  it('lets every trigger but the tool-less planner load a reviewed skill', () => {
+    expect(triggerTypeSchema.options.filter(trigger => !TOOL_PERMISSIONS[trigger].includes('skills_load'))).toEqual(['work_unit_plan']);
   });
 
   it('keeps the Outcome-bound planning turn on a literal empty ACL', () => {
