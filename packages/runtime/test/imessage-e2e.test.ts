@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -461,7 +462,7 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
-const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 // Every model call fails, so a retry inside the responder cannot rescue the turn.
 const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
 const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));

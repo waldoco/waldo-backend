@@ -76,6 +76,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_COST_LEDGER_SYNC: inert('cost ledger sync after a turn'),
   AGENT_MAIL_INBOUND: inert('inbound agent mail ingress'),
   AGENT_MAIL_DOMAIN: inert('inbound agent mail ingress'),
+  AGENT_MAIL_ZONE_ID: inert('agent mail routing rules'),
 };
 
 export const unclassifiedVars = (vars: StagingVars): readonly string[] => Object.keys(vars).filter((name) => !(name in STAGING_VAR_CLASSES)).sort();
