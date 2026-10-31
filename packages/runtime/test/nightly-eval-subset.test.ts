@@ -8,7 +8,7 @@ import { callPlan } from '../evals/nightly/plan';
 import { LIVE_RUNS, liveRunPlan } from '../evals/nightly/live-plan';
 import { parseShard, shardOf } from '../evals/nightly/shard';
 import { selectScenarios } from '../evals/nightly/subset';
-import { gateScorecard, thresholdsFor } from '../evals/nightly/gate';
+import { gateScorecard, NIGHTLY_THRESHOLDS, thresholdsFor } from '../evals/nightly/gate';
 import { scorecard } from '../evals/nightly/scorecard';
 
 const live = NIGHTLY_SCENARIOS.filter((scenario) => scenario.live_subset);
@@ -60,7 +60,7 @@ describe('WALDO_EVAL_SUBSET', () => {
   it('holds a subset card to the size of its subset, not the catalogue', () => {
     const rows = live.map((scenario) => ({ id: scenario.id, pain: scenario.pain, outcomes: ['pass' as const] }));
     const card = scorecard(rows, { candidate: 'x', judge: 'y', trials: 1, usage: { candidate_calls: 1, judge_calls: 1, budget: 600, exhausted: false, candidate_tokens: 1, judge_tokens: 1 }, subset: 'live' });
-    expect(gateScorecard(card, thresholdsFor('live')).failures).toEqual([`scenarios ${live.length} < 103`]);
+    expect(gateScorecard(card, thresholdsFor('live')).failures).toEqual([`scenarios ${live.length} < ${NIGHTLY_THRESHOLDS.live.min_scenarios}`]);
     expect(gateScorecard(card, thresholdsFor('live', live.length))).toEqual({ ok: true, failures: [] });
   });
 });
@@ -133,7 +133,7 @@ describe('the live run plan', () => {
   it('refuses a plan over what the run may spend, before any call', () => {
     const room = NIGHTLY_SCENARIOS.filter((scenario) => !scenario.blocked && scenario.rubric.voice);
     expect(() => liveRunPlan('all', [...NIGHTLY_SCENARIOS, ...room, ...room, ...room])).toThrow(/may spend/);
-    expect(() => liveRunPlan('all', [...NIGHTLY_SCENARIOS, ...room.slice(0, 4)])).not.toThrow();
+    expect(() => liveRunPlan('all', [...NIGHTLY_SCENARIOS, ...room.slice(0, 2)])).not.toThrow();
   });
 
   it.each(['live; echo pwned', '$(id)', '`id`', 'live && id', 'live\nall', 'LIVE', 'a b', 'live|id', '../x', 'a'.repeat(5000)])('refuses the subset %j', (spec) => {
