@@ -334,6 +334,8 @@ export const createOwnerResponder = (
     };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
+    // The source pass runs apart from any owner turn, for the nightly run and the daytime pass alike, so its spend is background.
+    const costKind = purpose === 'memory_nightly_sources' ? { cost_kind: 'background' as const } : {};
     // The floor line is answered by no provider: every attempt failed, and the last failure is why the floor ran.
     const floor = result.ok && result.fallback_step === 'template';
     const served = floor ? undefined : result.attempts.at(-1);
@@ -342,9 +344,9 @@ export const createOwnerResponder = (
     const routing = floor
       ? { fallback_fired: true, ...(lastFailure?.outcome === 'failure' ? { error_code: lastFailure.code } : {}) }
       : served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ...costKind, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
+      trace, hop: `llm_${purpose}`, ...costKind, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
       ...(result.tool_search_degraded ? { tool_search_degraded: true, ...(result.tool_search_rejection ? { tool_search_rejection: result.tool_search_rejection } : {}) } : {}),
       ...(response?.ttft_ms === undefined ? {} : { ttft_ms: response.ttft_ms }),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
@@ -355,7 +357,7 @@ export const createOwnerResponder = (
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
-    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt` })) log(entry);
+    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt`, ...costKind })) log(entry);
     if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
       log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
     }
