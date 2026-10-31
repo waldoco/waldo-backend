@@ -15,7 +15,8 @@ export class TelegramRejection extends Error {
 }
 
 // On WhatsApp only: quote_message_id is the owner's message the reply quotes, and turn_reply marks the turn's own reply, the
-// words a later reaction or swipe-reply can name. System sends (sign-in and connect links among them) never carry it.
+// words a later reaction or swipe-reply can name (the delivery outbox's sends are named the same way, by their custody mark).
+// Direct system sends (sign-in and connect links among them) never carry it.
 export type TelegramFinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML'; fallback_text?: string; quote_message_id?: string; turn_reply?: true }>;
 
 export const TELEGRAM_MESSAGE_MAX_CHARS = 4_096;
