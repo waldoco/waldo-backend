@@ -126,6 +126,7 @@ Expected effect [inference]: about 2–3 rounds for this question, about 15 s le
 
 - `WALDO_TOOL_LOADER=harness` turns the loader on, and it wins over `WALDO_TOOL_SEARCH`.
 - `off`, or unset, is the rollback: the turn goes back to the full menu, or to hosted search if that flag is `on`. Nothing stored changes.
+- `WALDO_LOADER_CARRY=on`, with the harness loader, appends to the next owner message the definitions of the deferred tools the owner's previous turn used or loaded (`carriedToolBlock`, `src/tools/loader.ts`). It rides the message, never the offered list or the system prompt, so the cached prefix is unchanged, and the offered list plus the block stay within 4,200 estimated tokens: the offered list is about 3,700, so the block holds roughly 400 tokens, a few small tools. A turn that read outside text, or a tool no longer admitted, carries nothing. The record is in the owner object's memory; losing it costs one `find_tools` round. Unset or `off` is the rollback.
 
 Open owner/gate decisions:
 

@@ -15,7 +15,7 @@ import {
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
-import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
+import { runToolLoop, toolDefinitions, type ToolLoopEvent } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
@@ -37,7 +37,7 @@ import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observe
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, toolActivity, toolsWhere } from '../tools/records';
-import { FIND_TOOLS, harnessToolLoader } from '../tools/loader';
+import { carriedToolBlock, FIND_TOOLS, harnessToolLoader, isDeferredTool, namesLoadedBy } from '../tools/loader';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -214,6 +214,8 @@ export const createOwnerResponder = (
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
   const access = ownerModelAccess(modelAccess);
   const harnessLoader = access.toolLoader === 'harness';
+  // The deferred tools each chain's last clean owner turn loaded or used (tools/loader.ts carriedToolBlock): the next owner turn's message carries their definitions.
+  const loaderCarry = harnessLoader ? access.loaderCarry : undefined;
   const providerSearch = access.toolSearch === true && !harnessLoader;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
@@ -547,7 +549,16 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       const loopCtx = { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
-      return runToolLoop({
+      // Carry-over reads and writes the book only for the owner's own turn that has read nothing someone else wrote; the turn
+      // that follows one that did starts from nothing carried, and the admitted tools below are this turn's own, so a tool no
+      // longer admitted is never shown.
+      const carryKey = windowingRef;
+      const carrying = loaderCarry !== undefined && ownerTurnActive && !probeGuard?.stripLiveTools && !readOthersWords();
+      const admitted = carrying ? toolDefinitions(turnHandlers) : [];
+      const carriedText = carrying ? carriedToolBlock(admitted, loaderCarry.get(carryKey)).text : '';
+      const usedNow: string[] = [];
+      const loadedNow: string[] = [];
+      const looped = await runToolLoop({
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
@@ -642,7 +653,8 @@ export const createOwnerResponder = (
           const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
             const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) : '')
               + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
-              + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
+              + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '')
+              + carriedText;
             const turnPrompt = assembleTurnPrompt({
               instructions,
               facts: {
@@ -690,6 +702,10 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           // Loaded definitions are the turn's own catalogue: no receipt, and nothing a later turn should read back as a result.
           const loaded = event.call.name === FIND_TOOLS;
+          if (carrying && event.ok) {
+            if (loaded) loadedNow.push(...namesLoadedBy(admitted, event.call.arguments));
+            else if (isDeferredTool(event.call.name)) usedNow.push(event.call.name);
+          }
           if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), ...(event.blocked ? { blocked_reason: event.blocked } : {}), text: { input: event.call.arguments, output: event.output } });
@@ -698,6 +714,9 @@ export const createOwnerResponder = (
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
+      // What a turn used comes first, so a tight block keeps it; a turn that read outside words carries nothing on.
+      if (carrying) loaderCarry.set(carryKey, loopCtx.toolArgSourceTaint === 'external' ? [] : [...new Set([...usedNow, ...loadedNow])]);
+      return looped;
     },
   }, tree, undefined, pathObservers, compaction);
   const conversationLeaves = new Map<string, string>();
