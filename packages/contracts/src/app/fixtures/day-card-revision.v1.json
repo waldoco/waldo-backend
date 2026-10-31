@@ -1,0 +1,23 @@
+{
+  "notes": [
+    "Send x-waldo-app-contract: controls=9 to receive revision and revised_at on a day card; a build below 9 never receives them.",
+    "Waldo may revise a day card it already delivered when the owner's day changes (a meeting moves, a cancellation frees time). A revision is a new Main chat row; the original row stays in the chat and in day history.",
+    "revision counts the revisions delivered today (1 for the first). revised_at is when the latest one was delivered, epoch ms. Show it as \"updated HH:MM\" in the owner's zone. Both are present or both absent.",
+    "At controls=9 a revised card's latest names its newest revision's row, so the excerpt is the revised text; below 9 latest stays the original delivery.",
+    "A push with data.trigger \"update\" says the day changed. It may carry card_ref (\"card:brief\", \"card:midday\" or \"card:close\"): open that card. Without card_ref, open Main chat."
+  ],
+  "day": {
+    "version": 1, "state": "available", "view": "day", "revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "data": {
+      "timezone": "Asia/Kolkata", "date": "2026-10-31",
+      "cards": [{
+        "id": "card:brief", "name": "Brief", "defaultTime": "07:30", "time": "07:30", "reason": "default", "sent": true, "pin": null,
+        "latest": { "message_id": "row-2", "delivered_at": 1793418000000, "excerpt": "Update to your Brief: the 15:00 sync moved to 17:00, so the afternoon is free until then." },
+        "state": "sent", "revision": 1, "revised_at": 1793418000000
+      }],
+      "proactivity": { "quiet_start": null, "quiet_end": null, "volume": "normal" },
+      "schedules": { "daily_brief": true, "followups": true, "event_briefs": true, "nightly": true, "heartbeat": true }
+    }
+  },
+  "push": { "trigger": "update", "card_ref": "card:brief" }
+}
