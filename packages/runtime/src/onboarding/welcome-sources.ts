@@ -172,12 +172,24 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
   return settled(findings.page(1).total > 0 ? 'done' : 'empty');
 };
 
-// Whether a stage's source is there now, for a stage that settled skipped: a cheap check, no read of the source itself.
-export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'> }>) =>
+// A few signals any wearable sends, enough to tell whether a reading has landed in the welcome window.
+const LANDED_SIGNALS = ['sleep_duration', 'resting_heart_rate', 'steps_window', 'workout'];
+const healthLanded = async (book: HealthReadBook, granted: ReadonlySet<string>, timezone: string, now: number): Promise<boolean> => {
+  const to = localDayOf(new Date(now), timezone);
+  const parsed = parseSeries(await book.series({ from: shiftDay(to, -(WELCOME_HEALTH_DAYS - 1)), to, signals: LANDED_SIGNALS }));
+  return parsed.kind === 'series' && parsed.series.sources.some((source) => HEALTH_SOURCES[source.source] !== undefined && granted.has(source.source) && source.readings.length > 0);
+};
+
+// Whether a waiting stage's source is there now: a cheap check, and for health whether a reading has landed to build from.
+export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'>; now(): number; timezone(): string }>) =>
   async (stage: WelcomeStage): Promise<boolean> => {
     const accounts = async (wants: (account: Account) => boolean) => ((await deps.google.state?.()) ?? []).some((account) => wants(account) && account.error === null);
     switch (stage) {
-      case 'health': return deps.healthMemory() && (await deps.healthRead.consent()).kind === 'granted';
+      case 'health': {
+        if (!deps.healthMemory()) return false;
+        const consent = await deps.healthRead.consent();
+        return consent.kind === 'granted' && healthLanded(deps.healthRead, consent.sources, deps.timezone(), deps.now());
+      }
       case 'calendar': return accounts((account) => account.calendar || account.tasks);
       case 'mail': return accounts((account) => account.mail);
       case 'web': { const findings = deps.findings(); return findings.offered() && findings.lookup() === 'granted'; }

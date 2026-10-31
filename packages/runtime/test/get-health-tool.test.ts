@@ -214,4 +214,60 @@ describe('get_health', () => {
       expect(signals && signals.length).toBeGreaterThan(10);
     });
   });
+
+  // Health contract revision 5: what a coach reads. Every value is synthetic.
+  describe('coach reads', () => {
+    const session = (day: string, minutes: number, activity: string, workout?: Record<string, unknown>, start = `${day}T01:00:00Z`) =>
+      reading('workout', day, minutes, { activity, start_at: start, end_at: `${day}T02:00:00Z`, ...(workout ? { workout } : {}) });
+    const full = { energy_kcal: 640, distance_m: 12400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181,
+      hr_zones: { basis: 'heart_rate_reserve', lower_bounds_bpm: [120, 136, 151, 166], seconds: [300, 900, 1500, 600, 180] },
+      effort: { score: 7, method: 'rated' }, running: { power_w: 285, cadence_spm: 176 } };
+    const coach = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      session('2026-10-12', 58, 'running', full),
+      session('2026-10-12', 40, 'swimming', { distance_m: 2000, swimming: { strokes: 1480 } }, '2026-10-12T11:00:00Z'),
+      session('2026-10-11', 30, 'walking'),
+      session('2026-10-10', 45, 'cycling', { avg_hr_bpm: 170, max_hr_bpm: 150, distance_m: 30000 }),
+      reading('body_mass', '2026-10-12', 72.4, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('body_mass', '2026-10-11', 72.9, { start_at: '2026-10-11T01:30:00Z', end_at: '2026-10-11T01:30:00Z' }),
+      reading('body_fat_percentage', '2026-10-12', 14.2, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('lean_body_mass', '2026-10-12', 61.9, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 1, { start_at: '2026-10-12T03:30:00Z', end_at: '2026-10-12T04:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 0, { start_at: '2026-10-12T04:30:00Z', end_at: '2026-10-12T05:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 1, { start_at: '2026-10-12T05:30:00Z', end_at: '2026-10-12T06:30:00Z' }),
+    ] }] };
+    const ask = async (signals: string[], aggregation: 'daily' | 'summary' = 'daily', from = '2026-10-10') => {
+      const { calls, handler } = fake({ series: coach });
+      const result = await handler.handle({ signals: signals as never, from, to: '2026-10-12', aggregation }, ctx);
+      if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+      return { calls, data: getHealthResultSchema.parse(result.data) as Extract<ReturnType<typeof getHealthResultSchema.parse>, { state: 'available' }> };
+    };
+
+    it('lists each workout session with what the watch measured, oldest first, beside the daily minutes', async () => {
+      const { data } = await ask(['workouts']);
+      expect(data.signals.map(entry => entry.days?.map(day => day.value))).toEqual([[45, 30, 98]]);
+      expect(data.sessions).toEqual([
+        { day: '2026-10-10', activity: 'cycling', minutes: 45, distance_m: 30000 },
+        { day: '2026-10-11', activity: 'walking', minutes: 30 },
+        { day: '2026-10-12', activity: 'running', minutes: 58, energy_kcal: 640, distance_m: 12400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181,
+          zone_minutes: [5, 15, 25, 10, 3], effort: { score: 7, method: 'rated' }, running: { power_w: 285, cadence_spm: 176 } },
+        { day: '2026-10-12', activity: 'swimming', minutes: 40, distance_m: 2000, swimming: { strokes: 1480 } },
+      ]);
+    });
+    it('drops a session part that cannot be one session (an average above the maximum), never the session', async () => {
+      const { data } = await ask(['workouts']);
+      expect(data.sessions?.[0]).not.toHaveProperty('avg_hr_bpm');
+      expect(data.sessions?.[0]).not.toHaveProperty('max_hr_bpm');
+    });
+    it('lists no sessions for a summary or when workouts were not asked', async () => {
+      expect((await ask(['workouts'], 'summary')).data).not.toHaveProperty('sessions');
+      expect((await ask(['body_mass'])).data).not.toHaveProperty('sessions');
+    });
+    it('gives body mass, body fat and lean mass as the day\'s newest reading, and stand hours as a day count', async () => {
+      const { data, calls } = await ask(['body_mass', 'body_fat', 'lean_body_mass', 'stand_hours'], 'daily', '2026-10-12');
+      expect(data.signals.map(entry => [entry.signal, entry.unit, entry.days?.[0]?.value])).toEqual([
+        ['body_mass', 'kg', 72.4], ['body_fat', 'percent', 14.2], ['lean_body_mass', 'kg', 61.9], ['stand_hours', 'count', 2],
+      ]);
+      expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour']);
+    });
+  });
 });

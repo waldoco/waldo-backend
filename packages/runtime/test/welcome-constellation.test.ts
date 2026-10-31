@@ -593,6 +593,33 @@ describe('welcome build: a source connected after setup', () => {
     });
   });
 
+  it('health that settled empty before the phone\'s first readings arrived is taken up once when they arrive; no other empty stage is', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0, synced = false;
+      const empty = async (): Promise<StageInput> => ({ kind: 'settled', state: 'empty' });
+      const probes: WelcomeStage[] = [];
+      const { asked, deps: d } = deps(sql, transaction, {
+        now: () => now,
+        read: { health: () => synced ? Promise.resolve(input(['apple_health'], ['sleep_midpoint'])) : empty(), calendar: skipped, mail: skipped, web: empty, setup: skipped },
+        available: async (stage) => { probes.push(stage); return synced && stage === 'health'; },
+        answers: { health: answer(healthNode()) },
+      });
+      welcomeBuild(sql, () => now).start();
+      await runWelcome({ ...d, build: welcomeBuild(sql, () => now) });
+      expect(welcomeBuild(sql, () => now).view()).toMatchObject({ state: 'done', stages: { health: 'empty', web: 'empty' } });
+      now += WELCOME_RECHECK_MS;
+      await runWelcome({ ...d, build: welcomeBuild(sql, () => now) });
+      expect(probes).toContain('health');
+      expect(probes).not.toContain('web');
+      expect(asked).toEqual([]);
+      synced = true; now += WELCOME_RECHECK_MS;
+      await runWelcome({ ...d, build: welcomeBuild(sql, () => now) });
+      expect(asked).toEqual(['health']);
+      expect(welcomeBuild(sql, () => now).view()).toMatchObject({ state: 'done', stages: { health: 'done', web: 'empty' } });
+      expect(welcomeBuild(sql, () => now).reopenable()).not.toContain('health');
+    });
+  });
+
   it('a check that fails reopens nothing', async () => {
     await withSql(async (sql, transaction) => {
       let now = T0;

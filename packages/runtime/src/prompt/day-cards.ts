@@ -70,6 +70,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   `<today>\n${context.today || '(no conversation yet today)'}\n</today>`,
   ...(context.updates ? [updatesSection(context.updates)] : []),
   card.instruction,
+  "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
   BODY_RULE[card.body],
   `Format it as a compact card for chat: a first line naming "${card.name}", then short sections. Keep it tight enough to read in 20 seconds.`,
 ].join('\n\n');
