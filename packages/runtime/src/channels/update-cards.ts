@@ -9,8 +9,11 @@ const LAST_SEEN_KEPT_MS = 14 * DAY_MS;
 // current times, so a meeting moved out of the next two days is otherwise never seen.
 const DAY_STATE_BACK_MS = DAY_MS;
 const DAY_STATE_AHEAD_MS = 14 * DAY_MS;
-// A kept event moved past the two weeks is read in the year after them: Google returns only what changed since the last read,
-// and the sweep keeps only those it saw before.
+// A kept event moved out of that window, ahead or into the past, is read in the year either side of it: Google returns only
+// what changed since the last read, and the sweep keeps only events it saw before. One now before the window counts only if it
+// was last seen inside it, so a meeting that aged out and was then edited (a late reply, a note) is not news. Never seen: a
+// move more than a year either side of the window, and a move of an event no read has kept (one past the day's SEED_EVENTS
+// that has not changed since).
 const MOVED_OUT_MS = 366 * DAY_MS;
 // The events the once-a-day read keeps, soonest first.
 const SEED_EVENTS = 250;
@@ -210,8 +213,13 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const [from, to] = dayState ? [now - DAY_STATE_BACK_MS, now + DAY_STATE_AHEAD_MS] : [now, now + 2 * DAY_MS];
   const window = calendarSince === null ? [] : await google.changedEvents(calendarSince, from, to);
   const ids = new Set(window.map(item => item.id));
+  const left = (item: CalendarChange) => {
+    const last = book.lastSeen(item.id);
+    const beforeWindow = Date.parse(item.end) <= from;
+    return last !== null && (!beforeWindow || Date.parse(last.end) > from);
+  };
   const movedOut = dayState && calendarSince !== null
-    ? (await google.changedEvents(calendarSince, to, to + MOVED_OUT_MS)).filter(item => !ids.has(item.id) && book.lastSeen(item.id) !== null) : [];
+    ? (await google.changedEvents(calendarSince, from - MOVED_OUT_MS, to + MOVED_OUT_MS)).filter(item => !ids.has(item.id) && left(item)) : [];
   const items = [...window, ...movedOut];
   const calendar = items.map((item) => toChange(item, calendarSince!));
   const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];

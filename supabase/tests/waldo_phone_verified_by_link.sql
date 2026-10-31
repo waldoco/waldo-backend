@@ -43,33 +43,33 @@ select is(pg_temp.live('imessage', '+15550001111'), 'do-vera', 'the handle is li
 select ok(pg_temp.verified('do-vera'), 'and her number is verified');
 select is(pg_temp.console_view('do-vera')->'phone_verified', 'true'::jsonb, 'and the console reads it as verified');
 
--- A code sent from anything else still links that handle, as before, but proves nothing about the number on file.
+-- A code sent from an Apple ID email links that handle and proves no number. One sent from another number proves that
+-- number, so an owner with none proven takes it in place of the unproven one typed at sign-up.
 select is(pg_temp.plink('do-wes', 'imessage', pg_temp.h('2')), true, 'wes gets an iMessage link code');
 select isnt(pg_temp.redeem_link(pg_temp.h('2'), 'imessage', 'wes@icloud.test'), null, 'a code sent from an Apple ID email links that handle');
 select ok(not pg_temp.verified('do-wes'), 'but verifies no number');
 select is(pg_temp.plink('do-wes', 'imessage', pg_temp.h('3')), true, 'wes gets another iMessage link code');
 select isnt(pg_temp.redeem_link(pg_temp.h('3'), 'imessage', '+15550009999'), null, 'a code sent from another number links that number');
-select ok(not pg_temp.verified('do-wes'), 'but does not verify the number on file');
+select ok(pg_temp.verified('do-wes') and (select phone from waldo.owners where do_name = 'do-wes') = '+15550009999', 'and makes it his number, proven, in place of the one he typed');
 
--- WhatsApp: the subject is the number's digits. The code from the number on file verifies it before the presence is
--- written, so the presence rule that wants a verified number admits it.
+-- WhatsApp: the subject is the number's digits. An owner with a proven number links WhatsApp from any number of theirs;
+-- the proven number stays as it is.
 select is(pg_temp.plink('do-wes', 'whatsapp', pg_temp.h('4')), true, 'wes gets a WhatsApp link code');
 select isnt(pg_temp.redeem_link(pg_temp.h('4'), 'whatsapp', '15550002222'), null, 'a WhatsApp code from the number on file links');
 select is(pg_temp.live('whatsapp', '15550002222'), 'do-wes', 'the WhatsApp presence is live for wes');
-select ok(pg_temp.verified('do-wes'), 'and his number is verified');
+select ok(pg_temp.verified('do-wes') and (select phone from waldo.owners where do_name = 'do-wes') = '+15550009999', 'and his proven number stays as it was');
 
--- A WhatsApp code from another number still needs a verified number: nothing links, nothing is verified, the code stays.
+-- A WhatsApp code from a number other than the unproven one on file proves the sending number: it becomes ned's, and links.
 select is(pg_temp.plink('do-ned', 'whatsapp', pg_temp.h('5')), true, 'ned gets a WhatsApp link code');
-select throws_ok($$ select pg_temp.redeem_link(pg_temp.h('5'), 'whatsapp', '15550008888') $$, null, 'whatsapp presence requires a verified phone (phone_verified_at is null)',
-  'a WhatsApp code from a number ned does not have on file is refused');
-select ok(not pg_temp.verified('do-ned'), 'ned stays unverified');
-select is(pg_temp.live('whatsapp', '15550008888'), null, 'and that number is not linked');
-select ok(pg_temp.unspent(pg_temp.h('5')), 'the code is not spent');
+select isnt(pg_temp.redeem_link(pg_temp.h('5'), 'whatsapp', '15550008888'), null, 'a WhatsApp code from a number ned does not have on file links');
+select ok(pg_temp.verified('do-ned') and (select phone from waldo.owners where do_name = 'do-ned') = '+15550008888', 'and that number becomes his, proven');
+select is(pg_temp.live('whatsapp', '15550008888'), 'do-ned', 'with WhatsApp live from it');
+select ok(not pg_temp.unspent(pg_temp.h('5')), 'the code is spent');
 
 -- A number already verified for another active owner is not verified again for a second account that typed it.
 select is(pg_temp.plink('do-twin', 'whatsapp', pg_temp.h('6')), true, 'the second account with vera''s number gets a WhatsApp code');
-select throws_ok($$ select pg_temp.redeem_link(pg_temp.h('6'), 'whatsapp', '15550001111') $$, null, 'whatsapp presence requires a verified phone (phone_verified_at is null)',
-  'a code from a number another owner already verified does not verify it here');
+select throws_ok($$ select pg_temp.redeem_link(pg_temp.h('6'), 'whatsapp', '15550001111') $$, '23505', 'phone number held by another owner',
+  'a code from a number another owner already verified does not verify it here, and says why');
 select ok(not pg_temp.verified('do-twin'), 'the second account stays unverified');
 select ok(pg_temp.unspent(pg_temp.h('6')), 'and its code is not spent');
 
