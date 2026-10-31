@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { outsideView } from '../src/memory/outside-view';
 import { recallForTurn, type RecallEpisodes } from '../src/memory/turn-recall';
-import { coreMemory, CORE_ROOM, RECALLED_ROOM, reviewedThrough, selectMemory } from '../src/memory/select-memory';
+import { coreMemory, CORE_ROOM, RECALLED_ROOM, recallWithin, reviewedThrough, SEMANTIC_DEADLINE_MS, selectMemory } from '../src/memory/select-memory';
+import { EMBED_TIMEOUT_MS } from '../src/memory/semantic-recall';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { memoryHandlers } from '../src/tools/live/memory';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
 
 // Option B of the memory redesign: the core holds the model's pins, what the owner said since memory was last reviewed and a
 // count of the rest by area; recall gives full lines, then stubs the model opens with read_memory({ ids }). Synthetic only.
@@ -106,6 +108,25 @@ describe('recall with stubs', () => {
     });
   });
 
+  it('never cuts a stub inside a word, so a number is shown whole or not at all', async () => {
+    // The room where the full line no longer fits and its stub stands in for it.
+    const stubOf = async (store: ClaimStore, question: string) => {
+      for (let room = 1_200; room > 0; room -= 10) {
+        const line = (await recallForTurn({ claims: store, question, room, holds: () => false, stubs: true })).text.split('\n').find((text) => text.includes(' stub · '));
+        if (line) return line;
+      }
+      throw new Error('no stub');
+    };
+    await inOwner(async (store) => {
+      said(store, 'Pulse note: the resting reading after the long run came to 145 beats, then eased', BEFORE);
+      expect(await stubOf(store, 'pulse resting reading')).toMatch(/\] Pulse note: the resting reading after the long run came to…$/);
+    });
+    await inOwner(async (store) => {
+      said(store, `Locker${'x'.repeat(50)}c12345 opens it`, BEFORE);
+      expect(await stubOf(store, 'opens it')).toMatch(new RegExp(`\\] Locker${'x'.repeat(50)}c…$`));
+    });
+  });
+
   it('gives an outside-content job no health note, as a line or a stub', async () => {
     await inOwner(async (store) => {
       for (let index = 0; index < 16; index += 1) said(store, `Pulse note ${index}: heart feels fine after cardio`, BEFORE, { kind: 'health' });
@@ -140,6 +161,17 @@ describe('selectMemory', () => {
       expect(selected.recalled).toBe('');
       expect(selected.failed).toEqual(['episodes']);
       expect(selected.core).toContain('Dr Rao');
+    });
+  });
+
+  it('a slow embedding fails only the meaning leg: the lines found by words still come back', async () => {
+    await inOwner(async (store) => {
+      said(store, 'The owner\'s dentist, Dr Rao, sees them on Tuesdays', BEFORE);
+      // As workersAiEmbedder does: the call gives up on its own timer.
+      const semantic = () => new Promise<readonly number[]>((_, reject) => setTimeout(() => reject(new Error('embedding timed out')), EMBED_TIMEOUT_MS));
+      const recalled = await recallWithin({ claims: store, question: 'which day is my dentist', room: RECALLED_ROOM, holds: () => false, stubs: true, semantic }, SEMANTIC_DEADLINE_MS);
+      expect(recalled.failed).toEqual(['semantic']);
+      expect(recalled.text).toContain('Dr Rao');
     });
   });
 
@@ -195,6 +227,26 @@ describe('the owner turn, with MEMORY_SELECTION on and off', () => {
       const toolless = await turnContext(store, true, 'what did the dentist say');
       expect(toolless).toContain('<owner_new>');
       expect(toolless).not.toMatch(/ stub · |c12 stub/);
+    });
+  });
+
+  it('gives the background decision, which runs with no tools, the core and full recall lines but no stub', async () => {
+    await inOwner(async (store) => {
+      said(store, 'The owner moved the grocery run to Thursdays', AFTER);
+      for (let index = 0; index < 16; index += 1) said(store, `Dentist note ${index}: the clinic on Park Road keeps a waiting list, and this note is long enough to be cut`, BEFORE);
+      const sent: string[] = [];
+      const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+        sent.push(String(request.messages.at(-1)?.content ?? ''));
+        return { ok: true, data: { model: request.model, text: '{"kind":"no_op","text":""}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+      } };
+      const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+      args[2] = store; args[10] = gateway; args[21] = { memorySelection: { reviewed: () => MARK } };
+      await createOwnerResponder(...args).prompt('decision-1', 'owner', '[Meeting prep decision] Dentist on Park Road today?', async (_hop, work) => work(), 'telegram', [], async () => undefined, CALENDAR_PREP_FORMAT);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('<owner_new>');
+      expect(sent[0]).toContain('Dentist note 15');
+      expect(sent[0]).not.toMatch(/ stub · /);
+      expect(sent[0]).not.toContain('read_memory and its ids');
     });
   });
 });

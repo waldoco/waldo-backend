@@ -64,9 +64,10 @@ export const coreMemory = (store: ClaimStore, room: number, reviewed: Reviewed):
 
 // MEMORY_SELECTION=1: the owner turn shows option B, judging what is new as of this turn.
 export type MemorySelection = Readonly<{ reviewed(): Reviewed }>;
-// How long selection waits for recall: the lexical path alone, or one embedding call when the meaning leg is on.
+// How long selection waits for recall: the lexical path alone, or one embedding call when the meaning leg is on. The
+// embedding call gives up on its own timer first, so a slow one fails only that leg and the lines found by words still arrive.
 export const LEXICAL_DEADLINE_MS = 250;
-export const SEMANTIC_DEADLINE_MS = EMBED_TIMEOUT_MS;
+export const SEMANTIC_DEADLINE_MS = EMBED_TIMEOUT_MS + LEXICAL_DEADLINE_MS;
 
 // Recall that misses deadlineMs is left out, and the legs it was waiting on are named.
 export const recallWithin = async (args: Parameters<typeof recallForTurn>[0], deadlineMs: number): Promise<TurnRecall> => {

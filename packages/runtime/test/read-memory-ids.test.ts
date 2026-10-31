@@ -12,7 +12,7 @@ import { memoryHandlers } from '../src/tools/live/memory';
 const AT = '2026-10-31T04:00:00Z';
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 
-const readIds = (name: string, seed: (said: (text: string, kind?: string, origin?: string) => number, memory: ReturnType<typeof claimStore>, sql: SqlStorage) => readonly number[], taint?: 'external') =>
+const readIds = (name: string, seed: (said: Said, memory: ReturnType<typeof claimStore>, sql: SqlStorage) => readonly number[], taint?: 'external') =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
     const said = (text: string, kind = 'fact', origin = 'owner') => {
@@ -35,7 +35,9 @@ const readIds = (name: string, seed: (said: (text: string, kind?: string, origin
     return output.data.claims.map((claim) => claim.text);
   });
 
-const seedAll = (said: (text: string, kind?: string, origin?: string) => number, memory: ReturnType<typeof claimStore>, sql: SqlStorage) => {
+type Said = (text: string, kind?: string, origin?: string) => number;
+// No topic is pending here, so the forget barrier is off and the read_memory handler's own filters are what refuse.
+const seedUnreadable = (said: Said, memory: ReturnType<typeof claimStore>) => {
   const dentist = said('Dentist is Dr Rao on Tuesdays');
   const pulse = said('Pulse runs high after cardio', 'health');
   const untrusted = said('Cafe on 4th Cross has the best latte', 'fact', 'untrusted');
@@ -44,20 +46,27 @@ const seedAll = (said: (text: string, kind?: string, origin?: string) => number,
   const replacement = memory.claims().find((claim) => claim.supersedes_id === old)!.id;
   const forgotten = said('Mr Okafor kept the old deposit');
   memory.forget(forgotten);
-  const held = said('Lotus Hall venue deposit paid in two parts');
-  sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint('Lotus Hall'), 'Lotus Hall', AT);
-  const purging = said('Spare key is with the neighbour');
-  memory.setStatus(purging, 'purging');
   const statement = said('The owner confirmed this pattern', NODE_STATEMENT);
-  return [dentist, pulse, untrusted, old, replacement, forgotten, held, purging, statement, 999];
+  return [dentist, pulse, untrusted, old, replacement, forgotten, statement, 999];
 };
 
 it('opens only what the turn may read, in the order asked, and an unreadable id looks like a missing one', async () => {
-  expect(await readIds('read-memory-ids-owner', seedAll)).toEqual(['Dentist is Dr Rao on Tuesdays', 'Pulse runs high after cardio', 'Gym locker moved to the red door']);
+  expect(await readIds('read-memory-ids-owner', seedUnreadable)).toEqual(['Dentist is Dr Rao on Tuesdays', 'Pulse runs high after cardio', 'Gym locker moved to the red door']);
+});
+
+it('opens nothing held or being purged while a forget is in progress', async () => {
+  expect(await readIds('read-memory-ids-held', (said, memory, sql) => {
+    const kept = said('Dentist is Dr Rao on Tuesdays');
+    const held = said('Lotus Hall venue deposit paid in two parts');
+    sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint('Lotus Hall'), 'Lotus Hall', AT);
+    const purging = said('Spare key is with the neighbour');
+    memory.setStatus(purging, 'purging');
+    return [kept, held, purging];
+  })).toEqual(['Dentist is Dr Rao on Tuesdays']);
 });
 
 it('opens no health note by id in a job built from outside content', async () => {
-  expect(await readIds('read-memory-ids-outside', seedAll, 'external')).toEqual(['Dentist is Dr Rao on Tuesdays', 'Gym locker moved to the red door']);
+  expect(await readIds('read-memory-ids-outside', seedUnreadable, 'external')).toEqual(['Dentist is Dr Rao on Tuesdays', 'Gym locker moved to the red door']);
 });
 
 it('reads an id in this owner\'s store only: the same number in another owner\'s store is that owner\'s claim', async () => {

@@ -65,10 +65,13 @@ const STUB_NOTE = ' A stub (c12 stub) shows only how a note starts; read it whol
 const cutLine = (count: number) => `(${count} more matches did not fit here; read_memory and search_episodes reach them.)`;
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
 const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
-// Code points, so a cut never splits a character.
+// Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
+// word longer than the stub keeps what precedes its digits.
 const stubLine = (claim: Claim) => {
   const text = [...oneLine(claim.text)];
-  return `- [c${claim.id} stub · ${claim.kind}] ${text.slice(0, STUB_CHARS).join('')}${text.length > STUB_CHARS ? '…' : ''}`;
+  const head = text.slice(0, STUB_CHARS).join('');
+  const cut = text.length <= STUB_CHARS || /\s/.test(text[STUB_CHARS]!) ? head : head.replace(/\S+$/, '').trimEnd() || head.replace(/\d+$/, '');
+  return `- [c${claim.id} stub · ${claim.kind}] ${cut.trimEnd()}${text.length > STUB_CHARS ? '…' : ''}`;
 };
 const episodeLine = (hit: EpisodeHit) => `- [${hit.speaker}, ${hit.at?.slice(0, 10) ?? 'undated'}, ref ${hit.ref}] ${oneLine(hit.snippet)}`;
 const OWNER_REF = 'owner, ';
