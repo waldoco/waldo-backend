@@ -213,7 +213,18 @@ it.each(['pass', 'whatsapp', 'mail'] as const)('a held %s lane never holds a Wha
   });
 });
 
+// The owner's day has wakes at fixed local times (the cards at 08:00, 14:00 and 21:30, the nightly pass at 03:00; the test
+// owner's zone is UTC), and the arbiter arms whichever comes first. A test that reads the armed alarm runs its clock from
+// `time` UTC tomorrow, so the real time of day cannot put one of those wakes inside its window, and every alarm it arms is
+// in the real future, where the platform does not run it on its own instance meanwhile.
+const clockAt = (time: string) => {
+  const real = Date.now.bind(Date), start = real();
+  const base = Date.parse(`${new Date(start + 24 * 60 * 60_000).toISOString().slice(0, 10)}T${time}Z`);
+  vi.spyOn(Date, 'now').mockImplementation(() => base + (real() - start));
+};
+
 it('a WhatsApp drain that throws holds no lane and waits 30 seconds, so it neither delays other work nor spins the alarm', async () => {
+  clockAt('11:10:00');
   await harness('whatsapp-second-message-drain-throws', async ({ instance, state }) => {
     expect((await post(instance, 'wamid.throws.A', 'Find me flights to Goa.')).status).toBe(200);
     vi.spyOn(instance as unknown as { drainWhatsApp(): Promise<void> }, 'drainWhatsApp').mockRejectedValue(new Error('storage fault'));
@@ -254,6 +265,7 @@ it('without a WhatsApp transport the waiting row is left alone and wakes again i
 });
 
 it('without a WhatsApp transport a running row cut off by an eviction is left for when the transport returns, and the alarm does not refire at the floor', async () => {
+  clockAt('11:10:00');
   await harness('whatsapp-second-message-no-secret-running', async ({ instance, state, inbox }) => {
     expect((await post(instance, 'wamid.nosecret.cut', 'Find me flights to Goa.')).status).toBe(200);
     // Its turn was running in an instance that is gone, and its wake is already due.
