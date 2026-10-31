@@ -392,15 +392,16 @@ export const createOwnerResponder = (
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
-  const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string): Promise<string> => {
+  const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string, stubs = false): Promise<string> => {
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
     const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
     const args = { claims: memoryFor(source), question: text, room, holds: barrier().holds, ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) };
-    // With memory selection on, recall offers stubs past its full lines and waits no longer than its deadline.
-    const recalled = privateOwner?.memorySelection ? await recallWithin({ ...args, stubs: true }, privateOwner.semanticRecall ? SEMANTIC_DEADLINE_MS : LEXICAL_DEADLINE_MS) : await recallForTurn(args);
+    // With memory selection on, recall waits no longer than its deadline, and offers stubs past its full lines to a call that
+    // can open them with read_memory.
+    const recalled = privateOwner?.memorySelection ? await recallWithin({ ...args, stubs }, privateOwner.semanticRecall ? SEMANTIC_DEADLINE_MS : LEXICAL_DEADLINE_MS) : await recallForTurn(args);
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
@@ -605,7 +606,7 @@ export const createOwnerResponder = (
             };
             // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
             // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
-            const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined) : '';
+            const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined, turnHandlers.some((handler) => handler.name === 'read_memory')) : '';
             // The owner's earlier turns' tool results, newest kept whole within the gate's size, as they stood when this turn
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.

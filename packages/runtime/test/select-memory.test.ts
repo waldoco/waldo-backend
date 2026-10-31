@@ -6,6 +6,7 @@ import { outsideView } from '../src/memory/outside-view';
 import { recallForTurn, type RecallEpisodes } from '../src/memory/turn-recall';
 import { coreMemory, CORE_ROOM, RECALLED_ROOM, reviewedThrough, selectMemory } from '../src/memory/select-memory';
 import { createOwnerResponder } from '../src/channels/owner-turn';
+import { memoryHandlers } from '../src/tools/live/memory';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
 // Option B of the memory redesign: the core holds the model's pins, what the owner said since memory was last reviewed and a
@@ -15,6 +16,9 @@ let sequence = 0;
 const inOwner = <R>(work: (store: ClaimStore) => R | Promise<R>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`select-memory-${sequence++}`)), (_instance, state) =>
     work(claimStore(state.storage.sql, (fn) => state.storage.transactionSync(fn))));
+const inOwnerSql = <R>(work: (store: ClaimStore, sql: SqlStorage) => R | Promise<R>) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`select-memory-${sequence++}`)), (_instance, state) =>
+    work(claimStore(state.storage.sql, (fn) => state.storage.transactionSync(fn)), state.storage.sql));
 const said = (store: ClaimStore, text: string, at: string, extra: Readonly<{ kind?: string; area?: string }> = {}) => {
   store.add({ kind: extra.kind ?? 'fact', text, source: 'stated', evidence: text, origin: 'owner', source_ref: `owner, ${text}`, ...(extra.area ? { area: extra.area } : {}) }, at);
   return store.allClaims().find((claim) => claim.text === text)!.id;
@@ -153,7 +157,7 @@ describe('selectMemory', () => {
 });
 
 describe('the owner turn, with MEMORY_SELECTION on and off', () => {
-  const turnContext = async (store: ClaimStore, selection: boolean, text: string) => {
+  const turnContext = async (store: ClaimStore, selection: boolean, text: string, sql?: SqlStorage) => {
     const requests: LLMGatewayRequest[] = [];
     const gateway: LLMGatewayAdapter = { complete: async (request) => {
       requests.push(request);
@@ -161,18 +165,19 @@ describe('the owner turn, with MEMORY_SELECTION on and off', () => {
     } };
     const args: Parameters<typeof createOwnerResponder> = ['fixture'];
     args[2] = store; args[10] = gateway;
+    if (sql) args[5] = memoryHandlers({ sql, store, conversationRef: 'telegram-1', hideHistory: async () => undefined }) as never;
     if (selection) args[21] = { memorySelection: { reviewed: () => MARK } };
-    await createOwnerResponder(...args).prompt(`turn-${sequence++}`, 'owner', text, async (_hop, work) => work(), 'telegram', []);
+    await createOwnerResponder(...args).prompt(`turn-${sequence++}`, 'owner', text, async (_hop, work) => work(), 'telegram', sql ? ['read_memory'] : []);
     return requests[0]!.request.messages.at(-1)?.content ?? '';
   };
 
   it('shows the pins and the new, not the reviewed, and offers further matches as stubs', async () => {
-    await inOwner(async (store) => {
+    await inOwnerSql(async (store, sql) => {
       store.pin(said(store, 'The owner goes by Sam', BEFORE), 'profile', 1);
       said(store, 'The owner\'s sister lives in Pune', BEFORE, { area: 'people' });
       said(store, 'The owner moved the grocery run to Thursdays', AFTER);
       for (let index = 0; index < 16; index += 1) said(store, `Dentist note ${index}: the clinic on Park Road keeps a waiting list, and this note is long enough to be cut`, BEFORE);
-      const on = await turnContext(store, true, 'what did the dentist say');
+      const on = await turnContext(store, true, 'what did the dentist say', sql);
       expect(on).toContain('<owner_new>');
       expect(on).toContain('grocery run to Thursdays');
       // Reviewed and unpinned, it is not in the core; recall may still offer it, but only as a stub.
@@ -186,6 +191,10 @@ describe('the owner turn, with MEMORY_SELECTION on and off', () => {
       expect(off).toContain('sister lives in Pune');
       expect(off).not.toContain('<owner_new>');
       expect(off).not.toMatch(/ stub · /);
+      // A call that cannot read memory by id gets no stub to open, and no line telling it to.
+      const toolless = await turnContext(store, true, 'what did the dentist say');
+      expect(toolless).toContain('<owner_new>');
+      expect(toolless).not.toMatch(/ stub · |c12 stub/);
     });
   });
 });
