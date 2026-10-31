@@ -177,11 +177,15 @@ describe('DELIVERY_POLICY', () => {
 });
 
 describe('cooldown_scope', () => {
-  it('keeps exactly pre_activity_spot and sync_error event-scoped', () => {
+  it('keeps exactly sync_error event-scoped', () => {
     const eventScoped = pushClassSchema.options.filter(
       (pushClass) => DELIVERY_POLICY[pushClass].cooldown_scope === 'event',
     );
-    expect(eventScoped.sort()).toEqual(['pre_activity_spot', 'sync_error']);
+    expect(eventScoped).toEqual(['sync_error']);
+  });
+
+  it('leaves meeting prep to the model: no daily cap and no cooldown on pre_activity_spot', () => {
+    expect(DELIVERY_POLICY.pre_activity_spot).toMatchObject({ daily_cap: null, cooldown_min: null, quiet_hours: 'hold', budget: 'counted' });
   });
 });
 
