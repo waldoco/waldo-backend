@@ -25,10 +25,22 @@ const answered = <T extends string>(value: unknown, allowed: ReadonlySet<string>
   return value as T;
 };
 
-// Null without a directory. Every call throws when the directory cannot answer.
-export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetcher: typeof fetch = fetch, now = () => Date.now()): AgentMailHandleDirectory | null => {
+// Which of these handles any owner holds; null without a directory. Throws when the directory cannot answer.
+export const agentMailHeldHandles = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): AgentMailRuleDirectory['held'] | null => {
   const call = signedRpc(env, fetcher, now);
   if (!call) return null;
+  return async handles => {
+    if (!handles.length) return new Set();
+    const list = [...handles].sort().join(',');
+    const rows = await call('agent_mail_held_handles', `mailheld.${list}`, { p_handles: list });
+    return new Set(Array.isArray(rows) ? rows.filter((handle): handle is string => typeof handle === 'string') : []);
+  };
+};
+
+// Null without a directory. Every call throws when the directory cannot answer.
+export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetcher: typeof fetch = fetch, now = () => Date.now()): AgentMailHandleDirectory | null => {
+  const call = signedRpc(env, fetcher, now), held = agentMailHeldHandles(env, fetcher, now);
+  if (!call || !held) return null;
   return {
     claim: async handle => answered<Awaited<ReturnType<AgentMailHandleDirectory['claim']>>>(await call('claim_agent_mail_handle', `mailclaim.${doName}.${handle}`, { p_do_name: doName, p_handle: handle }), CLAIMS),
     release: async () => answered<AgentMailRelease>(await call('release_agent_mail_handle', `mailrelease.${doName}`, { p_do_name: doName }), new Set(['released', 'none'])),
@@ -38,12 +50,7 @@ export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetch
       if (typeof row.handle !== 'string') throw new Error('agent mail directory answer');
       return { handle: row.handle, state: answered<RuleState>(row.rule_state, STATES) };
     },
-    held: async handles => {
-      if (!handles.length) return new Set();
-      const list = [...handles].sort().join(',');
-      const rows = await call('agent_mail_held_handles', `mailheld.${list}`, { p_handles: list });
-      return new Set(Array.isArray(rows) ? rows.filter((handle): handle is string => typeof handle === 'string') : []);
-    },
+    held,
     settle: async (handle, state) => (await call('settle_agent_mail_rule', `mailsettle.${doName}.${handle}.${state}`, { p_do_name: doName, p_handle: handle, p_state: state })) === true,
   };
 };

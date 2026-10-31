@@ -472,3 +472,34 @@ describe('agent mail routing rule lane', () => {
     }, ruleEnv('0'));
   });
 });
+
+describe('agent mail rule sweep, nightly', () => {
+  it('the cron deletes a rule whose handle no one holds, and only with agent mail on', async () => {
+    const rules = [
+      { id: 'r1', name: 'waldo-staging-mail:gone', matchers: [{ type: 'literal', field: 'to', value: `gone@${DOMAIN}` }], actions: [{ type: 'worker', value: ['waldo-runtime-staging'] }] },
+      { id: 'r2', name: 'waldo-staging-mail:kept', matchers: [{ type: 'literal', field: 'to', value: `kept@${DOMAIN}` }], actions: [{ type: 'worker', value: ['waldo-runtime-staging'] }] },
+    ];
+    const deleted: string[] = [];
+    const directoryFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.startsWith('https://api.cloudflare.com/')) {
+        if (init?.method === 'DELETE') deleted.push(url.split('/').pop()!);
+        return Response.json({ success: true, errors: [], messages: [], result: init?.method === 'DELETE' ? { id: 'x' } : rules, result_info: { total_pages: 1 } });
+      }
+      if (url.endsWith('/rpc/agent_mail_held_handles')) return Response.json(['kept']);
+      return directoryFetch(input, init);
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const nightly = async (flag: string) => {
+      const waits: Promise<unknown>[] = [];
+      await worker.scheduled!({} as ScheduledController, { ...env, ...directory, AGENT_MAIL_INBOUND: flag, AGENT_MAIL_DOMAIN: DOMAIN, AGENT_MAIL_ZONE_ID: '0123456789abcdef0123456789abcdef',
+        CLOUDFLARE_EMAIL_ROUTING_TOKEN: 'cf-token', WALDO_ENVIRONMENT: 'staging', LANGFUSE_RETENTION_SWEEP: '0' } as never, { waitUntil: (work: Promise<unknown>) => void waits.push(work), passThroughOnException: () => {} } as never);
+      await Promise.allSettled(waits);
+    };
+    await nightly('0');
+    expect(deleted).toEqual([]);
+    await nightly('1');
+    expect(deleted).toEqual(['r1']);
+  });
+});

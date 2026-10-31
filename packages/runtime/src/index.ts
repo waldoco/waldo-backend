@@ -28,6 +28,8 @@ import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { receiveAgentMail } from './channels/agent-mail/ingress';
+import { agentMailRouting, sweepAgentMailRules } from './channels/agent-mail/rules';
+import { agentMailHeldHandles } from './channels/agent-mail/handles';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -236,6 +238,9 @@ const worker = {
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
     // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
     // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
+    // Waldo's routing rules no held handle accounts for: an account deleted with its owner object leaves its rule behind.
+    const mailRouting = agentMailRouting(env), mailHeld = agentMailHeldHandles(env);
+    if (mailRouting && mailHeld) ctx.waitUntil(sweepAgentMailRules(mailRouting, mailHeld).then((outcome) => console.log(JSON.stringify({ hop: 'agent_mail_rule_sweep', ...outcome }))));
     if (env.LANGFUSE_RETENTION_SWEEP === '1' || env.LANGFUSE_RETENTION_SWEEP === 'dry') ctx.waitUntil(sweepLangfuseRetention(env).then((outcome) => (outcome.overdue ? console.error : console.log)(langfuseSweepLogLine(outcome))));
   },
 } satisfies ExportedHandler<Env>;
