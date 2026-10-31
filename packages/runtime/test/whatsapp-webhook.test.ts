@@ -209,7 +209,9 @@ describe('handleWhatsAppWebhook', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network unreachable for 15550003333'); }));
     await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, directory);
     expect(logs.map(line => JSON.parse(line))).toEqual([
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'Error', status: 400, code: 131030 },
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'TypeError' },
     ]);
     for (const leak of ['15550003333', 'wamid.', 'FICTIONAL-DETAIL', 'allowed list', 'unreachable']) expect(logs.join('\n')).not.toContain(leak);
