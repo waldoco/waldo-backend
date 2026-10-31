@@ -26,7 +26,7 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
-import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange } from '../health/zone-change-route';
+import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange, type HealthRecomputeCause } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import type { HealthWakeReason } from '../health/wakes';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
@@ -302,7 +302,7 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   // The owner's derived health rows: asked for by each upload that changed a reading and each wearable sync, and recomputed
   // once for every window of asks.
-  healthSamples(): Promise<void>;
+  healthSamples(cause?: HealthRecomputeCause): Promise<void>;
   healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
@@ -1607,8 +1607,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Worker-to-DO only: an upload changed this owner's readings, and asks for one recompute of the derived rows.
   private async healthSamples(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
-    if(!await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name))return Response.json({error:'unavailable'},{status:403,headers});
-    await this.setup('app').healthSamples();
+    const cause=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!cause)return Response.json({error:'unavailable'},{status:403,headers});
+    await this.setup('app').healthSamples(cause);
     return Response.json({ok:true},{headers});
   }
   // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
@@ -4360,7 +4361,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, onAttempts };
     const responder = createTelegramResponder(
       { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, onAttempts, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -4840,9 +4841,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
         readContext: async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } } });
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
-    const healthSamples = async () => {
+    // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
+    const healthSamples = async (cause: HealthRecomputeCause = 'readings') => {
       await recompute.ask();
-      if (runtime.welcome.lateHealth()) this.continueWelcome(runtime);
+      if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;

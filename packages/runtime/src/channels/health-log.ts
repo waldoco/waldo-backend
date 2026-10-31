@@ -145,8 +145,9 @@ export const healthLogHandlers = (book: HealthLogBook) => [
 ];
 
 // The owner's own sleep need, from chat on any surface. The figure goes to the health plane's setting and nowhere else; the
-// model hears a word back. A write the health plane did not store as asked is a failure, never a "saved".
-export const sleepNeedHandler = (write: (payload: string) => Promise<unknown>) => ({
+// model hears a word back. A write the health plane did not store as asked is a failure, never a "saved". A saved need asks
+// for a recompute, so the owner's rows move to it without waiting for the next upload; that ask never fails the save.
+export const sleepNeedHandler = (write: (payload: string) => Promise<unknown>, saved?: () => Promise<void>) => ({
   name: 'set_sleep_need',
   description: 'Save the sleep need the owner tells you they have ("I need about 8 hours"), or clear it when they ask. It is kept in their health settings only, never in memory.',
   schema: setSleepNeedArgsSchema,
@@ -159,6 +160,7 @@ export const sleepNeedHandler = (write: (payload: string) => Promise<unknown>) =
     const stored = typeof answer === 'object' && answer !== null && 'sleep_need_minutes' in answer
       ? healthSleepNeedMinutesV1Schema.nullable().safeParse(answer.sleep_need_minutes) : null;
     if (!stored?.success || stored.data !== args.minutes) return { ok: false, code: 'transient', error: 'the sleep need was not saved' };
+    await saved?.().catch(() => { console.error('health recompute ask failed'); });
     return { ok: true, data: { state: args.minutes === null ? 'cleared' : 'set' }, source_taint: null };
   },
 } satisfies ToolHandler<SetSleepNeedArgs, SetSleepNeedResult, ToolDispatcherContext>);

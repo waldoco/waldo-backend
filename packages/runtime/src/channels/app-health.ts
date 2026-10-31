@@ -27,6 +27,8 @@ export type AppHealthInput = Readonly<{
   // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
   notifySamples?: () => Promise<void>;
+  // Tells the owner's object that their stated sleep need changed, so it recomputes their rows on it.
+  notifySettings?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
   trainingLoad?: boolean;
   // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
@@ -197,7 +199,8 @@ const scoresHistory = async ({ request, url, doName, rpc }: AppHealthInput): Pro
 };
 
 // The owner's stated sleep need. The health plane answers with when it last changed too; the app is shown the need alone.
-const settings = async ({ request, doName, rpc, readBody }: AppHealthInput): Promise<Response> => {
+// A saved need asks the owner's object for a recompute after the answer, so the app's rows move to it before the next upload.
+const settings = async ({ request, doName, rpc, readBody, defer, notifySettings }: AppHealthInput): Promise<Response> => {
   const shown = (result: unknown) => {
     const stored = asObject(result);
     return settle(stored && !('error' in stored) ? { sleep_need_minutes: stored.sleep_need_minutes } : result, healthSettingsV1Schema);
@@ -205,7 +208,10 @@ const settings = async ({ request, doName, rpc, readBody }: AppHealthInput): Pro
   if (request.method === 'GET') return shown(await invokeHealth(rpc, doName, 'settings_read', '{}'));
   if (request.method !== 'PUT') return refuse('unavailable', 405);
   const body = await readJson(request, healthSettingsV1Schema, readBody);
-  return 'response' in body ? body.response : shown(await invokeHealth(rpc, doName, 'settings_write', JSON.stringify(body.data)));
+  if ('response' in body) return body.response;
+  const response = shown(await invokeHealth(rpc, doName, 'settings_write', JSON.stringify(body.data)));
+  if (response.status === 200 && notifySettings) defer?.(notifySettings().catch(() => { console.error('health settings notice failed'); }));
+  return response;
 };
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
