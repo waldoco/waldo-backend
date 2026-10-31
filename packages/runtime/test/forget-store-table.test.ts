@@ -26,6 +26,7 @@ const TABLES: Record<string, Row> = {
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('a forgotten topic in custody until the forget purge job settles it, then deleted: the one place a forgotten text stays on purpose, so the job can clean it'),
   forget_purge_steps: exempt('fingerprint hash, store name, state, attempt count, a content-free code and a time'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
+  memory_revision: exempt('one counter of how many times the owner\'s memory changed; no owner text'),
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
   node_statement_backfill: exempt('an empty marker that the one-time node statement backfill ran'),
@@ -79,6 +80,7 @@ const TABLES: Record<string, Row> = {
   approval_presentations: exempt('approval id, surface, provider chat/message or run ref, approvable flag, payload digest and times; the app card is rendered from the ledger row at read time, so no review text is stored here'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
+  calendar_last_seen: exempt('Google event ids, start and end times, an all-day flag, an HMAC of the title under a random per-object key (never the title) and an attendee count; rows expire two weeks after the event was last seen'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget

@@ -19,7 +19,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     instruction: [
       'It is morning. Send the owner The Brief: how today looks and what to protect.',
       'Open with a one-line read of the day. Then the day in order: events with times and what each is for, reminders due today, and anything waiting on them.',
-      'Name the one thing that matters most today and one clear action. Use what you know about their routines only when you actually have it.',
+      'Name the one thing that matters most today, and one clear action when one would help. Use what you know about their routines only when you actually have it.',
       'One clear direction, not a list of worries.',
     ].join('\n'),
   },
@@ -27,7 +27,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     id: 'card:midday', name: 'Check-in', defaultTime: '14:00', calendar: 'rest_of_today', body: 'plan',
     instruction: [
       'It is early afternoon. Send the owner a short afternoon check-in: what still matters today and what comes next.',
-      'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day.',
+      'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day, when one would help.',
       `If nothing is left and nothing changed, reply with exactly ${SKIP_CARD} and send nothing else.`,
     ].join('\n'),
   },

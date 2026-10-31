@@ -33,6 +33,14 @@ export const dayPlanBook = (sql: Sql) => {
   // from the chat as it is now, and a forgotten or deleted row takes them with it.
   if (!columns.has('delivered_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_message_id TEXT');
   if (!columns.has('delivered_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_at INTEGER');
+  // Revisions of a delivered card, when the owner's day changed after it: how many reached the owner, the latest one's time and
+  // outbox record, and the Main chat row a revision became when that was the app, with that revision's record. The original
+  // delivery stays as it was.
+  if (!columns.has('revision')) sql.exec('ALTER TABLE day_plan ADD COLUMN revision INTEGER');
+  if (!columns.has('revised_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_at INTEGER');
+  if (!columns.has('revised_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_message_id TEXT');
+  if (!columns.has('revised_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_record TEXT');
+  if (!columns.has('revised_row_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_row_record TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -62,6 +70,25 @@ export const dayPlanBook = (sql: Sql) => {
       return new Map(sql.exec<{ card: string; message_id: string; delivered_at: number }>(
         'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
       ).toArray().map(({ card, ...delivery }) => [card, delivery]));
+    },
+    // Whether the card reached the owner today, on any surface, so a change can revise it.
+    reached(day: string, card: string): boolean {
+      return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
+    },
+    revisedRow(day: string, card: CardId, messageId: string, record: string): void {
+      sql.exec('UPDATE day_plan SET revised_message_id = ?, revised_row_record = ? WHERE day = ? AND card = ?', messageId, record, day, card);
+    },
+    // Counted once per outbox record: a settle the outbox repeats after a restart does not count it again.
+    revised(day: string, card: CardId, at: number, record: string): void {
+      sql.exec(`UPDATE day_plan SET revision = COALESCE(revision, 0) + 1, revised_at = ?, revised_record = ?
+        WHERE day = ? AND card = ? AND revised_record IS NOT ?`, at, record, day, card, record);
+    },
+    // message_id: the newest revision's Main chat row, or null when it reached the owner outside the app.
+    revisions(day: string): ReadonlyMap<string, Readonly<{ revision: number; revised_at: number; message_id: string | null }>> {
+      return new Map(sql.exec<{ card: string; revision: number; revised_at: number; message_id: string | null }>(
+        `SELECT card, revision, revised_at, CASE WHEN revised_row_record = revised_record THEN revised_message_id END AS message_id
+         FROM day_plan WHERE day = ? AND revision IS NOT NULL AND revised_at IS NOT NULL`, day,
+      ).toArray().map(({ card, ...revision }) => [card, revision]));
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));

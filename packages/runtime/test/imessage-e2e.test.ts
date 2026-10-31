@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -34,6 +35,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
+import { unfinishedReply } from '../src/conversation/tool-loop';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -460,7 +462,7 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
-const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 // Every model call fails, so a retry inside the responder cannot rescue the turn.
 const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
 const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));
@@ -572,7 +574,7 @@ it('an iMessage turn that runs out of time while the model works answers with it
   shortDeadline(300);
   proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
   await replyFor(w, 'Plan my afternoon');
-  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  expect(JSON.parse((await sendNext(w)).body).text).toBe(unfinishedReply('time_exhausted', []));
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
   expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
@@ -1771,16 +1773,20 @@ it('a note from the next turn never reaches the owner before the reply still wai
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 600_000);
-  let setTiming!: (timing: unknown) => void;
-  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  let setTiming!: (timing: unknown) => void, ownStorage: unknown;
+  await runInDurableObject(w.ownerStub, async (instance, state) => { ownStorage = state.storage; setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  // The prototype spies below see every owner in the isolate, including one an earlier test left running; only this owner's calls count.
+  const ours = (outbox: IMessageFinalOutbox) => (outbox as unknown as { storage: unknown }).storage === ownStorage;
   const admitted = admissions();
   const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
   vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
-    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+    if (ours(this)) retries.push(ref);
+    return retryLater.call(this, ref, maxAge, delay);
   });
   const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
   vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
-    drops.push(args[0]); return dropProgress.apply(this, args);
+    if (ours(this)) drops.push(args[0]);
+    return dropProgress.apply(this, args);
   });
   const LATER = 'Switching the options to vegetarian ones.';
   proof.notes.push('Looking at dinner spots near you.', LATER);

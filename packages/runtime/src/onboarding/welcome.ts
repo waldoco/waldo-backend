@@ -25,13 +25,16 @@ export const WELCOME_STAGE_BUDGET_MS = 90_000;
 const STALE_MS = 2 * WELCOME_STAGE_BUDGET_MS;
 // A stage that settled skipped is checked again for its source at most this often, and goes back to pending at most once.
 export const WELCOME_RECHECK_MS = 10 * 60_000;
+// A health stage that found nothing may have run before the owner's first readings landed. The next health upload or the night
+// reads it once more, within this long of it settling.
+export const WELCOME_LATE_HEALTH_MS = 24 * 60 * 60_000;
 const DOMAINS = ['health', 'work', 'people', 'routines', 'interests'] as const;
 const LIMITS = { label: 40, summary: 140, observation: 200 } as const;
 const MAX_POINTERS = 10;
 // ADR-0081: nothing numeric about the owner's body is stored in DO memory, and a node is a phrase, not a measurement.
 const DIGIT = /\p{Nd}/u;
 
-type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number }>;
+type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true }>;
 type Row = Readonly<{ started_at: number; finished_at: number | null; stages_json: string; nodes: number }>;
 
 // The one welcome build per owner. The row holds stage states, times and a count, never text.
@@ -90,6 +93,16 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       const current = stages(run), at = now();
       if (!waiting(stage, current[stage])) return false;
       write({ ...current, [stage]: { state: 'pending', at, reopened: true } }, null);
+      return true;
+    },
+    // Late health data: an empty health stage goes back to pending, once, within a day of settling. Checked again in the same
+    // write, like reopen.
+    lateHealth(): boolean {
+      const run = row();
+      if (!run) return false;
+      const current = stages(run), at = now(), health = current.health;
+      if (health.state !== 'empty' || health.retried || at - health.at > WELCOME_LATE_HEALTH_MS) return false;
+      write({ ...current, health: { ...health, state: 'pending', at, retried: true } }, null);
       return true;
     },
     checked(stage: WelcomeStage): void {

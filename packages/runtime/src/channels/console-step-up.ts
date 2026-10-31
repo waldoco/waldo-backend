@@ -24,6 +24,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
   'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
   'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'spot.area': { gated: true, why: 'Moves a claim between areas of the owner\'s life; moved out of body or mind, a pattern could reach a job that reads outside content.' },
   'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
   // The app's memory actions, named for themselves so each carries its own reason.
   'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
@@ -87,6 +88,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
   'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
   'phone.set': { gated: true, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
+  'agent_mail.claim': { gated: true, why: 'Opens an address that brings outside mail into Waldo; changing it gives up the old one for 180 days.' },
+  'agent_mail.release': { gated: false, why: 'Stops the owner\'s Waldo address receiving mail; removes access.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.

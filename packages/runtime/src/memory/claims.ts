@@ -1,7 +1,7 @@
 import { fuseRanked } from './semantic-recall';
 import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
-import { replaceLiteralText } from '@waldo/contracts';
+import { LIFE_AREAS, replaceLiteralText, type LifeArea } from '@waldo/contracts';
 import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
 import { HEALTH_MEMORY_RULES } from './health-rules';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
@@ -16,7 +16,7 @@ export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferre
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
 // claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row.
@@ -44,7 +44,13 @@ export const textFingerprint = (text: string): string => {
 };
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
-type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[] }>;
+type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[]; area?: string }>;
+// The part of the owner's life a claim is filed under, as stored: unsorted is NULL, and anything outside the set is unsorted.
+const filedArea = (area: string | null | undefined): LifeArea | null =>
+  area !== 'unsorted' && (LIFE_AREAS as readonly (string | null | undefined)[]).includes(area) ? area as LifeArea : null;
+// body and mind keep a claim out of every model call built from outside content, so only the owner moves a claim out of them:
+// a model write may have been steered by that content.
+const FENCED_AREAS: readonly (string | null | undefined)[] = ['body', 'mind'];
 
 // Write-time retrieval aliases: alternative words the owner might use later for the same fact. Model-written, so
 // untrusted-quality: bounded and cleaned here (a hard bounding line, not meaning detection), used only for
@@ -352,7 +358,29 @@ const stringsOf = (value: unknown): string[] =>
     : Array.isArray(value) ? value.flatMap(stringsOf)
       : value !== null && typeof value === 'object' ? Object.values(value).flatMap(stringsOf) : [];
 
-export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
+// Read only: an owner whose memory was never opened reads 0.
+export const memoryRevision = (sql: Sql): number =>
+  tableExists(sql, 'memory_revision') ? sql.exec<{ value: number }>('SELECT value FROM memory_revision WHERE id = 1').toArray()[0]?.value ?? 0 : 0;
+
+const MEMORY_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(?:claims|constellation_nodes|constellation_edges)\b/i;
+const RETURNING = /\bRETURNING\b/i;
+
+export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
+  // A count, never content. Every write that changes the owner's claims, patterns or links moves it in the writer's own
+  // transaction, whoever wrote (chat, the nightly pass, the welcome build, the console), so an open app screen knows to read
+  // memory again. Every such write in this store goes through `sql` below, which moves it; re-reading a claim (seen) writes
+  // through `db` and does not. No trigger does this: a trigger's write would count in every statement's rowsWritten.
+  db.exec('CREATE TABLE IF NOT EXISTS memory_revision (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
+  const bump = () => db.exec('INSERT INTO memory_revision (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1');
+  // A RETURNING statement runs as its rows are read, and nothing may run in between, so it moves the count first: the
+  // writer's transaction takes both or neither.
+  const sql: Sql = { exec: (query: string, ...bindings: unknown[]) => {
+    if (!MEMORY_WRITE.test(query)) return db.exec(query, ...bindings);
+    if (RETURNING.test(query)) { bump(); return db.exec(query, ...bindings); }
+    const cursor = db.exec(query, ...bindings);
+    if (cursor.rowsWritten > 0) bump();
+    return cursor;
+  } } as Sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
@@ -367,6 +395,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     ['source_ref', 'TEXT'], ['learned_at', 'TEXT'], ['valid_from', 'TEXT'],
     ['valid_to', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
     ['pinned', 'TEXT'], ['pin_order', 'INTEGER'],
+    // area_by: who filed it, model or owner. The owner's choice stands against the model's later passes.
+    ['area', 'TEXT'], ['area_by', 'TEXT'],
   ] as const) {
     if (!sql.exec("SELECT name FROM pragma_table_info('claims') WHERE name = ?", column).toArray().length) {
       sql.exec(`ALTER TABLE claims ADD COLUMN ${column} ${definition}`);
@@ -508,10 +538,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     nodes: () => sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes ORDER BY strength DESC').toArray(),
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),
     add(claim: NewClaim, at: string, id?: number): void {
-      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, null, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases));
+      const area = filedArea(claim.area);
+      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, null, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), area, area ? 'model' : null);
     },
     seen(id: number, at: string): void {
-      sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
+      db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
     // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
@@ -559,6 +590,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // Two writes must never leave contradictory active claims. A caller without a DO
       // transaction facility cannot safely correct and therefore fails closed.
       if (!transaction) return false;
+      // Counted by the rows it returns, not rowsWritten: semantic recall's trigger deletes the claim's vector in the same
+      // statement, and a trigger's writes count in rowsWritten.
+      const retire = () => {
+        if (sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' RETURNING id", at, id).toArray().length !== 1) throw new Error('correction conflict');
+      };
       return transaction(() => {
         const old = sql.exec<Claim>("SELECT * FROM claims WHERE id = ? AND status = 'active'", id).one();
         if (!old) return false;
@@ -571,20 +607,30 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // A correction replaces the same fact, so the old row's pin moves to the row that now carries it.
         if (twin) {
           if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
-          const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
-          if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
+          retire();
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
           repointNodes(old, twin.id);
           return true;
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
-        const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null).one().id;
-        const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
-        if (retired.rowsWritten !== 1) throw new Error('correction conflict');
+        // The replacement stays filed where the old claim was, by whoever filed it, unless the writer files it anew. A writer
+        // never refiles what the owner filed, and never moves it out of body or mind.
+        const kept = claim.area === undefined || old.area_by === 'owner' || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
+        const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
+        const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
+        retire();
         repointNodes(old, replacement);
         return true;
       });
+    },
+    // Files a live claim under an area. The model never refiles what the owner filed, and never moves a claim out of body or mind.
+    setArea(id: number, area: LifeArea, by: 'model' | 'owner'): boolean {
+      if (!(LIFE_AREAS as readonly string[]).includes(area)) return false;
+      const stored = filedArea(area);
+      return sql.exec(`UPDATE claims SET area = ?, area_by = ? WHERE id = ? AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}'
+        AND (? = 'owner' OR (COALESCE(area_by, '') != 'owner' AND (COALESCE(area, '') NOT IN ('body', 'mind') OR area IS ?)))`,
+        stored, stored || by === 'owner' ? by : null, id, by, stored).rowsWritten === 1;
     },
     setStatus(id: number, status: string): void {
       sql.exec('UPDATE claims SET status = ? WHERE id = ?', status, id);
@@ -1122,7 +1168,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
     'Profile, built only from what the owner said or confirmed:',
     ...profile(claims).map((section) => `<profile section="${section.title}">\n${section.lines.map(fence).join('\n')}\n</profile>`),
     'Claims. stated = the owner said it; confirmed = the owner agreed with Waldo\'s read; inferred = Waldo\'s read, offer it as such. An unverified provenance label means a legacy claim, not an authenticated quote.',
-    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}"${claim.pinned ? ` pinned="${claim.pinned}" order="${claim.pin_order ?? 0}"` : ''}>${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" area="${claim.area ?? 'unsorted'}"${claim.area_by === 'owner' ? ' area_by="owner"' : ''} source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}"${claim.pinned ? ` pinned="${claim.pinned}" order="${claim.pin_order ?? 0}"` : ''}>${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...nodes.map((node) => `<node id="${node.id}" domain="${node.domain}" strength="${node.strength}">${fence(node.label)}: ${fence(node.summary)}</node>`),
     ...store.edges().filter((edge) => byId.has(edge.from_id) && byId.has(edge.to_id)).map((edge) => `<edge>${fence(byId.get(edge.from_id)!)} ${edge.relation} ${fence(byId.get(edge.to_id)!)} (strength ${edge.strength})</edge>`),
   ].join('\n');
@@ -1248,6 +1294,7 @@ const CLAIM_RULES = [
   'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   ...HEALTH_MEMORY_RULES,
+  'area: the part of the owner\'s life the claim mainly belongs to. body: sleep, movement, food, illness, appointments, recovery. mind: energy, focus, mood, stress, rest. home: household, errands, travel, admin. work: the job, meetings, projects, colleagues. people: family, friends, what each person cares about. goals: ambitions, learning, long projects. money: bills, budgets, subscriptions, purchases. unsorted when it is unclear. File energy, mood, stress, focus and sleep patterns as kind health. Under areas, refile an existing claim by id when it sits in the wrong area; an area the owner chose stays theirs.',
   'aliases: up to 5 short words or phrases the owner might use later for the same thing in different words (for example "bedtime" for a claim about sleeping at 11:30). They are only used to find the claim again, are not facts and not evidence. Leave empty when the claim\'s own words are enough. Set aliases_touch_forgotten true when any alias mentions something the owner asked to forget; those aliases are then dropped.',
 ];
 
@@ -1309,10 +1356,11 @@ export const MIGRATION_INSTRUCTION = [
 ].join('\n');
 
 export const CLAIM_OPS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin'],
+  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin', 'areas'],
   properties: {
-    add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten'],
-      properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } } } } },
+    add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten', 'area'],
+      properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
+    areas: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'area'], properties: { id: { type: 'integer' }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
     corrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['old_id', 'kind', 'text', 'evidence'], properties: { old_id: { type: 'integer' }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, evidence: { type: 'string' } } } },
     seen: { type: 'array', items: { type: 'integer' } },
     confirm: { type: 'array', items: { type: 'integer' } },
@@ -1410,7 +1458,7 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
 };
 
 // pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[] }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
 const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
   const op = value as { id?: unknown; block?: unknown; order?: unknown } | null;
   return typeof op === 'object' && op !== null && Number.isSafeInteger(op.id) && PIN_BLOCKS.includes(op.block as PinBlock) && Number.isSafeInteger(op.order);
@@ -1515,10 +1563,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // An alias that is itself a forgotten topic is dropped, not stored.
     const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
     const sourceRef = origin !== 'owner' ? undefined : ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence);
-    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef }, at);
+    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef, area: claim.area }, at);
     written += 1;
   }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
+  let filed = 0;
+  for (const op of ops.areas ?? []) {
+    const { id, area } = (op ?? {}) as { id?: unknown; area?: unknown };
+    if (typeof id === 'number' && known.has(id) && typeof area === 'string' && store.setArea(id, area as LifeArea, 'model')) filed += 1;
+  }
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
@@ -1551,7 +1604,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [

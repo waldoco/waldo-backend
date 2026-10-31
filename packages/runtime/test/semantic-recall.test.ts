@@ -7,8 +7,12 @@ import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
-import { fuseRanked, semanticRecall, semanticRecallFromEnv, workersAiEmbedder, type SemanticRecall } from '../src/memory/semantic-recall';
-import { fakeEmbeddings, type FakeEmbeddings } from './support/fake-embeddings';
+import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
+import { modelCost } from '../src/llm/pricing';
+import { COST_ROLLUP_KEY, costRollup, type CostRollupRow } from '../src/observability/cost-rollup';
+import { gateTraceEntry } from '../src/observability/trace-privacy';
+import { EMBED_TIMEOUT_MS, estimatedTokens, fuseRanked, semanticRecall, semanticRecallFromEnv, semanticTraceEntry, SWEEP_RETRY_KEY, SWEEP_RETRY_MS, SWEEP_TIMEOUT_MS, workersAiEmbedder, type SemanticEvent, type SemanticRecall } from '../src/memory/semantic-recall';
+import { fakeEmbeddings, type FakeEmbeddings } from '../src/testing/fake-embeddings';
 
 // Synthetic fixtures only: no owner text, and the one health reading is made up.
 const AT = '2026-10-26T09:00:00.000Z';
@@ -121,6 +125,25 @@ describe('semantic recall write path', () => {
       expect(vectorRows(sql)).toEqual([]);
     });
   });
+
+  it('a correction of a claim with a vector still lands, and its vector goes with the retired row', async () => {
+    await inOwner(async ({ sql, store, semantic }) => {
+      owned(store, DENTIST); owned(store, GYM); owned(store, 'Gym locker moved to the red door');
+      await semantic.sync();
+      const fix = (text: string) => ({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: 'owner, tg-2' });
+      expect(store.correct(1, fix('Dr Rao does the teeth cleaning, now at the clinic on 5th Cross'), AT)).toBe(true);
+      // The replacement is already an owner's stated row: only the old claim retires.
+      expect(store.correct(2, fix('Gym locker moved to the red door'), AT)).toBe(true);
+      expect(store.claims('active').map((claim) => claim.text).sort()).toEqual(['Dr Rao does the teeth cleaning, now at the clinic on 5th Cross', 'Gym locker moved to the red door']);
+      expect(vectorRows(sql).map((row) => row.claim_id)).toEqual([3]);
+      // Grounding a claim Waldo inferred keeps it recallable, so its vector stays and the write counts once.
+      store.add({ kind: 'fact', text: 'Espresso before ten, never after', source: 'inferred', evidence: 'chat', origin: 'inferred' }, AT);
+      const inferred = store.claims('active').find((claim) => claim.origin === 'inferred')!.id;
+      await semantic.sync();
+      expect(store.ownerGround(inferred, AT, 'owner, console')).toBe(true);
+      expect(vectorRows(sql).map((row) => row.claim_id)).toEqual([3, 4, inferred]);
+    });
+  });
 });
 
 describe('semantic recall read path', () => {
@@ -187,6 +210,157 @@ describe('semantic recall read path', () => {
       expect(recalled.text).toBe('');
     }, b);
     await inOwner(async ({ semantic }) => { expect(await semantic.near('my dentist')).toEqual([1]); }, a);
+  });
+});
+
+const memoryKv = () => {
+  const rows = new Map<string, unknown>();
+  return { rows, get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
+};
+
+describe('semantic recall sweep after a failure', () => {
+  const START = Date.UTC(2026, 9, 31, 12);
+  // A sweep under test: its embedder gives up after 20 ms, kicks run on a clock the test moves, and each deferred sweep is awaited.
+  const sweeping = (world: World, kv = memoryKv()) => {
+    const clock = { at: START };
+    const events: SemanticEvent[] = [], pending: Promise<unknown>[] = [];
+    const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), sweepEmbedder: workersAiEmbedder(world.ai, 20), kv, now: () => clock.at, defer: (work) => pending.push(work), log: (event) => events.push(event) });
+    const kick = async () => { semantic.kick(); await Promise.all(pending.splice(0)); };
+    return { clock, events, kick, kv };
+  };
+  const billed = (events: readonly SemanticEvent[]) => events.filter((event) => event.usage);
+
+  it('a sweep whose embedder hangs is priced once; no kick sends again until the retry time, and then the backlog drains', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST); owned(world.store, GYM);
+      const { clock, events, kick } = sweeping(world);
+      world.ai.hold = new Promise(() => undefined);
+      await kick();
+      expect(world.ai.calls).toBe(1);
+      expect(billed(events)).toEqual([expect.objectContaining({ ok: false, code: 'embed_failed', cost_kind: 'background' })]);
+      for (let kicks = 0; kicks < 3; kicks += 1) await kick();
+      clock.at = START + SWEEP_RETRY_MS - 1;
+      await kick();
+      expect(world.ai.calls).toBe(1);
+      expect(billed(events)).toHaveLength(1);
+      world.ai.hold = undefined;
+      clock.at = START + SWEEP_RETRY_MS;
+      await kick();
+      expect(vectorRows(world.sql).map((row) => row.claim_id)).toEqual([1, 2]);
+      // An answered sweep clears the wait: the next claim is embedded on the next kick.
+      owned(world.store, 'Espresso before ten, never after');
+      await kick();
+      expect(vectorRows(world.sql).map((row) => row.claim_id)).toEqual([1, 2, 3]);
+    });
+  });
+
+  it('the wait is kept in the owner\'s KV, so another runtime of the same owner waits too', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST);
+      const first = sweeping(world);
+      world.ai.fail = true;
+      await first.kick();
+      expect(first.kv.get<number>(SWEEP_RETRY_KEY)).toBe(START + SWEEP_RETRY_MS);
+      world.ai.fail = false;
+      await sweeping(world, first.kv).kick();
+      expect(world.ai.calls).toBe(1);
+      expect(vectorRows(world.sql)).toEqual([]);
+    });
+  });
+
+  it('a query keeps its short wait while the sweep waits longer for the same slow answer', async () => {
+    await inOwner(async ({ sql, store }) => {
+      owned(store, DENTIST);
+      const ai = fakeEmbeddings();
+      const slow = { run: async (...args: Parameters<FakeEmbeddings['run']>) => { await new Promise((resolve) => setTimeout(resolve, EMBED_TIMEOUT_MS + 100)); return ai.run(...args); } };
+      const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: slow }, { sql, transaction: (fn) => fn() })!;
+      const [query, sweep] = await Promise.allSettled([semantic.near('my dentist'), semantic.sync()]);
+      expect(query).toEqual({ status: 'rejected', reason: new Error('embedding timed out') });
+      expect(sweep).toEqual({ status: 'fulfilled', value: { embedded: 1, withheld: 0 } });
+      expect(EMBED_TIMEOUT_MS).toBeLessThan(SWEEP_TIMEOUT_MS);
+    });
+  });
+
+  it('keeps its counts in the trace with text capture off', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST); owned(world.store, GYM);
+      const events: SemanticEvent[] = [];
+      const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => events.push(event) });
+      await semantic.sync();
+      await semantic.near('my dentist');
+      world.ai.fail = true;
+      await expect(semantic.near('my dentist')).rejects.toThrow();
+      const gated = events.map((event) => gateTraceEntry(semanticTraceEntry(event), false));
+      expect(gated.map((entry) => [entry.hop, entry.ok, entry.code, entry.detail])).toEqual([
+        ['memory_embedding', true, undefined, 'sweep texts=2'],
+        ['memory_embedding', true, undefined, expect.stringMatching(/^query rows=2 scan_ms=\d+$/)],
+        ['memory_embedding', false, 'embed_failed', 'query'],
+      ]);
+      expect(gated.every((entry) => entry.usage !== undefined)).toBe(true);
+    });
+  });
+});
+
+describe('semantic recall cost', () => {
+  const priced = (world: World, events: SemanticEvent[]) =>
+    semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => events.push(event) });
+  const billed = (events: readonly SemanticEvent[]) => events.filter((event) => event.usage);
+
+  it('prices bge-m3 by input tokens only, at the rate on Cloudflare\'s pricing page', () => {
+    expect(modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: 1_000_000, output: 0, cached: 0 })?.total).toBeCloseTo(0.012, 10);
+    expect(estimatedTokens(['abcd', 'abcde'])).toBe(3);
+  });
+
+  it('records one priced event per embedding call: the sweep as background work, the query on the turn, a withheld secret not at all', async () => {
+    await inOwner(async (world) => {
+      const events: SemanticEvent[] = [];
+      const semantic = priced(world, events);
+      owned(world.store, DENTIST);
+      owned(world.store, 'Deploy token is Bearer abcdefghijklmnopqrstuvwxyz0123456789');
+      owned(world.store, GYM);
+      await semantic.sync();
+      await semantic.near('my dentist');
+      expect(billed(events)).toEqual([
+        expect.objectContaining({ ok: true, cost_kind: 'background', usage: { model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens([DENTIST, GYM]), output: 0, cached: 0 } }),
+        expect.objectContaining({ ok: true, usage: { model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(['my dentist']), output: 0, cached: 0 } }),
+      ]);
+      expect(billed(events)[1]).not.toHaveProperty('cost_kind');
+      // The query's event carries how long the scan took and over how many rows: counts only, never a text.
+      expect(billed(events)[1]!.detail).toMatch(/^query rows=2 scan_ms=\d+$/);
+      expect(JSON.stringify(events)).not.toMatch(/Rao|dentist|locker|Bearer/i);
+    });
+  });
+
+  it('counts a call that failed: it may have run and billed', async () => {
+    await inOwner(async (world) => {
+      const events: SemanticEvent[] = [];
+      const semantic = priced(world, events);
+      owned(world.store, DENTIST);
+      world.ai.fail = true;
+      await expect(semantic.sync()).rejects.toThrow();
+      await expect(semantic.near('my dentist')).rejects.toThrow();
+      expect(billed(events).map((event) => [event.ok, event.code, event.usage!.input])).toEqual([[false, 'embed_failed', estimatedTokens([DENTIST])], [false, 'embed_failed', estimatedTokens(['my dentist'])]]);
+    });
+  });
+
+  it('reaches the cost ledger as bge-m3 rows, and the month\'s spend the ceiling reads grows by their price', async () => {
+    await inOwner(async (world) => {
+      const kv = memoryKv();
+      const at = Date.UTC(2026, 9, 31, 10);
+      const ledger = costRollup({ kv, call: async () => 1, doName: 'do-a', newId: () => 'batch-1' });
+      const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => { ledger.record(semanticTraceEntry(event), at); } });
+      owned(world.store, DENTIST);
+      await semantic.sync();
+      await semantic.near('my dentist');
+      const rows = kv.get<{ open: CostRollupRow[] }>(COST_ROLLUP_KEY)!.open;
+      const usd = (texts: readonly string[]) => modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(texts), output: 0, cached: 0 })!.total;
+      expect(rows).toEqual([
+        expect.objectContaining({ day: '2026-10-31', kind: 'background', model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, calls: 1, input: estimatedTokens([DENTIST]) }),
+        expect.objectContaining({ day: '2026-10-31', kind: 'turn', model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, calls: 1, input: estimatedTokens(['my dentist']) }),
+      ]);
+      expect(ledger.monthSpendUsd(at)).toBeCloseTo(usd([DENTIST]) + usd(['my dentist']), 15);
+      expect(ledger.monthSpendUsd(at)).toBeGreaterThan(0);
+    });
   });
 });
 

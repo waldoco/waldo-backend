@@ -11,6 +11,7 @@ import {
   HEY144_GOALS_SCHEMA_MIGRATION,
   DO_SCHEMA_MIGRATIONS,
   RETIRE_MEMORY_HALLS_MIGRATION,
+  CALENDAR_LAST_SEEN_MIGRATION,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   TASK_JOBS_SCHEMA_MIGRATION,
   applyDoMigration,
@@ -202,14 +203,16 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
       { version: 8, name: SCHEDULE_RUNS_SCHEMA_MIGRATION.name },
       { version: 12, name: TASK_JOBS_SCHEMA_MIGRATION.name },
       { version: 13, name: 'retire-memory-halls' },
+      { version: 14, name: 'calendar-last-seen' },
     ]);
+    expect(result.tables).toContain('calendar_last_seen');
     expect(result.tables).toContain('task_jobs');
     for (const retired of ['owner_roots', 'presence_registrations', 'work_units', 'judgment_requests', 'common_message_custody', 'planning_execution_requests']) {
       expect(result.tables).not.toContain(retired);
@@ -228,6 +231,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const atV1 = objects();
       provisionDoSchema(state.storage);
       const current = objects();
+      applyDoMigration(state.storage, CALENDAR_LAST_SEEN_MIGRATION, 'down');
       applyDoMigration(state.storage, RETIRE_MEMORY_HALLS_MIGRATION, 'down');
       return { atV1, current, restored: objects(), version: getSchemaVersion(state.storage.sql) };
     });
