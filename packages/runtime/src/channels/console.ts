@@ -245,6 +245,8 @@ export type ConsoleView = Readonly<{
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
+  // The owner's yes to a node's words; never listed as claims, read only to say whether a node is confirmed.
+  statements: readonly Claim[];
   // Topics a forget is still clearing from storage, masked: Waldo no longer sees them, and the owner can retry.
   forgettingTopics: readonly ForgetHold[];
   holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];

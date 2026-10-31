@@ -9,7 +9,7 @@ export function memoryControl(view:ConsoleView,scope:string,id:string){
  if(pending)return {id,kind:'claim' as const,source:pending.source,origin:pending.origin??'legacy',status:'purging',actions:['spot.forget']};
  // Confirm and correct act on a live node only; forget stays on any node, so a stale one can still be removed. A node
  // citing a support that is no longer live is Waldo's read and cannot be confirmed: confirm grounds only what it can find.
- if(node){const live=[...view.spots,...view.retiredSpots.filter(c=>c.status==='promoted')],whole=nodeSupports(live,node).length===supportIds(node).length,confirmation=whole?nodeConfirmation(live,node):'waldos_read' as const;
+ if(node){const live=[...view.spots,...view.retiredSpots.filter(c=>c.status==='promoted'),...view.statements],whole=nodeSupports(live,node).length===supportIds(node).length,confirmation=whole?nodeConfirmation(live,node):'waldos_read' as const;
   return {id,kind:'interpretation' as const,status:node.status,review:{label:node.label,note:node.summary,domain:node.domain,support:node.supporting_spots,strength:node.strength,sources:nodeSources(live,node),confirmation},actions:[...(node.status==='active'?[...(whole&&confirmation==='waldos_read'?['node.confirm']:[]),'node.correct']:[]),'node.forget']};}
  return null;
 }

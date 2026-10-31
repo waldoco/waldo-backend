@@ -54,7 +54,7 @@ import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from 
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,appConnectReceipt,appDisconnectReceipt,googleConnectReceipt,granolaConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
-import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
+import { createJobSkillCapability, createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
@@ -211,6 +211,7 @@ import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_LAST_INBOUND_ID_KEY, WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
+import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
@@ -1164,7 +1165,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Each surface's runtime names the chain its jobs write, the one its owner turns read, whichever binding admitted the owner.
   private jobHostFor(chain: OwnerJobHost['chain']): OwnerJobHost {
-    return { admit: () => this.admitOwnerJob(), chain };
+    const sql = this.ctx.storage.sql;
+    return { admit: () => this.admitOwnerJob(), chain,
+      // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent }) };
   }
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
@@ -2398,6 +2402,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         this.ctx.storage.transactionSync(() => { retired = this.bindWhatsApp(subject); });
         await this.settleRetiredWhatsApp(retired, 'whatsapp');
         this.runtimes = {};
+        // Waldo's own card follows on WhatsApp, as after a code: one tap saves the number as Waldo. Best effort.
+        const waldo = whatsAppWaldoNumber(this.env.WHATSAPP_WALDO_NUMBER);
+        if (waldo) await this.setup('whatsapp').call('sendWaldoCard', { number: waldo })
+          .catch(() => console.log(JSON.stringify({ hop: 'whatsapp_contact_card', ok: false })));
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
     }
@@ -5246,7 +5254,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const [imessage, whatsapp] = await Promise.all([known('imessage', auth.iMessageHandleHint), known('whatsapp', auth.whatsAppHandleHint)]);
             return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
-          profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), forgettingTopics: this.forgetPurgeJob().status(),
+          profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), statements: shown.statements(), forgettingTopics: this.forgetPurgeJob().status(),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
           nodes: shown.nodes(), edges: shown.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
@@ -5340,7 +5348,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await this.forgetPurgeJob().track([node.label], 'history');
           if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
         } else if (action === 'node.confirm') {
-          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:node.confirm'}`))) return false;
+          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), made ?? 'console:node.confirm'))) return false;
         } else if (action === 'node.correct') {
           // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
           // same scribe check a spot edit crosses, so a credential never enters memory.

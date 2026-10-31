@@ -28,6 +28,7 @@ const TABLES: Record<string, Row> = {
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
+  node_statement_backfill: exempt('an empty marker that the one-time node statement backfill ran'),
   claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),
