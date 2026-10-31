@@ -302,6 +302,31 @@ export const cardStatus = (deps: CardDeps, card: DayCard): CardStatus => {
   return row === undefined || row.state === 'pending' ? { state: 'pending' } : {};
 };
 
+// Where today's cards stand, as one host fact for the owner's own turns, so a turn on any surface knows whether the Brief
+// reached them, and where, before it decides what to offer. States and times only: a card's words stay in the chat it went to.
+export const dayCardsLine = (deps: CardDeps): string => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const rows = new Map(deps.book.read(day).map((row) => [row.card, row]));
+  const delivered = deps.book.deliveries(day);
+  const clockOf = (at: number) => localIso(at, deps.timezone).slice(11, 16);
+  const said = DAY_CARDS.flatMap((card) => {
+    const status = cardStatus(deps, card);
+    const found = deps.scheduler.lookup(card.id);
+    const due = rows.get(card.id)?.time ?? (found.state === 'entry' && localIso(found.entry.due_at, deps.timezone).startsWith(day) ? clockOf(found.entry.due_at) : null);
+    const app = delivered.get(card.id);
+    if (app) return [`${card.name} reached them in the app at ${clockOf(app.delivered_at)}`];
+    switch (rows.get(card.id)?.sent && status.state !== 'skipped' ? 'sent' : status.state) {
+      case 'sent': return [`${card.name} was sent`];
+      case 'skipped': return [status.reason ? `${card.name} was not sent (${status.reason})` : `${card.name} was skipped: nothing worth sending`];
+      case 'held': return [`${card.name} is held for quiet hours`];
+      case 'generating': return [`${card.name} is being written now`];
+      case 'failed': case 'paused': return [`${card.name} could not be written (${status.reason})`];
+      default: return deps.queued(day, card.id) ? [`${card.name} is on its way`] : due ? [`${card.name} is due at ${due}`] : [];
+    }
+  });
+  return said.length ? `Today's cards: ${said.join('; ')}.` : '';
+};
+
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
   const { from: midnight } = dayWindow(now, timezone);
   if (card.calendar === 'today') return { from: midnight, to: midnight + DAY_MS };

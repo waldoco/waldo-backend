@@ -17,6 +17,8 @@ export type TurnInstructions = Readonly<{
 // system prompt; the behavior text's turn-context rule says how the model reads it.
 export type TurnFacts = Readonly<{
   clock: string;
+  // Where today's Brief, Check-in and Close stand; it reads with the clock and is counted in its section.
+  today?: string;
   // The composer's operations material: recall, health, workspace and tool results.
   reasons?: string;
   toolResultsNote?: string;
@@ -57,7 +59,7 @@ export function assembleTurnPrompt(input: Readonly<{
   const { instructions: i, facts: f } = input;
   const head = [i.behavior, i.skillCatalog, i.orders, i.reasons].filter(Boolean).join('\n\n');
   const system = withOwnerSkillProcedures(head, i.procedure);
-  const context = (memory = '', loops = '') => [TURN_CONTEXT_HEADER, f.clock, f.ownerProfile, memory, f.reasons, f.toolResultsNote, f.health, loops, f.connections, f.taskContext]
+  const context = (memory = '', loops = '') => [TURN_CONTEXT_HEADER, f.clock, f.today, f.ownerProfile, memory, f.reasons, f.toolResultsNote, f.health, loops, f.connections, f.taskContext]
     .filter(Boolean).join('\n\n');
   const memory = input.memory?.(input.room(`${system}\n\n${context()}`)) ?? '';
   const loops = input.loops?.(Math.max(0, input.room(`${system}\n\n${context(memory)}`))) ?? '';
@@ -66,7 +68,7 @@ export function assembleTurnPrompt(input: Readonly<{
     turnContext: context(memory, loops),
     sections: { ...sized({ behavior: i.behavior, skill_catalog: i.skillCatalog, orders: i.orders, reasons: i.reasons }), ...(i.procedure ? { skill_procedures: bytes(system) - bytes(head) } : {}) },
     contextSections: sized({
-      clock: f.clock, owner_profile: f.ownerProfile, memory, reasons: f.reasons, tool_results: f.toolResultsNote, health: f.health,
+      clock: f.today ? `${f.clock}\n\n${f.today}` : f.clock, owner_profile: f.ownerProfile, memory, reasons: f.reasons, tool_results: f.toolResultsNote, health: f.health,
       loops, connections: f.connections, task_context: f.taskContext,
     }),
   };
