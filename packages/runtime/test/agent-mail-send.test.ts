@@ -8,7 +8,7 @@ import { agentMailDisplayName, agentMailFirstName } from '../src/channels/agent-
 import { agentMailInbox } from '../src/channels/agent-mail/inbox';
 import { renderAgentMail, type AgentMailParts } from '../src/channels/agent-mail/render';
 import {
-  AGENT_MAIL_SEND_CODES, agentMailIntact, agentMailRefusal, agentMailSendCode, agentMailSending, type AgentMailSenderBinding, type AgentMailSendProposal,
+  AGENT_MAIL_SEND_CODES, agentMailDeskDep, agentMailIntact, agentMailRefusal, agentMailSendCode, agentMailSending, type AgentMailDeskDep, type AgentMailSenderBinding, type AgentMailSendProposal,
 } from '../src/channels/agent-mail/send';
 import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { STEP_UP_APPROVALS } from '../src/channels/approval-step-up';
@@ -40,12 +40,12 @@ describe('the service error codes', () => {
       expect(agentMailSendCode(other)).toBe('other');
   });
 
-  it('treats every listed code but the internal error as nothing sent, and the internal error, an unknown code or none as maybe sent', () => {
-    expect(agentMailRefusal('E_INTERNAL_SERVER_ERROR')).toBeNull();
-    expect(agentMailRefusal('other')).toBeNull();
-    for (const code of AGENT_MAIL_SEND_CODES.filter(code => code !== 'E_INTERNAL_SERVER_ERROR')) expect([code, agentMailRefusal(code)]).not.toEqual([code, null]);
-    expect([agentMailRefusal('E_SENDER_NOT_VERIFIED'), agentMailRefusal('E_RECIPIENT_SUPPRESSED'), agentMailRefusal('E_DAILY_LIMIT_EXCEEDED'), agentMailRefusal('E_HEADERS_TOO_MANY'), agentMailRefusal('E_DELIVERY_FAILED')])
-      .toEqual(['sender', 'recipient', 'limit', 'content', 'delivery']);
+  it('treats every listed code but the internal error and a failed delivery as nothing sent; those two, an unknown code or none as maybe sent', () => {
+    const maybe = ['E_INTERNAL_SERVER_ERROR', 'E_DELIVERY_FAILED'];
+    for (const code of [...maybe, 'other'] as const) expect([code, agentMailRefusal(code as never)]).toEqual([code, null]);
+    for (const code of AGENT_MAIL_SEND_CODES.filter(code => !maybe.includes(code))) expect([code, agentMailRefusal(code)]).not.toEqual([code, null]);
+    expect([agentMailRefusal('E_SENDER_NOT_VERIFIED'), agentMailRefusal('E_RECIPIENT_SUPPRESSED'), agentMailRefusal('E_DAILY_LIMIT_EXCEEDED'), agentMailRefusal('E_HEADERS_TOO_MANY')])
+      .toEqual(['sender', 'recipient', 'limit', 'content']);
   });
 });
 
@@ -81,14 +81,14 @@ describe('the frozen draft', () => {
 });
 
 type Fake = { attempts: AgentMailParts[]; answer: (parts: AgentMailParts) => Promise<{ messageId: string }> };
-const harness = (state: DurableObjectState, options: Readonly<{ sender?: boolean; logs?: TurnLogEntry[] }> = {}) => {
+const harness = (state: DurableObjectState, options: Readonly<{ sender?: boolean; logs?: TurnLogEntry[]; agentMail?: AgentMailDeskDep }> = {}) => {
   let n = 0;
   const fake: Fake = { attempts: [], answer: async () => ({ messageId: '<sent-1@mail.example.test>' }) };
   const inbox = agentMailInbox(state.storage);
   const desk = approvalDesk(state.storage.sql, {
     surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink, google: async () => null, newId: () => `am${++n}`, now: () => Date.now(), timezone: 'UTC',
     log: entry => options.logs?.push(entry), commit: work => state.storage.transactionSync(work), effects: ownerEffectLedger(state.storage, () => Date.now()),
-    ...(options.sender === false ? {} : { agentMail: {
+    ...(options.sender === false ? {} : { agentMail: options.agentMail ?? {
       intact: p => agentMailIntact(p, 'mail.example.test'),
       send: async parts => { fake.attempts.push(parts); return fake.answer(parts); },
       sent: (messageId, p) => inbox.recordOutbound(messageId, p.in_reply_to),
@@ -172,6 +172,7 @@ describe('a send as Waldo on the approval desk', () => {
   for (const [name, failure] of [
     ['a thrown error without a code', () => new Error(`timed out ${CANARY}`)],
     ['the internal error code', () => Object.assign(new Error(CANARY), { code: 'E_INTERNAL_SERVER_ERROR' })],
+    ['a failed delivery, which may have reached some recipients', () => Object.assign(new Error(CANARY), { code: 'E_DELIVERY_FAILED' })],
     ['an answer without an id', null],
   ] as const) {
     it(`${name} leaves the outcome unknown, and an approval again never sends it again`, async () => {
@@ -182,6 +183,7 @@ describe('a send as Waldo on the approval desk', () => {
         const out = await f.approve(id);
         expect(out.toast).toBe('Outcome unknown');
         expect(out.message).toContain('nothing was sent again');
+        expect(out.message).not.toContain('nothing went out');
         expect(f.status(id)).toBe('uncertain');
         f.fake.answer = async () => ({ messageId: '<late@mail.example.test>' });
         expect((await f.approve(id)).toast).toBe('Outcome unknown');
@@ -190,6 +192,86 @@ describe('a send as Waldo on the approval desk', () => {
       });
     });
   }
+
+  it('three approvals of one open card at once send it once', async () => {
+    await owner('agent-mail-send-concurrent', async state => {
+      const f = harness(state);
+      f.fake.answer = () => new Promise(resolve => setTimeout(() => resolve({ messageId: '<sent-1@mail.example.test>' }), 50));
+      const id = await f.desk.proposeAgentMailSend(await agentMailProposal());
+      const outs = await Promise.all([f.approve(id), f.approve(id), f.approve(id)]);
+      expect({ attempts: f.fake.attempts.length, status: f.status(id), sent: outs.filter(out => out.toast === 'Sent').length }).toEqual({ attempts: 1, status: 'done', sent: 1 });
+    });
+  });
+
+  it('an approval while the send is in flight sends nothing more', async () => {
+    await owner('agent-mail-send-midflight', async state => {
+      const f = harness(state);
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      f.fake.answer = async () => { await held; return { messageId: '<sent-1@mail.example.test>' }; };
+      const id = await f.desk.proposeAgentMailSend(await agentMailProposal());
+      const first = f.approve(id);
+      while (f.fake.attempts.length === 0) await new Promise(resolve => setTimeout(resolve, 1));
+      // Claimed before the send: no surface offers it for approval while its outcome is open.
+      expect(f.status(id)).toBe('uncertain');
+      const second = await f.approve(id);
+      release();
+      expect({ first: (await first).toast, second: second.toast, attempts: f.fake.attempts.length, status: f.status(id) })
+        .toEqual({ first: 'Sent', second: 'Already handled.', attempts: 1, status: 'done' });
+    });
+  });
+
+  it('a stored card changed outside the rendered fields fails the card digest and sends nothing', async () => {
+    await owner('agent-mail-send-digest', async state => {
+      const f = harness(state);
+      const p = await agentMailProposal();
+      const id = await f.desk.proposeAgentMailSend(p);
+      state.storage.sql.exec('UPDATE ledger SET payload_json = ? WHERE id = ?', JSON.stringify({ ...p, idempotency_key: 'other-key' }), id);
+      const out = await f.approve(id);
+      expect({ attempts: f.fake.attempts.length, toast: out.toast, status: f.status(id) }).toEqual({ attempts: 0, toast: 'Email changed', status: 'failed' });
+    });
+  });
+
+  it('a card whose send key another send already used collapses onto it: the same email is not sent twice, other content is refused', async () => {
+    await owner('agent-mail-send-key-holder', async state => {
+      const f = harness(state);
+      const hold = (id: string, status: string, p: AgentMailSendProposal) => state.storage.sql.exec(
+        "INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'agent_mail_send', ?, 'held', ?, NULL, ?, ?)", id, status, JSON.stringify(p), Date.now(), Date.now());
+      const same = await agentMailProposal({ idempotency_key: 'key-same' });
+      const sameId = await f.desk.proposeAgentMailSend(same);
+      hold('held-same', 'done', same);
+      expect((await f.approve(sameId)).toast).toBe('Already sent');
+      expect(f.status(sameId)).toBe('done');
+      const other = await agentMailProposal({ idempotency_key: 'key-other' });
+      const otherId = await f.desk.proposeAgentMailSend(other);
+      hold('held-other', 'uncertain', { ...other, parts_digest: `sha256:${'1'.repeat(64)}` });
+      expect((await f.approve(otherId)).toast).toBe('Key already used');
+      expect(f.status(otherId)).toBe('failed');
+      expect(f.fake.attempts).toEqual([]);
+    });
+  });
+
+  it('approving re-asks the directory: a handle released, changed or not answered for, or no owner name, sends nothing', async () => {
+    const directoryEnv = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
+    for (const [name, answer, doName, sends] of [
+      ['held', [{ handle: 'sam', rule_state: 'live' }], 'owner-do', 1],
+      ['released', [], 'owner-do', 0],
+      ['changed', [{ handle: 'lee', rule_state: 'pending' }], 'owner-do', 0],
+      ['unanswered', 'throw', 'owner-do', 0],
+      ['unnamed', [{ handle: 'sam', rule_state: 'live' }], undefined, 0],
+    ] as const) {
+      await owner(`agent-mail-send-held-${name}`, async state => {
+        const attempts: AgentMailParts[] = [];
+        const sender: AgentMailSenderBinding = { send: async parts => { attempts.push(parts); return { messageId: '<sent-1@mail.example.test>' }; } };
+        const fetcher = (async () => { if (answer === 'throw') throw new TypeError('network connection lost'); return Response.json(answer); }) as unknown as typeof fetch;
+        const dep = agentMailDeskDep({ ...ON, AGENT_MAIL_DOMAIN: 'mail.example.test', AGENT_MAIL_SENDER: sender, ...directoryEnv }, state.storage, () => doName, fetcher)!;
+        const f = harness(state, { agentMail: dep });
+        const id = await f.desk.proposeAgentMailSend(await agentMailProposal());
+        const out = await f.approve(id);
+        expect([name, attempts.length, out.toast, f.status(id)]).toEqual([name, sends, sends ? 'Sent' : 'Email changed', sends ? 'done' : 'failed']);
+      });
+    }
+  });
 
   it('an uncertain send stays unknown when approved again after the card no longer checks out or sending is off', async () => {
     await owner('agent-mail-send-unknown-recheck', async state => {

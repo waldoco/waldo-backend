@@ -35,26 +35,27 @@ export const agentMailSendCode = (error: unknown): AgentMailSendCode | 'other' =
 };
 
 // A refusal is the service saying it sent nothing. E_INTERNAL_SERVER_ERROR, an unknown code, a missing one and a lost
-// answer may each have sent, so they are not refusals.
-export type AgentMailRefusal = 'sender' | 'recipient' | 'limit' | 'content' | 'delivery';
-const REFUSALS: Readonly<Record<Exclude<AgentMailSendCode, 'E_INTERNAL_SERVER_ERROR'>, AgentMailRefusal>> = {
+// answer may each have sent, so they are not refusals. Nor is E_DELIVERY_FAILED: one recipient's server can refuse after
+// another's took the mail, so saying nothing went out could be false and invite a second send.
+type MaybeSent = 'E_INTERNAL_SERVER_ERROR' | 'E_DELIVERY_FAILED';
+const MAYBE_SENT: ReadonlySet<string> = new Set<MaybeSent>(['E_INTERNAL_SERVER_ERROR', 'E_DELIVERY_FAILED']);
+export type AgentMailRefusal = 'sender' | 'recipient' | 'limit' | 'content';
+const REFUSALS: Readonly<Record<Exclude<AgentMailSendCode, MaybeSent>, AgentMailRefusal>> = {
   E_SENDER_NOT_VERIFIED: 'sender', E_SENDER_DOMAIN_NOT_AVAILABLE: 'sender', E_ACCOUNT_SUSPENDED: 'sender',
   E_RECIPIENT_NOT_ALLOWED: 'recipient', E_RECIPIENT_SUPPRESSED: 'recipient',
   E_RATE_LIMIT_EXCEEDED: 'limit', E_DAILY_LIMIT_EXCEEDED: 'limit',
   E_VALIDATION_ERROR: 'content', E_FIELD_MISSING: 'content', E_TOO_MANY_RECIPIENTS: 'content', E_TOO_MANY_ATTACHMENTS: 'content', E_CONTENT_TOO_LARGE: 'content',
   E_HEADER_NOT_ALLOWED: 'content', E_HEADER_USE_API_FIELD: 'content', E_HEADER_VALUE_INVALID: 'content', E_HEADER_VALUE_TOO_LONG: 'content',
   E_HEADER_NAME_INVALID: 'content', E_HEADERS_TOO_LARGE: 'content', E_HEADERS_TOO_MANY: 'content',
-  E_DELIVERY_FAILED: 'delivery',
 };
 export const agentMailRefusal = (code: AgentMailSendCode | 'other'): AgentMailRefusal | null =>
-  code === 'other' || code === 'E_INTERNAL_SERVER_ERROR' ? null : REFUSALS[code];
+  code === 'other' || MAYBE_SENT.has(code) ? null : REFUSALS[code as Exclude<AgentMailSendCode, MaybeSent>];
 // Why it was not sent, in the owner's words.
 export const AGENT_MAIL_REFUSED: Readonly<Record<AgentMailRefusal, string>> = {
   sender: 'sending from your Waldo address is not set up on the mail service',
   recipient: 'the mail service will not send to one of those addresses',
   limit: 'the mail service has reached its sending limit for now',
   content: 'the mail service refused the email as written',
-  delivery: 'the mail service could not deliver it',
 };
 
 // The frozen card of a send as Waldo. body is the rendered plain text, the exact words the card shows; the parts are not
@@ -106,12 +107,12 @@ export type AgentMailDeskDep = Readonly<{
 }>;
 // The approval desk's sender, absent while sending is off. Approving re-checks that the owner still holds the handle the
 // card sends from, so a released address never sends; a directory that cannot say counts as not held.
-export const agentMailDeskDep = (env: AgentMailSendEnv & OwnerDirectoryEnv, storage: DurableObjectStorage, doName: () => string | undefined): AgentMailDeskDep | undefined => {
+export const agentMailDeskDep = (env: AgentMailSendEnv & OwnerDirectoryEnv, storage: DurableObjectStorage, doName: () => string | undefined, fetcher: typeof fetch = fetch): AgentMailDeskDep | undefined => {
   const on = agentMailSending(env);
   if (!on) return undefined;
   return {
     intact: async p => {
-      const parts = await agentMailIntact(p, on.domain), name = doName(), directory = name ? agentMailDirectory(env, name) : null;
+      const parts = await agentMailIntact(p, on.domain), name = doName(), directory = name ? agentMailDirectory(env, name, fetcher) : null;
       if (!parts || !directory) return null;
       try { return (await directory.current())?.handle === p.handle ? parts : null; } catch { return null; }
     },

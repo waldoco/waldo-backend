@@ -4029,9 +4029,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
       browserReceiptVerified: browserApproval.receiptVerified,
       browserDeny: browserApproval.deny,
+      agentMail: agentMailDeskDep(this.env, storage, () => storage.kv.get<string>('do_name')),
       // Approved sends go out verbatim on the channel the proposal names, through that channel's
       // egress-gated call, whichever surface approved them.
-      agentMail: agentMailDeskDep(this.env, storage, () => storage.kv.get<string>('do_name')),
       canSendMessage: name => { try { const target = destination(name); return !!target && target.owner > 0 && identity.get<boolean>(`${name}_unlinked`) !== true; } catch { return false; } },
       sendMessage: async (proposal) => {
         const target = destination(proposal.channel);
