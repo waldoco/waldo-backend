@@ -117,14 +117,22 @@ it('the skill index is byte-stable across machine and owner turns and in name or
   });
 });
 
-it('an owner whose book was seeded before every trigger could load keeps every skill loadable', async () => {
-  await inDo('upgrade-trigger-types', async state => {
+// A rollback runs the build before this one against rows this build wrote, so the rows must be what that build writes and
+// checks: same version, triggers and date per skill. A bumped pack would read as tampered there and every skill would go dark.
+it('rows this build writes still load under the build before it, and the reverse', async () => {
+  await inDo('rollback-rows', async state => {
     const before = CURATED_SKILLS.map(s => skillSchema.parse({ ...s, version: s.name === 'document-email-preparation' ? 1 : 2, trigger_types: s.name === 'document-email-preparation' ? ['user_message' as const, 'brief' as const] : ['user_message' as const], created_at: s.name === 'document-email-preparation' ? '2026-10-01T00:00:00Z' : '2026-10-03T00:00:00Z' }));
-    new CuratedOwnerSkills(state.storage.sql, PRINCIPAL, undefined, PRINCIPAL, before);
-    state.storage.sql.exec("UPDATE skills SET status='archived' WHERE name='weekly-review'");
-    const book = new CuratedOwnerSkills(state.storage.sql, PRINCIPAL);
-    const turn = (turnId: string) => ({ owner: PRINCIPAL, turnId, trigger: 'brief' as const, ownerText: '', assertCurrent: async () => undefined });
-    for (const s of CURATED_SKILLS.filter(s => s.name !== 'weekly-review')) expect(book.load(s.name, s.version, turn(`t-${s.name}`)).ok, s.name).toBe(true);
-    expect(book.list().find(s => s.name === 'weekly-review')?.enabled).toBe(false);
+    const sql = state.storage.sql, rows = () => sql.exec('SELECT * FROM skills ORDER BY name').toArray();
+    const turn = (turnId: string) => ({ owner: PRINCIPAL, turnId, trigger: 'user_message' as const, ownerText: '', assertCurrent: async () => undefined });
+    new CuratedOwnerSkills(sql, PRINCIPAL);
+    sql.exec("UPDATE skills SET status='archived' WHERE name='weekly-review'");
+    const written = rows();
+    const older = new CuratedOwnerSkills(sql, PRINCIPAL, undefined, PRINCIPAL, before);
+    for (const s of before.filter(s => s.name !== 'weekly-review')) expect(older.load(s.name, s.version, turn(`old-${s.name}`)).ok, s.name).toBe(true);
+    expect(older.list().find(s => s.name === 'weekly-review')?.enabled).toBe(false);
+    expect(rows()).toEqual(written);
+    const current = new CuratedOwnerSkills(sql, PRINCIPAL);
+    for (const s of CURATED_SKILLS.filter(s => s.name !== 'weekly-review')) expect(current.load(s.name, s.version, turn(`new-${s.name}`)).ok, s.name).toBe(true);
+    expect(rows()).toEqual(written);
   });
 });
