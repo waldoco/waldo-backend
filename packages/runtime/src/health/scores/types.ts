@@ -18,8 +18,8 @@ export interface MethodReading<Method extends string> { readonly value: number; 
 export interface HourlyBucket {
   readonly startAt: string;
   readonly heartRate: number | null;
-  readonly hrv: number | null;
-  readonly hrvMethod: HrvMethod | null;
+  // At most one reading per method: an hour can hold SDNN and RMSSD side by side.
+  readonly hrvReadings: readonly MethodReading<HrvMethod>[];
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
   readonly activeEnergyKcal: number | null;

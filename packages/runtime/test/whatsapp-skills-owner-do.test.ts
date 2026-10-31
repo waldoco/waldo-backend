@@ -6,6 +6,7 @@ import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import { CURATED_SKILLS } from '../src/skills/curated-owner';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const SKILL = CURATED_SKILLS.find(skill => skill.name === 'day-brief')!;
 const REPLY = 'Three meetings today; the board prep at 11 matters most.';
@@ -38,7 +39,7 @@ const deliver = async (instance: InstanceType<typeof OwnerDO>, name: string, tex
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: name, subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
   expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  await drainWhatsAppTurns(instance);
 };
 
 it('a WhatsApp turn loads a reviewed skill unprompted, keeps its tools and approval rule, and replies as a WhatsApp text', async () => {

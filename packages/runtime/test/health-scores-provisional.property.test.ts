@@ -11,7 +11,7 @@ const finite = (min: number, max: number) => fc.double({ min, max, noNaN: true, 
 const optional = (min: number, max: number) => fc.option(finite(min, max), { nil: null });
 
 const bucket = (day: string, hour: number, hr: number | null, hrv: number | null, method: 'rmssd' | 'sdnn'): HourlyBucket => ({
-  startAt: new Date(Date.parse(`${day}T00:00:00Z`) + hour * 3_600_000).toISOString(), heartRate: hr, hrv, hrvMethod: hrv === null ? null : method, daylightMinutes: 10, movementMinutes: 10, activeEnergyKcal: null,
+  startAt: new Date(Date.parse(`${day}T00:00:00Z`) + hour * 3_600_000).toISOString(), heartRate: hr, hrvReadings: hrv === null ? [] : [{ value: hrv, method }], daylightMinutes: 10, movementMinutes: 10, activeEnergyKcal: null,
 });
 const dayArb = (age: number): fc.Arbitrary<DayRecord> => {
   const day = addDays(TARGET, -age);

@@ -436,9 +436,8 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
 // (https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks/ , "Webhook delivery failure").
 // A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier
 // than Meta's first attempt, so a retry cannot outlive the record. A message is marked as it is accepted
-// (at-most-once): a replayed turn could repeat effects, a failed one is reported to the owner by a fixed notice (whatsappTurn) and can be resent.
-// Two wordings: a message whose turn never started is safe to resend; one whose turn started may have had effects.
-export const WHATSAPP_UNSTARTED_NOTICE = "I couldn't get to your last message, so nothing happened. Send it again?";
+// (at-most-once): a replayed turn could repeat effects. A message waits in the owner's inbox until its turn runs; a turn that
+// started and failed is reported to the owner by a fixed notice (whatsappNotice), since it may have had effects.
 export const WHATSAPP_PARTIAL_NOTICE = 'I may have only partly handled your last message. Check what went through before you send it again.';
 export const WAMID_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 type WamidKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;

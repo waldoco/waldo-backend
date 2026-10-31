@@ -1,15 +1,15 @@
-// Regression for the wa_seq read/turn/put race (fixed: allocation + turns + persist are one serial unit).
+// Regression for the wa_seq read/turn/put race (fixed: each message's update_id is allocated in its admitting step, beside
+// its inbox row, so overlapping admissions can never share one).
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { WA_UPDATE_BASE } from '../src/channels/whatsapp-api';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
-// Admission acks before the turns run; settle waits for them, as the webhook's waitUntil would.
-const settle = (instance: OwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -21,7 +21,6 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const firstSend = deferred();
     const releaseSend = deferred();
-    const secondQueued = deferred();
     const sent: unknown[] = [];
     const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       expect(String(input)).toBe('https://graph.facebook.com/v26.0/fictional-phone-id/messages');
@@ -36,44 +35,33 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
     });
     const turnHost = instance as unknown as { turn(update: { update_id: number }, channel: string): Promise<void> };
     const turns = vi.spyOn(turnHost, 'turn');
-    // Observe the real serial queue, without replacing its behavior. The second allocation has
-    // already happened when its turn is queued, while the first request still awaits Graph.
-    const serialHost = instance as unknown as { serial(work: () => Promise<void>): Promise<void> };
-    const serial = serialHost.serial.bind(instance);
-    const queue = vi.spyOn(serialHost, 'serial').mockImplementation(work => {
-      const result = serial(work);
-      if (state.storage.kv.get('wamid:wamid.concurrent.B') !== undefined) secondQueued.resolve();
-      return result;
-    });
     const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
       body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/stop' } }] }),
     }));
-    const pending: Promise<Response>[] = [];
+    let drained: Promise<void> | undefined;
     try {
-      pending.push(post('wamid.concurrent.A'));
+      expect((await post('wamid.concurrent.A')).status).toBe(200);
+      drained = drainWhatsAppTurns(instance);
       await firstSend.promise;
-      pending.push(post('wamid.concurrent.B'));
-      await secondQueued.promise;
+      // B is admitted while A's turn awaits Graph: its update_id is allocated now, beside its row, never from a stale read.
+      expect((await post('wamid.concurrent.B')).status).toBe(200);
       expect(state.storage.kv.get('wamid:wamid.concurrent.A')).toBeDefined();
       expect(state.storage.kv.get('wamid:wamid.concurrent.B')).toBeDefined();
-      expect(await state.storage.get('wa_seq')).toBe(1); // A's allocation is persisted before its turn; B is still queued
+      expect(await state.storage.get('wa_seq')).toBe(2);
       releaseSend.resolve();
-      const replies = await Promise.all(pending);
-      expect(replies.map(reply => reply.status)).toEqual([200, 200]);
-      await settle(instance);
+      await drained;
       expect(turns).toHaveBeenCalledTimes(2);
       const ids = turns.mock.calls.map(([update]) => update.update_id);
       // Before the fix this yielded [BASE+1, BASE+1].
       expect(ids, 'different wamids must receive distinct update_ids').toEqual([WA_UPDATE_BASE + 1, WA_UPDATE_BASE + 2]);
       expect(sent).toHaveLength(2);
-      expect(await state.storage.get('wa_seq')).toBe(2);
       expect(await state.storage.get('wa_offset')).toBe(WA_UPDATE_BASE + 3);
     } finally {
       releaseSend.resolve();
-      await Promise.allSettled(pending);
+      await drained?.catch(() => undefined);
       await state.storage.deleteAlarm();
-      turns.mockRestore(); queue.mockRestore(); graph.mockRestore();
+      turns.mockRestore(); graph.mockRestore();
     }
   });
 });
@@ -93,7 +81,7 @@ const post = async (instance: OwnerDO, messages: { id: string }[]) => {
     method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
     body: JSON.stringify({ messages: messages.map(m => ({ from: '15550001111', id: m.id, type: 'text', text: { body: 'hi' } })) }),
   }));
-  await settle(instance);
+  await drainWhatsAppTurns(instance);
   return response;
 };
 
