@@ -83,8 +83,9 @@ async function world() {
     expect((await host.capabilities()).status).toBe(200);
   };
   const threaded = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().map(record => record.replyTo !== undefined));
-  // Each record as kind:outcome, in the order it was frozen.
-  const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0))
+  // Each record as kind:outcome, in the chat's order; a plain resend shares its reply's place and lists after it.
+  const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records()
+    .sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0) || Number(x.replyRef.startsWith('plain:')) - Number(y.replyRef.startsWith('plain:')))
     .map(record => `${record.replyRef.split(':')[0]}:${record.result?.state ?? record.state}`));
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records().map(record => record.state));
   // The owner object's armed alarm and the outbox's own wake, read without running either.
@@ -160,7 +161,7 @@ it('a host that refuses A\'s threaded reply before sending still gets A\'s answe
 
   expect((await w.host.pull()).delivery).toBeNull();
   expect(w.host.nativeSends.map(send => send.text)).toEqual(['Reply to turn 1.', 'Reply to turn 2.']);
-  expect(await w.outcomes()).toEqual(['reply:rejected', 'reply:local_recorded', 'plain:local_recorded']);
+  expect(await w.outcomes()).toEqual(['reply:rejected', 'plain:local_recorded', 'reply:local_recorded']);
 }, 30_000);
 
 // One message, written as an inline reply, so its answer is threaded, and nothing else is waiting: no second turn, no busy
