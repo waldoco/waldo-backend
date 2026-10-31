@@ -25,7 +25,7 @@ import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'health' | 'admin/health' | 'connections' | 'connections/imessage' | 'connections/devices' | 'connections/phone' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'vault' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'health' | 'admin/health' | 'connections' | 'connections/imessage' | 'connections/devices' | 'connections/phone' | 'connections/agent_mail' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'vault' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -36,7 +36,7 @@ export const resolveRoute = (raw: string): Route => {
   if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
   const value = raw.split('?')[0] ?? '';
   if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
-  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices','connections/phone'].includes(value))return value as Route;
+  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices','connections/phone','connections/agent_mail'].includes(value))return value as Route;
   if (value === 'admin' || value === 'admin/health' || value === 'health' || value === 'vault' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
   if(isThreadRoute(value))return value as Route;
@@ -57,7 +57,7 @@ const ownerActivity = (data: OverviewV1) => data.latest_activity?.kind === 'hear
 // The time-of-day word carries the one serif accent on the page.
 const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(\.)$/.exec(text); return match ? <>{match[1]}<em>{match[2]}</em>{match[3]}</> : <>{text}</>; };
 
-export const isSettingsRoute = (route: Route) => route === 'admin' || route === 'admin/health' || route === 'health' || route === 'vault' || ['connections', 'connections/imessage', 'connections/devices', 'connections/phone', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
+export const isSettingsRoute = (route: Route) => route === 'admin' || route === 'admin/health' || route === 'health' || route === 'vault' || ['connections', 'connections/imessage', 'connections/devices', 'connections/phone', 'connections/agent_mail', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
 const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
@@ -86,7 +86,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='not-found')return <section className="tile notice" role="status"><h1>Page not found</h1><p>This console page doesn’t exist.</p><a className="button-link" href="#/today">Back to Today</a></section>;
   if(route==='settings/not-found')return <><SettingsHead selected="day" isAdmin={isAdmin}/><section className="tile notice" role="status"><h2>Settings page not found</h2><p>This settings page doesn’t exist.</p><a className="button-link" href="#/settings">Open Settings</a></section></>;
   if(route==='connections')return <><SettingsHead selected="connections" isAdmin={isAdmin}/><ControlsPanel key={route} view="connections" section="connections" embedded/></>;
-  if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
+  if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'||route==='connections/agent_mail'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':route==='connections/agent_mail'?'agent_mail':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':view==='agent_mail'?'Your Waldo address':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting')return <ControlsPanel key={route} view="waiting"/>;
   if(route==='patrol')return <><ControlsPanel key={route} view="activity"/><AccessLogPanel/></>;

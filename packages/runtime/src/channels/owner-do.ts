@@ -152,7 +152,7 @@ import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-c
 import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
-import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
@@ -1007,8 +1007,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     let known: boolean;
     try { known = new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
-    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass.
-    if (known && observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now())) await this.rearmEveryWake();
+    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass; a refused thread leaves a plain resend due.
+    if (known && (observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now()) || new IMessageFinalOutbox(this.ctx.storage).dueAt() !== null)) await this.rearmEveryWake();
     return known;
   }
   private async drainIMessage(alarmEnd?: number): Promise<void> {
@@ -5157,7 +5157,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         quiet: () => revisesCards && quiet(),
         cards: dayCards, revisesCards,
         delivered: card => plans.reached(today(), card),
-        pushLine: async (line, outside) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...outside, await healthLogLines()] }),
+        named: () => this.env.UPDATE_PUSH_NAMES === '1',
         chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),
         settled: () => this.ctx.waitUntil(wakeBriefSweep(scheduler, Date.now()).then(() => undefined, () => undefined)),
       } } : {}),
