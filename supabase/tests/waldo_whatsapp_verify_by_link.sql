@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(35);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -64,6 +64,10 @@ select throws_ok($$ select pg_temp.send('DEECODE234', '919800000301') $$, '23505
   'once unlinked, a number another owner has proven is still refused, in its own words');
 select ok(not pg_temp.verified('wa-dee') and pg_temp.phone('wa-dee') is null, 'dee gains no number');
 select is((select count(*)::int from waldo.link_codes where owner_id = pg_temp.owner('wa-dee') and used_at is null), 1, 'and keeps her code');
+
+-- A sender that is not a number proves nothing and is not told the number belongs to someone else.
+select throws_ok($$ select pg_temp.send('DEECODE234', 'bsuid.fixture') $$, 'P0001', 'whatsapp presence requires a verified phone (phone_verified_at is null)',
+  'a subject that is not a number is refused by the presence rule, not as held elsewhere');
 
 -- An owner who has proven a number keeps it when linking WhatsApp from another.
 select ok(pg_temp.issue('wa-cy', 'CYCODE6789'), 'cy gets a new code');

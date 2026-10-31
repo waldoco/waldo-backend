@@ -21,7 +21,8 @@ revoke all on function waldo.adopt_owner_phone(uuid, text) from public, anon, au
 
 -- A WhatsApp link needs a proven number on the account (presences_whatsapp_verified_phone). When the sending number is
 -- held by another owner and this owner has proven none, the refusal says so in its own words, so the sender is told
--- why instead of hearing that the code failed; the transaction rolls back and the code is not spent.
+-- why instead of hearing that the code failed; the transaction rolls back and the code is not spent. Any other reason
+-- the number stayed unproven (a subject that is not a number) is left to the presence rule's own refusal.
 create or replace function waldo.redeem_link_code(p_code_hash text, p_provider text, p_subject text) returns uuid
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid;
@@ -36,7 +37,8 @@ begin
     raise exception 'presence already linked to another owner' using errcode = '23505';
   end if;
   perform waldo.adopt_owner_phone(v_owner, case p_provider when 'whatsapp' then '+' || p_subject when 'imessage' then p_subject end);
-  if p_provider = 'whatsapp' and (select phone_verified_at from waldo.owners where id = v_owner) is null then
+  if p_provider = 'whatsapp' and (select phone_verified_at from waldo.owners where id = v_owner) is null
+      and waldo.phone_held_by_other(v_owner, '+' || p_subject) then
     raise exception 'phone number held by another owner' using errcode = '23505';
   end if;
   insert into waldo.presences (owner_id, provider, subject) values (v_owner, p_provider, p_subject);
