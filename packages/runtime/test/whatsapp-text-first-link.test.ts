@@ -352,3 +352,43 @@ describe('the directory calls', () => {
     expect(whatsappLinkDirectory({})).toBeNull();
   });
 });
+
+describe('Waldo\'s contact card after a link', () => {
+  const WALDO = '919226067544';
+  const linking = async (graphReply?: Parameters<typeof run>[3], number: string | undefined = WALDO, redeemed = true) => {
+    const redeem = vi.fn(async () => redeemed ? { doName: 'do-a', subject: SENDER, timezone: null } : null);
+    const request = await inbound('waldo ABCDEFGH23');
+    const sent: Record<string, unknown>[] = [], logs: string[] = [];
+    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return (graphReply ?? (() => Response.json({ messages: [{ id: 'wamid.reply' }] })))(); });
+    const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+    const work: Promise<unknown>[] = [];
+    try {
+      await handleWhatsAppWebhook(request, { ...env, ...(number ? { WHATSAPP_WALDO_NUMBER: number } : {}) }, (p) => work.push(p), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle: async () => true });
+      await Promise.all(work);
+      return { sent, logs };
+    } finally { graph.mockRestore(); log.mockRestore(); }
+  };
+
+  it('a redeemed code is answered, then Waldo sends its own card so one tap saves it as Waldo', async () => {
+    const { sent } = await linking();
+    expect(sent.map(body => body.type)).toEqual(['text', 'contacts']);
+    expect(sent[1]).toEqual({ messaging_product: 'whatsapp', to: `+${SENDER}`, type: 'contacts',
+      contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${WALDO}`, type: 'WORK', wa_id: WALDO }] }] });
+  });
+
+  it('a code that did not work, or no Waldo number configured, sends no card', async () => {
+    expect((await linking(undefined, WALDO, false)).sent.map(body => body.type)).toEqual(['text']);
+    expect((await linking(undefined, '')).sent.map(body => body.type)).toEqual(['text']);
+  });
+
+  it('a card Graph refuses leaves the link as it is and is logged by its codes, never by a number', async () => {
+    let calls = 0;
+    const { sent, logs } = await linking(() => ++calls === 1 ? Response.json({ messages: [{ id: 'wamid.reply' }] }) : Response.json({ error: { code: 131026, message: `undeliverable to ${SENDER}` } }, { status: 400 }));
+    expect(sent.map(body => body.type)).toEqual(['text', 'contacts']);
+    const card = logs.filter(line => line.includes('whatsapp_contact_card'));
+    expect(card).toHaveLength(1);
+    expect(card[0]).toContain('"ok":false');
+    expect(card.join('\n')).not.toContain(SENDER);
+    expect(logs.some(line => line.includes('"hop":"whatsapp_link_code","ok":false'))).toBe(false);
+  });
+});

@@ -103,6 +103,15 @@ describe('whatsapp types Waldo cannot open', () => {
     expect(unsupported.map(turn => turn.chatId)).toEqual([Number(OWNER), Number(OWNER), Number(OWNER)]);
   });
 
+  it('a captioned video reaches the turn as its caption, saying the video was not watched', async () => {
+    const { accepted, unsupported } = await poll([
+      { id: 'wamid.v3', from: OWNER, type: 'video', video: { id: 'media-v3', caption: '  is this form right?  ' } },
+      { id: 'wamid.v4', from: OWNER, type: 'video', video: { id: 'media-v4', caption: '   ' } },
+    ]);
+    expect(accepted.map(turn => turn.parts)).toEqual([[{ authorship: 'owner', text: "Sent a video Waldo can't watch yet. Its caption: is this form right?" }]]);
+    expect(unsupported).toHaveLength(1);
+  });
+
   it('a reaction to one of Waldo\'s messages needs no answer, and a foreign sender is still ignored', () => {
     const { updates } = whatsappIngressUpdates([
       { id: 'wamid.r1', from: OWNER, type: 'reaction', reaction: { message_id: 'wamid.out', emoji: '👍' } },

@@ -3,6 +3,7 @@ import { whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
 import { clearWhatsAppContext, forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText, WHATSAPP_CONTEXT_RETENTION_MS } from '../src/channels/whatsapp-context';
 import { clearWhatsAppNumber } from '../src/channels/whatsapp-window';
+import { OUTBOX_CUSTODY, SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 
 const OWNER = '15550001111';
 const kvStore = () => {
@@ -55,6 +56,12 @@ describe('whatsapp context store', () => {
     expect(whatsappSentText(kv, 'wamid.1', 1_000)).not.toContain('52');
     expect(whatsappSentText(kv, 'wamid.1', 1_000 + WHATSAPP_CONTEXT_RETENTION_MS)).toBeNull();
     expect(whatsappSentText(kv, 'wamid.other', 1_000)).toBeNull();
+  });
+
+  it('masks a secret-bearing link before keeping what Waldo sent', () => {
+    const kv = kvStore();
+    recordWhatsAppSent(kv, 'wamid.1', 'Reconnect here: https://accounts.google.com/o/oauth2/v2/auth?client_id=x&state=abc', 1);
+    expect(whatsappSentText(kv, 'wamid.1', 2)).toBe('Reconnect here: [link removed]');
   });
 
   it('keeps one waiting line per message, replaced by a later reaction and removed when taken back; taking empties it', () => {
@@ -111,6 +118,15 @@ describe('whatsapp shim: quotes, sent words and reactions', () => {
     expect(heard.map(([id, text]) => [id, text.length])).toEqual([['wamid.out.1', 4096], ['wamid.out.2', 904]]);
     await shim('sendMessage', { chat_id: Number(OWNER), text: 'Console (link works once): https://waldo.example/console?t=secret' });
     expect(heard).toHaveLength(2);
+  });
+
+  it('a delivery-outbox send (a Brief, a reminder) is heard like a turn reply; a send-now-only system send is not', async () => {
+    const { fetcher } = graph();
+    const heard: string[] = [];
+    const shim = whatsappTelegramShim('token', 'phone', OWNER, fetcher, { onSent: (_id, text) => heard.push(text) });
+    await shim('sendMessage', { chat_id: Number(OWNER), text: 'Morning. Three meetings today.', [OUTBOX_CUSTODY]: true });
+    await shim('sendMessage', { chat_id: Number(OWNER), text: 'Your code is 123456', [SEND_NOW_ONLY]: true });
+    expect(heard).toEqual(['Morning. Three meetings today.']);
   });
 
   it('a reaction goes out as the Cloud API reaction message', async () => {

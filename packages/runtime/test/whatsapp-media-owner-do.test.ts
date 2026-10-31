@@ -65,6 +65,13 @@ it('a document reaches the turn as an attached file, the owner\'s message is mar
   });
 }, 60_000);
 
+it('a captioned video starts a turn on its caption, and the model is told the video itself was not seen', async () => {
+  await whatsappOwner('wa-media-video-caption', async (deliver) => {
+    await deliver({ id: 'wamid.video.c', type: 'video', video: { id: 'media-video', caption: 'what do you think of my serve?' } });
+    expect(JSON.stringify(modelInputs.at(-1))).toContain("Sent a video Waldo can't watch yet. Its caption: what do you think of my serve?");
+  });
+}, 60_000);
+
 it('a video gets the honest unsupported reply and starts no turn', async () => {
   await whatsappOwner('wa-media-video', async (deliver, graph) => {
     const turns = modelInputs.length;
