@@ -311,7 +311,7 @@ Each slice is its own issue, PR and gate review. Re-ranked after the owner's rul
 **Title:** Photon: a threaded reply whose target cannot be resolved is refused, so Waldo's answer is lost.
 
 **Where:** branch `ashish/photon-rich` at `25217b16`.
-- `src/photon/spectrum.ts:137-140`: `target()` resolves the reply target with `space.getMessage(partIndex ? \`p:${partIndex}/${guid}\` : guid)`. If that throws or finds nothing, it throws `PhotonTargetUnavailable` before any send.
+- `src/photon/spectrum.ts:137-140`: `target()` resolves the reply target with `` space.getMessage(partIndex ? `p:${partIndex}/${guid}` : guid) ``. If that throws or finds nothing, it throws `PhotonTargetUnavailable` before any send.
 - `src/photon/transport.ts:35` classifies that as refused (`photon_target_unavailable`).
 - `src/photon/sender.ts:49` needs `replies` verified for any command with a target message.
 - The id the backend targets is the one the host forwarded inbound: `src/photon/reader.ts:26`, `messageGuid: row.messageId, partIndex: 0`.
