@@ -4771,8 +4771,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
         if (schedPrefs.enabled('daily_brief')) await armDayCards(scheduler, plans, clock.timezone, Date.now());
         await planToday(`${trace}:plan`);
-        // A source the owner connected since setup (health consent, Google) joins the welcome build without a visit to the app.
-        // Last, so its stage budgets do not wait behind the night's own jobs on the owner queue.
+        // A source the owner connected since setup (health consent, Google), or health readings that landed after an empty
+        // health stage, join the welcome build without a visit to the app. Last, so its stage budgets do not wait behind the
+        // night's own jobs on the owner queue.
+        runtime.welcome.lateHealth();
         this.continueWelcome(runtime);
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'nightly' });
         return outcome;
@@ -4807,7 +4809,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
         readContext: async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } } });
-    const healthSamples = () => recompute.ask();
+    // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
+    const healthSamples = async () => {
+      await recompute.ask();
+      if (runtime.welcome.lateHealth()) this.continueWelcome(runtime);
+    };
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
       let outcome: string;
