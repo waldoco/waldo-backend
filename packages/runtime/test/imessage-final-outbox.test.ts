@@ -324,3 +324,40 @@ it('a full outbox of live replies still records the refusal; it only has no room
     expect(outbox.get('plain:a')).toBeNull();
   });
 });
+
+it('a command conflict at the bridge is not resent: another delivery under that command may already have gone out', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage);
+    outbox.freeze(threadedTurn('a'), 'the reply');
+    outbox.settle('reply:a', 'cmd-a', refused('cmd-a', 'command_conflict'));
+    expect(outbox.get('plain:a')).toBeNull();
+    expect(outbox.due()).toEqual([]);
+  });
+});
+
+it('a reply waiting on a busy bridge steps aside when an earlier reply becomes due there: a plain resend keeps its place', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    // Near the drain's own clock, which ages a reply from its frozenAt.
+    let now = Date.now() - 3_000;
+    const outbox = new IMessageFinalOutbox(state.storage, () => now), calls: string[] = [];
+    outbox.freeze(threadedTurn('a'), 'first answer'); outbox.markQueued('reply:a');
+    now += 1_000;
+    outbox.freeze(turn('b'), 'second answer');
+    now += 1_000;
+    // The bridge still holds A's threaded reply; while B waits on it, the host refuses A.
+    const bridges = { idFromName: (name: string) => name, get: (name: string) => ({ enqueueReply: async ({ replyRef }: { replyRef: string }) => {
+      calls.push(`${name} ${replyRef}`);
+      if (calls.length === 1) outbox.settle('reply:a', 'cmd-a', refused('cmd-a', 'photon_target_unavailable'));
+      return { kind: 'busy' };
+    } }) };
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const drained = drainIMessageOutbox({ storage: state.storage, id: state.id, env: { IMESSAGE_BRIDGE_DO: bridges } as never }, 600_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await drained;
+    } finally { vi.useRealTimers(); }
+    expect(calls).toEqual(['bridge reply:b']);
+    expect(outbox.get('reply:b')).toMatchObject({ state: 'frozen', attempts: 1 });
+    expect(outbox.due().map(row => row.replyRef)).toEqual(['plain:a']);
+  });
+});

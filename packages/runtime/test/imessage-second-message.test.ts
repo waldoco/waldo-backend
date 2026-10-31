@@ -7,7 +7,7 @@ import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
-import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { IMESSAGE_BUSY_RETRY_MS, IMESSAGE_OUTBOX_DUE_KEY, IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import type { IMessageResult } from '@waldo/contracts';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
@@ -87,7 +87,10 @@ async function world() {
   const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0))
     .map(record => `${record.replyRef.split(':')[0]}:${record.result?.state ?? record.state}`));
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records().map(record => record.state));
-  return { host, pump, handOver, activate, inbox, threaded, outcomes };
+  // The owner object's armed alarm and the outbox's own wake, read without running either.
+  const wakes = () => runInDurableObject(ownerStub, async (_i, state) => ({ alarm: await state.storage.getAlarm(), outbox: state.storage.kv.get<number | null>(IMESSAGE_OUTBOX_DUE_KEY) ?? null }));
+  const ownerAlarm = async () => { await runDurableObjectAlarm(ownerStub); await settle(); };
+  return { host, pump, handOver, activate, inbox, threaded, outcomes, wakes, ownerAlarm };
 }
 
 // The owner sends A, then B while A's turn is held on its first model call; A is released and both turns run.
@@ -158,4 +161,34 @@ it('a host that refuses A\'s threaded reply before sending still gets A\'s answe
   expect((await w.host.pull()).delivery).toBeNull();
   expect(w.host.nativeSends.map(send => send.text)).toEqual(['Reply to turn 1.', 'Reply to turn 2.']);
   expect(await w.outcomes()).toEqual(['reply:rejected', 'reply:local_recorded', 'plain:local_recorded']);
+}, 30_000);
+
+// One message, written as an inline reply, so its answer is threaded, and nothing else is waiting: no second turn, no busy
+// retry. The refusal's own report must wake the owner object for the plain resend, at the outbox's due time, not on the
+// 30-minute heartbeat.
+it('with no other wake, a refused threaded reply goes out plain on the wake its refusal armed', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, true)).status).toBe(200);
+  expect((await w.host.send({ ...w.host.message('Find me three flights to Goa for Friday.'), replyToGuid: 'g-earlier-waldo-message' })).status).toBe(200);
+  await w.pump();
+  expect(await w.threaded()).toEqual([true]);
+
+  const { delivery } = await w.host.pull();
+  const command = JSON.parse(delivery!.body) as { commandId: string; target: IMessageResult['target'] };
+  expect(command.target.messageGuid).toBeDefined();
+  expect((await w.host.postResult(delivery!, { version: 1, commandId: command.commandId, target: command.target, state: 'rejected', disposition: 'not_started', reason: 'photon_target_unavailable' })).status).toBe(200);
+  await w.handOver();
+  await vi.waitFor(async () => expect(await w.outcomes()).toEqual(['reply:rejected', 'plain:frozen']), { timeout: 10_000, interval: 20 });
+
+  const { alarm, outbox } = await w.wakes();
+  // Armed at the outbox's due time, never before it (no busy loop): the arbiter floors the alarm at its own now + 250 ms, read
+  // a moment after the outbox's, so it can land a millisecond later. Without the wake it sat on another lane's wake, minutes out.
+  expect(outbox).not.toBeNull();
+  expect(alarm! - outbox!).toBeGreaterThanOrEqual(0);
+  expect(alarm! - outbox!).toBeLessThan(1_000);
+  await w.ownerAlarm();
+  const plain = (await w.host.pull()).delivery;
+  expect(plain?.body).toContain('Reply to turn 1.');
+  expect((JSON.parse(plain!.body) as { target: { messageGuid?: string } }).target.messageGuid).toBeUndefined();
 }, 30_000);

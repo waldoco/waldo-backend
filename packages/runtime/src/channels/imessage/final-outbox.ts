@@ -182,10 +182,15 @@ export class IMessageFinalOutbox {
       if (r.commandId !== commandId) return;
       known = true;
       if (r.state === 'settled') { if (JSON.stringify(r.result) !== JSON.stringify(result)) r.conflicts = (r.conflicts ?? 0) + 1; return; }
-      if (r.replyTo && r.text && r.subject !== undefined && r.replyRef.startsWith('reply:') && result.state === 'rejected' && result.disposition === 'not_started') {
+      // A command conflict proves nothing about the other delivery under that command, which may have gone out.
+      if (r.replyTo && r.text && r.subject !== undefined && r.replyRef.startsWith('reply:') && result.state === 'rejected' && result.disposition === 'not_started'
+        && result.reason !== 'command_conflict') {
         // A full outbox of live replies has no room: the refusal is still recorded, and the answer stays unsent.
         try { this.put(`${PLAIN}${r.replyRef.slice('reply:'.length)}`, { ...r, subject: r.subject, commandId: `wpl_${r.commandId}` }, r.text, { frozenAt: r.frozenAt }); }
-        catch (error) { if (!(error instanceof Error) || error.message !== 'imessage_outbox_capacity') throw error; }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== 'imessage_outbox_capacity') throw error;
+          console.error(JSON.stringify({ hop: 'imessage_plain_resend', ok: false, code: 'outbox_capacity' }));
+        }
       }
       r.state = 'settled'; r.result = result; r.text = '';
     });
