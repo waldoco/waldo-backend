@@ -76,3 +76,63 @@ describe('producer: the owner\'s stated sleep need', () => {
     expect(tied.notices).toEqual([]);
   });
 });
+
+// A need saved while a recompute runs: the run read the old need, so the row it would write for today is on the old need
+// though stamped after the change, and the next run's fence, which keys on when today's row was compiled, would let a
+// need-only zone move through. The run leaves today's row to the recompute the save asked for.
+describe('producer: a need saved while it runs', () => {
+  const T0 = '2026-03-30T08:00:00.000Z', T1 = '2026-03-30T11:00:00.000Z';
+  const world = () => {
+    const rows = new Map<string, Record<string, unknown>>(), notices: string[] = [];
+    const clock = { at: T0 }, need = { answers: [] as unknown[], current: { sleep_need_minutes: null as number | null, updated_at: null as string | null } };
+    const deps = (changed: readonly string[]): ProducerDeps => ({
+      readSeries: async range => ({ ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(entry => range.signals.includes(String(entry.signal))) })) }),
+      writeContext: async payload => { const row = JSON.parse(payload); rows.set(row.day, { ...row, compiled_at: clock.at }); return { written: true, changed }; },
+      readScores: async day => (rows.has(day) ? { scores: rows.get(day) } : { unavailable: 'no_readings' }),
+      readSettings: async () => need.answers.shift() ?? need.current,
+      compute: computeDailyScores,
+      onZoneChange: async day => { notices.push(day); },
+    });
+    return { rows, notices, clock, need, deps };
+  };
+
+  it('writes no row for today on the need it read, and the next run fences the move the new need makes', async () => {
+    const w = world();
+    expect(await produceHealthScores(w.deps([]), { now: NOW, timezone: 'UTC' })).toBe('written');
+    // The owner saves 540 after this run read the settings and before it writes today's row.
+    w.need.current = { sleep_need_minutes: 540, updated_at: T1 };
+    w.need.answers = [{ sleep_need_minutes: null, updated_at: null }];
+    w.clock.at = '2026-03-30T11:00:05.000Z';
+    await produceHealthScores(w.deps([]), { now: NOW, timezone: 'UTC' });
+    expect(w.rows.get(TODAY)?.compiled_at).toBe(T0);
+    w.clock.at = '2026-03-30T11:01:00.000Z';
+    expect(await produceHealthScores(w.deps(['recovery']), { now: NOW, timezone: 'UTC' })).toBe('written');
+    expect((w.rows.get(TODAY)?.sleep_debt as Record<string, unknown>).need_basis).toBe('owner_confirmed');
+    expect(w.notices).toEqual([]);
+  });
+
+  it('leaves today\'s row and the late days alone when the second read fails or the need moved, and still writes yesterday\'s', async () => {
+    for (const second of [new Error('down'), { sleep_need_minutes: 540, updated_at: T1 }]) {
+      const w = world(), late: unknown[] = [];
+      w.need.answers = [{ sleep_need_minutes: null, updated_at: null }];
+      w.need.current = second as never;
+      const deps = { ...w.deps([]), compute: dailyScoresFor('1'), readHistory: async () => ({ unavailable: 'no_readings' }) };
+      const settings = deps.readSettings!;
+      deps.readSettings = async () => { const answer = await settings(); if (answer instanceof Error) throw answer; return answer; };
+      const writeContext = deps.writeContext;
+      deps.writeContext = async payload => { if (JSON.parse(payload).backfilled === true) late.push(payload); return writeContext(payload); };
+      expect(await produceHealthScores(deps, { now: NOW, timezone: 'UTC' }), String(second)).toBe('written');
+      expect([...w.rows.keys()], String(second)).toEqual([addDays(TODAY, -1)]);
+      expect(late, String(second)).toEqual([]);
+    }
+  });
+
+  it('writes today as usual when the need it read is still the need, saved again or not', async () => {
+    const w = world();
+    w.need.answers = [{ sleep_need_minutes: 540, updated_at: T0 }];
+    w.need.current = { sleep_need_minutes: 540, updated_at: T1 };
+    w.clock.at = '2026-03-30T11:00:05.000Z';
+    expect(await produceHealthScores(w.deps([]), { now: NOW, timezone: 'UTC' })).toBe('written');
+    expect(w.rows.get(TODAY)?.compiled_at).toBe('2026-03-30T11:00:05.000Z');
+  });
+});

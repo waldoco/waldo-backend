@@ -87,7 +87,8 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
     const run = world(shrinking, '0');
     run.state(540);
     await run.runOn(addDays(TODAY, -2));
-    run.need.failRead = run.need.reads + 2;
+    // The run reads the need to compute on and again before today's row; the third read is the wake check's.
+    run.need.failRead = run.need.reads + 3;
     await run.runOn(TODAY);
     expect(run.debt(TODAY)?.need_basis).toBe('owner_confirmed');
     expect(run.woken).toEqual([]);

@@ -7,8 +7,9 @@ export const HEALTH_MEMORY_RULES = [
   'Never copy readings from a wearable or health app into memory: they are read live with get_health.',
   'Only what the owner said: never a condition or diagnosis Waldo inferred, never a government or insurance id, never a medication dose, and never someone else\'s health unless the owner asks you to remember it.',
 ];
-// The stated sleep need lives in the owner's health settings, never in memory. The background writers carry the rule with the
+// A stated sleep need is never kept in memory. The rule names no store, since the health settings that keep it are offered only
+// while coaching is on, so its words hold with coaching on or off. The background writers carry the rule with the
 // others; in chat it is in the system prompt's Remembering section, which every owner turn reads, because remember's description
 // is at the 1,024-character cap and set_sleep_need's is not offered while coaching is off or its namespace is deferred.
-export const SLEEP_NEED_MEMORY_RULE = 'The owner\'s sleep need lives in their health settings, never in memory: keep no figure for it, at most that they stated one.';
+export const SLEEP_NEED_MEMORY_RULE = 'Never keep a figure for the owner\'s sleep need in memory, at most that they stated one.';
 export const PASS_HEALTH_MEMORY_RULES = [...HEALTH_MEMORY_RULES, SLEEP_NEED_MEMORY_RULE];

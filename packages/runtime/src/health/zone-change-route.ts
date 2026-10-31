@@ -1,7 +1,7 @@
 import { routerSignature } from '../identity/owner-directory';
 
 // Worker-to-owner-DO only, value-free health notices. "Today's derived row moved zone" carries the owner's local day;
-// "this owner's readings changed" carries nothing, and "their stated sleep need changed" carries only `settings: true`. Neither carries a pillar, zone word or reading. The router signature
+// "this owner's readings changed" carries nothing, and "their stated sleep need changed" carries only `settings: true`. None carries a pillar, zone word or reading. The router signature
 // binds the owner and the body; a replay marks a day already marked, or asks for a recompute that one already waiting covers.
 export const HEALTH_ZONE_CHANGE_PATH = '/app/v1/internal/health-zone-change';
 export const HEALTH_SAMPLES_PATH = '/app/v1/internal/health-samples';

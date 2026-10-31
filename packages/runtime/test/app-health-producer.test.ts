@@ -136,8 +136,9 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     for (const row of off.writes) expect(row.sleep_debt?.need_basis ?? 'blended_average').not.toBe('owner_confirmed');
     answers.health_settings_read = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
     const on = await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
-    expect(on.settings).toHaveLength(1);
-    expect(on.settings[0]!.body.p_sig).toBe(await routerSignature(SECRET, on.settings[0]!.body.p_at as number, `health.settings_read.owner-1.${md5Hex('{}')}`));
+    // Once to compute on, and once more before today's row, so a need saved mid-run never lands on a row of the old need.
+    expect(on.settings).toHaveLength(2);
+    for (const read of on.settings) expect(read.body.p_sig).toBe(await routerSignature(SECRET, read.body.p_at as number, `health.settings_read.owner-1.${md5Hex('{}')}`));
     const live = on.writes.filter(row => row.sleep_debt?.state === 'available');
     expect(live.length).toBeGreaterThan(0);
     for (const row of live) expect(row.sleep_debt.need_basis).toBe('owner_confirmed');
