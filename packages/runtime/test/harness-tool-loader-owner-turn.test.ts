@@ -42,8 +42,8 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; model.respond = undefined; });
 
 // Consecutive owner messages to one owner, two minutes apart. Returns every reply round of each message, in order.
-type Flags = Readonly<{ WALDO_TOOL_SEARCH?: string; WALDO_TOOL_LOADER?: string }>;
-const ownerTurns = async (name: string, flags: Flags, said: readonly string[], inspect?: (state: DurableObjectState) => void): Promise<LLMRequest[][]> => {
+type Flags = Readonly<{ WALDO_TOOL_SEARCH?: string; WALDO_TOOL_LOADER?: string; WALDO_LOADER_CARRY?: string }>;
+const ownerTurns = async (name: string, flags: Flags, said: readonly string[], inspect?: (state: DurableObjectState) => void, beforeTurn?: (index: number, state: DurableObjectState) => Promise<void>): Promise<LLMRequest[][]> => {
   model.requests = [];
   const start = Date.parse('2030-11-04T09:00:00Z');
   vi.useFakeTimers({ toFake: ['Date'], now: start });
@@ -64,11 +64,12 @@ const ownerTurns = async (name: string, flags: Flags, said: readonly string[], i
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'owner@example.test', scopes: [...GOOGLE_CONSENT_SCOPES] }]);
-    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_SEARCH: undefined, WALDO_TOOL_LOADER: undefined, ...flags });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_SEARCH: undefined, WALDO_TOOL_LOADER: undefined, WALDO_LOADER_CARRY: undefined, ...flags });
     const turns: LLMRequest[][] = [];
     try {
       for (const [index, text] of said.entries()) {
         vi.setSystemTime(start + index * 120_000);
+        await beforeTurn?.(index, state);
         const before = model.requests.length;
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}-${index}`, text }) }));
         expect(sent.status).toBe(202);
@@ -243,5 +244,115 @@ describe('the harness tool loader on the owner turn', () => {
     expect(report.anthropic_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.system_added_tokens_est).toBeLessThan(1_000);
     expect(report.before_tokens_est).toBeGreaterThan((report.openai_tokens_est + report.system_added_tokens_est) * 3);
+  });
+});
+
+// A turn that loaded a deferred tool leaves its definition with the next owner message (WALDO_LOADER_CARRY), so the next
+// turn calls it with no find_tools round. The model here acts on what its message carries, as a real one reads it.
+describe('loader carry-over from one owner turn to the next', () => {
+  const FIRST = 'show my reminders';
+  const SECOND = 'and my reminders again?';
+  const HEADER = 'Tool definitions you loaded on your previous turn';
+  const flags = { WALDO_TOOL_LOADER: 'harness', WALDO_LOADER_CARRY: '1' } as const;
+  const lastMessage = (request: LLMGatewayRequest['request']) => request.messages.at(-1)!.content;
+  const answers = (text: string) => (request: LLMGatewayRequest['request']) => Boolean(request.tools?.length) && lastMessage(request).startsWith(text);
+  const loadsThenUses = (group: string, tool: string, said: string, carriedUse: boolean) => (request: LLMGatewayRequest['request']): Scripted | undefined => {
+    if (!answers(said)(request)) return undefined;
+    const round = request.tool_turns?.length ?? 0;
+    const carried = lastMessage(request).includes(HEADER) && lastMessage(request).includes(`"name":"${tool}"`);
+    if (round === 0) return carried && carriedUse
+      ? { text: '', tool_calls: [{ call_id: 'u1', name: USE_TOOL, arguments: JSON.stringify({ name: tool, arguments: {} }) }] }
+      : { text: '', tool_calls: [{ call_id: 'f1', name: FIND_TOOLS, arguments: JSON.stringify({ groups: [group] }) }] };
+    if (round === 1 && request.tool_turns![0]!.call.name === FIND_TOOLS) return { text: '', tool_calls: [{ call_id: 'u1', name: USE_TOOL, arguments: JSON.stringify({ name: tool, arguments: {} }) }] };
+    return { text: 'Done.' };
+  };
+  // The last round holds every tool turn of the message, so the find_tools rounds are counted there.
+  const findRounds = (turn: LLMRequest[]) => (turn.at(-1)?.tool_turns ?? []).filter((made) => made.call.name === FIND_TOOLS).length;
+  const carriedNames = (request: LLMGatewayRequest['request']): string[] => {
+    const line = lastMessage(request).split('\n').find((text) => text.startsWith('[{"name"'));
+    return line ? (JSON.parse(line) as { name: string }[]).map((tool) => tool.name) : [];
+  };
+  // The header and the one line of definitions under it, as the owner message carries them.
+  const carriedBlock = (request: LLMGatewayRequest['request']): string => {
+    const text = lastMessage(request);
+    const at = text.indexOf('\n\n[' + HEADER);
+    if (at < 0) return '';
+    const end = text.indexOf('\n\n', text.indexOf('\n[{"name"', at));
+    return text.slice(at, end < 0 ? undefined : end);
+  };
+  const scriptBoth = () => { model.respond = (request) => loadsThenUses('reminders', 'list_reminders', FIRST, true)(request) ?? loadsThenUses('reminders', 'list_reminders', SECOND, true)(request); };
+
+  it('the second turn calls the tool it used before with no find_tools round; without the flag it loads again', async () => {
+    scriptBoth();
+    const [first, second] = await ownerTurns('carry-trace', flags, [FIRST, SECOND]);
+    expect(findRounds(first!)).toBe(1);
+    expect(findRounds(second!)).toBe(0);
+    expect(second!.length).toBeLessThan(first!.length);
+    const used = second!.at(-1)!.tool_turns![0]!;
+    expect(used.call.name).toBe(USE_TOOL);
+    expect(JSON.parse(used.output.split('\n[')[0]!)).toMatchObject({ ok: true });
+    scriptBoth();
+    const [, uncarried] = await ownerTurns('carry-trace-off', { WALDO_TOOL_LOADER: 'harness' }, [FIRST, SECOND]);
+    expect(findRounds(uncarried!)).toBe(1);
+    expect(uncarried!.every((request) => !lastMessage(request).includes(HEADER))).toBe(true);
+  });
+
+  it('carries the definition on the owner message only: the cached prefix, the history and the later turns are untouched', async () => {
+    scriptBoth();
+    const turns = await ownerTurns('carry-prefix', flags, [FIRST, SECOND, 'thanks', 'bye']);
+    const [first, second, third] = [turns[0]![0]!, turns[1]![0]!, turns[2]![0]!];
+    expect(lastMessage(first)).not.toContain(HEADER);
+    expect(lastMessage(second)).toContain(HEADER);
+    const [a, b] = [await openAIBody(first), await openAIBody(second)];
+    expect(JSON.stringify(b.tools)).toBe(JSON.stringify(a.tools));
+    expect(b.instructions).toBe(a.instructions);
+    const input = b.input as { role: string; content: string }[];
+    expect(input[0]).toEqual({ role: 'user', content: FIRST });
+    expect(input.slice(0, -1).every((message) => !message.content.includes(HEADER))).toBe(true);
+    const [x, y] = [await anthropicBody(first), await anthropicBody(second)];
+    expect(JSON.stringify(y.tools)).toBe(JSON.stringify(x.tools));
+    expect(JSON.stringify(y.system)).toBe(JSON.stringify(x.system));
+    // The next owner message repeats nothing of the block in its history, and a turn that used no deferred tool leaves nothing to carry.
+    expect((await openAIBody(third) as { input: { content: string }[] }).input.slice(0, -1).every((message) => !message.content.includes(HEADER))).toBe(true);
+    expect(turns[3]!.every((request) => !lastMessage(request).includes(HEADER))).toBe(true);
+    expect(new Set(turns[1]!.map((request) => lastMessage(request))).size).toBe(1);
+  });
+
+  it('keeps carrying a tool the next turn uses, and drops the ones it only had shown', async () => {
+    scriptBoth();
+    const turns = await ownerTurns('carry-chain', flags, [FIRST, SECOND, SECOND]);
+    expect(carriedNames(turns[1]![0]!).length).toBeGreaterThan(1);
+    expect(carriedNames(turns[2]![0]!)).toEqual(['list_reminders']);
+    expect(findRounds(turns[2]!)).toBe(0);
+  });
+
+  it('carries nothing on from a turn that read outside text, and nothing between owners', async () => {
+    model.respond = (request) => {
+      if (!answers(FIRST)(request)) return answers(SECOND)(request) ? { text: 'Fine.' } : undefined;
+      if (request.tool_turns?.length) return { text: 'Done.' };
+      return { text: '', output_items: [{ type: 'web_search_call', id: 'ws_1', status: 'completed' }], tool_calls: [{ call_id: 'f1', name: FIND_TOOLS, arguments: JSON.stringify({ groups: ['reminders'] }) }] };
+    };
+    const tainted = await ownerTurns('carry-taint', flags, [FIRST, SECOND]);
+    expect(findRounds(tainted[0]!)).toBe(1);
+    expect(tainted[1]!.every((request) => !lastMessage(request).includes(HEADER))).toBe(true);
+    scriptBoth();
+    await ownerTurns('carry-owner-a', flags, [FIRST]);
+    const other = await ownerTurns('carry-owner-b', flags, [SECOND]);
+    expect(other[0]!.every((request) => !lastMessage(request).includes(HEADER))).toBe(true);
+  });
+
+  it('keeps the offered tools and the carried definitions inside the definitions budget, leaving out what does not fit', async () => {
+    model.respond = (request) => {
+      if (answers(FIRST)(request)) return (request.tool_turns?.length ?? 0) === 0 ? { text: '', tool_calls: [{ call_id: 'f1', name: FIND_TOOLS, arguments: JSON.stringify({ groups: ['reminders', 'health', 'mail', 'calendar', 'tasks'] }) }] } : { text: 'Loaded.' };
+      return answers(SECOND)(request) ? { text: 'Fine.' } : undefined;
+    };
+    const [, second] = await ownerTurns('carry-budget', flags, [FIRST, SECOND]);
+    const request = second![0]!;
+    const block = carriedBlock(request);
+    expect(block.length).toBeGreaterThan(0);
+    const carried = carriedNames(request);
+    expect(carried.length).toBeGreaterThan(0);
+    expect(carried.length).toBeLessThanOrEqual(8);
+    expect(tokens(request.tools) + tokens(block)).toBeLessThanOrEqual(TOOL_DEFINITION_BUDGET_TOKENS);
   });
 });

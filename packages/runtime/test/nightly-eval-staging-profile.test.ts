@@ -44,6 +44,9 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_TOOL_SEARCH: 'off' }).toolLoader).toBeUndefined();
     expect(stagingProfile({ ...STAGING, WALDO_FORGET_BARRIER: 'off' }).forgetBarrier).toBe('reads');
     expect(stagingProfile({ ...STAGING, WALDO_COMPACTION: 'off' }).compaction.enabled).toBe(false);
+    expect(stagingProfile(STAGING).loaderCarry).toBeUndefined();
+    expect(stagingProfile({ ...STAGING, WALDO_LOADER_CARRY: '1' }).loaderCarry).toBe(true);
+    expect(stagingProfile({ ...STAGING, WALDO_LOADER_CARRY: '1', WALDO_TOOL_LOADER: 'off' }).loaderCarry).toBeUndefined();
   });
 
   it('refuses a staging that turns on what the eval cannot model', () => {

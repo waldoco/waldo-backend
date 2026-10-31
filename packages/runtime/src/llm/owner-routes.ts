@@ -1,3 +1,4 @@
+import type { CarryBook } from '../tools/loader';
 import {
   ANTHROPIC_PROVIDER,
   OPENAI_PROVIDER,
@@ -28,8 +29,10 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // schemas where the provider allows them. Off by default until a staging smoke shows both providers take the request.
 // toolLoader 'harness': the reply loads core tools up front and the rest through the harness's own find_tools and use_tool
 // (tools/loader.ts), on any provider. It wins over toolSearch.
+// loaderCarry: the owner object's book; with the harness loader, the next owner turn's message carries the definitions the previous owner turn loaded or
+// used (tools/loader.ts carriedToolBlock), so a deferred tool the owner keeps using needs no second find_tools round.
 // onAttempts: told every model call's attempts, so a provider that refused the key is noticed whichever call met it.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness'; loaderCarry?: CarryBook;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>

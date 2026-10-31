@@ -39,6 +39,7 @@ export const toolOfCall = (call: Pick<LLMToolCall, 'name' | 'arguments'>): strin
   const args = useArgsSchema.safeParse(parse(call.arguments));
   return args.success && toolNameSchema.safeParse(args.data.name).success ? args.data.name : call.name;
 };
+export const isDeferredTool = (name: string): boolean => placement(name) !== 'core';
 const placement = (name: string): 'core' | BrainNamespace => (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
 
 const deferredGroups = (names: readonly string[]): Map<BrainNamespace, string[]> => {
@@ -59,6 +60,16 @@ export const toolCatalogue = (names: readonly string[]): string => {
     const members = groups.get(group);
     return members ? [`- ${group}: ${[...members].sort().join(', ')}. ${BRAIN_NAMESPACES[group]}`] : [];
   }).join('\n');
+};
+
+type FindArgs = z.infer<typeof findArgsSchema>;
+const wantedBy = (args: FindArgs, groups: ReadonlyMap<BrainNamespace, readonly string[]>, byName: ReadonlyMap<string, LLMTool>): string[] =>
+  [...(args.groups ?? []).flatMap((group) => groups.get(group as BrainNamespace) ?? []), ...(args.names ?? []).filter((name) => byName.has(name))];
+
+// The tool names a find_tools call loads from the tools a turn admitted, read from the call's own arguments.
+export const namesLoadedBy = (tools: readonly LLMTool[], rawArguments: string): readonly string[] => {
+  const args = findArgsSchema.safeParse(parse(rawArguments));
+  return args.success ? [...new Set(wantedBy(args.data, deferredGroups(tools.map((tool) => tool.name)), new Map(tools.map((tool) => [tool.name, tool] as const))))] : [];
 };
 
 export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
@@ -84,7 +95,7 @@ export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
     if (raw === undefined) return refused(toolError('invalid_json_args'), 'invalid_args');
     const args = findArgsSchema.safeParse(raw);
     if (!args.success) return refused(toolError('invalid_args', 'find_tools needs at least one group or tool name from its list.'), 'invalid_args');
-    const wanted = [...(args.data.groups ?? []).flatMap((group) => groups.get(group as BrainNamespace) ?? []), ...(args.data.names ?? []).filter((name) => byName.has(name))];
+    const wanted = wantedBy(args.data, groups, byName);
     const missing = [...(args.data.groups ?? []).filter((group) => !groups.has(group as BrainNamespace)), ...(args.data.names ?? []).filter((name) => !byName.has(name))];
     return { ok: true, data: { tools: [...new Set(wanted)].map((name) => byName.get(name)!), ...(missing.length ? { not_found: missing } : {}) }, source_taint: null };
   };
@@ -105,3 +116,48 @@ export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
     },
   };
 }
+
+// The ceiling on the tool definitions the model sees each round, in estimated tokens (bytes / 4), on either provider's wire.
+// It guards spend and creep, not reach: deferred tools still load when a turn needs them.
+export const TOOL_DEFINITION_BUDGET_TOKENS = 4_200;
+export const estimatedTokens = (value: unknown): number => Math.round(new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value)).byteLength / 4);
+
+// At most this many deferred tools ride from one owner turn to the next.
+export const CARRIED_TOOLS_MAX = 8;
+const CARRIED_HEADER = '\n\n[Tool definitions you loaded on your previous turn, host facts. Call one with use_tool by its exact name and these arguments; no find_tools round is needed for it.]\n';
+
+// What the next owner turn's message appends: the definitions of the deferred tools the last owner turn loaded or used,
+// read from the tools this turn admitted, so a tool revoked or disabled since, or one whose schema changed, is shown as it is now
+// or not at all. It rides the owner's message, never the offered list or the system prompt, so the cached prefix is untouched,
+// and the offered list plus this block stay inside TOOL_DEFINITION_BUDGET_TOKENS: a tool that does not fit is left to find_tools.
+export const carriedToolBlock = (admitted: readonly LLMTool[], carried: readonly string[], budgetTokens = TOOL_DEFINITION_BUDGET_TOKENS): Readonly<{ names: readonly string[]; text: string }> => {
+  const byName = new Map(admitted.map((tool) => [tool.name, tool] as const));
+  let room = budgetTokens - estimatedTokens(harnessToolLoader(admitted).offered) - estimatedTokens(CARRIED_HEADER);
+  const shown: LLMTool[] = [];
+  for (const name of carried) {
+    const tool = byName.get(name);
+    if (!tool || META_TOOLS.has(name) || !isDeferredTool(name) || shown.some((kept) => kept.name === name) || shown.length >= CARRIED_TOOLS_MAX) continue;
+    const cost = estimatedTokens(tool);
+    if (cost > room) continue;
+    room -= cost;
+    shown.push(tool);
+  }
+  if (shown.length === 0) return { names: [], text: '' };
+  return { names: shown.map((tool) => tool.name), text: CARRIED_HEADER + JSON.stringify(shown).replace(/[<>]/g, (char) => (char === '<' ? '\\u003c' : '\\u003e')) };
+};
+
+// The deferred tools each owner chain's last owner turn loaded or used, newest chains kept. The owner object holds one, since
+// its runtime and responder are rebuilt between messages. It lives in that object's memory only: an eviction loses a hint and costs one find_tools round, never a fact.
+export type CarryBook = ReturnType<typeof carryBook>;
+export const carryBook = (maxChains = 16) => {
+  const byChain = new Map<string, readonly string[]>();
+  return {
+    get: (chain: string): readonly string[] => byChain.get(chain) ?? [],
+    set: (chain: string, names: readonly string[]): void => {
+      byChain.delete(chain);
+      if (names.length === 0) return;
+      byChain.set(chain, names.slice(0, CARRIED_TOOLS_MAX));
+      while (byChain.size > maxChains) byChain.delete(byChain.keys().next().value!);
+    },
+  };
+};

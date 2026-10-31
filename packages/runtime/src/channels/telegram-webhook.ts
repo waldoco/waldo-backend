@@ -47,6 +47,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
+  // '1' (with WALDO_TOOL_LOADER=harness) carries the deferred tools an owner turn loaded or used into the next owner turn's
+  // message as definitions; anything else leaves every turn loading its own.
+  WALDO_LOADER_CARRY?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).

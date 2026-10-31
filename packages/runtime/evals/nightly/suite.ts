@@ -31,6 +31,8 @@ export type NightlyRun = Readonly<{
   toolSearch?: boolean;
   // The harness's own loader (WALDO_TOOL_LOADER=harness): core tools up front, the rest through find_tools and use_tool.
   toolLoader?: 'harness';
+  // Each trial gets its own owner book, as WALDO_LOADER_CARRY=1 gives the owner object one.
+  loaderCarry?: boolean;
   // Opens the route's second-provider step; the gateway must serve Anthropic requests for it to be taken.
   fallbackKey?: string;
   forgetBarrier?: ForgetBarrierMode;
@@ -82,7 +84,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const missed = run.ablationMisses?.() ?? 0;
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}) });
+      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.loaderCarry ? { loaderCarry: true } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       metrics.push(record.metrics);
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       // A trial whose rules were not all dropped measured nothing about them.
