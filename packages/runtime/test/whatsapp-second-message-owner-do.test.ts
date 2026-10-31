@@ -4,7 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
-import { WHATSAPP_PARTIAL_NOTICE } from '../src/channels/whatsapp-api';
+import { WHATSAPP_PARTIAL_NOTICE, WHATSAPP_TYPING_REFRESH_MS } from '../src/channels/whatsapp-api';
 
 // The first owner turn waits on `hold`; each reply names the turn it answers.
 const model = vi.hoisted(() => ({ turns: [] as string[], hold: null as null | Promise<void> }));
@@ -24,17 +24,20 @@ const SUBJECT = '15550001111';
 const settle = (instance: OwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 
-const harness = (name: string, work: (instance: OwnerDO, sent: string[], turns: ReturnType<typeof vi.spyOn>) => Promise<void>) =>
+type Typing = { id: string; at: number };
+const harness = (name: string, work: (instance: OwnerDO, sent: string[], turns: ReturnType<typeof vi.spyOn>, typing: Typing[]) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
-    const sent: string[] = [];
+    const sent: string[] = [], typing: Typing[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      if (String(input).startsWith('https://graph.facebook.com/') && init?.body) sent.push(String((JSON.parse(String(init.body)) as { text?: { body?: string } }).text?.body ?? ''));
+      const body = String(input).startsWith('https://graph.facebook.com/') && init?.body ? JSON.parse(String(init.body)) as { text?: { body?: string }; message_id?: string; typing_indicator?: unknown } : null;
+      if (body?.typing_indicator) typing.push({ id: body.message_id!, at: Date.now() });
+      else if (body) sent.push(String(body.text?.body ?? ''));
       return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });
     });
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     const turns = vi.spyOn(instance as unknown as { turn(update: { update_id: number }, channel: string): Promise<void> }, 'turn');
-    try { await work(instance, sent, turns as never); } finally { await state.storage.deleteAlarm(); }
+    try { await work(instance, sent, turns as never, typing); } finally { await state.storage.deleteAlarm(); }
   });
 const post = (instance: OwnerDO, id: string, body: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
@@ -80,6 +83,47 @@ it('a first turn past its own deadline is closed with the partial notice and no 
     expect(sent.indexOf(WHATSAPP_PARTIAL_NOTICE)).toBeLessThan(sent.indexOf('Reply to turn 2.'));
   });
 });
+
+// Meta shows the indicator for 25 seconds or until the reply, so a gap longer than that reads as Waldo having stopped.
+const META_TYPING_SHOWS_MS = 25_000;
+
+it('keeps showing typing through a long turn, follows the owner to a second message, and stops with the reply', async () => {
+  // The turn's clock jumps one refresh at a time, so a minute of work passes in a few seconds; the listener's 4-second ticks
+  // are real, so each gap is the refresh plus at most one tick, the same worst case as production.
+  const realNow = Date.now.bind(Date);
+  let ahead = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ahead);
+  await harness('whatsapp-second-message-typing', async (instance, sent, _turns, typing) => {
+    const gate = deferred(); model.hold = gate.promise;
+    expect((await post(instance, 'wamid.typing.A', 'Find me three flights to Goa for Friday.')).status).toBe(200);
+    await vi.waitFor(() => expect(model.turns).toHaveLength(1), { timeout: 10_000, interval: 20 });
+    expect(typing).toEqual([{ id: 'wamid.typing.A', at: expect.any(Number) }]);
+
+    for (const step of [1, 2, 3]) {
+      ahead += WHATSAPP_TYPING_REFRESH_MS;
+      await vi.waitFor(() => expect(typing).toHaveLength(1 + step), { timeout: 6_000, interval: 50 });
+    }
+    expect(typing.every(call => call.id === 'wamid.typing.A')).toBe(true);
+
+    // B is the owner's latest message now; the indicator moves onto it at the next tick while A is still running.
+    expect((await post(instance, 'wamid.typing.B', 'Also, is it raining in Pune?')).status).toBe(200);
+    await vi.waitFor(() => expect(typing.at(-1)?.id).toBe('wamid.typing.B'), { timeout: 6_000, interval: 50 });
+    expect(sent.filter(text => text.startsWith('Reply to turn'))).toEqual([]);
+    const during = typing.length;
+    const gaps = typing.slice(1).map((call, index) => call.at - typing[index]!.at);
+    expect(Math.max(...gaps)).toBeLessThan(META_TYPING_SHOWS_MS);
+
+    gate.resolve();
+    await settle(instance);
+    expect(sent.filter(text => text.startsWith('Reply to turn'))).toEqual(['Reply to turn 1.', 'Reply to turn 2.']);
+    // With both replies sent, no tick is left running: a minute later nothing has asked Meta for typing again.
+    const after = typing.length;
+    expect(after).toBeGreaterThanOrEqual(during);
+    ahead += 3 * WHATSAPP_TYPING_REFRESH_MS;
+    await new Promise(done => setTimeout(done, 4_500));
+    expect(typing).toHaveLength(after);
+  });
+}, 60_000);
 
 it('gives a WhatsApp turn 150 seconds, against 14 minutes on Telegram and 15 on the app and iMessage', () => {
   expect(TURN_TIMEOUT_MS).toBe(150_000);

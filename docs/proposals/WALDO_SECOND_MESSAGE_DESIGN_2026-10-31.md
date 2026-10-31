@@ -19,7 +19,9 @@ The owner said: "imessages but ideally, it should be regardless of the surface, 
 - **D2:** the drop was seen on iMessage.
 - **D1:** settled by D2.
 - **D3:** a background task reports on the surface where it was asked.
-- **D4:** surface parity. WhatsApp gets the app's deadline plus progress notes, not a special short one. [inference: the gate read this from "regardless of the surface", pending the owner's confirmation]
+- **D4:** surface parity.
+- **Slice 3, decided 31 Oct (option A):** while Waldo works, every surface shows a typing indicator, and no surface gets progress notes. This keeps the owner's 26 Oct ruling (commit `b9a14fdde`, #1579) that iMessage behaves like a person texting back, with the agent's working view in the app and the console.
+- **Still open:** whether WhatsApp's turn deadline moves to the app's 15 min, and whether that work goes in slice 6. The gate is putting it to the owner.
 
 ## What happens today, per surface
 
@@ -50,7 +52,7 @@ The owner saw it on iMessage (D2). Ranked by fit:
    - *Falsifier:* on staging, A's bridge delivery shows a `local_recorded` result, or the host reports `replies` unverified, so A went out plain.
 2. **iMessage: A interrupted, then B answered** [verified mechanism, generic].
    - A turn that dies (its 15 min deadline, an eviction, a deploy that resets the object, or a model or tool failure) gets the "did not finish" notice. B then runs.
-   - With `WALDO_IMESSAGE_PROGRESS=0` on staging (`wrangler.jsonc:109`), A is silent until then. That can read as "dropped".
+   - iMessage shows nothing while A runs. Progress notes are off by the owner's 26 Oct ruling (`WALDO_IMESSAGE_PROGRESS=0`), and the host has no typing dots yet (slice 3). That silence can read as "dropped".
    - *Falsifier:* A's inbox row is `completed`, not `interrupted`.
 3. **iMessage inbound lost before admission** [inference].
    - The Photon host rebuilds its Spectrum stream on error, with backoff (`spectrum.ts`).
@@ -123,7 +125,12 @@ Why the model rarely uses it [inference from source, no trace]:
 - Give the model the elapsed wall clock and the count of waiting owner messages as round context ("You have been working 95 s; 1 owner message is waiting").
 - Add one prompt line, as context and not a rule: when the rest is long, start a task with what you have and reply now.
 - Test the model's choice with scenario evals (judgment → scenarios, not a timer rule).
-- Separately, the WhatsApp 150 s turn deadline is a leftover from the polling era (W0 hardening, `96c768347`). WhatsApp replies are asynchronous like the app's, so it gets the same 15 min deadline, progress notes and hand-off (D4, decided).
+- Separately, the WhatsApp 150 s turn deadline is a leftover from the polling era (W0 hardening, `96c768347`).
+- It cannot simply be raised where it is.
+  - WhatsApp turns run in `ctx.waitUntil` after the webhook's 200.
+  - Cloudflare's limits page says `waitUntil` "extends execution for up to 30 seconds after the response or disconnect". During a runtime update, in-flight requests get 30 s.
+  - The app and iMessage get 15 min because they run under `alarm()`, whose wall time is 15 min.
+- So the app's deadline needs WhatsApp turns drained by an alarm from durable inbox rows, which is slice 6's inbox. Whether to do that, and in which slice, is open with the owner.
 
 Report routing [verified source]: a task's report goes to the owner's first proactive surface for that alarm pass (`owner-do.ts:2811-2840`, `drainJobs` at `:3121`). It does not go to the surface the owner asked on. A task started on iMessage can report in the app. D3 is decided: the report goes where the task was asked. [proposed] The job row already records `surface` (and the app thread). The jobs lane delivers on that surface's outbox, falling back to the proactive surface only when that one can no longer deliver (unlinked, or WhatsApp's window closed with no template).
 
@@ -297,7 +304,7 @@ Each slice is its own issue, PR and gate review. Re-ranked after the owner's rul
 |---|---|---|---|---|
 | 1 | **iMessage: a refused threaded reply goes out plain.** Built in the PR stacked on #1763. When the host settles a threaded reply `rejected` / `not_started`, the outbox re-freezes the same text unthreaded under a derived command id, so the host's journal sees a new command. A threaded reply that is `unknown` / `may_have_completed` is not resent. That stays an honest uncertainty, and the owner is told. `imessage-second-message.test.ts` case 2 flips to "both answers reach the owner". | `imessage/final-outbox.ts` (`settle`), `imessage/owner-runtime.ts` | S | The owner's reported surface; verified silent loss. No `owner-do.ts` edit. |
 | 2 | **Photon host: resolve reply targets reliably, or report `replies` unverified.** Check `space.getMessage` against the ids the stream delivers, including part ids. Until verified, the probe stops reporting `replies`, and the backend then threads nothing. | `waldo-imessage-host` (host lane) | S | Removes the trigger at the source. Slice 1 still guards every host. |
-| 3 | **Progress notes on, every surface (D4 parity).** Turn on iMessage progress notes (`WALDO_IMESSAGE_PROGRESS`, a flag flip that needs its own go) and give WhatsApp the same pacer and the app's 15 min deadline. | flag; WhatsApp turn wiring | S–M | A long A is never silent anywhere. The WhatsApp half touches `owner-do.ts`, after the day-awareness lane. |
+| 3 | **A typing indicator on every surface, no progress notes (option A, decided 31 Oct).** WhatsApp already shows typing for the whole turn: the listener ticks every 4 s, and the shim calls Graph's `typing_indicator` once per 20 s, inside Meta's 25 s display. `whatsapp-second-message-owner-do.test.ts` pins this through a long turn and a second message. The app and console show typing dots and stream the reply. iMessage dots come from the host (`waldo-imessage-host#7`, host lane). No flag flip; progress notes stay off. | test and doc (backend); `waldo-imessage-host` | S | A long A is never silent anywhere, and iMessage still texts back like a person (26 Oct ruling). |
 | 4 | **Steer race: rebuild, don't close.** `telegram-second-message-steer.test.ts` case 2 flips to "A answers both". | `owner-turn.ts` | S | Must land before steer reaches any other surface (slice 7). |
 | 5 | **App composer: Send when text is typed, per-message slots.** Golden test: send B during A, both answered. | waldo-app (Suyash's lane) | S | The app's way to lose A. The backend already queues. |
 | 6 | **WhatsApp honesty and durability.** Per-message inbox rows; an unstarted B gets the unstarted notice; notices name the message. | `owner-do.ts`, WhatsApp inbox | M | Verified dishonest receipts. After the day-awareness lane. |
@@ -329,8 +336,7 @@ Each slice is its own issue, PR and gate review. Re-ranked after the owner's rul
 
 D1–D4 are decided (see "Owner rulings, 31 Oct"). Still open:
 
-- **D4 confirmation.** Parity for WhatsApp was read from "regardless of the surface". The gate confirms it with the owner before slice 3's WhatsApp half.
-- **The progress-notes flag (slice 3).** `WALDO_IMESSAGE_PROGRESS=1` on staging is a flag change. It needs its own go and is not part of this PR.
+- **WhatsApp's turn deadline.** Does it move to the app's 15 min, and does that work go in slice 6 (see the deadline paragraph under (b))? This is with the owner. Slice 6 is unchanged until they rule.
 
 ## Constraints this design keeps
 
