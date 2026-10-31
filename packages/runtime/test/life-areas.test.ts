@@ -7,7 +7,7 @@ import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { MEMORY_CONTROL_PATH } from '../src/channels/dashboard-memory-actions';
 import { readMemoryGraph } from '../src/channels/memory-graph';
-import { applyClaimOps, CLAIM_OPS_SCHEMA, claimStore, memoryPrompt, type ClaimStore } from '../src/memory/claims';
+import { applyClaimOps, CLAIM_OPS_SCHEMA, claimStore, memoryPrompt, memoryRevision, type ClaimStore } from '../src/memory/claims';
 import { outsideView } from '../src/memory/outside-view';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 
@@ -69,16 +69,20 @@ describe('filing a claim', () => {
     });
   });
 
-  it('the owner\'s choice stands against a model correction, and their "unsorted" against a model refile', async () => {
-    await withStore((store) => {
+  it('the owner\'s choice stands against a model correction, and their "unsorted" against a model refile; only a refile that lands moves the memory revision', async () => {
+    await withStore((store, sql) => {
       const rent = said(store, 'Rent is due on the first', 'fact', 'money');
       expect(store.setArea(rent.id, 'work', 'owner')).toBe(true);
       expect(store.correct(rent.id, { kind: 'fact', text: 'Rent is due on the fifth', source: 'stated', evidence: 'x', origin: 'owner', source_ref: 'owner, tg-fix', area: 'home' }, AT)).toBe(true);
       expect(store.claims().find((claim) => claim.text === 'Rent is due on the fifth')).toMatchObject({ area: 'work', area_by: 'owner' });
       const tea = said(store, 'Prefers tea', 'preference', 'home');
       expect(store.setArea(tea.id, 'unsorted', 'owner')).toBe(true);
+      const revision = memoryRevision(sql);
       expect(store.setArea(tea.id, 'people', 'model')).toBe(false);
       expect(store.claims().find((claim) => claim.id === tea.id)).toMatchObject({ area: null, area_by: 'owner' });
+      expect(memoryRevision(sql)).toBe(revision);
+      expect(store.setArea(tea.id, 'home', 'owner')).toBe(true);
+      expect(memoryRevision(sql)).toBe(revision + 1);
     });
   });
 

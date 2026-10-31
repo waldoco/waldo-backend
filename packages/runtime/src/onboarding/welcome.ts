@@ -257,7 +257,9 @@ export const correctWelcomeNode = (claims: ClaimStore, nodeId: number, text: str
   const said = claims.allClaims().filter((claim) => claim.source_ref === ref && claim.text === words).at(-1);
   if (!said) throw new Error('correction not stored');
   claims.saveNode({ id: node.id, domain: node.domain, label: words, summary: words, strength: node.strength, status: 'active', supporting_spots: [said.id] }, at);
+  // The owner wrote the new wording, so it is their yes to it; their yes to the old wording goes with the old words.
   claims.dropStatements(node.id);
+  claims.confirmNode(node.id, ref.replace(/^owner, /, ''), at);
   claims.barrier(node.label, at);
   return { purge, barred: node.label };
 };

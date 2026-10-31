@@ -65,6 +65,22 @@ describe('memory_revision', () => {
     });
   });
 
+  it('leaves nothing in storage that changes what a reverted Worker\'s writers count: each still changes exactly one row', async () => {
+    await withStore((store, sql) => {
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'Lives in Pune', origin: 'owner', source_ref: 'owner, tg-pin' }, AT);
+      const id = store.allClaims().find((claim) => claim.text === 'Lives in Pune')!.id;
+      expect(store.pin(id, 'profile', 1)).toBe(true);
+      expect(sql.exec("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'claim_recall_%'").toArray()).toEqual([]);
+      // The writers' row-count checks as they read before memory_revision, run on storage this store has opened.
+      expect(sql.exec(`UPDATE claims SET origin = 'owner', verification_status = 'owner-grounded',
+        source = CASE WHEN source IN ('inferred', 'waldo_confirmed') THEN 'confirmed' ELSE source END,
+        source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
+        WHERE id = ? AND status IN ('active', 'promoted')`, 'owner, console', 'owner, console', AT, id).rowsWritten).toBe(1);
+      expect(sql.exec('UPDATE claims SET pinned = NULL, pin_order = NULL WHERE id = ? AND pinned IS NOT NULL', id).rowsWritten).toBe(1);
+      expect(sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", AT, id).rowsWritten).toBe(1);
+    });
+  });
+
   it('is each owner\'s own: a write for one owner never moves another\'s', async () => {
     const a = `memory-revision-owner-a-${sequence++}`, b = `memory-revision-owner-b-${sequence++}`;
     await withStore((store) => said(store, 'Owner B note'), b);
