@@ -181,3 +181,60 @@ it('a reply call\'s cache writes reach its logged usage, and its cost counts the
   expect(reply?.usage).toMatchObject({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 10_000, cached: 2_000, cache_write: 7_000 });
   expect(modelCost(reply!.usage!)!.total).toBeCloseTo((1_000 * 1 + 2_000 * 0.05 + 7_000 * 1.25 + 5 * 5) / 1e6, 12);
 });
+
+const billed = { input_tokens: 4_000, output_tokens: 40, cache_read_input_tokens: 1_000, cache_write_input_tokens: 2_000 };
+const attemptEntries = (entries: readonly Parameters<NonNullable<Args[3]>>[0][]) => entries.filter((entry) => entry.hop === 'llm_reply_attempt');
+
+// A failed attempt the provider still billed is spend: the month counts it at the rates of the model that billed it.
+it('a fallback turn counts the failed model\'s billed tokens at its own rates, apart from the model that answered', async () => {
+  const entries: Parameters<NonNullable<Args[3]>>[0][] = [];
+  const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
+  const gateway: LLMGatewayAdapter = { complete: async (input) => input.request.model === OPENAI_GPT_6_1_TERRA_MODEL
+    ? { ok: false, code: 'transient', error: 'down', spent: billed }
+    : { ok: true, data: { model: input.request.model, text: 'Your day is clear.', input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } } };
+  const owner = responder(gateway, at(1), [], (entry) => { entries.push(entry); costs.record(entry, NOW); });
+  expect(await owner.respond(turn('fallback-billed'), time)).toBe('Your day is clear.');
+
+  const answered = entries.find((entry) => entry.hop === 'llm_reply' && entry.usage);
+  expect(answered?.usage).toEqual({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 100, output: 5, cached: 0, web_searches: 0 });
+  const failed = attemptEntries(entries);
+  expect(failed.length).toBeGreaterThan(0);
+  for (const entry of failed) expect(entry).toMatchObject({ ok: false, error_code: 'transient', usage: { model: OPENAI_GPT_6_1_TERRA_MODEL, input: 4_000, output: 40, cached: 1_000, cache_write: 2_000 } });
+  const terra = modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 4_000, output: 40, cached: 1_000, cache_write: 2_000 })!.total;
+  const sonnet = modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 100, output: 5, cached: 0 })!.total;
+  expect(costs.monthSpendUsd(NOW)).toBeCloseTo(failed.length * terra + sonnet, 12);
+});
+
+it('a turn every provider failed still counts what its attempts billed, though the floor line carries no usage', async () => {
+  const entries: Parameters<NonNullable<Args[3]>>[0][] = [];
+  const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
+  const gateway: LLMGatewayAdapter = { complete: async () => ({ ok: false, code: 'transient', error: 'down', spent: billed }) };
+  await responder(gateway, at(1), [], (entry) => { entries.push(entry); costs.record(entry, NOW); }).respond(turn('floor-billed'), time);
+
+  expect(entries.find((entry) => entry.hop === 'llm_reply')?.usage).toBeUndefined();
+  expect(attemptEntries(entries).length).toBeGreaterThan(1);
+  const perAttempt = (model: Parameters<typeof modelCost>[0]['model']) => modelCost({ model, input: 4_000, output: 40, cached: 1_000, cache_write: 2_000 })!.total;
+  expect(costs.monthSpendUsd(NOW)).toBeCloseTo(attemptEntries(entries).reduce((sum, entry) => sum + perAttempt(entry.usage!.model), 0), 12);
+  expect(costs.monthSpendUsd(NOW)).toBeGreaterThan(0);
+});
+
+it('a failed attempt that billed nothing logs no attempt row', async () => {
+  const entries: Parameters<NonNullable<Args[3]>>[0][] = [];
+  const gateway: LLMGatewayAdapter = { complete: async (input) => input.request.model === OPENAI_GPT_6_1_TERRA_MODEL
+    ? { ok: false, code: 'transient', error: 'down' }
+    : { ok: true, data: { model: input.request.model, text: 'ok', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } } };
+  await responder(gateway, at(1), [], (entry) => { entries.push(entry); }).respond(turn('fallback-unbilled'), time);
+  expect(attemptEntries(entries)).toEqual([]);
+});
+
+it('a provider that reports more cache reads and writes than the whole prompt is clamped and flagged once, without its numbers', async () => {
+  const entries: Parameters<NonNullable<Args[3]>>[0][] = [];
+  const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
+  const gateway: LLMGatewayAdapter = { complete: async (input) => ({ ok: true, data: { model: input.request.model, text: 'ok', input_tokens: 1_000, output_tokens: 5, cache_read_input_tokens: 600, cache_write_input_tokens: 700, latency_ms: 1 } }) };
+  await responder(gateway, at(1), [], (entry) => { entries.push(entry); costs.record(entry, NOW); }).respond(turn('anomaly'), time);
+  const anomalies = entries.filter((entry) => entry.hop === 'usage_anomaly');
+  expect(anomalies).toHaveLength(1);
+  expect(anomalies[0]).toMatchObject({ ok: false, code: 'cache_exceeds_input', provider: 'openai' });
+  expect(JSON.stringify(anomalies[0])).not.toMatch(/600|700|1000/);
+  expect(costs.monthSpendUsd(NOW)).toBeGreaterThan(0);
+});
