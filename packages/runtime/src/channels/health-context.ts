@@ -12,6 +12,7 @@ import {
   type DerivedSleepDebt,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
+import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
@@ -54,6 +55,8 @@ export type HealthContextRow = Readonly<{
     // is given a word for the amount and, when the row names one, a word for the direction, never the minutes.
     sleep_debt?: unknown;
     windows?: unknown;
+    // The candidate training load: a closed phrase and method, or a closed reason, never a figure.
+    training_load?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
@@ -130,6 +133,18 @@ const sleepDebtWords = (value: unknown): DerivedSleepDebt | undefined => {
 const energyWindows = (value: unknown): DerivedHealthDestinationView['energy_windows'] => {
   const parsed = derivedEnergyWindowsSchema.safeParse(value);
   return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
+};
+
+// The candidate training load as one sentence, from the closed vocabulary only; anything else is absence, never passed on.
+const LOAD_METHOD_WORDS: Readonly<Record<string, string>> = { hr_zones: 'time in heart-rate zones', effort: 'session effort', minutes: 'workout minutes' };
+const LOAD_UNAVAILABLE_WORDS: Readonly<Record<string, string>> = { baseline_immature: 'not enough days yet', no_readings: 'no workouts in the last four weeks' };
+const trainingLoadWords = (value: unknown): string | null => {
+  if (!isRecord(value)) return null;
+  if (value['state'] === 'unavailable') return typeof value['reason'] === 'string' && Object.hasOwn(LOAD_UNAVAILABLE_WORDS, value['reason']) ? `Training load: ${LOAD_UNAVAILABLE_WORDS[value['reason']]}.` : null;
+  const { phrase, method } = value;
+  if (value['state'] !== 'available' || value['activation'] !== 'candidate_unaccepted' || typeof method !== 'string' || !Object.hasOwn(LOAD_METHOD_WORDS, method)
+    || !(TRAINING_LOAD_PHRASES as readonly unknown[]).includes(phrase)) return null;
+  return `Training load this week (candidate, from ${LOAD_METHOD_WORDS[method]}): ${String(phrase)} against your own usual.`;
 };
 
 const pillarDrivers = (value: unknown): readonly string[] =>
@@ -220,6 +235,8 @@ export const toContextHealthMaterial = (
     const summaryParts = [`${zone === undefined ? '' : `Form ${zone}; `}${zone === undefined ? 'Recovery' : 'recovery'} ${recovery}; load ${load ?? 'unavailable'}.`];
     if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
     if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
+    const trainingLoad = trainingLoadWords(context.training_load);
+    if (trainingLoad !== null) summaryParts.push(trainingLoad);
 
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
