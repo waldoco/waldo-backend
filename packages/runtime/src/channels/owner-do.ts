@@ -5242,7 +5242,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const [imessage, whatsapp] = await Promise.all([known('imessage', auth.iMessageHandleHint), known('whatsapp', auth.whatsAppHandleHint)]);
             return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
-          profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), forgettingTopics: this.forgetPurgeJob().status(),
+          profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), statements: shown.statements(), forgettingTopics: this.forgetPurgeJob().status(),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
           nodes: shown.nodes(), edges: shown.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
@@ -5336,7 +5336,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await this.forgetPurgeJob().track([node.label], 'history');
           if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
         } else if (action === 'node.confirm') {
-          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:node.confirm'}`))) return false;
+          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), made ?? 'console:node.confirm'))) return false;
         } else if (action === 'node.correct') {
           // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
           // same scribe check a spot edit crosses, so a credential never enters memory.
