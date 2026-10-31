@@ -52,23 +52,37 @@ export const meetingPrepApplier = (deps: MeetingPrepApplyDeps): MachineHandler =
     const connectionId = machine.source!.connection_id;
     const client = await deps.client();
     if (!client || client.account?.connection_id !== connectionId) { deps.transaction(io.settle); return { held: 'no_source' }; }
-    await deps.current(connectionId);
-    const latest = await client.event(machine.refs[0]!);
-    await deps.current(connectionId);
-    const identity = await prepIdentity(connectionId, latest);
-    const start = Date.parse(latest.start);
-    if (latest.status === 'cancelled' || identity.id !== machine.scope || await calendarPrepDigest(latest) !== machine.input_digest || deps.now() >= start) {
-      deps.transaction(io.settle);
-      return { held: 'held_stale' };
+    // The meeting as it stands: the same occurrence on the same details, not cancelled or started, and one the owner organized
+    // or accepted. Read before the decision and again before the note is queued, so a meeting the owner declined after the
+    // job was written gets no note.
+    const standing = async () => {
+      await deps.current(connectionId);
+      const latest = await client.event(machine.refs[0]!);
+      await deps.current(connectionId);
+      const identity = await prepIdentity(connectionId, latest);
+      const stands = latest.status !== 'cancelled' && latest.owner_status !== undefined && identity.id === machine.scope
+        && await calendarPrepDigest(latest) === machine.input_digest && deps.now() < Date.parse(latest.start);
+      return stands ? { latest, identity } : null;
+    };
+    const stale = () => { deps.transaction(io.settle); return { held: 'held_stale' as const }; };
+    const found = await standing();
+    if (!found) return stale();
+    const { latest, identity } = found;
+    // Granola is read only for a job still current and a meeting still standing, and the meeting is read again after it:
+    // the owner may decline while Granola answers, and then the decision runs on nothing it returned.
+    let granola: GranolaNotes | undefined;
+    if (deps.granola) {
+      await io.current();
+      granola = await deps.granola(latest, client.account?.email ?? null, io.trace);
+      if (!await standing()) return stale();
     }
-    const granola = await deps.granola?.(latest, client.account?.email ?? null, io.trace);
-    await deps.current(connectionId);
     const now = deps.now();
     const decision = parseCalendarPrep(await deps.decide(io.trace, calendarPrepPrompt(latest, now, deps.timezone, checkedMail(result), granola), async () => { await io.current(); await deps.current(connectionId); }));
     // A reply that is no decision is no note: the job settles unrecorded rather than paying for the same reply again.
     if (decision.kind === 'malformed') { deps.transaction(io.settle); return { held: 'malformed_reply' }; }
     const commit = () => { deps.briefs.commitPrep(identity, now, machine.input_digest); io.settle(); };
     if (decision.kind === 'no_op') { deps.transaction(commit); return 'skipped'; }
+    if (!await standing()) return stale();
     const receipt: CalendarPrepReceipt = { connectionId, calendarId: 'primary', eventId: latest.id, occurrence: identity.occurrence, start: identity.canonicalStart,
       revision: latest.etag ?? latest.updated ?? null, sourceDigest: machine.input_digest, timezone: deps.timezone, title: latest.title };
     if (await deps.enqueue(identity.id, decision.text, receipt, commit)) return 'delivered';

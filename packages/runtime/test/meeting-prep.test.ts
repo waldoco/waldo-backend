@@ -229,6 +229,49 @@ describe('applying a prep job', () => {
     });
   });
 
+  // Google maps a decline, a tentative and an unanswered invite alike: no owner_status.
+  it.each(['declined', 'left tentative or unanswered'])('a meeting the owner %s after the job was written gets no decision and no note', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const { owner_status: _accepted, ...unanswered } = h.event;
+      h.latest.event = unanswered;
+      const a = applying(h);
+      await a.lane();
+      expect(a.decided).toEqual([]);
+      expect(a.delivered).toEqual([]);
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
+      expect(h.briefed()).toEqual([]);
+      expect(h.book.get(job.id)!.status).not.toBe('reported');
+    });
+  });
+
+  it('a meeting the owner declines while the decision runs gets no note, and nothing is recorded', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const { owner_status: _accepted, ...declined } = h.event;
+      const a = applyingWith(h, { decide: async () => { h.latest.event = declined; return JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }); } });
+      await a.lane();
+      expect(a.delivered).toEqual([]);
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
+      expect(h.briefed()).toEqual([]);
+    });
+  });
+
+  it('a meeting still accepted, or organized by the owner, keeps its note when attendees change', async () => {
+    for (const status of ['accepted', 'organizer'] as const) {
+      await withPrep(event => ({ ...event, owner_status: status }), async (h) => {
+        await h.sweep();
+        report(h, FOUND);
+        h.latest.event = { ...h.event, attendee_emails: [...(h.event.attendee_emails ?? []), 'ben@example.test'] };
+        const a = applying(h);
+        await a.lane();
+        expect(a.delivered, status).toHaveLength(1);
+      });
+    }
+  });
+
   it('quiet hours by apply time: no decision', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
@@ -417,6 +460,47 @@ describe('Granola in an accepted meeting\'s prep', () => {
       expect(asked).toEqual([['e1', OWNER, `task:${job.id}:apply`]]);
       expect(a.decided[0]).toMatch(/Asha sent the agenda[\s\S]*<granola_notes>[\s\S]*Budget approved last week/);
       expect(a.delivered).toHaveLength(1);
+    });
+  });
+
+  it('a meeting the owner declined after the job was written reads no Granola, decides nothing and sends no note', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const { owner_status: _accepted, ...declined } = h.event;
+      h.latest.event = { ...declined, attendee_emails: [...(h.event.attendee_emails ?? []), 'added.later@example.test'] };
+      const asked: string[][] = [];
+      const a = applyingWith(h, { granola: async (event) => { asked.push([...(event.attendee_emails ?? [])]); return { status: 'checked', text: 'notes' }; } });
+      await a.lane();
+      expect({ asked, decided: a.decided.length, delivered: a.delivered.length }).toEqual({ asked: [], decided: 0, delivered: 0 });
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
+    });
+  });
+
+  it('a meeting the owner declines while Granola answers gets no decision and no note', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const { owner_status: _accepted, ...declined } = h.event;
+      const a = applyingWith(h, { granola: async () => { h.latest.event = declined; return { status: 'checked', text: 'notes' }; } });
+      await a.lane();
+      expect({ decided: a.decided.length, delivered: a.delivered.length }).toEqual({ decided: 0, delivered: 0 });
+      expect(h.briefed()).toEqual([]);
+    });
+  });
+
+  it('a job cancelled after its apply began sends nothing to Granola', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const asked: string[] = [];
+      const a = applyingWith(h, {
+        client: async () => { h.book.cancel(job.id, 'owner'); return h.client; },
+        granola: async (event) => { asked.push(event.id); return undefined; },
+      });
+      await a.lane();
+      expect(asked).toEqual([]);
+      expect(a.delivered).toEqual([]);
     });
   });
 
