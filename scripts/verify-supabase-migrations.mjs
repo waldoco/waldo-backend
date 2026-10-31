@@ -9,6 +9,7 @@ const expectedMigrations = [
   '20260709172043_0006_harden_rls_auto_enable_execute.sql',
   '20260710182949_reconcile_contract_spine.sql',
   '20260806180000_add_responsibility_session_authority.sql',
+  '20261031120000_add_google_oauth_accounts.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

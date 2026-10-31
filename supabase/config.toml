@@ -14,3 +14,8 @@ enabled = false
 [functions.mint-agent-jwt]
 verify_jwt = false
 
+# Google redirects the browser to /callback without a Supabase JWT; /start and /complete
+# verify the caller's JWT themselves.
+[functions.google-connect]
+verify_jwt = false
+
