@@ -229,7 +229,10 @@ export const readMemoryArgsSchema = z.strictObject({
   query: z.string().min(1).max(500).optional(),
   // Only claims filed under this part of the owner's life; unsorted reads what is not filed yet.
   area: lifeAreaSchema.optional(),
-});
+  // Claims by id (the number in a c12 tag), as a stub in recall names them. An id this read may not show is left out,
+  // the same as one that does not exist.
+  ids: z.array(z.int().positive()).min(1).max(12).optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
 // return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.

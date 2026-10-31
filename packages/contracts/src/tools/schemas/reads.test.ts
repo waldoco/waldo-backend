@@ -207,6 +207,13 @@ describe('readMemoryArgs', () => {
     expect(readMemoryArgsSchema.safeParse({ hall: 'goals' }).success).toBe(false);
     expect(readMemoryArgsSchema.safeParse({ query: 'x'.repeat(501) }).success).toBe(false);
   });
+
+  it('reads claims by id: one to twelve positive ids, which a hall or area may narrow but a query may not join', () => {
+    expect(readMemoryArgsSchema.safeParse({ ids: [12, 40] }).success).toBe(true);
+    expect(readMemoryArgsSchema.safeParse({ ids: [12], hall: 'facts', area: 'work' }).success).toBe(true);
+    for (const ids of [[], [0], [-3], [1.5], ['c12'], Array.from({ length: 13 }, (_, i) => i + 1)]) expect(readMemoryArgsSchema.safeParse({ ids }).success, JSON.stringify(ids)).toBe(false);
+    expect(readMemoryArgsSchema.safeParse({ ids: [12], query: 'dentist' }).success).toBe(false);
+  });
 });
 
 describe('readMemoryResult', () => {

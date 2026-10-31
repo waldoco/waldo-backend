@@ -133,8 +133,12 @@ export const lastInputCarries = (needles: readonly string[], why: string): Recei
 
 // The claims a request showed the model, by the c<id> tag that leads each memory line (memory.ts claimTag). Read from what the model
 // was sent, so it holds for any way the lines got there: a pinned block, recent facts or per-message recall.
-const shownClaimIds = (trial: TrialEvidence, turn: number): ReadonlySet<number> =>
-  new Set((trial.model_inputs ?? []).filter((input) => input.turn === turn).flatMap((input) => [...input.text.matchAll(/\bc(\d+) · /g)].map((match) => Number(match[1]))));
+// A claim shown in full carries its c<id> tag; a stub (c<id> stub) shows only how the note starts, so it counts as shown only
+// once read_memory opens it. Anything that must never reach the model must not reach it as a stub either.
+const tagged = (trial: TrialEvidence, turn: number, tag: RegExp): ReadonlySet<number> =>
+  new Set((trial.model_inputs ?? []).filter((input) => input.turn === turn).flatMap((input) => [...input.text.matchAll(tag)].map((match) => Number(match[1]))));
+const shownClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+) · /g);
+const offeredClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+)(?: stub)? · /g);
 const readMemoryOutputs = (trial: TrialEvidence) => trial.toolOutputs.filter((entry) => entry.name === 'read_memory').map((entry) => entry.output.toLowerCase());
 
 // On this owner turn the model was shown the claim, or read it with read_memory (the claim's words in a read_memory result):
@@ -163,7 +167,7 @@ export const neverReaches = (claims: readonly Readonly<{ id: number; needle: str
   holds: (trial) => {
     const inputs = (trial.model_inputs ?? []).filter((input) => turns === undefined || turns.includes(input.turn));
     const needles = claims.map((claim) => claim.needle.toLowerCase());
-    return claims.every((claim) => inputs.every((input) => !shownClaimIds(trial, input.turn).has(claim.id)))
+    return claims.every((claim) => inputs.every((input) => !offeredClaimIds(trial, input.turn).has(claim.id)))
       && inputs.every((input) => needles.every((needle) => !input.text.toLowerCase().includes(needle)))
       && trial.toolOutputs.every((entry) => needles.every((needle) => !entry.output.toLowerCase().includes(needle)))
       && trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => needles.every((needle) => !turn.text.toLowerCase().includes(needle)));
