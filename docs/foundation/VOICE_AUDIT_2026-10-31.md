@@ -84,7 +84,7 @@ Each finding says who can fix it: **(a)** fixable here as a fixed string or prom
 - `src/channels/telegram-listener.ts:198`: "Sorry - I hit a problem answering that. Please try again in a moment." `:197`: "That took too long. In-flight changes may still finish. Try again, or split it into smaller asks." `:206` reacts 😢 to a failed turn.
 - Reach: `TelegramOwnerListener` is the turn listener for every channel (`src/channels/owner-do.ts:4406`, `surface: channel`); WhatsApp rethrows to its own notice (`:201`). So app and iMessage owners get these lines [inference from source].
 - Wrong: "Sorry - ... Please" is the over-apologiser and corporate register; "in-flight changes" is plumbing. The model's own reaction rule saves 😢 "for genuinely sad news (a loss, bad health news)" (`src/channels/reactions.ts:23`); the host puts it on every failed turn, so Waldo looks sad about his own error.
-- Fix: "That didn't go through on my side. Try again in a moment?" and "That took too long, and part of it may still finish. Try again, or split it into smaller asks." Drop the default 😢 reaction. **First-wave PR.**
+- Fix: "I hit a problem answering that. Try again in a moment." and "That took too long, and anything I had started may still finish. Try again, or split it into smaller asks." Text in #1747. The 😢 reaction is left for a decision (Q10): no reaction, or 🤷 "can't help right now".
 
 ### F12. The interrupted-run notices are jargon and inconsistent. gate
 - `src/channels/owner-do.ts:353`: "This run did not finish. In-flight changes may still finish. Please check before retrying changes." `:721-727`: five more ("...could not be verified for delivery. A private result may already be saved. I did not send the unverified final...", "Your added message was used by a run whose outcome is uncertain...").
@@ -94,20 +94,20 @@ Each finding says who can fix it: **(a)** fixable here as a fixed string or prom
 ### F13. The out-of-budget reply lists tool names and scripts a password. (a)
 - `src/conversation/tool-loop.ts:67-73`: "I ran out of time before finishing this. Done so far: search communication, query calendar. The rest is still open; say "continue" and I will pick it up from here."
 - Wrong: tool names are machinery (and read-only steps are not effects; real effects are already on the receipt line). `say "continue"` tells the owner the exact word to type, while TASKS already reads any "keep going" as carry on.
-- Fix: "I ran out of time before finishing this. Reply and I'll pick it up from here." **First-wave PR.**
+- Fix in #1748: "I ran out of time partway through this. Reply and I'll pick it up from where I stopped." (or "...before I got anywhere with this. Reply and I'll try again." when no step ran).
 
 ### F14. A debug line can be the whole reply. (a)
 - `tool-loop.ts:300`: "No tools are available this turn; no tool calls were executed." when the model returns no text and the turn had no tools.
-- Fix: an honest owner line ("I didn't get an answer together for that. Ask me again?"). **First-wave PR.**
+- Fix in #1748: "I couldn't act on that here, so nothing was done."
 
 ### F15. The background-task progress note counts steps. (a)
 - `src/prompt/fixed-lines.ts:63`: `Still working on "${title}" in the background (${rounds} steps so far). I'll tell you when it's done.` Pinned at `test/task-lane.test.ts:226` with "(0 steps so far)".
 - Wrong: the step count is machinery and "0 steps so far" reads as no progress. Chat-turn progress notes are model-written (`src/channels/progress-pacer.ts:47-53`), so the background note is the odd one out.
-- Fix: `Still working on "${title}". I'll tell you when it's done.` **First-wave PR.** Making it model-written is possible but needs a model when one may be the thing that is down; not proposed.
+- Fix in #1746: `Still working on "${title}". I'll tell you when it's done.` Making it model-written is possible but needs a model when one may be the thing that is down; not proposed.
 
 ### F16. WhatsApp's failure notices say "Please" and name the channel. (a)
 - `src/channels/whatsapp-api.ts:441-442`: "I could not handle your last WhatsApp message. Please send it again." / "I may have only partly handled your last WhatsApp message. Please check what happened before you resend it."
-- Fix: "I couldn't get to your last message. Send it again?" / "I may have only partly handled your last message. Check what went through before you send it again." **First-wave PR.**
+- Fix in #1747: "I couldn't get to your last message, so nothing happened. Send it again?" (only on the path where the turn never started) / "I may have only partly handled your last message. Check what went through before you send it again."
 
 ### F17. "My model" is said four ways. (b) Q7
 - `src/llm/owner-routes.ts:39` "I can't reach my model right now. I've kept your message and will answer as soon as I can."; `src/scheduler/failure-notice.ts:36` "...so today's day cards are waiting..."; `fixed-lines.ts:19` "I still can't reach my model..."; `src/channels/day-cards.ts:199-201` "Waldo couldn't reach its model this morning" (console, third person, "its").
@@ -135,7 +135,7 @@ Each finding says who can fix it: **(a)** fixable here as a fixed string or prom
 
 ### F21. The voice judge never grades a day card. (a), eval-only
 - `packages/runtime/evals/nightly/suite.ts:94` runs the voice judge only when `scenario.rubric.voice` is set. `card-scenarios.ts` (d1-d3) has none; `brief-health-scenarios.ts` has 3 of 6; `skill-scenarios.ts`, `state-memory-scenarios.ts` and `errands.ts` have none.
-- Fix: add `voice` rubrics to d1-d3 (and the Brief cases without one), naming the report never-mode and the pitch-day Close. Cheap, eval-only, and it would have caught F1 and F2.
+- Fix in #1749 for d1-d3, naming the report never-mode; the pitch-day Close waits on Q3. The three Brief cases in `brief-health-scenarios.ts` without one are a follow-up.
 
 ### F22. The judge's character line drifts from VOICE. (b) Q8
 - `evals/nightly/voice.ts:41`: "Alfred in a modern register, a caring and considerate concierge the owner could text." VOICE: "a capable peer who serves, not a servant who performs (no "sir", no ceremony, no default cheer)."
@@ -160,7 +160,8 @@ These are not decided here.
 7. **Saying "my model" (owner).** Keep "I can't reach my model" as the honest-about-software line, or plainer ("I'm having trouble on my side")? And in third person, "he" or "it"?
 8. **Judge calibration (Suyash).** Review the 35 draft labels, and confirm the judge's character line should match VOICE ("capable peer who serves"), not "concierge".
 9. **Silence by default (owner).** VOICE: "Silence is the default; the Brief, Check-in and Close carry nearly everything." The 30 October direction is to act ahead of the owner, and proactive skills and prep notes now speak between cards. Does the line still hold as written, or should it read "speak up when it helps their day, never to fill silence"?
-10. **North-star items still open** (from the digest): use only what you gave him vs. owner look-up; sentence case; the mascot; care without surveillance and the follow-up cadence.
+10. **The failure reaction (Suyash).** A failed turn gets a fixed 😢 reaction on surfaces that react. Keep it, use 🤷, or none?
+11. **North-star items still open** (from the digest): use only what you gave him vs. owner look-up; sentence case; the mascot; care without surveillance and the follow-up cadence.
 
 ## For the app lane
 
@@ -169,11 +170,10 @@ Not edited here: the app's own button labels and section headers (Q6, Q2), and a
 ## Fix plan
 
 First wave, smallest blast radius first, no VOICE change and no lane-owned file:
-1. `fixed-lines.ts` progress note (F15).
-2. WhatsApp failure notices (F16).
-3. `tool-loop.ts` out-of-budget and empty-turn replies (F13, F14).
-4. The turn-failure line and reaction in `telegram-listener.ts` (F11).
-5. Voice rubrics on the day-card eval scenarios (F21).
+1. #1746: `fixed-lines.ts` progress note (F15).
+2. #1747: WhatsApp failure notices and the turn-failure lines in `telegram-listener.ts` (F16, F11 text).
+3. #1748: `tool-loop.ts` out-of-budget and empty-turn replies (F13, F14).
+4. #1749: voice rubrics on the day-card eval scenarios (F21).
 
 Later, after answers or with the lane owners: F1-F4 and F8 (S8 lane), F5 (Q4), F6 (stable-prompt change), F7 and F9 (privacy notes), F10, F17-F19.
 
