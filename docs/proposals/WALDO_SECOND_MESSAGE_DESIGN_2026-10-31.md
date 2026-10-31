@@ -306,6 +306,25 @@ Each slice is its own issue, PR and gate review. Re-ranked after the owner's rul
 | 9 | **`start_task` always loaded, elapsed-time context, scenario evals.** | prompt, tool loader, evals | M | Makes (b) happen by the model's choice. |
 | 10 | **Task groups with one merged brief;** caps as a budget envelope. Spike Workflows first (Reuse vs build §3); fall back to job-book groups. | `tasks/`, job book or a Workflow binding | L | The (c) criterion. Needs persistence or binding review. |
 
+### Slice 2, ready to file for the host lane (`waldoco/waldo-imessage-host`)
+
+**Title:** Photon: a threaded reply whose target cannot be resolved is refused, so Waldo's answer is lost.
+
+**Where:** branch `ashish/photon-rich` at `25217b16`.
+- `src/photon/spectrum.ts:137-140`: `target()` resolves the reply target with `space.getMessage(partIndex ? \`p:${partIndex}/${guid}\` : guid)`. If that throws or finds nothing, it throws `PhotonTargetUnavailable` before any send.
+- `src/photon/transport.ts:35` classifies that as refused (`photon_target_unavailable`).
+- `src/photon/sender.ts:49` needs `replies` verified for any command with a target message.
+- The id the backend targets is the one the host forwarded inbound: `src/photon/reader.ts:26`, `messageGuid: row.messageId, partIndex: 0`.
+
+**What happens:** when the owner sends two messages before Waldo answers, the backend threads the first reply onto the first message. The host refuses that send. Until backend slice 1 lands, the backend settles the reply as lost.
+
+**Expected host behaviour:**
+1. Prove that `space.getMessage` resolves the stream's own inbound message ids, for messages older than a few minutes too. Add a test with a real Spectrum id shape.
+2. If the target cannot be resolved, refuse as today (`not_started`, nothing sent). The backend will resend plain after slice 1. Never send unthreaded on its own: the backend owns the retry.
+3. Report `replies` as verified only while (1) holds, so a host that cannot resolve targets makes the backend send plain from the start.
+
+**Evidence wanted from the live host:** the count of `photon_target_unavailable` results, and whether the host reports `replies` as verified.
+
 ## Owner decisions
 
 D1–D4 are decided (see "Owner rulings, 31 Oct"). Still open:
