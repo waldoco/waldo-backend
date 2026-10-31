@@ -36,9 +36,6 @@ const statementOf = (nodeId: number, claim: Pick<Claim, 'kind' | 'source_ref'>):
 export const nodeStatementIds = (claims: readonly Claim[], nodeId: number): readonly number[] =>
   claims.filter((claim) => statementOf(nodeId, claim)).map((claim) => claim.id);
 
-// Waldo's read: written while reading a source or outside content. The ref survives a per-claim confirm, which makes the claim
-// the owner's word but never makes the pattern drawn over it theirs.
-export const waldosRead = (claim: Pick<Claim, 'origin' | 'source_ref'>): boolean => claim.origin === 'untrusted' || isWelcomeRef(claim.source_ref);
 export const HEALTH_NODE_SOURCES: ReadonlySet<AppNodeSourceV1 | null> = new Set<AppNodeSourceV1>(['apple_health', 'health_connect']);
 // Words other people may have written (an invite, a mail subject), whether or not the owner has since confirmed the note.
 export const othersWords = (claim: Pick<Claim, 'origin' | 'source_ref'>): boolean =>
@@ -48,9 +45,7 @@ type Worded = Pick<ConstellationNode, 'id' | 'label' | 'summary' | 'supporting_s
 export const statementConfirms = (claims: readonly Claim[], node: Worded): boolean =>
   nodeSupports(claims, node).some((claim) => statementOf(node.id, claim) && claim.status === 'active' && claim.text === nodeWording(node));
 
-// Confirmed when the owner said yes to the node's current wording, or when it rests only on their own grounded words.
-export const nodeConfirmation = (claims: readonly Claim[], node: Worded): 'confirmed' | 'waldos_read' => {
-  if (statementConfirms(claims, node)) return 'confirmed';
-  const supports = nodeSupports(claims, node).filter((claim) => claim.kind !== NODE_STATEMENT);
-  return supports.length > 0 && !supports.some(waldosRead) && supports.every((claim) => claim.verification_status === 'owner-grounded') ? 'confirmed' : 'waldos_read';
-};
+// Confirmed only when the owner said yes to the node's current wording. The wording is Waldo's until then, however its notes
+// came to be the owner's: stated by them, or confirmed one by one.
+export const nodeConfirmation = (claims: readonly Claim[], node: Worded): 'confirmed' | 'waldos_read' =>
+  statementConfirms(claims, node) ? 'confirmed' : 'waldos_read';

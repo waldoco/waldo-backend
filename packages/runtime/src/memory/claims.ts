@@ -4,7 +4,7 @@ type Sql = Pick<SqlStorage, 'exec'>;
 import { replaceLiteralText } from '@waldo/contracts';
 import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
 import { HEALTH_MEMORY_RULES } from './health-rules';
-import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds, waldosRead } from './node-sources';
+import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
 import { MAX_FORGET_SOURCES } from './selective-forget';
 
@@ -470,7 +470,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const ids = supportIds(node), supports = nodeSupports(all, node);
       const confirmedBefore = supports.length > 0 && supports.length === ids.length
         && supports.every((claim) => (claim.status === 'active' || claim.status === 'promoted') && claim.verification_status === 'owner-grounded');
-      if (!confirmedBefore || !supports.some(waldosRead) || supports.some((claim) => claim.kind === NODE_STATEMENT)
+      if (!confirmedBefore || supports.some((claim) => claim.kind === NODE_STATEMENT)
         || !supports.some((claim) => claim.evidence.split(' | ').some((part) => NODE_CONFIRM_MARKS.includes(part)))) continue;
       cite(node, [...ids, addStatement(node, 'backfill:node.confirm', at)], node.last_confirmed);
     }
@@ -1597,7 +1597,6 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
   const eligible = new Map([...store.claims('active'), ...store.claims('promoted')]
     .filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin === 'owner')
     .map((claim) => [claim.id, claim]));
-  const existing = new Set(store.nodes().map((node) => node.id));
   const supported = new Set<number>();
   const ids = plan.nodes.map((node) => {
     if (node.durable !== true) {
@@ -1615,7 +1614,12 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
     }
     onEvidence?.({ outcome: 'admitted', source_kind: 'owner_observation_pattern', count: 1 });
     for (const id of valid) supported.add(id);
-    return store.saveNode({ ...node, strength: clamp01(node.strength), supporting_spots: valid, id: node.id !== null && existing.has(node.id) ? node.id : null }, at);
+    // The owner's yes to a node's wording stays cited while the wording does; a rewrite leaves nothing they said yes to.
+    const prior = node.id === null ? undefined : store.nodes().find((row) => row.id === node.id);
+    const same = prior !== undefined && nodeWording(prior) === nodeWording(node);
+    if (prior && !same) store.dropStatements(prior.id);
+    const yes = same ? nodeStatementIds(store.statements(), prior.id).filter((id) => supportIds(prior).includes(id)) : [];
+    return store.saveNode({ ...node, strength: clamp01(node.strength), supporting_spots: [...valid, ...yes], id: prior ? prior.id : null }, at);
   });
   const resolve = (ref: string) => ref.startsWith('new:') ? ids[Number(ref.slice(4))] : Number(ref);
   // Only endpoints admitted in this pass may establish or refresh an association.
