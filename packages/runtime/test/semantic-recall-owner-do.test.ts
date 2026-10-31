@@ -3,7 +3,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
-import { semanticRecall, workersAiEmbedder } from '../src/memory/semantic-recall';
+import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
+import { modelCost } from '../src/llm/pricing';
+import { COST_MONTH_KEY, COST_ROLLUP_KEY, type CostRollupRow } from '../src/observability/cost-rollup';
+import { estimatedTokens, semanticRecall, workersAiEmbedder } from '../src/memory/semantic-recall';
 import { ensureSchema } from '../src/tracer/schema';
 import { fakeEmbeddings } from '../src/testing/fake-embeddings';
 
@@ -46,9 +49,8 @@ const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, 
   return new Response('unexpected', { status: 500 });
 });
 
-it('an app turn, which runs on a run scope, recalls a claim by meaning when the flag is on', async () => {
-  directory();
-  const name = 'semantic-recall-owner-do-app';
+const appTurn = async (name: string, extra: Readonly<Record<string, string>> = {}) => {
+  let ai = fakeEmbeddings();
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const sql = state.storage.sql, transaction = <T>(work: () => T) => state.storage.transactionSync(work);
     const memory = claimStore(sql, transaction);
@@ -59,9 +61,9 @@ it('an app turn, which runs on a run scope, recalls a claim by meaning when the 
     memory.add({ kind: 'fact', text: DENTIST, evidence: 'teeth', source: 'stated', origin: 'owner', source_ref: 'owner, tg-2' }, '2026-10-26T08:00:00Z');
     // Only the gym claim is pinned, so the dentist claim can reach the model by recall alone.
     expect(memory.pin(1, 'facts', 1)).toBe(true);
-    const ai = fakeEmbeddings();
+    ai = fakeEmbeddings();
     await semanticRecall({ sql, transaction, embedder: workersAiEmbedder(ai) }).sync();
-    const owner = new OwnerDO(state, { ...env, MEMORY_SEMANTIC_RECALL: '1', AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, MEMORY_SEMANTIC_RECALL: '1', AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-dentist', text: 'When is my dentist appointment?' }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
@@ -70,5 +72,24 @@ it('an app turn, which runs on a run scope, recalls a claim by meaning when the 
     expect(reply, 'the reply call reached the model').toBeDefined();
     expect(JSON.stringify(reply!.messages)).toContain('Dr Rao does the teeth cleaning');
     expect(ai.inputs).toContain('When is my dentist appointment?');
+  });
+  return ai;
+};
+
+it('an app turn, which runs on a run scope, recalls a claim by meaning when the flag is on', async () => {
+  directory();
+  await appTurn('semantic-recall-owner-do-app');
+});
+
+it('prices the turn\'s embedding call into the cost ledger and the month the spend ceiling reads', async () => {
+  directory();
+  const name = 'semantic-recall-owner-do-cost';
+  await appTurn(name, { WALDO_COST_LEDGER_SYNC: 'on' });
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const pending = state.storage.kv.get<{ open: CostRollupRow[]; sending?: { rows: CostRollupRow[] } }>(COST_ROLLUP_KEY);
+    const rows = [...pending?.open ?? [], ...pending?.sending?.rows ?? []].filter((row) => row.model === WORKERS_AI_BGE_M3_EMBEDDING_MODEL);
+    const query = modelCost({ model: WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: estimatedTokens(['When is my dentist appointment?']), output: 0, cached: 0 })!.total;
+    expect(rows).toEqual([expect.objectContaining({ kind: 'turn', calls: 1, input: estimatedTokens(['When is my dentist appointment?']), usd: query })]);
+    expect(state.storage.kv.get<{ usd: number }>(COST_MONTH_KEY)!.usd).toBeGreaterThanOrEqual(query);
   });
 });
