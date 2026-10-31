@@ -1,5 +1,5 @@
 import { signedRpc, type OwnerDirectoryEnv } from '../../identity/owner-directory';
-import { AGENT_MAIL_RULE_HANDLES_KEY, intendAgentMailRule, type AgentMailRuleDirectory, type HeldHandle, type RuleState } from './rules';
+import { agentMailRuleHandles, intendAgentMailRule, type AgentMailRuleDirectory, type HeldHandle, type RuleState } from './rules';
 
 // The owner's handle at the agent mail domain. The directory is the one writer of who holds which handle; the owner's object
 // asks it, records the handle for its alarm before each call that changes it, and the alarm makes the rule.
@@ -14,7 +14,8 @@ const CHANGES_KEY = 'agent_mail_handle_changes_v1';
 export type AgentMailClaim = 'claimed' | 'unchanged' | 'taken' | 'unavailable' | 'full' | 'invalid' | 'reserved' | 'too_many_changes' | 'no_owner';
 export type AgentMailRelease = 'released' | 'none';
 export type AgentMailHandleDirectory = AgentMailRuleDirectory & Readonly<{
-  claim(handle: string): Promise<Exclude<AgentMailClaim, 'invalid' | 'reserved' | 'too_many_changes'>>;
+  // `notice`: the version of the agent mail notice the owner accepted with this claim.
+  claim(handle: string, notice: string): Promise<Exclude<AgentMailClaim, 'invalid' | 'reserved' | 'too_many_changes'>>;
   release(): Promise<AgentMailRelease>;
 }>;
 
@@ -42,7 +43,7 @@ export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetch
   const call = signedRpc(env, fetcher, now), held = agentMailHeldHandles(env, fetcher, now);
   if (!call || !held) return null;
   return {
-    claim: async handle => answered<Awaited<ReturnType<AgentMailHandleDirectory['claim']>>>(await call('claim_agent_mail_handle', `mailclaim.${doName}.${handle}`, { p_do_name: doName, p_handle: handle }), CLAIMS),
+    claim: async (handle, notice) => answered<Awaited<ReturnType<AgentMailHandleDirectory['claim']>>>(await call('claim_agent_mail_handle', `mailclaim.${doName}.${handle}.${notice}`, { p_do_name: doName, p_handle: handle, p_notice_version: notice }), CLAIMS),
     release: async () => answered<AgentMailRelease>(await call('release_agent_mail_handle', `mailrelease.${doName}`, { p_do_name: doName }), new Set(['released', 'none'])),
     current: async () => {
       const [row] = await call('agent_mail_handle', `mailhandle.${doName}`, { p_do_name: doName }) as { handle?: unknown; rule_state?: unknown }[];
@@ -58,7 +59,7 @@ export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetch
 type Kv = Pick<SyncKvStorage, 'get' | 'put' | 'delete'>;
 const dayOf = (at: number) => new Date(at).toISOString().slice(0, 10);
 
-export async function claimAgentMailHandle(kv: Kv, directory: AgentMailHandleDirectory, asked: string, now = Date.now()): Promise<AgentMailClaim> {
+export async function claimAgentMailHandle(kv: Kv, directory: AgentMailHandleDirectory, asked: string, notice: string, now = Date.now()): Promise<AgentMailClaim> {
   const handle = asked.trim().toLowerCase();
   if (!AGENT_MAIL_HANDLE.test(handle) || handle.includes('..')) return 'invalid';
   if (AGENT_MAIL_RESERVED.includes(handle)) return 'reserved';
@@ -67,7 +68,7 @@ export async function claimAgentMailHandle(kv: Kv, directory: AgentMailHandleDir
   if (today >= AGENT_MAIL_HANDLE_CHANGES_PER_DAY) return 'too_many_changes';
   // Before the call: a claim whose answer is lost may still have landed, and the alarm finds out from the directory.
   intendAgentMailRule(kv, handle, now);
-  const outcome = await directory.claim(handle);
+  const outcome = await directory.claim(handle, notice);
   if (outcome === 'claimed') {
     kv.put(CHANGES_KEY, { day: dayOf(now), count: today + 1 });
     // Again after it: an alarm pass that ran during the call may have read the directory before the claim and let it go.
@@ -87,7 +88,7 @@ export async function releaseAgentMailHandle(kv: Kv, directory: AgentMailHandleD
 // the set, or one an alarm pass let go during its claim) is put back for it.
 export async function agentMailHandleView(kv: Kv, directory: AgentMailHandleDirectory, now = Date.now()): Promise<HeldHandle | null> {
   const current = await directory.current();
-  if (current?.state === 'pending' && !(kv.get<string[]>(AGENT_MAIL_RULE_HANDLES_KEY) ?? []).includes(current.handle)) intendAgentMailRule(kv, current.handle, now);
+  if (current?.state === 'pending' && !agentMailRuleHandles(kv).includes(current.handle)) intendAgentMailRule(kv, current.handle, now);
   return current;
 }
 

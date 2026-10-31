@@ -9,8 +9,11 @@ import { withRequestTimeout } from '../../identity/request-timeout';
 
 export const AGENT_MAIL_RULE_DUE_KEY = 'agent_mail_rule_due_v1';
 // The handles this owner claimed whose rules may still exist: the current one, and any released or renamed away until
-// Cloudflare's list shows their rules gone. Written before the directory call that claims or releases.
+// Cloudflare's list shows their rules gone. Written before the directory call that claims or releases, each with a fresh
+// token: a pass lets a handle go only if its token is the one the pass started from, so an intent recorded while the pass
+// waited on Cloudflare or the directory is never lost.
 export const AGENT_MAIL_RULE_HANDLES_KEY = 'agent_mail_rule_handles_v1';
+type Intents = Record<string, string>;
 const TRIES_KEY = 'agent_mail_rule_tries_v1';
 // A create that keeps ending without an answer stops here and is reported as unknown; the owner retries by claiming the
 // same handle again. A delete keeps retrying, at most once a day: a stale rule routes nothing, but it holds a slot.
@@ -51,11 +54,13 @@ export type AgentMailRouting = Readonly<{ routing: EmailRouting; domain: string;
 
 const ZONE = /^[0-9a-f]{32}$/;
 const RULE_ID = /^[A-Za-z0-9]{1,64}$/;
+// While agent mail is off, recorded rule work waits and is looked at again daily: a claim or a view wakes it sooner.
+const DEFER_MS = 24 * 60 * 60_000;
 
 // Null unless agent mail is on and every part of the rule API is configured: with any of it missing no Cloudflare call is made.
 export const agentMailRouting = (env: AgentMailRoutingEnv, fetcher: typeof fetch = fetch): AgentMailRouting | null => {
   const script = SCRIPTS[env.WALDO_ENVIRONMENT ?? ''];
-  const { AGENT_MAIL_ZONE_ID: zone, CLOUDFLARE_EMAIL_ROUTING_TOKEN: token, AGENT_MAIL_DOMAIN: domain } = env;
+  const { AGENT_MAIL_ZONE_ID: zone, CLOUDFLARE_EMAIL_ROUTING_TOKEN: token } = env, domain = env.AGENT_MAIL_DOMAIN?.toLowerCase();
   if (env.AGENT_MAIL_INBOUND !== '1' || !script || !domain || !token || !zone || !ZONE.test(zone)) return null;
   // The environment is in the name so one environment's sweep never takes another's rules on a shared zone.
   return { routing: cloudflareEmailRouting(token, zone, script, fetcher), domain, prefix: `waldo-${env.WALDO_ENVIRONMENT}-mail:`, script };
@@ -149,9 +154,15 @@ const backoff = (tries: number) => Math.min(BACKOFF_FIRST_MS * 2 ** Math.max(tri
 
 // Writes the handle into the set the alarm reconciles, and wakes it now. Called before the directory call that changes it.
 export const intendAgentMailRule = (kv: Kv, handle: string, now = Date.now()): void => {
-  const handles = kv.get<string[]>(AGENT_MAIL_RULE_HANDLES_KEY) ?? [];
-  if (!handles.includes(handle)) kv.put(AGENT_MAIL_RULE_HANDLES_KEY, [...handles, handle]);
+  kv.put(AGENT_MAIL_RULE_HANDLES_KEY, { ...kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY), [handle]: crypto.randomUUID() });
   kv.put(AGENT_MAIL_RULE_DUE_KEY, now);
+};
+export const agentMailRuleHandles = (kv: Pick<Kv, 'get'>): string[] => Object.keys(kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {});
+
+// Agent mail is off or unconfigured: no Cloudflare call, and recorded work waits rather than waking every pass.
+export const deferAgentMailRules = (kv: Kv, now = Date.now()): void => {
+  if (agentMailRuleHandles(kv).length) kv.put(AGENT_MAIL_RULE_DUE_KEY, now + DEFER_MS);
+  else kv.delete(AGENT_MAIL_RULE_DUE_KEY);
 };
 
 export async function reconcileAgentMailRules(deps: Readonly<{
@@ -159,7 +170,7 @@ export async function reconcileAgentMailRules(deps: Readonly<{
   log(code: AgentMailRuleCode, cloudflare?: readonly number[]): void;
 }>): Promise<void> {
   const { kv, setup, directory } = deps;
-  const handles = kv.get<string[]>(AGENT_MAIL_RULE_HANDLES_KEY) ?? [];
+  const started = kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {}, handles = Object.keys(started);
   if (!handles.length) { kv.delete(AGENT_MAIL_RULE_DUE_KEY); kv.delete(TRIES_KEY); return; }
   const tries = kv.get<Record<string, number>>(TRIES_KEY) ?? {};
   let wait = Infinity;
@@ -172,10 +183,14 @@ export async function reconcileAgentMailRules(deps: Readonly<{
     deps.log('retry', error instanceof EmailRoutingError ? error.codes : []);
     return false;
   };
-  const finish = (keep: readonly string[], again: boolean) => {
-    kv.put(AGENT_MAIL_RULE_HANDLES_KEY, keep);
-    kv.put(TRIES_KEY, Object.fromEntries(Object.entries(tries).filter(([handle]) => keep.includes(handle))));
-    if (again) kv.put(AGENT_MAIL_RULE_DUE_KEY, deps.now());
+  // Synchronous from here on: nothing recorded between this read and these writes.
+  const finish = (done: ReadonlySet<string>, again: boolean) => {
+    const fresh = kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {};
+    const next = Object.fromEntries(Object.entries(fresh).filter(([handle, token]) => !(done.has(handle) && started[handle] === token)));
+    const renewed = Object.entries(next).some(([handle, token]) => started[handle] !== token);
+    kv.put(AGENT_MAIL_RULE_HANDLES_KEY, next);
+    kv.put(TRIES_KEY, Object.fromEntries(Object.entries(tries).filter(([handle]) => Object.hasOwn(next, handle))));
+    if (again || renewed) kv.put(AGENT_MAIL_RULE_DUE_KEY, deps.now());
     else if (wait < Infinity) kv.put(AGENT_MAIL_RULE_DUE_KEY, deps.now() + wait);
     else kv.delete(AGENT_MAIL_RULE_DUE_KEY);
   };
@@ -191,15 +206,14 @@ export async function reconcileAgentMailRules(deps: Readonly<{
   } catch {
     deps.log('unavailable');
     wait = BACKOFF_FIRST_MS;
-    return finish(handles, false);
+    return finish(new Set(), false);
   }
 
-  const keep: string[] = [];
+  const done = new Set<string>();
   let again = false;
   for (const handle of handles) {
     const address = `${handle}@${setup.domain}`;
     if (current?.handle === handle) {
-      keep.push(handle);
       if (current.state !== 'pending') { delete tries[handle]; continue; }
       let outcome: Exclude<RuleState, 'pending'>, refusal: readonly number[] = [];
       try {
@@ -225,14 +239,15 @@ export async function reconcileAgentMailRules(deps: Readonly<{
       }
       continue;
     }
-    if (!listed) { keep.push(handle); missed(handle, listError); continue; }
+    if (!listed) { missed(handle, listError); continue; }
     // Another owner holds it now: its rule is theirs.
-    if (held.has(handle)) continue;
+    if (held.has(handle)) { done.add(handle); continue; }
     try {
       for (const rule of listed.filter(ours(setup, handle))) { await setup.routing.remove(rule.id); deps.log('removed'); }
-    } catch (error) { keep.push(handle); missed(handle, error); }
+      done.add(handle);
+    } catch (error) { missed(handle, error); }
   }
-  finish(keep, again);
+  finish(done, again);
 }
 
 // The nightly sweep: Waldo's rules in this environment whose handle no owner holds, left by an account deletion (the owner

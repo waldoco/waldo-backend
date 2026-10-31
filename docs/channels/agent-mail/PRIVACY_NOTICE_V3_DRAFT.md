@@ -2,7 +2,7 @@
 
 Status: **draft for the owner**. Not published. By owner ruling it goes in notice v3, not v2. The live notice is at heywaldo.in/privacy; its source is the waldo-landing repository. No waldo-landing change is made here.
 
-Agent mail stays off (`AGENT_MAIL_INBOUND=0`) until this paragraph is live.
+Agent mail is opt-in per user. Claiming an address is the switch: a user without one has no address, no routing rule and no mail. Until notice v3 is published, the claim shows a short notice (`packages/runtime/src/channels/agent-mail/notice.ts`, served on the app's `agent_mail` view at controls revision 10). The directory records the version the user accepted, and when, beside the handle. A claim naming an older version is refused. The notice is the short form of the paragraph below; change them together.
 
 ## Draft text
 
@@ -24,7 +24,9 @@ Agent mail stays off (`AGENT_MAIL_INBOUND=0`) until this paragraph is live.
 >
 > **Delivery.** Mail to your Waldo address is received by Cloudflare Email Routing, which passes it to Waldo. Cloudflare holds the routing rule for your address, which contains the address itself.
 >
-> **Changing or giving up your address.** When you do this, its routing rule is deleted and the address stops receiving mail. A released address is not given to anyone else, including you, for 180 days. The record that enforces this keeps only a digest of the address, not who held it.
+> **Changing or giving up your address.** When you do this, the address stops receiving mail at once and its routing rule is deleted. Mail Waldo has not read yet is discarded unread. What Waldo already told you stays in your chat, and the fingerprints and thread records above are kept as described. A released address is not given to anyone else, including you, for 180 days. The record that enforces this keeps only a digest of the address, not who held it.
+>
+> **Your consent.** Waldo keeps which version of this notice you accepted when you claimed your address, and when.
 
 ## Each claim, and the code that makes it true
 
@@ -41,6 +43,8 @@ Agent mail stays off (`AGENT_MAIL_INBOUND=0`) until this paragraph is live.
 | Thread records until account deletion | `agent_mail_threads`, no age bound (residual risk in PR 1) | — |
 | Cloudflare holds a rule naming the address | `agent-mail/rules.ts` (`create`, literal `to` matcher) | — |
 | Rule deleted on change or release | `rules.ts` `reconcileAgentMailRules`; nightly `sweepAgentMailRules` after account deletion | — |
+| Unread mail discarded on release or change | `agent-mail/turn.ts` `drainAgentMail`: a handle that no longer routes here closes its rows (`end(row, 'closed')` deletes the raw bytes) | — |
+| Notice version and time kept with the claim | migration `20261031140000`, `notice_version`, `notice_accepted_at`; `agent-mail/notice.ts` | — |
 | Not reissued for 180 days; digest only | migration `20261029160000`, `agent_mail_handle_reissue` | 180 days |
 
 ## Open points for the owner

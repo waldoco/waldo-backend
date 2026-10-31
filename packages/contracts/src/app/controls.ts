@@ -5,7 +5,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -24,6 +24,10 @@ const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edi
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
 const nodeId = /^memory:node:[1-9][0-9]{0,15}$/;
 const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
+// What the owner typed for a handle. The backend trims and lower-cases it and answers invalid for anything but 3 to 32 of
+// a-z, 0-9, dot and hyphen, starting and ending with a letter or digit, with no two dots together.
+export const APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 = 64;
+const agentMailNoticeVersion = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
 // One of the owner's local days, as the days view names it.
 const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -43,13 +47,15 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
   // The six digits Twilio texted, for phone.sms_check only. The send and the check name no number: the backend texts the
   // number on file, which only phone.set changes.
   code: z.string().regex(/^\d{6}$/).optional(),
+  // The version of the agent mail notice the owner was shown, for agent_mail.claim only.
+  notice: agentMailNoticeVersion.optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   // Try again on one of today's cards: revision 3, the day view, the card's id and nothing else.
@@ -104,6 +110,13 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'phone.set' && !APP_PHONE_E164.test(action.value ?? '')) ctx.addIssue({ code: 'custom', path: ['value'], message: 'phone.set carries the number in value, E.164 (+ and 7 to 15 digits)' });
   if (phone && (action.id ?? (action.action === 'phone.set' ? undefined : action.value) ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code, or for phone.set the number' });
   // imessage.enroll sets up the number on file for iMessage; it carries nothing, so no number travels with it.
+  // The owner's Waldo address: claim names the handle in value; release carries nothing.
+  const agentMail = action.action === 'agent_mail.claim' || action.action === 'agent_mail.release';
+  if (agentMail !== (action.view === 'agent_mail')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The agent_mail actions alone use the agent_mail view' });
+  if (action.action === 'agent_mail.claim' && !(action.value && action.value.trim().length >= 1 && action.value.length <= APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `agent_mail.claim names the handle in value, up to ${APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1} characters` });
+  // Claiming is the owner's opt-in: it names the version of the notice the owner was shown and accepted.
+  if ((action.notice !== undefined) !== (action.action === 'agent_mail.claim')) ctx.addIssue({ code: 'custom', path: ['notice'], message: 'agent_mail.claim alone carries notice, the version of the notice it showed, and always does' });
+  if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
 });
 
 // The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
@@ -336,6 +349,44 @@ export const APP_IMESSAGE_ENROLL_RECEIPTS_V1 = {
   unavailable: { state: 'rejected', message: 'iMessage could not be set up right now. Try again later.' },
   unknown: { state: 'unconfirmed', message: 'Setting up iMessage was not confirmed. Refresh to see where it stands.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
+// Controls revision 10 (`controls=10`): the agent_mail view and its two actions. A build below it never names them and is
+// refused them.
+export const APP_CONTROLS_AGENT_MAIL_REVISION = 10;
+// The owner's Waldo address. Agent mail is opt-in: claiming a handle is the switch, after the owner reads notice (shown
+// exactly as given; the claim names its version). enabled is false while agent mail is off, and then only display_name
+// and an empty actions list are sent. handle, address and rule are absent until a handle is held. rule says where the
+// address's routing stands: pending (being set up; mail may not arrive yet), live, failed (it could not be set up; claiming
+// the same handle again retries) or unknown (setting it up was not confirmed; claiming it again retries). rule_reason
+// not_configured: routing is not set up on this server yet, so a pending rule stays pending. display_name is the name
+// mail from Waldo carries. Claim is listed while enabled, release while a handle is held; a claim of a different handle
+// releases the one held.
+export const appControlAgentMailDataV1Schema = z.strictObject({
+  enabled: z.boolean(), domain: text.optional(), handle: text.optional(), address: text.optional(),
+  rule: z.enum(['pending', 'live', 'failed', 'unknown']).optional(), rule_reason: z.literal('not_configured').optional(),
+  notice: z.strictObject({ version: agentMailNoticeVersion, text: text.min(1).max(4000) }).optional(),
+  display_name: text.min(1).max(80), actions: z.array(z.enum(['agent_mail.claim', 'agent_mail.release'])),
+}).superRefine((data, ctx) => {
+  const held = data.handle !== undefined;
+  if (data.enabled ? data.domain === undefined || data.notice === undefined : data.domain !== undefined || data.notice !== undefined || held) ctx.addIssue({ code: 'custom', path: ['enabled'], message: 'domain and notice come exactly when agent mail is enabled, and a handle only then' });
+  if (held !== (data.address !== undefined) || held !== (data.rule !== undefined)) ctx.addIssue({ code: 'custom', path: ['handle'], message: 'handle, address and rule come together' });
+  if (data.rule_reason !== undefined && data.rule !== 'pending') ctx.addIssue({ code: 'custom', path: ['rule_reason'], message: 'rule_reason explains a pending rule only' });
+});
+// The receipt for each agent_mail outcome. The app tells them apart by these exact messages, so they are contract.
+export const APP_AGENT_MAIL_RECEIPTS_V1 = {
+  claimed: { state: 'recorded', message: 'Address saved. Waldo is setting it up; mail reaches it once that is done.' },
+  changed: { state: 'recorded', message: 'Address changed. Your old address no longer receives mail, and no one can claim it for 180 days.' },
+  unchanged: { state: 'recorded', message: 'That is already your Waldo address.' },
+  released: { state: 'recorded', message: 'Address released. It no longer receives mail, and no one, you included, can claim it for 180 days.' },
+  none: { state: 'recorded', message: 'You have no Waldo address to release.' },
+  taken: { state: 'rejected', message: 'That address is taken. Try another.' },
+  reserved: { state: 'rejected', message: 'That address is reserved. Try another.' },
+  invalid: { state: 'rejected', message: 'Use 3 to 32 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit.' },
+  unavailable: { state: 'rejected', message: 'That address cannot be claimed right now. Try another, or try again later.' },
+  full: { state: 'rejected', message: 'Waldo cannot set up new addresses right now. Try again later.' },
+  too_many_changes: { state: 'rejected', message: 'That is the limit on address changes for today. Try again tomorrow.' },
+  notice_stale: { state: 'rejected', message: 'The notice changed since you read it. Read the new one, then claim again.' },
+  unknown: { state: 'unconfirmed', message: 'The change was not confirmed. Refresh to see your address.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -345,6 +396,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
+  z.strictObject({ ...envelope, view: z.literal('agent_mail'), data: appControlAgentMailDataV1Schema }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({

@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -12,6 +12,7 @@ import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-phone';
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
+import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
@@ -34,6 +35,8 @@ export type AppControlsHost = Readonly<{
   whatsappUnlinked():Promise<void>;
   // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
   imessageProof?:IMessageProof;
+  // The owner's Waldo address (controls revision APP_CONTROLS_AGENT_MAIL_REVISION); absent where it is not offered.
+  agentMail?:AgentMailControlsDeps;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -57,6 +60,7 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
   const {setup:_setup,...stages}=build.stages;
   return {...build,stages};
 };
+const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
 const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
 // A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
 // is still unfinished, so it reads as pending.
@@ -129,6 +133,13 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
+    if(query.data.view==='agent_mail'){
+      if(!host.agentMail||!readsAgentMail(request))return reply({error:'invalid_query'},400);
+      let controls:AgentMailControls;
+      try{controls=await agentMailControls(host.agentMail,host.csrf);}catch{return reply({error:'projection_unavailable'},503);}
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
     if(query.data.view==='account'){
       const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
       // The revision is the console's own and was taken before identity joins: an email change must not make a deletion read stale.
@@ -189,14 +200,19 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(action.success&&action.data.action==='card.retry'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_CARD_STATE_REVISION)return reply({error:'invalid_action'},400);
   // Disconnecting Google came with controls=7: a build below it never named it, so it gets what it got before.
   if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
-  const phone=action.data.view==='phone';
+  const phone=action.data.view==='phone',mail=action.data.view==='agent_mail'?host.agentMail:undefined;
+  let mailRead:AgentMailControls|undefined;
   const response=await controlAction(form,phone
     ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
       projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof):null,
       act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked,host.imessageProof);}}
+    :mail?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
+      act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
       act:async action=>{await host.assertCurrent();return host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);

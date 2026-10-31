@@ -8,7 +8,7 @@ import { READ_BODY_BUDGET } from '../src/tools/live/google';
 import { AGENT_MAIL_TURN_TOOLS, AGENT_MAIL_UNFINISHED } from '../src/channels/agent-mail/turn';
 import { presenceAuthority } from './helpers/directory-presence';
 import { agentMailDirectory, claimAgentMailHandle } from '../src/channels/agent-mail/handles';
-import { AGENT_MAIL_RULE_DUE_KEY, intendAgentMailRule } from '../src/channels/agent-mail/rules';
+import { AGENT_MAIL_RULE_DUE_KEY, agentMailRuleHandles, intendAgentMailRule } from '../src/channels/agent-mail/rules';
 
 // Mail to an owner's Waldo address, from the Worker's email handler through the owner's object to the alarm's turn. The
 // message is a real stream and real Headers, as the platform hands them over; the owner object is the pool's real one.
@@ -422,7 +422,7 @@ describe('agent mail inbound', () => {
 
 describe('agent mail routing rule lane', () => {
   const TOKEN = 'cf-routing-token-canary-41b7';
-  const ruleEnv = (flag: string) => ({ AGENT_MAIL_INBOUND: flag, AGENT_MAIL_ZONE_ID: '0123456789abcdef0123456789abcdef', CLOUDFLARE_EMAIL_ROUTING_TOKEN: TOKEN, WALDO_ENVIRONMENT: 'staging' });
+  const ruleEnv = (flag: string, zone = '0123456789abcdef0123456789abcdef') => ({ AGENT_MAIL_INBOUND: flag, AGENT_MAIL_ZONE_ID: zone, CLOUDFLARE_EMAIL_ROUTING_TOKEN: TOKEN, WALDO_ENVIRONMENT: 'staging' });
   // The directory's handle row and Cloudflare's rule list, behind the global fetch the owner object uses.
   const rulesWorld = () => {
     const world = { state: null as string | null, rules: [] as { id: string; name: string; matchers: unknown[]; actions: unknown[] }[], cloudflare: 0 };
@@ -449,7 +449,7 @@ describe('agent mail routing rule lane', () => {
       const world = rulesWorld();
       const logs: string[] = [];
       vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
-      expect(await claimAgentMailHandle(state.storage.kv, agentMailDirectory({ ...env, ...directory }, doName)!, 'priya')).toBe('claimed');
+      expect(await claimAgentMailHandle(state.storage.kv, agentMailDirectory({ ...env, ...directory }, doName)!, 'priya', '2026-10-31')).toBe('claimed');
       await passes(1);
       expect(world.rules).toEqual([{ id: 'r1', name: 'waldo-staging-mail:priya', enabled: true,
         matchers: [{ type: 'literal', field: 'to', value: `priya@${DOMAIN}` }], actions: [{ type: 'worker', value: ['waldo-runtime-staging'] }] }]);
@@ -460,6 +460,17 @@ describe('agent mail routing rule lane', () => {
     }, ruleEnv('1'));
   });
 
+  it('with agent mail on but no zone configured, a claim stays pending and is never reported live', async () => {
+    await withOwner(async ({ state, passes }) => {
+      const world = rulesWorld();
+      expect(await claimAgentMailHandle(state.storage.kv, agentMailDirectory({ ...env, ...directory }, doName)!, 'priya', '2026-10-31')).toBe('claimed');
+      await passes(3);
+      expect(world.cloudflare).toBe(0);
+      expect(world.state).toBe('pending');
+      expect(agentMailRuleHandles(state.storage.kv)).toEqual(['priya']);
+    }, ruleEnv('1', ''));
+  });
+
   it('with agent mail off the alarm makes no Cloudflare call and stops waking for the rule', async () => {
     await withOwner(async ({ state, passes }) => {
       const world = rulesWorld();
@@ -468,7 +479,8 @@ describe('agent mail routing rule lane', () => {
       await passes(2);
       expect(world.cloudflare).toBe(0);
       expect(world.state).toBe('pending');
-      expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
+      // The work waits a day instead of waking every pass, and is still there when agent mail comes on.
+      expect(state.storage.kv.get<number>(AGENT_MAIL_RULE_DUE_KEY)! - Date.now()).toBeGreaterThan(23 * 60 * 60_000);
     }, ruleEnv('0'));
   });
 });

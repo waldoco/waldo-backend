@@ -64,8 +64,9 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
 import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
-import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, reconcileAgentMailRules } from './agent-mail/rules';
+import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, deferAgentMailRules, reconcileAgentMailRules } from './agent-mail/rules';
 import { agentMailDirectory } from './agent-mail/handles';
+import type { AgentMailControlsDeps } from './agent-mail/controls';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
@@ -1721,7 +1722,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
@@ -2498,7 +2499,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if((await response.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){const headers=new Headers(response.headers);for(const name of [CONSOLE_COOKIE,OWNER_COOKIE])headers.append('set-cookie',clearConsoleCookie(name));return new Response(response.body,{status:response.status,headers});}
             return response;
           }
-          const channel={imessage:this.imessageHost.env,phone:this.env,devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked,onWhatsAppUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(this.ctx.storage.kv.get<string>('do_name')??'')};
+          const channel={imessage:this.imessageHost.env,phone:this.env,agentMail:this.agentMailControls(this.ctx.storage.kv.get<string>('do_name')??''),devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked,onWhatsAppUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(this.ctx.storage.kv.get<string>('do_name')??'')};
           if(channelRead)return channelControlsRead(channelRead,channel);
           if(channelAction)return channelControlsAction(await request.formData(),channel);
           const runtime=this.setup();await runtime.ready;
@@ -3002,13 +3003,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (this.ctx.storage.kv.get(AGENT_MAIL_DUE_KEY) == null) return;
     for (let expired = agentMailInbox(this.ctx.storage).expire(); expired > 0; expired--) console.log(JSON.stringify({ hop: 'agent_mail_turn', code: 'expired' }));
   }
+  private agentMailControls(doName: string): AgentMailControlsDeps {
+    return { env: this.env, kv: this.ctx.storage.kv, owner: doName, ownerName: () => ownerName(claimStore(this.ctx.storage.sql)), wake: () => this.rearmEveryWake() };
+  }
   // The Email Routing rules of this owner's handles: nothing is called while agent mail is off or its rule API unconfigured.
   private async reconcileAgentMailRules(): Promise<void> {
     const kv = this.ctx.storage.kv, due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY), doName = kv.get<string>('do_name');
     if (due == null || due > Date.now()) return;
     const setup = agentMailRouting(this.env), directory = doName === undefined ? null : agentMailDirectory(this.env, doName);
-    if (!setup || !directory) { kv.delete(AGENT_MAIL_RULE_DUE_KEY); return; }
-    await reconcileAgentMailRules({ kv, setup, directory, now: Date.now,
+    if (!setup || !directory) deferAgentMailRules(kv);
+    else await reconcileAgentMailRules({ kv, setup, directory, now: Date.now,
       log: (code, cloudflare = []) => console.log(JSON.stringify({ hop: 'agent_mail_rule', code, ...(cloudflare.length ? { cloudflare } : {}) })) });
     await this.rearmEveryWake();
   }

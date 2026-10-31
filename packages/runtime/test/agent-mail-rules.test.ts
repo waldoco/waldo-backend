@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_MAIL_RULE_DUE_KEY, AGENT_MAIL_RULE_HANDLES_KEY, AGENT_MAIL_RULE_TRIES, agentMailRouting, intendAgentMailRule,
+  AGENT_MAIL_RULE_DUE_KEY, AGENT_MAIL_RULE_TRIES, agentMailRouting, agentMailRuleHandles, intendAgentMailRule,
   reconcileAgentMailRules, sweepAgentMailRules, type AgentMailRuleCode, type AgentMailRuleDirectory, type HeldHandle, type RuleState,
 } from '../src/channels/agent-mail/rules';
 
@@ -96,6 +96,17 @@ const world = (initial: Rule[] = [], now = 1_000_000) => {
 };
 
 describe('agent mail routing rules', () => {
+  it('matches its own rules whatever the case of the configured domain', async () => {
+    const cloudflare = fakeCloudflare([rule('r1101', `${PREFIX}priya`, `priya@${DOMAIN}`)]);
+    const setup = agentMailRouting({ ...env, AGENT_MAIL_DOMAIN: DOMAIN.toUpperCase() }, cloudflare.fetch as typeof fetch)!;
+    const holders = new Map([['priya', { owner: 'owner-a', state: 'pending' as RuleState }]]);
+    const kv = fakeKv();
+    intendAgentMailRule(kv as never, 'priya', 1_000_000);
+    await reconcileAgentMailRules({ kv: kv as never, setup, directory: fakeDirectory('owner-a', holders), now: () => 1_000_000, log: () => {} });
+    expect(cloudflare.calls).toEqual(['GET']);
+    expect(holders.get('priya')?.state).toBe('live');
+  });
+
   it('makes no Cloudflare call unless agent mail is on and the rule API is configured', () => {
     let fetched = 0;
     const counting = (async () => { fetched++; return new Response(); }) as typeof fetch;
@@ -180,10 +191,10 @@ describe('agent mail routing rules', () => {
     intendAgentMailRule(w.kv as never, 'priya', 1_000_000);
     await w.pass();
     expect(w.cloudflare.rules).toHaveLength(1);
-    expect(w.kv.get(AGENT_MAIL_RULE_HANDLES_KEY)).toEqual(['priya']);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual(['priya']);
     await w.pass();
     expect(w.cloudflare.rules).toEqual([]);
-    expect(w.kv.get(AGENT_MAIL_RULE_HANDLES_KEY)).toEqual([]);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual([]);
     expect(w.due()).toBeUndefined();
   });
 
@@ -195,7 +206,7 @@ describe('agent mail routing rules', () => {
     await w.pass();
     expect(w.cloudflare.addresses()).toEqual([`priya.k@${DOMAIN}`]);
     expect(w.holders.get('priya.k')?.state).toBe('live');
-    expect(w.kv.get(AGENT_MAIL_RULE_HANDLES_KEY)).toEqual(['priya.k']);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual(['priya.k']);
   });
 
   it('never deletes the rule of a handle another owner now holds', async () => {
@@ -204,7 +215,7 @@ describe('agent mail routing rules', () => {
     w.holders.set('priya', { owner: 'owner-b', state: 'live' });
     await w.pass();
     expect(w.cloudflare.rules.map(r => r.id)).toEqual(['r0301']);
-    expect(w.kv.get(AGENT_MAIL_RULE_HANDLES_KEY)).toEqual([]);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual([]);
   });
 
   it('with no list or no directory, nothing is created or deleted', async () => {
@@ -220,6 +231,36 @@ describe('agent mail routing rules', () => {
     expect(w.cloudflare.calls).toEqual(['GET', 'GET']);
     expect(w.cloudflare.rules.map(r => r.id)).toEqual(['r0401']);
     expect(w.due()).toBe(1_000_000 + 60_000);
+  });
+
+  it('a claim recorded while a pass waits on the directory survives the pass and wakes the next one', async () => {
+    const w = world([rule('r0901', `${PREFIX}gone`, `gone@${DOMAIN}`)]);
+    intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+    const racing = { ...w.directory, held: async (handles: readonly string[]) => {
+      // The owner claims a new handle while the pass waits for this answer.
+      w.claim('fresh');
+      return w.directory.held(handles);
+    } };
+    await reconcileAgentMailRules({ kv: w.kv as never, setup: w.setup, directory: racing, now: () => 1_000_000, log: () => {} });
+    expect(w.cloudflare.rules).toEqual([]);
+    expect(agentMailRuleHandles(w.kv as never)).toEqual(['fresh']);
+    expect(w.due()).toBe(1_000_000);
+    await w.pass();
+    expect(w.holders.get('fresh')?.state).toBe('live');
+  });
+
+  it('a handle let go keeps a newer intent recorded during the pass', async () => {
+    const w = world([rule('r1001', `${PREFIX}gone`, `gone@${DOMAIN}`)]);
+    intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+    const remove = w.setup.routing.remove;
+    const racing = { ...w.setup, routing: { ...w.setup.routing, remove: async (id: string) => {
+      await remove(id);
+      intendAgentMailRule(w.kv as never, 'gone', 1_000_000);
+      intendAgentMailRule(w.kv as never, 'next', 1_000_000);
+    } } };
+    await reconcileAgentMailRules({ kv: w.kv as never, setup: racing, directory: w.directory, now: () => 1_000_000, log: () => {} });
+    expect(agentMailRuleHandles(w.kv as never)).toEqual(['gone', 'next']);
+    expect(w.due()).toBe(1_000_000);
   });
 
   it('a settle refused because the handle changed mid-pass runs again at once', async () => {

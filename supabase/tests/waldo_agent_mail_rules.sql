@@ -15,8 +15,8 @@ insert into waldo.owners(id, auth_user_id, do_name, email) values
   ('77000000-0000-0000-0000-000000000001', '76000000-0000-0000-0000-000000000001', 'rules-owner-a', 'rules-a@test.invalid'),
   ('77000000-0000-0000-0000-000000000002', '76000000-0000-0000-0000-000000000002', 'rules-owner-b', 'rules-b@test.invalid'),
   ('77000000-0000-0000-0000-000000000003', '76000000-0000-0000-0000-000000000003', 'rules-owner-c', 'rules-c@test.invalid');
-create function pg_temp.claim(do_name text, handle text) returns text language sql as $$
-  select waldo.claim_agent_mail_handle(do_name, handle, pg_temp.at(), pg_temp.sig('mailclaim.' || do_name || '.' || handle))
+create function pg_temp.claim(do_name text, handle text, notice text default '2026-10-31') returns text language sql as $$
+  select waldo.claim_agent_mail_handle(do_name, handle, notice, pg_temp.at(), pg_temp.sig('mailclaim.' || do_name || '.' || handle || '.' || notice))
 $$;
 create function pg_temp.release(do_name text) returns text language sql as $$
   select waldo.release_agent_mail_handle(do_name, pg_temp.at(), pg_temp.sig('mailrelease.' || do_name))
@@ -33,7 +33,15 @@ $$;
 
 select is(pg_temp.claim('rules-owner-a', 'priya'), 'claimed', 'an owner claims a free handle');
 select results_eq($$select * from pg_temp.current('rules-owner-a')$$, $$values ('priya'::text, 'pending'::text)$$, 'its rule starts pending');
-select is(pg_temp.claim('rules-owner-a', 'priya'), 'unchanged', 'claiming the same handle again changes nothing');
+select results_eq($$select notice_version, notice_accepted_at is not null from waldo.agent_mail_handles where handle = 'priya'$$,
+  $$values ('2026-10-31'::text, true)$$, 'the claim records the notice the owner accepted, and when');
+select is(pg_temp.claim('rules-owner-a', 'priya', '2026-11-05'), 'unchanged', 'claiming the same handle again changes nothing');
+select results_eq($$select notice_version from waldo.agent_mail_handles where handle = 'priya'$$, $$values ('2026-11-05'::text)$$, 'but records the newer notice accepted');
+select throws_ok($$select pg_temp.claim('rules-owner-c', 'free', 'v 1')$$, '22023', 'notice version', 'a claim names a notice version');
+select throws_ok(format($$select waldo.claim_agent_mail_handle('rules-owner-c', 'free', '2026-10-31', %s, %L)$$, pg_temp.at(), pg_temp.sig('mailclaim.rules-owner-c.free.2026-11-05')),
+  '42501', 'unsigned router call', 'a claim signed for another notice version is refused');
+select throws_ok($$insert into waldo.agent_mail_handles (handle, owner_id, notice_version) values ('half', '77000000-0000-0000-0000-000000000003', '2026-10-31')$$,
+  '23514', null, 'a notice version is kept only with its time');
 select is(pg_temp.claim('rules-owner-b', 'priya'), 'taken', 'a held handle is taken');
 select is(pg_temp.claim('rules-owner-b', 'postmaster'), 'unavailable', 'a reserved handle is unavailable');
 select is(pg_temp.claim('rules-owner-b', 'A..b'), 'unavailable', 'a malformed handle is unavailable');
@@ -75,7 +83,7 @@ select is((select count(*) from waldo.agent_mail_handles), 190::bigint, 'the zon
 select is(pg_temp.claim('rules-owner-c', 'late'), 'full', 'a new claim is refused at the ceiling');
 select is(pg_temp.claim('rules-owner-a', 'priya.k'), 'claimed', 'a rename still goes through');
 
-select throws_ok($$select waldo.claim_agent_mail_handle('rules-owner-a', 'x1', extract(epoch from now())::bigint, 'forged')$$, '42501', 'unsigned router call', 'a forged claim is refused');
+select throws_ok($$select waldo.claim_agent_mail_handle('rules-owner-a', 'x1', '2026-10-31', extract(epoch from now())::bigint, 'forged')$$, '42501', 'unsigned router call', 'a forged claim is refused');
 select throws_ok(format($$select waldo.release_agent_mail_handle('rules-owner-a', %s, %L)$$, pg_temp.at(), pg_temp.sig('mailrelease.rules-owner-b')),
   '42501', 'unsigned router call', 'a release signed for another owner is refused');
 select throws_ok(format($$select waldo.settle_agent_mail_rule('rules-owner-a', 'priya.k', 'live', %s, %L)$$, pg_temp.at(), pg_temp.sig('mailsettle.rules-owner-a.priya.k.failed')),
@@ -85,10 +93,10 @@ select throws_ok(format($$select * from waldo.agent_mail_held_handles('priya.k,f
 select throws_ok(format($$select * from waldo.agent_mail_handle('rules-owner-a', %s, %L)$$, pg_temp.at(), pg_temp.sig('mailhandle.rules-owner-b')),
   '42501', 'unsigned router call', 'a handle read signed for another owner is refused');
 select ok(has_function_privilege('anon', f, 'execute'), format('%s is callable signed', f))
-  from unnest(array['waldo.claim_agent_mail_handle(text,text,bigint,text)', 'waldo.release_agent_mail_handle(text,bigint,text)',
+  from unnest(array['waldo.claim_agent_mail_handle(text,text,text,bigint,text)', 'waldo.release_agent_mail_handle(text,bigint,text)',
     'waldo.agent_mail_handle(text,bigint,text)', 'waldo.settle_agent_mail_rule(text,text,text,bigint,text)', 'waldo.agent_mail_held_handles(text,bigint,text)']) f;
 select ok(not has_function_privilege('authenticated', f, 'execute'), format('%s is not callable by a signed-in user', f))
-  from unnest(array['waldo.claim_agent_mail_handle(text,text,bigint,text)', 'waldo.release_agent_mail_handle(text,bigint,text)',
+  from unnest(array['waldo.claim_agent_mail_handle(text,text,text,bigint,text)', 'waldo.release_agent_mail_handle(text,bigint,text)',
     'waldo.agent_mail_handle(text,bigint,text)', 'waldo.settle_agent_mail_rule(text,text,text,bigint,text)', 'waldo.agent_mail_held_handles(text,bigint,text)']) f;
 select ok(not exists(select 1 from pg_proc p, lateral aclexplode(p.proacl) a
   where p.proname in ('claim_agent_mail_handle', 'release_agent_mail_handle', 'agent_mail_handle', 'settle_agent_mail_rule', 'agent_mail_held_handles')
