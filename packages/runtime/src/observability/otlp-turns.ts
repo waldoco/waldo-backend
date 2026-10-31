@@ -1,6 +1,6 @@
 import { TURN_EVENT_SCHEMA_VERSION, type TurnOutcome } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
-import { modelCost } from '../llm/pricing';
+import { modelCost, uncachedInput } from '../llm/pricing';
 import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
 import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
@@ -26,7 +26,7 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   receipt: { feature: 'reactions', type: 'tool' }, resolved: { feature: 'reactions', type: 'tool' }, choose_reaction: { feature: 'reactions', type: 'chain' },
   respond: { feature: 'reply', type: 'chain' }, joined_path: { feature: 'reply', type: 'chain' },
   memory: { feature: 'memory', type: 'chain' }, constellation_evidence: { feature: 'memory', type: 'span' }, health_context: { feature: 'health', type: 'span' },
-  llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
+  llm_reply: { feature: 'reply', type: 'span' }, llm_reply_attempt: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
@@ -83,7 +83,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       attr('langfuse.observation.type', 'generation'),
       ...optional('langfuse.observation.metadata.cached_share', share(usage.cached, usage.input)),
       attr('langfuse.observation.model.name', usage.model),
-      attr('langfuse.observation.usage_details', JSON.stringify({ input: usage.input - usage.cached - (usage.cache_write ?? 0), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), output: usage.output })),
+      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), output: usage.output })),
       attr('langfuse.observation.metadata.cost_kind', cost ? 'estimate' : 'unpriced'),
       ...(cost ? [attr('langfuse.observation.metadata.price_source', JSON.stringify({
         source: 'runtime:modelCost:standard-flat',

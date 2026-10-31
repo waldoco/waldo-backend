@@ -33,6 +33,7 @@ import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, co
 import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
@@ -51,6 +52,7 @@ import type { SemanticRecall } from '../memory/semantic-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
+import { billedAttemptEntries } from './billed-attempts';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -351,6 +353,11 @@ export const createOwnerResponder = (
       shape,
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
+    // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
+    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt` })) log(entry);
+    if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
+      log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
+    }
     if (!result.ok) {
       const message = `live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason, result.scribe_stage].filter(Boolean).join(': ') || result.reason})`;
       const down = modelDownReason(result);
