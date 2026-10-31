@@ -121,6 +121,25 @@ describe('semantic recall write path', () => {
       expect(vectorRows(sql)).toEqual([]);
     });
   });
+
+  it('a correction of a claim with a vector still lands, and its vector goes with the retired row', async () => {
+    await inOwner(async ({ sql, store, semantic }) => {
+      owned(store, DENTIST); owned(store, GYM); owned(store, 'Gym locker moved to the red door');
+      await semantic.sync();
+      const fix = (text: string) => ({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: 'owner, tg-2' });
+      expect(store.correct(1, fix('Dr Rao does the teeth cleaning, now at the clinic on 5th Cross'), AT)).toBe(true);
+      // The replacement is already an owner's stated row: only the old claim retires.
+      expect(store.correct(2, fix('Gym locker moved to the red door'), AT)).toBe(true);
+      expect(store.claims('active').map((claim) => claim.text).sort()).toEqual(['Dr Rao does the teeth cleaning, now at the clinic on 5th Cross', 'Gym locker moved to the red door']);
+      expect(vectorRows(sql).map((row) => row.claim_id)).toEqual([3]);
+      // Grounding a claim Waldo inferred keeps it recallable, so its vector stays and the write counts once.
+      store.add({ kind: 'fact', text: 'Espresso before ten, never after', source: 'inferred', evidence: 'chat', origin: 'inferred' }, AT);
+      const inferred = store.claims('active').find((claim) => claim.origin === 'inferred')!.id;
+      await semantic.sync();
+      expect(store.ownerGround(inferred, AT, 'owner, console')).toBe(true);
+      expect(vectorRows(sql).map((row) => row.claim_id)).toEqual([3, 4, inferred]);
+    });
+  });
 });
 
 describe('semantic recall read path', () => {
