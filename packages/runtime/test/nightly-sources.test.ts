@@ -227,6 +227,17 @@ describe('the pass on its own', () => {
     ask: async () => addOne('Has a weekly design review'), log: () => undefined, ...over,
   });
 
+  // Evidence that quotes the changes grounds as shared content; this one quotes nothing, so it is a paraphrase of outside
+  // content, still untrusted, never Waldo's own read.
+  it('a claim whose evidence is not in the changes is untrusted too', async () => {
+    await withStorage('nightly-sources-ungrounded', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      const paraphrase = JSON.stringify({ add: [{ kind: 'fact', text: 'Meets the design leads every week', source: 'inferred', evidence: 'seems to be a standing sync with the leads', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] });
+      expect(await consolidateSources(deps(state, { ask: async () => paraphrase }), 't')).toBe('consolidated');
+      expect(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.origin, claim.source])).toEqual([['Meets the design leads every week', 'untrusted', 'inferred']]);
+    });
+  });
+
   it('the adds and the mark commit together: a stop between them writes nothing, and the rerun writes once', async () => {
     await withStorage('nightly-sources-atomic', async (state) => {
       updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
