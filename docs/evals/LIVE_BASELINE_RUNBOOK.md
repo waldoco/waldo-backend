@@ -66,7 +66,7 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 | Trigger | Runs | Trials | Shards | Cap on calls |
 | --- | --- | --- | --- | --- |
 | Nightly schedule (02:00 IST) | the live-judged subset | 2 | 1 | 600 |
-| Weekly schedule (Sunday 03:00 IST) | the whole catalogue | 3 | 4 | 4,400 in all, split across the shards |
+| Weekly schedule (Sunday 03:00 IST) | the whole catalogue | 3 | 4 | 4,600 in all, split across the shards |
 | Dispatch, `subset` = `all` | the whole catalogue | 3 | 4 | as the weekly run |
 | Dispatch, any other `subset` | what it names | 2 | 1 | 600 |
 

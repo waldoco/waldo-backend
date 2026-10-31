@@ -25,7 +25,8 @@ export type FinalPayload = TelegramFinalPayload;
 export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string; status?: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
-export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
+// title: the event's title, kept only for the app push that may name the meeting.
+export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string; title?: string };
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
