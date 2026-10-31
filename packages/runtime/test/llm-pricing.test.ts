@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, WORKERS_AI_GEMMA_4_26B_MODEL, modelNameSchema, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 
 const M = 1_000_000;
@@ -70,4 +70,15 @@ it('prices cache writes at each provider\'s published write rate, apart from rea
 
 it('leaves the cost shape unchanged for a call that wrote nothing to the cache', () => {
   expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 1, output: 1, cached: 0, cache_write: 0 })).not.toHaveProperty('cache_write');
+});
+
+it('never prices uncached input below zero when a provider reports reads and writes that exceed the whole prompt', () => {
+  const cost = modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 1_000, output: 0, cached: 600, cache_write: 700 })!;
+  expect(cost.input).toBeCloseTo((600 * 0.05) / M, 12);
+  expect(cost.total).toBeGreaterThanOrEqual(0);
+});
+
+it('prices every model the router can pick, Workers AI included', () => {
+  for (const model of modelNameSchema.options) expect(modelCost({ model, input: 1, output: 1, cached: 0 }), model).not.toBeNull();
+  expect(modelCost({ model: WORKERS_AI_GEMMA_4_26B_MODEL, input: M, output: M, cached: 0 })?.total).toBeCloseTo(0.4, 10);
 });

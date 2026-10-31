@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(17);
+select plan(24);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -33,6 +33,15 @@ select is((select calls from waldo.cost_ledger_daily where owner_id = '10000000-
 select throws_ok(format($$ select pg_temp.add('do-cost', 'b3', '[{"day":"%s","kind":"chat","model":"m","calls":1}]') $$, current_date), '23514', null, 'an unknown cost kind is rejected');
 select throws_ok($$ select pg_temp.add('do-cost', 'b4', '{"day":"2026-10-20"}') $$, '22023', null, 'a batch that is not an array is rejected');
 select is(pg_temp.add('do-cost-other', 'b1', format('[{"day":"%s","kind":"turn","model":"m","calls":1}]', current_date)), 1, 'batch ids are scoped per owner');
+
+select is((select cache_write_tokens from waldo.cost_ledger_daily where owner_id = '10000000-0000-0000-0000-0000000000c1' and kind = 'turn'), 0::bigint, 'a row from a DO that does not send cache_write adds 0');
+select is(pg_temp.add('do-cost', 'w1', format('[{"day":"%s","kind":"background","model":"gpt-6.1-terra","calls":1,"input":10000,"output":50,"cached":2000,"cache_write":7000,"usd":0.0097},'
+  || '{"day":"%s","kind":"background","model":"gpt-6.1-terra","calls":1,"input":5000,"output":20,"cache_write":3000,"usd":0.0047}]', current_date, current_date)), 1, 'rows with write tokens fold into the model bucket');
+select is((select cache_write_tokens from waldo.cost_ledger_daily where owner_id = '10000000-0000-0000-0000-0000000000c1' and kind = 'background'), 10000::bigint, 'write tokens add up apart from reads');
+select is((select array[input_tokens, cached_tokens] from waldo.cost_ledger_daily where owner_id = '10000000-0000-0000-0000-0000000000c1' and kind = 'background'), array[15000, 2000]::bigint[], 'writes stay inside the input total and outside the reads');
+select is(pg_temp.add('do-cost', 'w1', format('[{"day":"%s","kind":"background","model":"gpt-6.1-terra","calls":1,"cache_write":99999}]', current_date)), 0, 'a replayed batch does not count its writes twice');
+select is((select cache_write_tokens from waldo.cost_ledger_daily where owner_id = '10000000-0000-0000-0000-0000000000c1' and kind = 'background'), 10000::bigint, 'the replay left the write total alone');
+select throws_ok(format($$ select pg_temp.add('do-cost', 'w2', '[{"day":"%s","kind":"turn","model":"m","calls":1,"cache_write":-1}]') $$, current_date), '23514', null, 'a negative write count is rejected');
 
 delete from waldo.owners where id = '10000000-0000-0000-0000-0000000000c1';
 select is((select count(*)::int from waldo.cost_ledger_daily where owner_id = '10000000-0000-0000-0000-0000000000c1')
