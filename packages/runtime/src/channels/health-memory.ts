@@ -30,8 +30,8 @@ export const noteHealthSaved = (kv: Kv, ids: readonly number[]): void => {
 // nothing that waits is still there. The owner is told how many, never the notes' words or ids: a quoted note can carry a
 // reading they did not ask to see. modelLine is the same line with the ids it counts, for the reply as the model reads it
 // back, so "forget that" reaches those claims. The notes it counts stop waiting only when taken, once the reply carrying the
-// line is saved, so a run that closes first counts them next time. A note counted only as "more", or saved after the line
-// was read, keeps waiting; one no longer in memory stops waiting.
+// line is saved, so a run that closes first counts them next time. A note past the first five, or saved after the line was
+// read, keeps waiting and is counted in a later reply; one no longer in memory stops waiting.
 export type HealthNotice = Readonly<{ line: string; modelLine: string; taken(): void }>;
 export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id'>[]): HealthNotice | null => {
   const waiting = kv.get<number[]>(HEALTH_SAVED_KEY);
@@ -47,8 +47,7 @@ export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id'>[])
   };
   if (!named.length) { taken(); return null; }
   const one = named.length === 1;
-  const more = saved.length > NAMED ? `, plus ${saved.length - NAMED} more` : '';
-  const line = `I kept ${one ? 'a note' : `${named.length} notes`} about your health from earlier${more}. Say if you want ${one ? 'it' : 'any'} changed or gone, or turn health notes off in settings.`;
+  const line = `I kept ${one ? 'a note' : `${named.length} notes`} about your health from earlier. Say if you want ${one ? 'it' : 'any'} changed or gone, or turn health notes off in settings.`;
   const ids = named.map((id) => `c${id}`).join(', ');
   return { line, modelLine: `${line}\n[Not shown to the owner: the notes are ${ids}. forget_memory takes them as claim_ids; remember takes one as replaces_id.]`, taken };
 };

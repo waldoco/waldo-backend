@@ -66,13 +66,13 @@ describe('the notice of health notes saved on Waldo\'s own', () => {
     const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
     noteHealthSaved(kv, many.map((claim) => claim.id));
     const capped = healthNotice(kv, () => many);
-    const line = 'I kept 5 notes about your health from earlier, plus 2 more. Say if you want any changed or gone, or turn health notes off in settings.';
+    const line = 'I kept 5 notes about your health from earlier. Say if you want any changed or gone, or turn health notes off in settings.';
     expect(capped?.line).toBe(line);
     expect(capped?.modelLine).toBe(forModel(line, [1, 2, 3, 4, 5]));
   }));
 
-  // "plus 2 more" names nothing, so taking the line clears only the five it named; the other two are named next time.
-  it('clears only the notes the line named, and names the ones it only counted in the next reply', () => inOwner((state) => {
+  // Taking the line clears only the five it counted; the other two are counted in the next reply, so the owner hears 5 then 2.
+  it('clears only the notes the line counted, and counts the rest in the next reply', () => inOwner((state) => {
     const kv = kvOf(state);
     const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
     noteHealthSaved(kv, [...many.map((claim) => claim.id), 9]);
