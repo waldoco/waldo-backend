@@ -1,8 +1,8 @@
 import { shiftDay } from './time';
 
-// Training load, candidate (ADR-0081 amendment of 31 Oct 2026, §2). It compares the owner's last seven days of training
-// with the twenty-one before them, in one load method, and names the change in a closed, digit-free phrase. Whether a
-// change matters is the model's judgment; no injury-risk rule lives here.
+// Training load, candidate (ADR-0081 amendment of 31 Oct 2026, §2). It compares the owner's last seven whole calendar days
+// of training with the twenty-one before them, in one load method, and names the change in a closed, digit-free phrase.
+// Whether a change matters is the model's judgment; no injury-risk rule lives here.
 export const TRAINING_LOAD_VERSION = 'training-load.candidate.v1';
 export const TRAINING_LOAD_PHRASES = ['much lighter than usual', 'lighter than usual', 'about usual', 'heavier than usual', 'much heavier than usual'] as const;
 export type TrainingLoadPhrase = (typeof TRAINING_LOAD_PHRASES)[number];
@@ -42,10 +42,11 @@ const phraseOf = (acute: number, usual: number): TrainingLoadPhrase => {
   return ratio < 0.6 ? 'much lighter than usual' : ratio < 0.85 ? 'lighter than usual' : ratio <= 1.15 ? 'about usual' : ratio <= 1.5 ? 'heavier than usual' : 'much heavier than usual';
 };
 
-// observedDays are the days the source holds any reading for. A day with a workout is observed whatever the caller says; a
-// day with none is left out of both means, so a watch left in a drawer never reads as rest.
-export const trainingLoad = (input: Readonly<{ targetDay: string; observedDays: readonly string[]; workouts: readonly WorkoutLoad[] }>): TrainingLoad => {
-  const window = new Set(Array.from({ length: WINDOW_DAYS }, (_, i) => shiftDay(input.targetDay, -i)));
+// throughDay is the last whole day the load covers, so a day still in progress never counts as a light one. observedDays
+// are the days a body-worn sensor reported on; a day with a workout is observed whatever the caller says. Any other day is
+// left out of both means rather than counted as rest.
+export const trainingLoad = (input: Readonly<{ throughDay: string; observedDays: readonly string[]; workouts: readonly WorkoutLoad[] }>): TrainingLoad => {
+  const window = new Set(Array.from({ length: WINDOW_DAYS }, (_, i) => shiftDay(input.throughDay, -i)));
   const acute = new Set([...window].slice(0, ACUTE_DAYS));
   const workouts = input.workouts.filter(w => window.has(w.day));
   if (!workouts.length) return { state: 'unavailable', reason: 'no_readings' };

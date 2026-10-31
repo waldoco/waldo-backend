@@ -14,6 +14,8 @@ const workout = (day: string, minutes: number, workoutDetail?: Sample): Sample =
   ({ signal: 'workout', day, start_at: at(day, 6), end_at: at(day, 7), utc_offset_minutes: 0, timezone: 'UTC', value: minutes, activity: 'running', ...(workoutDetail ? { workout: workoutDetail } : {}) });
 const zones = (seconds: number[]) => ({ hr_zones: { basis: 'heart_rate_reserve', lower_bounds_bpm: [120, 136, 151, 166], seconds } });
 
+// A reading only a phone makes: it shows the phone was about, not that a body-worn sensor was.
+const phoneOnly = (day: string): Sample => ({ signal: 'movement_duration', day, start_at: at(day, 9), end_at: at(day, 10), utc_offset_minutes: 0, timezone: 'UTC', value: 30 });
 // 28 observed days: an easy session every day of the usual, a harder one every day this week, same minutes.
 const month = (detail: (day: string, thisWeek: boolean) => Sample | undefined): Sample[] => Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
   worn(day), workout(day, 40, detail(day, i < 7)),
@@ -40,11 +42,13 @@ describe('producer: candidate training load', () => {
     const parsed = parseSeries(seriesOf([
       workout(TODAY, 40, { ...zones([600, 600, 600, 600, 0]), effort: { score: 6, method: 'rated' }, distance_m: 8000 }),
       workout(TODAY, 30, { hr_zones: { seconds: [1, 2, 3] }, effort: { score: 12, method: 'rated' } }),
+      workout(TODAY, 30, zones([600, -60, 600, 600, 0])),
       worn(TODAY),
     ]));
     if (parsed.kind !== 'series') throw new Error(parsed.kind);
     expect(parsed.series.sources[0]!.readings.map(r => r.workout)).toEqual([
       { zoneSeconds: [600, 600, 600, 600, 0], effort: { score: 6, method: 'rated' } },
+      { zoneSeconds: null, effort: null },
       { zoneSeconds: null, effort: null },
       null,
     ]);
@@ -65,6 +69,29 @@ describe('producer: candidate training load', () => {
     // The same minutes without zones are the same load.
     const plain = await run(seriesOf(month(() => undefined)), { trainingLoad: true });
     expect(plain.at(-1)?.training_load).toMatchObject({ method: 'minutes', phrase: 'about usual' });
+  });
+
+  it('reads a steady six-day routine as about usual on a training morning, before today\'s session and after it', async () => {
+    // Four weeks of the same routine, a rest day every seventh day; today is a training day. Today is not over, so the
+    // week is the seven whole days ending yesterday on both rows.
+    const routine = (sessionDone: boolean) => Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), ...(i % 7 === 3 || (i === 0 && !sessionDone) ? [] : [workout(day, 60)]),
+    ]);
+    for (const sessionDone of [false, true]) {
+      const writes = await run(seriesOf(routine(sessionDone)), { trainingLoad: true });
+      expect(writes.map(row => row.day)).toEqual([addDays(TODAY, -1), TODAY]);
+      for (const row of writes) expect(row.training_load, `${String(row.day)}, session done: ${sessionDone}`).toMatchObject({ state: 'available', phrase: 'about usual' });
+    }
+  });
+
+  it('never reads a day only the phone saw as rest', async () => {
+    // Usual: a session every day. This week: four sessions on worn days, and three days the watch sat in a drawer while
+    // the phone still counted movement. Those three are unobserved, not rest, so the week is about usual.
+    const yesterday = addDays(TODAY, -1);
+    const samples = Array.from({ length: 29 }, (_, i) => addDays(yesterday, -i)).flatMap((day, i) =>
+      i >= 4 && i <= 6 ? [phoneOnly(day)] : [worn(day), workout(day, 60)]);
+    const writes = await run(seriesOf([...samples, worn(TODAY)]), { trainingLoad: true });
+    for (const row of writes) expect(row.training_load, String(row.day)).toMatchObject({ state: 'available', phrase: 'about usual' });
   });
 
   it('says why when the window cannot carry a load', async () => {

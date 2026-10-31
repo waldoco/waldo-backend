@@ -333,10 +333,14 @@ const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): obj
 const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): object =>
   forToday && basis.accepted && scores.windows && scores.windows.length > 0 ? { windows: scores.windows, windows_version: ENERGY_WINDOWS_VERSION } : {};
 
-// The source's own workouts and observed days for the 28 days ending on the day. Another source's workouts never mix in.
-const trainingLoadOf = (source: Source, day: string): TrainingLoad => trainingLoad({
-  targetDay: day,
-  observedDays: [...new Set(source.readings.map(r => r.day))],
+// Signals only a body-worn sensor makes. A day the phone alone saw (movement, daylight) shows the phone was about, not that
+// a session would have been recorded, so it is not an observed day.
+const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
+// The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
+// Another source's workouts never mix in.
+const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
+  throughDay: yesterday,
+  observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
   workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, effort: r.workout?.effort ?? null })),
 });
 
@@ -484,7 +488,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const row = {
         ...rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
-        ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, targetDay) } : {}),
+        ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
