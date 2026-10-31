@@ -404,10 +404,10 @@ describe('semantic recall wiring', () => {
     });
   });
 
-  it('ships off in every wrangler environment', async () => {
+  it('ships off in production and on in staging', async () => {
     // @ts-expect-error vite-only API
     const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-    expect(raw.match(/"MEMORY_SEMANTIC_RECALL": "([^"]*)"/g)).toEqual(['"MEMORY_SEMANTIC_RECALL": "0"', '"MEMORY_SEMANTIC_RECALL": "0"']);
+    expect(raw.match(/"MEMORY_SEMANTIC_RECALL": "([^"]*)"/g)).toEqual(['"MEMORY_SEMANTIC_RECALL": "0"', '"MEMORY_SEMANTIC_RECALL": "1"']);
   });
 
   it('fuses ranked lists by reciprocal rank, counting an item in both once', () => {

@@ -130,20 +130,21 @@ import { gateTraceEntry, resolveCaptureText } from '../observability/trace-priva
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
 import { semanticRecallFromEnv, semanticTraceEntry } from '../memory/semantic-recall';
+import { reviewedThrough } from '../memory/select-memory';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
-import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, scrubEpisodeTexts, transcript } from './episodes';
-import { consolidateSources } from './nightly-sources';
+import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, scrubEpisodeTexts, transcript } from './episodes';
+import { consolidateSources, type SourcesDeps } from './nightly-sources';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -178,6 +179,7 @@ import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl, type A
 import { APP_FILES_PATH, appFileDownload } from './app-files';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { HEALTH_TRIGGER_RUN, NIGHTLY_RUN, recordedRun, runBook } from './background-runs';
+import { daytimeMemory, MEMORY_DAYTIME_ID } from '../memory/consolidator';
 import { dayHistoryDay, dayHistoryList, startDayHistory, type DayDetail, type DayHistoryDeps, type DaysList } from './day-history';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, revokeGoogleGrant, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { CONSENT_TTL_MS, finishConsent, startConsent, takeStart, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
@@ -4361,7 +4363,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const dayCards = () => dayCardsLine({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now: Date.now(), queued: cardQueued });
-    const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}) };
+    const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}), ...(this.env.MEMORY_SELECTION === '1' ? { memorySelection: { reviewed: () => reviewedThrough(storage.kv.get<number>(NIGHTLY_THROUGH_KEY)) } } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
     const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
@@ -4644,6 +4646,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
     };
+    // Today's calendar changed under the day state: the cards still to come are planned again from the calendar as it is now,
+    // on the owner queue, coalesced.
+    const replanCards = async (trace: string) => {
+      const started = Date.now();
+      const now = Date.now();
+      const movable = movableCards(plans, clock.timezone, now);
+      if (movable.length === 0 || !schedPrefs.enabled('daily_brief')) {
+        log({ trace, hop: 'day_plan', ms: 0, ok: true, code: 'nothing_to_move' });
+        return;
+      }
+      try {
+        const cards = movable.map(entry => entry.card);
+        const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
+        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()),
+          replan: Object.fromEntries(movable.map(entry => [entry.card.id, entry.time])) });
+        const applied = await applyReplan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards, true), movable);
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: dayPlanTraceDetail(applied) });
+      } catch (error) {
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+      }
+    };
+    // Whatever fails before the re-plan's own catch (reading the plan, the owner job itself) is logged as a code here, so the
+    // queued job never ends in an unhandled rejection.
+    const replanToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => replanCards(trace))
+      .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'replan_failed' })));
     // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
     // lands in the schedule retry/quarantine policy unchanged. Past-due loops become a reader job written with the scan; the
     // worker checks them off this pass, and the jobs lane applies what it found (heartbeatApply below).
@@ -4749,7 +4776,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
       await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
     };
-    const nightly = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
+    // What the source pass reads with, for the nightly run and the daytime pass alike.
+    const sourcesFor = (trace: string): SourcesDeps => {
+      const read = responder.sourceClaims!.bind(responder), health = healthMemoryOn(identity);
+      return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, log, ask: text => read(trace, text, { health }) };
+    };
+    const nightlyPass = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       if (entry.id === NIGHTLY_CATCH_UP_ID) {
@@ -4765,11 +4797,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await migrateCoreFiles(`${trace}:migration`);
         const outcome = await consolidateBacklog(trace, entry.occurrence_at);
         if (outcome === 'more' || outcome === 'failed') await armCatchUp();
-        if (this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1' && responder.sourceClaims) {
-          const read = responder.sourceClaims.bind(responder), health = healthMemoryOn(identity);
-          await consolidateSources({ kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone,
-            now: Date.now, health, log, ask: text => read(trace, text, { health }) }, trace);
-        }
+        if (this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1' && responder.sourceClaims) await consolidateSources(sourcesFor(trace), trace);
         const promoting = Date.now();
         await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) })
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) }))
@@ -4788,6 +4816,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     });
+    const daytimeOn = this.env.MEMORY_DAYTIME_CONSOLIDATOR === '1' && this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1';
+    const daytime = daytimeMemory({ kv: storage.kv, scheduler, now: Date.now, sources: sourcesFor, runs,
+      enabled: () => daytimeOn && responder.sourceClaims !== undefined && schedPrefs.enabled('nightly'),
+      capped: () => { const month = spend?.(); return month !== undefined && month.spentUsd >= month.ceilingUsd; } });
+    const nightly = (entry: ScheduleEntry) => entry.id === MEMORY_DAYTIME_ID ? daytime.run(entry).then(() => undefined) : nightlyPass(entry);
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const calendarGate = new DeliveryGateStore(storage.sql);
     // The health trigger. A zone change marks the day and arms one evaluation no sooner than an hour after the last; the
@@ -5089,7 +5122,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // Who wakes on the harness's hint that an ingestion committed. Memory's daytime consolidator subscribes here; with no one
     // subscribed, emitting writes nothing, calls nothing and arms no alarm.
-    const observers: readonly ObservedSubscriber[] = [];
+    const observers: readonly ObservedSubscriber[] = daytimeOn
+      ? [(event) => { daytime.observed(event)?.catch(() => log({ trace: MEMORY_DAYTIME_ID, hop: 'memory_daytime', ms: 0, ok: false, code: 'arm_failed' })); }] : [];
     const updateCheck = async (trace: string) => {
       const client = await google.client();
       if (client === null) return;
@@ -5107,9 +5141,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
-          dayChanged: () => recompute.calendarChanged().then(
+          dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(
             code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
-            () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })) });
+            () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })); } });
         log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}` });
         if (check.seedCapped) log({ trace, hop: 'day_state_seed', ms: 0, ok: true, code: 'seed_capped', detail: 'seed_capped' });
         if (check.wakeAt !== undefined) storage.kv.put(UPDATE_JUDGE_WAKE_KEY, check.wakeAt);
@@ -5502,7 +5536,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           else {
             if (!isClock(value)) return false;
             if (action === 'card.pin') plans.pin(card.id, value);
-            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
+            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : SET_FOR_TODAY }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
           }
         } else return false;
         // consoleActionTraceDetail strips the free-form form id before it can reach the

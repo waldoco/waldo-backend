@@ -286,3 +286,15 @@ it('a floor reached after an earlier round read outside text carries that taint,
   expect(promised).toHaveLength(1);
   expect(promised[0]).toMatchObject({ traceId: 'mid-turn', taint: 'external' });
 });
+
+// A fallback that refuses what it was handed (an attachment type it cannot send, a provider 400) says nothing about whether the
+// owner can be answered: the primary was down, so the owner reads the honest line, not an error.
+it.each(['auth_failed', 'transient', 'rate_limited'] as const)('an owner turn whose primary fails with %s and whose fallback refuses the request reaches the floor line', async (primary) => {
+  const { gateway } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: primary }], [ANTHROPIC_PROVIDER]: [{ fail: 'invalid_args' }] });
+  const hops: TurnLogEntry[] = [];
+  const owner = responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); });
+  const reply = await owner.respond(ownerTyped({ traceId: `fallback-refused-${primary}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
+  expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
+  expect(hops).toHaveLength(1);
+  expect(hops[0]).toMatchObject({ ok: true, code: 'template_floor' });
+});

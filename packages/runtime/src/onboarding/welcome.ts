@@ -89,7 +89,7 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       if (!run) return false;
       const current = stages(run), at = now();
       if (current[stage].state !== 'skipped' || current[stage].reopened) return false;
-      write({ ...current, [stage]: { state: 'pending', at, reopened: true } }, null);
+      write({ ...current, [stage]: { ...current[stage], state: 'pending', at, reopened: true } }, null);
       return true;
     },
     // Late health data: an empty health stage goes back to pending, once, within a day of settling. Checked again in the same

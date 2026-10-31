@@ -4,6 +4,7 @@
 // judge's reasons (the voice judge's and any failed receipts too), for a local look at a failure.
 // WALDO_EVAL_SUBSET=live|all|<id>,<id>... runs part of the catalogue and WALDO_EVAL_SHARD=<n>/<of> one slice of that part; WALDO_EVAL_PROFILE=staging runs it as the staging Worker builds a turn.
 // WALDO_EVAL_SEMANTIC=on runs it with semantic recall on (config.ts).
+// WALDO_EVAL_MEMORY_SELECTION=on runs it with option B's memory (config.ts).
 // WALDO_EVAL_RULES=1 prints the behaviour rules with their ids and standing, and runs nothing.
 // WALDO_EVAL_VERDICT=<rule id> with WALDO_EVAL_RUNS=<baseline.json>:<ablated.json>[,...] prints that rule's verdict from
 // scorecards already written, says whether every card came from a live judge, and runs nothing.
