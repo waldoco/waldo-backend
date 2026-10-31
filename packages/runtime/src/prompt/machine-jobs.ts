@@ -30,9 +30,13 @@ export const UPDATE_SWEEP_JOB_TEXT = {
 export const MEETING_PREP_JOB_TEXT = {
   title: 'Meeting prep',
   goal: [
-    'The owner has this meeting soon. Look through their own mail for what bears on it: the mail_query item is a search that finds mail by its title and attendees.',
-    'Judge whether a short prep note would help: something to know, decide or have ready before it starts.',
-    'Put each such point in findings, with the thread or message it came from. Leave out routine context and anything that does not bear on this meeting.',
+    'The owner has this meeting soon. Gather, from their own accounts, what they would want in hand walking in:',
+    'who is attending and what is known about them (get_context, search_contacts);',
+    'the last thread with them and where it stands (the mail_query item is a search that finds mail by the title and attendees; open the threads that matter);',
+    'linked documents (the attachments item names their file ids for read_drive);',
+    'open tasks or promises involving them (get_tasks);',
+    'and what to have ready.',
+    'Put each point that bears on this meeting in findings, with the thread, file or task it came from. Keep what someone said apart from what you checked. Leave out routine context.',
   ].join(' '),
   done_when: NOTHING_IS_NORMAL,
 } as const;

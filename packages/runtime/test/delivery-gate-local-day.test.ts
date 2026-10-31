@@ -7,6 +7,8 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { nextDailyLocalOccurrence } from '../src/scheduler/multiplexer';
 
 const prep: DeliveryCandidate = { push_class: 'pre_activity_spot', trigger: 'pre_activity_spot', event_id: 'local-day-prep' };
+const knock: DeliveryCandidate = { push_class: 'intervention_knock', trigger: 'intervention', event_id: 'local-day-knock' };
+const syncError: DeliveryCandidate = { push_class: 'sync_error', trigger: 'patrol', event_id: 'local-day-sync' };
 const adjustment: DeliveryCandidate = { push_class: 'adjustment', trigger: 'handoff_act', event_id: 'local-adjustment', sub_kind: 'proposed' };
 const at = Date.parse;
 let seq = 0;
@@ -50,11 +52,11 @@ describe('trusted owner-local delivery day', () => {
       store.incrementClassState('owner', first.push_class, before, 'Asia/Kolkata');
       store.incrementClassState('owner', first.push_class, before + 1000, 'Asia/Kolkata');
       expect(store.readClassState('owner', first, before + 1000, 'Asia/Kolkata').constellation_first?.count).toBe(2);
-      store.applyAdmission('owner', prep, computeAdmission({ candidate: prep, classState: {}, countedSends: 0, now: before }), before, 'Asia/Kolkata');
+      store.applyAdmission('owner', syncError, computeAdmission({ candidate: syncError, classState: {}, countedSends: 0, now: before }), before, 'Asia/Kolkata');
       const next = before + 1000;
-      const state = store.readClassState('owner', prep, next, 'Asia/Kolkata');
-      expect(state.pre_activity_spot).toEqual({ count: 0, last_sent_at: before });
-      expect(computeAdmission({ candidate: prep, classState: state, countedSends: 0, now: next, timezone: 'Asia/Kolkata' })).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: before + 60 * 60_000 });
+      const state = store.readClassState('owner', syncError, next, 'Asia/Kolkata');
+      expect(state.sync_error).toEqual({ count: 0, last_sent_at: before });
+      expect(computeAdmission({ candidate: syncError, classState: state, countedSends: 0, now: next, timezone: 'Asia/Kolkata' })).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: before + 1_440 * 60_000 });
     });
   });
   it('retains UTC default signatures and historical rows', async () => {
@@ -76,7 +78,7 @@ describe('trusted owner-local delivery day', () => {
     ['America/Sao_Paulo', '2018-11-03T12:00:00Z', '2018-11-04T03:00:00Z'],
     ['Pacific/Apia', '2011-12-29T12:00:00Z', '2011-12-30T10:00:00Z'],
   ])('holds class cap until next valid local day in %s from %s', (timezone, now, expected) => {
-    const result = computeAdmission({ candidate: prep, classState: { pre_activity_spot: { count: 2, last_sent_at: null } }, countedSends: 0, now: at(now), timezone });
+    const result = computeAdmission({ candidate: knock, classState: { intervention_knock: { count: 2, last_sent_at: null } }, countedSends: 0, now: at(now), timezone });
     expect(result).toMatchObject({ verdict: 'hold', reason: 'class_cap_exhausted', hold_until: at(expected) });
   });
   it('exports the existing gap/skipped-day-safe recurrence helper', () => {
@@ -84,6 +86,6 @@ describe('trusted owner-local delivery day', () => {
     expect(nextDailyLocalOccurrence('00:00', 'Pacific/Apia', at('2011-12-29T12:00:00Z'))).toBe(at('2011-12-30T10:00:00Z'));
   });
   it('retains UTC cap boundary when timezone is omitted', () => {
-    expect(computeAdmission({ candidate: prep, classState: { pre_activity_spot: { count: 2, last_sent_at: null } }, countedSends: 0, now: at('2026-10-03T18:00:00Z') }).hold_until).toBe(at('2026-10-04T00:00:00Z'));
+    expect(computeAdmission({ candidate: knock, classState: { intervention_knock: { count: 2, last_sent_at: null } }, countedSends: 0, now: at('2026-10-03T18:00:00Z') }).hold_until).toBe(at('2026-10-04T00:00:00Z'));
   });
 });
