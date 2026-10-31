@@ -20,12 +20,14 @@ const card = async (id: string, text: string) => {
 };
 
 describe('the day-card set in the catalogue', () => {
-  it('runs the good-day Brief, the Check-in and the Close nightly, each with a receipt, a rubric and a card step', () => {
+  it('runs the good-day Brief, the Check-in and the Close nightly, each with a receipt, a rubric, a voice rubric and a card step', () => {
     expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line']);
     for (const entry of CARD_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
       expect(entry.rubric.must_not.length, entry.id).toBeGreaterThan(0);
+      // The voice judge grades a trial only when its scenario carries a voice rubric, and the cards are what owners read most.
+      expect(entry.rubric.voice?.moment, entry.id).toBeTruthy();
       expect(entry.steps.some((step) => 'card' in step), entry.id).toBe(true);
     }
   });
