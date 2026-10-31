@@ -65,10 +65,10 @@ describe('the prep push body', () => {
     expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30');
   });
 
-  it('never carries an email address, a health value, or an empty or overlong title', () => {
-    const body = prepPushBody({ title: 'Sync with asha@example.test and ben@example.test', start, timezone: 'UTC', named: true });
-    expect(body).not.toContain('@');
-    expect(body).toBe('Prep: Sync with and at 05:00');
+  it('never carries an email address, a link, a health value, or an empty or overlong title', () => {
+    expect(prepPushBody({ title: 'Sync with asha@example.test and ben@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Verify your account at evil.co/x', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Call zoom.us/j/8812345678?pwd=Xy12ab', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: undefined, start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
