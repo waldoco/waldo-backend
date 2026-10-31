@@ -105,7 +105,7 @@ export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: Fi
 export type AppRowLinks = Readonly<{
   card(card: NonNullable<FinalRecord['dayCard']>, appRow: string): void;
   update(recordId: number, appRow: string): void;
-  revision?(revision: NonNullable<FinalRecord['revision']>, appRow: string): void;
+  revision?(revision: NonNullable<FinalRecord['revision']>, appRow: string, record: string): void;
   row?(appRow: string, trace: string): void;
 }>;
 export const linkingAppRows = (route: OutboxRoute, link: AppRowLinks): OutboxRoute => ({
@@ -116,7 +116,7 @@ export const linkingAppRows = (route: OutboxRoute, link: AppRowLinks): OutboxRou
     if (ack !== null && ack !== 'held' && typeof appRow === 'string') {
       if (record.dayCard) link.card(record.dayCard, appRow);
       if (record.update) link.update(record.update.recordId, appRow);
-      if (record.revision) link.revision?.(record.revision, appRow);
+      if (record.revision) link.revision?.(record.revision, appRow, record.id);
       link.row?.(appRow, record.trace);
     }
     return ack;
