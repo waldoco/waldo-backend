@@ -25,8 +25,8 @@ export type GateResult = Readonly<{ ok: boolean; failures: readonly string[] }>;
 // three other day-card cases, none blocked, and to 110 by the seven relevance cases, one blocked until the memory stubs exist (so up to 4 blocked). A PR that adds, removes or unblocks a scenario moves these numbers
 // in the same diff. Live mode has no pass-rate floor until a live baseline is recorded.
 export const NIGHTLY_THRESHOLDS: Readonly<Record<'recorded' | 'live', GateThresholds>> = {
-  recorded: { min_scenarios: 110, max_blocked: 4, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
-  live: { min_scenarios: 110, max_blocked: 4, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  recorded: { min_scenarios: 110, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  live: { min_scenarios: 110, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
 };
 
 // A subset run is held to the size of its own subset, not the catalogue's.
