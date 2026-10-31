@@ -145,6 +145,7 @@ import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
+import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-changes';
 import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
@@ -1504,6 +1505,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
 
+  private consoleHeldChanges(request: Request, url: URL): Response {
+    const reply = (body: object, status = 200, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
+    if (request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405, { allow: 'GET' });
+    if ([...url.searchParams.keys()].length) return reply({ error: 'invalid_query' }, 400);
+    const limited = this.consoleRateLimited('read');
+    if (limited) return limited;
+    const zone = this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+    try {
+      return reply(readHeldChanges(this.ctx.storage.sql, Date.now(), validZone(zone) ? zone : 'UTC'));
+    } catch {
+      console.error(JSON.stringify({ hop: 'console_held_changes', ok: false, code: 'held_changes_read_failed' }));
+      return reply({ error: 'held_changes_unavailable' }, 503);
+    }
+  }
+
   // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
   // app's contract does not carry.
   private async consoleControls(source: ConsoleView, view: ControlsView) {
@@ -2394,6 +2410,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const stepUp = await consoleStepUpRefusal(request, session, Date.now());
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
+    if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request), renews);if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';

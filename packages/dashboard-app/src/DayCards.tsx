@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { fetchAppDay } from './chat-model';
 import { fetchControls, submitControl, type DayRecord } from './controls-model';
 import { clockLabel, minutesLabel } from './Infographics';
+import { HeldChangesView } from './HeldChanges';
+import { fetchHeldChanges, type HeldChange } from './held-changes-model';
 import { cardName, excerptCut, excerptText, firstReveal, paragraphs, revealWords, type AppDay, type CardLatest } from './day-cards-model';
 
 type Card = DayRecord['data']['cards'][number];
@@ -71,7 +73,7 @@ export function DayCardsView({ cards, app, zone, now = Date.now(), play, busy, o
   })}</ol>;
 }
 
-type Read = { kind: 'reading' } | { kind: 'failed' } | { kind: 'ready'; day: DayRecord; app: AppDay | null };
+type Read = { kind: 'reading' } | { kind: 'failed' } | { kind: 'ready'; day: DayRecord; app: AppDay | null; held: readonly HeldChange[] };
 
 // Reads today's day view (its card states, and the action route's revision for Try again) and, beside it, the app's day view for what each
 // card delivered to Main chat. The second read failing leaves the words unknown, never the cards: each is still said to have gone out.
@@ -82,8 +84,8 @@ export function DayCards() {
   // Whether each delivered message plays in, decided once per message the first time this mount draws it.
   const [played, setPlayed] = useState<ReadonlyMap<string, boolean>>(new Map());
   const load = useCallback(async () => {
-    const app = fetchAppDay().catch(() => null);
-    try { setRead({ kind: 'ready', day: await fetchControls('day'), app: await app }); } catch { setRead({ kind: 'failed' }); }
+    const app = fetchAppDay().catch(() => null), held = fetchHeldChanges().catch(() => []);
+    try { setRead({ kind: 'ready', day: await fetchControls('day'), app: await app, held: await held }); } catch { setRead({ kind: 'failed' }); }
   }, []);
   useEffect(() => { void load(); }, [load]);
   const delivered = read.kind === 'ready' && read.app ? read.day.data.cards.flatMap(card => { const latest = read.app!.latest.get(card.id); return latest ? [latest.message_id] : []; }) : [];
@@ -107,6 +109,7 @@ export function DayCards() {
   return <section className="tile day-cards-tile" aria-label="Today’s messages" style={undecided.length ? { visibility: 'hidden' } : undefined}>
     <span className="label">Today’s messages</span>
     <DayCardsView cards={day.data.cards} app={read.app} zone={day.data.timezone} play={id => played.get(id) === true} busy={busy} onRetry={id => void retry(id)}/>
+    <HeldChangesView changes={read.held} zone={day.data.timezone}/>
     {note && <p className="meta" role="status">{note}</p>}
   </section>;
 }
