@@ -123,6 +123,8 @@ export type ToolName = z.infer<typeof toolNameSchema>;
 // injection blast radius — a trigger without a permission gives injection nowhere to go.
 // The deny-first check runs at PreToolUse priority 100 (ADR-0032) and is rebuilt from this
 // map at every DO wake; no prior-session authorisation carries forward (ADR-0033).
+// skills_load is on every trigger but the tool-less planner: it selects reviewed instructions and grants no tool, so the
+// model can choose a procedure in any turn without that turn's reach growing.
 export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>> = {
   brief: [
     'get_crs',
@@ -141,9 +143,10 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'search_connector',
     'propose_action',
     'send_message',
+    'skills_load',
   ],
-  fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message'],
-  patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action'],
+  fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+  patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
   pre_brief_sweep: [
     'get_crs',
     'get_health',
@@ -159,6 +162,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'read_memory',
     'search_episodes',
     'search_connector',
+    'skills_load',
   ],
   handoff_explore: [
     'get_crs',
@@ -181,8 +185,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'list_artifacts',
     'read_artifact',
     'search_tools',
+    'skills_load',
   ],
-  handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
+  handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
   // The mutation cluster: execute_action + writes + send_message, reachable only after
   // explicit user approval through propose_action (ADR-0008).
   handoff_act: [
@@ -196,6 +201,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_schedule',
     'write_sheet_cell',
     'send_message',
+    'skills_load',
   ],
   handoff_replan: [
     'get_crs',
@@ -205,8 +211,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_tasks',
     'update_task',
     'propose_action',
+    'skills_load',
   ],
-  intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
+  intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
     'use_mac',
@@ -294,7 +301,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'record_owner_finding',
     'list_owner_findings',
   ],
-  dreaming_mode: ['read_memory', 'search_episodes'],
+  dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
   pre_activity_spot: [
     'get_crs',
@@ -304,6 +311,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_schedule',
     'propose_action',
     'send_message',
+    'skills_load',
   ],
   // Outcome-bound candidate planning has no inherited capabilities. Provider text can propose
   // steps, but cannot discover or invoke any tool through this trigger.
