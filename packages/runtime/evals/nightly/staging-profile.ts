@@ -33,6 +33,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
 
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
+  WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial; staging has it off'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
@@ -48,6 +49,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
 
   WALDO_ENVIRONMENT: inert('names the deployment'),
   PREP_PUSH_NAMES: inert('the app push text raised after a prep note is delivered; the model never sees it'),
+  UPDATE_PUSH_NAMES: inert('the app push text raised after an update is delivered; the model never sees it'),
   WALDO_PUBLIC_ORIGIN: inert(IDENTITY),
   WALDO_OWNER_DO_NAMESPACE: inert(IDENTITY),
   WALDO_RELEASE: inert('release stamp'),

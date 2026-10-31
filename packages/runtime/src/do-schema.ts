@@ -432,6 +432,29 @@ export const RETIRE_MEMORY_HALLS_MIGRATION: DoMigration = {
   down: MEMORY_HALLS_DDL,
 };
 
+// What each calendar event last looked like to the update sweep, so a change can say what it was: its times, whether its
+// title changed (a digest, never the title) and how many attended. Written only by the sweep's own transaction, which runs
+// this DDL itself, and kept for two weeks after the event was last seen.
+export const CALENDAR_LAST_SEEN_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS calendar_last_seen (
+    event_id     TEXT PRIMARY KEY,
+    start_at     TEXT NOT NULL,
+    end_at       TEXT NOT NULL,
+    all_day      INTEGER NOT NULL CHECK (all_day IN (0, 1)),
+    title_digest TEXT NOT NULL,
+    attendees    INTEGER CHECK (attendees IS NULL OR attendees >= 0),
+    seen_at      INTEGER NOT NULL
+  );`,
+  'CREATE INDEX IF NOT EXISTS calendar_last_seen_age ON calendar_last_seen (seen_at);',
+] as const;
+
+export const CALENDAR_LAST_SEEN_MIGRATION: DoMigration = {
+  version: 14,
+  name: 'calendar-last-seen',
+  up: CALENDAR_LAST_SEEN_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS calendar_last_seen_age;', 'DROP TABLE IF EXISTS calendar_last_seen;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -442,6 +465,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   TASK_JOBS_SCHEMA_MIGRATION,
   RETIRE_MEMORY_HALLS_MIGRATION,
+  CALENDAR_LAST_SEEN_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

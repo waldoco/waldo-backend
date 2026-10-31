@@ -5028,7 +5028,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups,
+        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, dayState: this.env.WALDO_DAY_STATE === '1',
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => recompute.calendarChanged().then(

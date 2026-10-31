@@ -6,7 +6,7 @@ import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
-import { changeLines, readChanges, touchesDay, writeChanges, type Change, type UpdateBook } from './update-cards';
+import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type Change, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
 // it for the next main card. When an update card could go out now and something changed, it writes a reader job in the
@@ -24,8 +24,10 @@ export const UPDATE_CARD_FRESH_MS = 30 * 60_000;
 const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 
 export type SweepCheckDeps = Readonly<{
-  updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail'>;
+  updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events'>;
   now: number; day: string; timezone: string; surface: string; sourceFollowups: boolean;
+  // The day state: what each event was is kept, and two weeks ahead are read.
+  dayState?: boolean;
   gate(): SweepGate | null;
   // Every provider the worker could be served by is down.
   providerDown(): boolean;
@@ -48,18 +50,20 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   const gate = deps.gate();
   if (gate === null && deps.providerDown()) return { code: 'held_breaker', changes: 0, analysis: 0 };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
-  const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups);
+  const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups, deps.dayState
+    ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined) } : undefined);
   // A job held for a topic the owner is forgetting rolls the whole write back: the record, the observed mail and the
   // watermarks stay as they were, so the tick after the forget settles reads the same window.
   const heldTopic = new Error('held_topic');
   let checked: SweepChecked;
+  let changes = read.changes;
   try { checked = deps.transaction((): SweepChecked => {
-    writeChanges(updates, read);
-    let recordId = read.changes.length ? updates.record(deps.day, deps.now, read.changes, null) : null;
+    changes = writeChanges(updates, read);
+    let recordId = changes.length ? updates.record(deps.day, deps.now, changes, null) : null;
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
-    const analysis = deps.sourceFollowups ? [...read.changes.filter(change => change.source !== 'mail'), ...pending] : read.changes;
-    const counts = { changes: read.changes.length, analysis: analysis.length };
+    const analysis = deps.sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pending] : changes;
+    const counts = { changes: changes.length, analysis: analysis.length };
     if (gate !== null) return { code: gate, ...counts };
     if (!analysis.length) return { code: 'unchanged', ...counts };
     recordId ??= updates.record(deps.day, deps.now, [], null);
@@ -73,7 +77,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   }
   // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
   // recorded. A failed ask never costs the update.
-  if (read.changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
+  if (changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
   return checked;
 };
 
@@ -81,7 +85,7 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: UPDATE_SWEEP_JOB_TEXT,
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
-  items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${change.detail}` })),
+  items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${changeDetail(change)}` })),
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
