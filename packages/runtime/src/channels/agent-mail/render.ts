@@ -76,7 +76,7 @@ const MARK_FILE = 'waldo.png';
 const ADDRESS = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const validAddress = (value: string) => value.length <= 254 && value.indexOf('@') <= 64 && ADDRESS.test(value);
 const MESSAGE_ID = /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+>$/;
-const validMessageId = (value: string) => value.length <= 900 && MESSAGE_ID.test(value);
+export const validMessageId = (value: string) => value.length <= 900 && MESSAGE_ID.test(value);
 
 // A lone surrogate has no UTF-8 form; the wire would carry U+FFFD where the card showed something else, so it becomes
 // U+FFFD before anything is rendered.

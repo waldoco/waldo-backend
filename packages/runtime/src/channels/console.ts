@@ -341,22 +341,25 @@ const serviceStatus = (view: ConsoleView) => {
 // the safe direction - it can only prevent a send, never cause one - so it offers Don't do this
 // for open send proposals. That also un-strands proposals whose Telegram approval card lost its
 // inline keyboard.
+// The sends whose review is their exact draft: an email from the owner's Gmail, a message, and an email as Waldo.
+export const DRAFT_SEND_KINDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
-  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
+  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && DRAFT_SEND_KINDS.includes(item.kind);
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
 // The Waiting view shows a send's whole draft and binds each decision to the read that showed it, so it sends
 // (approval.send) and changes an open email or message. Sending is its own action so the step-up table can ask for a
 // recent email code; the retired page's form route binds no read and handles no send.
 export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
-  Boolean(item && item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && item.review?.kind === item.kind);
+  Boolean(item && item.state === 'open' && DRAFT_SEND_KINDS.includes(item.kind) && item.review?.kind === item.kind);
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
-  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
+  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send', agent_mail_send: 'Email as Waldo',
   browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if (review.kind === 'agent_mail_send') return `<div class="approval-review"><div>From: ${esc(`${review.from.name} <${review.from.address}>`)}</div><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if ('text' in review) return `<div class="approval-review"><pre>${esc(review.text)}</pre></div>`;
   if (review.kind === 'google_task_change') {
     const { args, list, before } = review.proposal;
@@ -384,10 +387,10 @@ const approvals = (view: ConsoleView) => {
         ? dismissible ? form(view.csrf, 'approval.skip', "Don't do this", { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
-    const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
+    const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : DRAFT_SEND_KINDS.includes(item.kind)
       ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Don\'t do this dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
-    const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
+    const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', ...DRAFT_SEND_KINDS].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';
     return `<div class="row approval-row"><div class="main"><div class="sub">${chip(label)}</div><div class="line">${esc(item.summary)}</div>${review}${holdReason}${changeHint}</div>${chip(item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'done' ? 'good' : 'neutral')}<div class="act">${actions}</div></div>`;
   }).join('');

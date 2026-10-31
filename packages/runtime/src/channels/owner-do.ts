@@ -66,6 +66,7 @@ import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type Agent
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
 import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, deferAgentMailRules, reconcileAgentMailRules } from './agent-mail/rules';
 import { agentMailDirectory } from './agent-mail/handles';
+import { agentMailDeskDep } from './agent-mail/send';
 import type { AgentMailControlsDeps } from './agent-mail/controls';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -226,6 +227,7 @@ import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_
 import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
+import { agentMailToolHost, sendAgentMailHandler } from '../tools/live/agent-mail';
 import { approvalJobReplay, approvalReplayContext, proposeActionHandler, replayHost, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { sanitise } from '../scribe/sanitiser';
@@ -4029,6 +4031,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       browserDeny: browserApproval.deny,
       // Approved sends go out verbatim on the channel the proposal names, through that channel's
       // egress-gated call, whichever surface approved them.
+      agentMail: agentMailDeskDep(this.env, storage, () => storage.kv.get<string>('do_name')),
       canSendMessage: name => { try { const target = destination(name); return !!target && target.owner > 0 && identity.get<boolean>(`${name}_unlinked`) !== true; } catch { return false; } },
       sendMessage: async (proposal) => {
         const target = destination(proposal.channel);
@@ -4394,7 +4397,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { ...replayHost(() => replayHandlers), claims: () => memory.allClaims(), loop: (id, turnId) => closableIn(turnId)?.has(id) === false ? undefined : loops.get(id) }), useMacHandler({ request: async (input, context) => {
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), sendAgentMailHandler(agentMailToolHost(this.env, storage, () => storage.kv.get<string>('do_name'), () => ownerName(memory), desk)), proposeActionHandler(desk, { ...replayHost(() => replayHandlers), claims: () => memory.allClaims(), loop: (id, turnId) => closableIn(turnId)?.has(id) === false ? undefined : loops.get(id) }), useMacHandler({ request: async (input, context) => {
         // A Mac is reached only from an owner-initiated turn of this exact owner DO, through that
         // owner's single paired device that declared the requested class. Identity is re-read after
         // every await so an unlink or rebind mid-turn cannot redirect the request.
