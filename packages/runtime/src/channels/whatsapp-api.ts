@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
+import { OUTBOX_CUSTODY } from './delivery-routes';
 import { splitTelegramText } from './telegram-api';
 // WhatsApp Cloud API surface (WHATSAPP_CHANNEL_SPEC W2-W4): the raw caller for the webhook's
 // link-code replies, the telegram-shaped send shim the owner DO wraps in the same
@@ -81,6 +82,10 @@ export class WhatsAppPartialSend extends Error {
 // quote is the wamid of an earlier message the text answers, which WhatsApp shows quoted above it.
 export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false, quote?: string) =>
   call({ to, ...(quote ? { context: { message_id: quote } } : {}), type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
+// Waldo's own contact card, so the owner saves the number as Waldo in one tap. Until Meta verifies the display name,
+// WhatsApp shows an unsaved business by its number.
+export const sendWhatsAppWaldoCard = (call: WhatsAppCall, to: string, waldoNumber: string) =>
+  call({ to, type: 'contacts', contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${waldoNumber}`, type: 'WORK', wa_id: waldoNumber }] }] });
 const ackId = (ack: unknown): string | null => {
   const id = (ack as { messages?: { id?: unknown }[] } | undefined)?.messages?.[0]?.id;
   return typeof id === 'string' && id !== '' ? id : null;
@@ -97,7 +102,9 @@ export type TelegramShimCall = (method: string, body: object) => Promise<unknown
 export const WHATSAPP_TYPING_REFRESH_MS = 20_000;
 // The owner DO keeps the id of the owner's latest admitted message here, for the read receipt and typing indicator.
 export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
-// onSent hears each part of a turn's own reply, with its wamid, so a later reaction or swipe-reply naming it can be read.
+// onSent hears each part of what Waldo wrote to the owner, with its wamid, so a later reaction or swipe-reply naming it can be
+// read: a turn's own reply, and whatever the delivery outbox sends (the Brief, Check-in and Close, reminders, follow-ups,
+// notices). Direct system sends (sign-in and connect links among them) are never heard.
 export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void }>;
 
 export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch, options: WhatsAppShimOptions = {}): TelegramShimCall => {
@@ -123,6 +130,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       const { message_id, emoji } = body as { message_id: string; emoji: string };
       return call({ to, type: 'reaction', reaction: { message_id, emoji } });
     }
+    if (method === 'sendWaldoCard') return sendWhatsAppWaldoCard(call, to, (body as { number: string }).number);
     if (method === 'sendDocument') {
       const { file } = body as { file: WhatsAppOutboundFile };
       const kind = whatsappOutboundKind(file);
@@ -140,7 +148,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
         try { ack = await sendWhatsAppText(call, to, parts[index]!, b.link_preview_options?.is_disabled !== true, index === 0 ? b.quote_message_id : undefined); }
         catch (error) { if (index === 0) throw error; throw new WhatsAppPartialSend(index, ack, parts.slice(index), error); }
         const id = ackId(ack);
-        if (id && b.turn_reply === true) options.onSent?.(id, parts[index]!);
+        if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, parts[index]!);
       }
       return ack;
     }
@@ -299,6 +307,7 @@ export type WaIngressMessage = Readonly<{
   audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string };
   document?: { id?: string; filename?: string; mime_type?: string; caption?: string }; location?: WaLocation; contacts?: WaContactCard[];
   sticker?: { id?: string; mime_type?: string; animated?: boolean }; reaction?: { message_id?: string; emoji?: string };
+  video?: { id?: string; mime_type?: string; caption?: string };
 }>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
@@ -389,6 +398,13 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     if (message.type === 'sticker') {
       const { id, mime_type, animated } = message.sticker ?? {};
       push(id && animated !== true ? { document: { file_id: id, file_name: 'sticker.webp', mime_type: fieldText(mime_type)?.slice(0, 128) ?? 'image/webp' } } : { whatsapp_type: 'sticker' });
+      continue;
+    }
+    // No model input takes video, so a captioned video reaches the turn as its caption, saying the video itself was not seen;
+    // without a caption there is nothing to read, and it gets the shared unsupported reply.
+    if (message.type === 'video') {
+      const caption = fieldText(message.video?.caption);
+      push(caption ? { text: quarantined(`Sent a video Waldo can't watch yet. Its caption: ${caption}`).slice(0, 4096) } : { whatsapp_type: 'video' });
       continue;
     }
     if (message.type === 'location' || message.type === 'contacts') {

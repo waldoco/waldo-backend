@@ -174,6 +174,44 @@ const reconcileHarness = async (name: string, presence: (subject: string) => Pro
   });
 };
 
+it('a confirmed link sends Waldo\'s contact card to the new number; a refused card leaves the link standing', async () => {
+  for (const refuse of [false, true]) {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`whatsapp-text-first-card-${refuse}`)), async (_instance, state) => {
+      state.storage.kv.put('do_name', 'do-text-first-card');
+      state.storage.kv.put('whatsapp_subject', OLD);
+      const access = consoleAccess(state.storage);
+      const token = await access.grant();
+      const { csrf } = (await access.session(token))!;
+      const sent: Record<string, unknown>[] = [];
+      const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.includes('graph.facebook.com')) {
+          sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return refuse ? Response.json({ error: { code: 131047 } }, { status: 400 }) : Response.json({ messages: [{ id: 'wamid.card' }], contacts: [{ wa_id: NEW }] });
+        }
+        const fn = url.split('/rpc/')[1] ?? '';
+        return Response.json(fn === 'consume_presence_link_request' ? 'linked' : true);
+      });
+      const instance = new OwnerDO(state, {
+        ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_WALDO_NUMBER: '15550009999',
+        WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+        SUPABASE_PROJECT_URL: 'https://db.example', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router',
+      });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        const confirmed = await instance.fetch(new Request('https://w.test/console/action', {
+          method: 'POST', headers: { cookie: `${CONSOLE_COOKIE}=${token}` }, body: new URLSearchParams({ csrf, action: 'whatsapp.confirm', token: TOKEN, subject: NEW }),
+        }));
+        expect(confirmed.status).toBe(200);
+        expect(state.storage.kv.get('whatsapp_subject')).toBe(NEW);
+        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: `+${NEW}`, type: 'contacts',
+          contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: '+15550009999', type: 'WORK', wa_id: '15550009999' }] }] }]);
+        if (refuse) expect(log.mock.calls.map(([line]) => String(line))).toContain(JSON.stringify({ hop: 'whatsapp_contact_card', ok: false }));
+      } finally { await state.storage.deleteAlarm(); graph.mockRestore(); log.mockRestore(); }
+    });
+  }
+});
+
 it('link A text-first, then redeem a console code from B: B is admitted, A\'s held state is gone, and A is refused', async () => {
   // The directory's answer for this owner's number: A after the text-first link, B once the code from B is redeemed
   // (redeem_link_code unlinks A and inserts B; the object is not told).

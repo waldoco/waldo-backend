@@ -10,7 +10,7 @@ import type { ToolDispatcherContext } from './dispatcher';
 
 export const readToolOutputHandler = (store: ToolOutputStore) => ({
   name: 'read_tool_output',
-  description: 'Read a range of a stored large tool output. The id comes from a truncated tool result; offset starts at 0 and the result carries next_offset when more remains.',
+  description: 'Read a range of a stored large tool output. id is the stored_output value of a truncated tool result (or the id in its "stored as" note); offset starts at 0 and the result carries next_offset when more remains.',
   schema: readToolOutputArgsSchema,
   trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('read_tool_output')),
   autonomy_gated: false,
