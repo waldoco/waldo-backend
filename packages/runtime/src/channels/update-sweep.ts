@@ -5,8 +5,7 @@ import { machineResultText, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs
 import { SKIP_UPDATE, updateCardPrompt, updateEffectsPrompt } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
-import { numericHealthIn } from '../scribe/sanitiser';
-import { PUSHES } from './expo-push';
+import { PUSHES, pushTitle } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
@@ -116,25 +115,42 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
-// What an update push may say. It may name the change (a meeting's title, its times, its people). A line with anything shaped
-// like a host (a link with or without its scheme, an email address: a meeting link can hold its passcode, and a stranger's
-// invite can carry a lure), a health value, or four words in a row from outside text the turn read (mail, an invite's
-// description or location, the health log) is the fixed line, as is every line while the owner has not turned named updates
-// on. A destination rule, so it holds at the send. Text the turn read through its own tools is not in that list.
-export const UPDATE_PUSH_CHARS = 140;
-const SHARED_WORDS = 4;
-const HOST = /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.\p{L}{2,24}(?![\p{L}\p{N}])|:\/\/|@/u;
-const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-const shingles = (text: string) => { const w = words(text); return w.slice(0, Math.max(0, w.length - SHARED_WORDS + 1)).map((_, i) => w.slice(i, i + SHARED_WORDS).join(' ')); };
-export const updatePushLine = (line: string, rules: Readonly<{ named: boolean; forbidden: readonly string[] }>): string => {
+// What an update push says, written by code from the calendar change the turn chose by its event id: the meeting's title as
+// pushTitle shows it and its new local time, or the fixed line. Nothing the model wrote reaches it, so nothing the turn read
+// (mail, an invite's description or location, the health log, what its tools returned) can either. A mail, a change the job
+// does not hold, a title pushTitle will not show, a start that does not parse, and every change while the owner has not turned
+// named updates on, give the fixed line.
+const LOCAL_DATE = (timezone: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: timezone });
+const pushWhen = (item: Readonly<Record<string, unknown>>, timezone: string, now: number): Readonly<{ day: string | null; time: string | null }> | null => {
+  const start = typeof item.start === 'string' ? item.start : '';
+  const today = localIso(now, timezone).slice(0, 10);
+  if (item.all_day === true) {
+    const date = start.slice(0, 10);
+    const noon = Date.parse(`${date}T12:00:00Z`);
+    if (!Number.isFinite(noon)) return null;
+    return { day: date === today ? 'today' : LOCAL_DATE('UTC').format(noon), time: null };
+  }
+  const at = Date.parse(start);
+  if (!Number.isFinite(at)) return null;
+  const local = localIso(at, timezone);
+  return { day: local.slice(0, 10) === today ? null : LOCAL_DATE(timezone).format(at), time: local.slice(11, 16) };
+};
+export const updatePushLine = (changes: readonly Change[], event: string | undefined, rules: Readonly<{ named: boolean; timezone: string; now: number }>): string => {
   const fixed = PUSHES.update.body;
-  const plain = line.replace(/\s+/g, ' ').trim();
-  if (!rules.named || !plain || HOST.test(plain) || numericHealthIn(plain)) return fixed;
-  const seen = new Set(rules.forbidden.flatMap(shingles));
-  if (shingles(plain).some(shingle => seen.has(shingle))) return fixed;
-  if (plain.length <= UPDATE_PUSH_CHARS) return plain;
-  const cut = plain.slice(0, UPDATE_PUSH_CHARS - 1);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).trim()}…`;
+  const change = rules.named && event ? changes.find(change => change.source === 'calendar' && change.ref === `event:${event}`) : undefined;
+  if (!change) return fixed;
+  let item: Record<string, unknown>;
+  try { item = JSON.parse(change.detail) as Record<string, unknown>; } catch { return fixed; }
+  const title = pushTitle(item.title);
+  if (!title) return fixed;
+  if (change.kind === 'cancelled') return `${title} cancelled`;
+  const when = pushWhen(item, rules.timezone, rules.now);
+  if (!when) return fixed;
+  const at = [when.day && (when.day === 'today' ? 'today' : `on ${when.day}`), when.time && `at ${when.time}`].filter(Boolean).join(' ');
+  if (change.kind === 'added') return `${title} added ${at}`;
+  const before = change.before;
+  const moved = before && (item.all_day === true ? before.start.slice(0, 10) !== String(item.start).slice(0, 10) : Date.parse(before.start) !== Date.parse(String(item.start)));
+  return moved ? `${title} moved to ${[when.day, when.time].filter(Boolean).join(' ')}` : `${title} ${at} changed`;
 };
 
 // The apply turn's tools: with source follow-ups it may open a source-bound loop (a card, since the turn is tainted);
@@ -154,7 +170,7 @@ const dayCardIds = DAY_CARDS.map(card => card.id) as [string, ...string[]];
 export const updateEffectsSchema = z.strictObject({
   revise: z.strictObject({ card: z.enum(dayCardIds), text: effectText }).optional(),
   say: effectText.optional(),
-  push: z.string().trim().min(1).max(500).optional(),
+  push: z.strictObject({ event: z.string().trim().min(1).max(256).optional() }).optional(),
 }).refine(chosen => !(chosen.revise && chosen.say), { error: 'revise or say, not both' })
   .refine(chosen => !chosen.push || chosen.revise || chosen.say, { error: 'a push opens a revision or a message' });
 export type UpdateEffects = z.infer<typeof updateEffectsSchema>;
@@ -169,12 +185,6 @@ export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => 
 };
 // What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
 export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
-
-const outsideText = (change: Change): readonly string[] => {
-  if (change.source === 'mail') return [change.detail];
-  const { description, location } = JSON.parse(change.detail) as { description?: unknown; location?: unknown };
-  return [description, location].filter((text): text is string => typeof text === 'string' && text.length > 0);
-};
 
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
@@ -195,9 +205,8 @@ export type UpdateSweepApplyDeps = Readonly<{
     revisesCards: boolean;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
-    // The push line as it may go out (updatePushLine), given the outside text the turn read in its changes: each mail, and
-    // each invite's description and location.
-    pushLine(line: string, outside: readonly string[]): Promise<string>;
+    // Whether the owner turned named update pushes on (updatePushLine).
+    named(): boolean;
     chose(trace: string, code: UpdateEffectCode): void;
     // The job settled, however it ended: changes that arrived while it was open can be read now, not at the next poll.
     settled(): void;
@@ -238,7 +247,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!effect) return skip('none');
       if (quiet && effect === 'say') return skip('say+quiet');
       // A push goes only from a surface that raises one; elsewhere the message is the notification.
-      const push = chosen.push && !quiet && day.revisesCards ? await day.pushLine(chosen.push, changes.flatMap(outsideText)) : undefined;
+      const push = chosen.push && !quiet && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
