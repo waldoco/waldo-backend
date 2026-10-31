@@ -19,6 +19,11 @@ export type AgentMailHandleDirectory = AgentMailRuleDirectory & Readonly<{
   release(): Promise<AgentMailRelease>;
 }>;
 
+// What a directory call signs: the call's name, then each argument with its length in bytes, so no two different sets of
+// arguments read the same (a handle and a notice version can both hold dots). The directory builds the same string.
+export const agentMailSigned = (call: string, ...parts: readonly string[]): string =>
+  `${call}${parts.map(part => `.${new TextEncoder().encode(part).length}:${part}`).join('')}`;
+
 const CLAIMS = new Set(['claimed', 'unchanged', 'taken', 'unavailable', 'full', 'no_owner']);
 const STATES = new Set<RuleState>(['pending', 'live', 'failed', 'unknown']);
 const answered = <T extends string>(value: unknown, allowed: ReadonlySet<string>): T => {
@@ -33,7 +38,7 @@ export const agentMailHeldHandles = (env: OwnerDirectoryEnv, fetcher: typeof fet
   return async handles => {
     if (!handles.length) return new Set();
     const list = [...handles].sort().join(',');
-    const rows = await call('agent_mail_held_handles', `mailheld.${list}`, { p_handles: list });
+    const rows = await call('agent_mail_held_handles', agentMailSigned('mailheld', list), { p_handles: list });
     return new Set(Array.isArray(rows) ? rows.filter((handle): handle is string => typeof handle === 'string') : []);
   };
 };
@@ -43,16 +48,16 @@ export const agentMailDirectory = (env: OwnerDirectoryEnv, doName: string, fetch
   const call = signedRpc(env, fetcher, now), held = agentMailHeldHandles(env, fetcher, now);
   if (!call || !held) return null;
   return {
-    claim: async (handle, notice) => answered<Awaited<ReturnType<AgentMailHandleDirectory['claim']>>>(await call('claim_agent_mail_handle', `mailclaim.${doName}.${handle}.${notice}`, { p_do_name: doName, p_handle: handle, p_notice_version: notice }), CLAIMS),
-    release: async () => answered<AgentMailRelease>(await call('release_agent_mail_handle', `mailrelease.${doName}`, { p_do_name: doName }), new Set(['released', 'none'])),
+    claim: async (handle, notice) => answered<Awaited<ReturnType<AgentMailHandleDirectory['claim']>>>(await call('claim_agent_mail_handle', agentMailSigned('mailclaim', doName, handle, notice), { p_do_name: doName, p_handle: handle, p_notice_version: notice }), CLAIMS),
+    release: async () => answered<AgentMailRelease>(await call('release_agent_mail_handle', agentMailSigned('mailrelease', doName), { p_do_name: doName }), new Set(['released', 'none'])),
     current: async () => {
-      const [row] = await call('agent_mail_handle', `mailhandle.${doName}`, { p_do_name: doName }) as { handle?: unknown; rule_state?: unknown }[];
+      const [row] = await call('agent_mail_handle', agentMailSigned('mailhandle', doName), { p_do_name: doName }) as { handle?: unknown; rule_state?: unknown }[];
       if (!row) return null;
       if (typeof row.handle !== 'string') throw new Error('agent mail directory answer');
       return { handle: row.handle, state: answered<RuleState>(row.rule_state, STATES) };
     },
     held,
-    settle: async (handle, state) => (await call('settle_agent_mail_rule', `mailsettle.${doName}.${handle}.${state}`, { p_do_name: doName, p_handle: handle, p_state: state })) === true,
+    settle: async (handle, state) => (await call('settle_agent_mail_rule', agentMailSigned('mailsettle', doName, handle, state), { p_do_name: doName, p_handle: handle, p_state: state })) === true,
   };
 };
 
