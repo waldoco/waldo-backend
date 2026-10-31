@@ -74,16 +74,41 @@ describe('receiptLine', () => {
   it('keeps a proposal labelled as one once any entry is not accepted', () => {
     expect(receiptLine([ev(1, 'propose_calendar_change', false, { code: 'rejected' })])).toBe('Receipts: calendar change proposed (failed)');
   });
-  it('is bounded: at most 5 lines named, the rest counted', () => {
-    const many = Array.from({ length: 8 }, (_, i) => ev(i + 1, 'set_reminder', true));
+  it('is bounded: at most 5 entries named, the rest counted', () => {
+    const many = Array.from({ length: 8 }, (_, i) => ev(i + 1, 'workspace_write', true, {}, { path: `${i + 1}.md` }));
     const line = receiptLine(many)!;
     expect(line.startsWith('Done: ')).toBe(true);
     expect(line.split('; ')).toHaveLength(6);
     expect(line.endsWith('and 3 more')).toBe(true);
   });
   it('counts what it leaves unnamed after both parts', () => {
-    const many = [ev(1, 'set_reminder', true), ...Array.from({ length: 6 }, (_, i) => ev(i + 2, 'send_email', true))];
-    expect(receiptLine(many)).toBe('Done: reminder set. Needs your yes: email send; email send; email send; email send; and 2 more');
+    const many = [ev(1, 'propose_calendar_change', true), ...Array.from({ length: 6 }, (_, i) => ev(i + 2, 'workspace_write', true, {}, { path: `${i + 1}.md` }))];
+    expect(receiptLine(many)).toBe('Done: workspace file written 1.md; workspace file written 2.md; workspace file written 3.md; workspace file written 4.md. Needs your yes: calendar change; and 2 more');
+  });
+  // Three memories saved in one turn is one thing done three times: a text-only channel (iMessage) shows this line as the
+  // reply's last line, where "memory stored; memory stored; memory stored" reads as a glitch.
+  describe('the same entry more than once', () => {
+    it('is named once with its count', () => {
+      expect(receiptLine([ev(1, 'remember', true), ev(2, 'remember', true), ev(3, 'remember', true)])).toBe('Done: memory stored ×3');
+      expect(receiptLine([ev(1, 'remember', true), ev(2, 'set_reminder', true), ev(3, 'remember', true)])).toBe('Done: memory stored ×2; reminder set');
+      expect(receiptLine([ev(1, 'set_reminder', true), ...Array.from({ length: 6 }, (_, i) => ev(i + 2, 'send_email', true))])).toBe('Done: reminder set. Needs your yes: email send ×6');
+    });
+    it('counts toward the bound as one entry, and its whole count as unnamed when left off', () => {
+      expect(receiptLine(Array.from({ length: 8 }, (_, i) => ev(i + 1, 'set_reminder', true)))).toBe('Done: reminder set ×8');
+      const writes = Array.from({ length: 5 }, (_, i) => ev(i + 1, 'workspace_write', true, {}, { path: `${i + 1}.md` }));
+      expect(receiptLine([...writes, ev(6, 'remember', true), ev(7, 'remember', true)])).toMatch(/workspace file written 5\.md; and 2 more$/);
+    });
+    it('stays apart when its target, state or task differs', () => {
+      expect(receiptLine([ev(1, 'workspace_write', true, {}, { path: 'a.md' }), ev(2, 'workspace_write', true, {}, { path: 'b.md' })]))
+        .toBe('Done: workspace file written a.md; workspace file written b.md');
+      expect(receiptLine([ev(1, 'remember', true), ev(2, 'remember', false, { code: 'rejected' }), ev(3, 'remember', true)]))
+        .toBe('Receipts: memory stored ×2 (accepted); memory stored (failed)');
+      expect(receiptLine([ev(1, 'remember', true), ev(2, 'remember', true, { delegated: true })])).toBe('Done: memory stored; memory stored (via task)');
+    });
+    it('keeps one typed item per receipt', async () => {
+      const receipt = await turnReceipt([ev(1, 'remember', true, { at: 1 }), ev(2, 'remember', true, { at: 2 }), ev(3, 'remember', true, { at: 3 })]);
+      expect([receipt?.line, receipt?.items.length, receipt?.more]).toEqual(['Done: memory stored ×3', 3, 0]);
+    });
   });
 });
 

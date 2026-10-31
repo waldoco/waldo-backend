@@ -590,6 +590,11 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       // Two writes must never leave contradictory active claims. A caller without a DO
       // transaction facility cannot safely correct and therefore fails closed.
       if (!transaction) return false;
+      // Counted by the rows it returns, not rowsWritten: semantic recall's trigger deletes the claim's vector in the same
+      // statement, and a trigger's writes count in rowsWritten.
+      const retire = () => {
+        if (sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' RETURNING id", at, id).toArray().length !== 1) throw new Error('correction conflict');
+      };
       return transaction(() => {
         const old = sql.exec<Claim>("SELECT * FROM claims WHERE id = ? AND status = 'active'", id).one();
         if (!old) return false;
@@ -602,8 +607,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         // A correction replaces the same fact, so the old row's pin moves to the row that now carries it.
         if (twin) {
           if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
-          const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
-          if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
+          retire();
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
           repointNodes(old, twin.id);
           return true;
@@ -615,8 +619,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
         const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
-        const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
-        if (retired.rowsWritten !== 1) throw new Error('correction conflict');
+        retire();
         repointNodes(old, replacement);
         return true;
       });

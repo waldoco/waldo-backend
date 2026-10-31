@@ -142,6 +142,11 @@ export const APP_CONTROLS_IDENTITY_REVISION = 7;
 // It carries no content and is not part of the day view's revision, so it never makes a day action stale; an open screen
 // re-reads memory when it differs. Revisions below 8 never receive it.
 export const APP_CONTROLS_MEMORY_SIGNAL_REVISION = 8;
+// Controls revision 9 (`controls=9`): a day card Waldo revised after delivering it, because the owner's day changed, carries
+// revision (how many revisions reached the owner today) and revised_at (epoch ms, the latest one), together or not at all,
+// and its latest names the newest revision's Main chat row, or is null when that revision reached the owner outside the app.
+// The original row stays in the chat and in day history. Below 9 neither field is sent and latest stays the original delivery.
+export const APP_CONTROLS_DAY_CARD_REVISION = 9;
 const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
@@ -173,7 +178,9 @@ export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(), memory_revision: count.optional(),
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
     state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
-    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
+    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional(), revision: z.int().min(1).optional(), revised_at: z.int().positive().optional() })
+    .refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })
+    .refine(card => (card.revision === undefined) === (card.revised_at === undefined), { error: 'revision and revised_at come together', path: ['revision'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),
