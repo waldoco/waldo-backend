@@ -56,14 +56,14 @@ describe('a correction and the nodes that cite the corrected claim', () => {
     });
   });
 
-  it('leaves a node built on Waldo\'s read citing the superseded row, so it stays out rather than turning into the owner\'s words', async () => {
+  it('leaves a node built on Waldo\'s read citing the superseded row: out of every turn, listed as incomplete, never the owner\'s words', async () => {
     await withStore((store, sql) => {
       store.add({ kind: 'observation', text: 'Clears investor mail first', source: 'inferred', evidence: 'read from a thread', origin: 'untrusted', source_ref: 'welcome:gmail:t1' }, AT);
       const read = store.claims().find((claim) => claim.text === 'Clears investor mail first')!.id;
       const id = node(store, [read]);
       expect(store.correct(read, correction('Clears investor mail after standup'), AT)).toBe(true);
       expect(supportsOf(store, id)).toEqual([read]);
-      expect(readMemoryGraph(sql, 'owner').nodes).toEqual([]);
+      expect(readMemoryGraph(sql, 'owner').nodes).toMatchObject([{ local_id: id, confirmation: 'waldos_read', support: { state: 'incomplete', claim_ids: [], unavailable_count: 1 } }]);
       expect(turnMemoryPrompt(store, 'unrelated')).not.toContain(`[n${id} `);
     });
   });

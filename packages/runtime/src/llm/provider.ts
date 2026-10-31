@@ -250,6 +250,10 @@ export type LLMAttempt =
       context: LLMContextMode;
       fallback_step: GatewayAttemptFallbackStep;
       code: ErrorCode;
+      // What the provider still billed for this attempt, priced at this attempt's own model, or at billed_model when the
+      // reply came from a different model than the one asked for.
+      spent?: SpentTokens;
+      billed_model?: string;
     }
   | {
       outcome: 'skipped';
@@ -476,7 +480,14 @@ export class RuntimeLLMProvider {
     const attempts: LLMAttempt[] = [];
     const settledModels = new Set<string>();
     const resendWaits = new Map<string, number>();
-    let spent: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+    // Tokens billed by failed attempts, per model. The model that answers owns its own failed tries (a retried step is metered
+    // whole); every other model's tokens stay on its failed attempts, so each is priced at its own rates.
+    const spentByModel = new Map<string, SpentTokens>();
+    const failure = (plan: ReturnType<typeof attemptPlan>[number], code: ErrorCode, spent?: SpentTokens, billedModel?: string): LLMAttempt => {
+      const elsewhere = billedModel !== undefined && billedModel !== plan.step.model;
+      if (spent && !elsewhere) spentByModel.set(modelKey(plan.step), addTokens(spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS, spent));
+      return { outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code, ...(spent ? { spent } : {}), ...(spent && elsewhere ? { billed_model: billedModel } : {}) };
+    };
     let lastDetail: string | undefined;
 
     const plans = attemptPlan(effectiveRoute, spendCapped);
@@ -561,8 +572,7 @@ export class RuntimeLLMProvider {
         // Tool search is a request shape a routed model can refuse with a 400, the spend clamp's cheaper models among them.
         // The step degrades to every tool up front, as the switch-off request sends them, rather than failing the turn.
         if (!gatewayResult.ok && gatewayResult.code === 'invalid_args' && sanitisedRequest.request.tool_search !== undefined) {
-          attempts.push({ outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code: 'invalid_args' });
-          if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+          attempts.push(failure(plan, 'invalid_args', gatewayResult.spent));
           const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
           searchDegraded = true;
           searchRejection = gatewayResult.error.slice(0, 160);
@@ -586,15 +596,7 @@ export class RuntimeLLMProvider {
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
         if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
-        attempts.push({
-          outcome: 'failure',
-          model: plan.step.model,
-          provider: plan.step.provider,
-          context: plan.context,
-          fallback_step: plan.fallback_step,
-          code: gatewayResult.code,
-        });
-        if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+        attempts.push(failure(plan, gatewayResult.code, gatewayResult.spent));
         if (gatewayResult.code === 'invalid_args') {
           return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
@@ -610,19 +612,14 @@ export class RuntimeLLMProvider {
       const parsedResponse = llmResponseSchema.safeParse(gatewayResult.data);
       if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.request.model) {
         this.circuitBreaker.recordFailure(plan.step.provider);
-        attempts.push({
-          outcome: 'failure',
-          model: plan.step.model,
-          provider: plan.step.provider,
-          context: plan.context,
-          fallback_step: plan.fallback_step,
-          code: 'invalid_args',
-        });
+        // A reply that parsed but came from another model was still billed; one that did not parse reports no tokens.
+        attempts.push(parsedResponse.success ? failure(plan, 'invalid_args', tokensOf(parsedResponse.data), parsedResponse.data.model) : failure(plan, 'invalid_args'));
         return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
       }
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
       if (!postHook.ok) {
+        attempts.push(failure(plan, postHook.error.code, tokensOf(parsedResponse.data)));
         return failFromHook(
           postHook.error,
           plan.fallback_step,
@@ -655,8 +652,12 @@ export class RuntimeLLMProvider {
           plan.context !== 'full_context' ||
           searchDegraded,
         ...(searchDegraded ? { tool_search_degraded: true as const, ...(searchRejection ? { tool_search_rejection: searchRejection } : {}) } : {}),
-        usage: { ...usage, ...addTokens(usage, spent) },
-        attempts,
+        usage: { ...usage, ...addTokens(usage, spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS) },
+        attempts: attempts.map((attempt) => {
+          if (attempt.outcome !== 'failure' || !attempt.spent || attempt.billed_model !== undefined || attempt.model !== plan.step.model || attempt.provider !== plan.step.provider) return attempt;
+          const { spent: _counted, ...rest } = attempt;
+          return rest;
+        }),
         routing_logs: routingLogs,
       };
     }
@@ -1354,6 +1355,13 @@ function failFromHook(
   return failure;
 }
 
+const tokensOf = (response: LLMResponse): SpentTokens => ({
+  input_tokens: response.input_tokens,
+  output_tokens: response.output_tokens,
+  cache_read_input_tokens: response.cache_read_input_tokens,
+  ...(response.cache_write_input_tokens ? { cache_write_input_tokens: response.cache_write_input_tokens } : {}),
+});
+
 function usageFromResponse(response: LLMResponse): LLMUsage {
   return {
     model: response.model,
@@ -1364,6 +1372,8 @@ function usageFromResponse(response: LLMResponse): LLMUsage {
     latency_ms: response.latency_ms,
   };
 }
+
+const NO_TOKENS: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
 
 function addTokens(a: SpentTokens, b: SpentTokens): SpentTokens {
   const written = (a.cache_write_input_tokens ?? 0) + (b.cache_write_input_tokens ?? 0);

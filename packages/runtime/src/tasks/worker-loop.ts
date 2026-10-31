@@ -3,6 +3,7 @@ import {
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
 import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
+import { billedAttemptEntries } from '../channels/billed-attempts';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
@@ -44,7 +45,8 @@ export type TaskBrainPort = Readonly<{
 
 // A model step for one task round: the job's system prompt and brief, the profile's tools and the turns so far.
 export type TaskModel = (input: Readonly<{ ticket: TaskTicket; claim: TaskClaim; system: string; content: string; tools: readonly LLMTool[] | undefined; turns: readonly LLMToolTurn[]; canaries: readonly string[] }>)
-  => Promise<Readonly<{ response: Awaited<ReturnType<ToolLoopStep>>; event: TurnLogEntry }>>;
+  // billed: usage lines of failed attempts a provider still billed before the answer, each at its own model.
+  => Promise<Readonly<{ response: Awaited<ReturnType<ToolLoopStep>>; event: TurnLogEntry; billed?: readonly TurnLogEntry[] }>>;
 
 // The worker's provider breaker: the owner's breaker as each claim brings it, and every success and failure recorded since,
 // kept in order for the brain to replay into the owner's breaker with the next checkpoint or report.
@@ -58,8 +60,8 @@ export class TaskBreaker implements CircuitBreaker {
   drain(): ProviderOutcome[] { return this.outcomes.splice(0); }
 }
 
-export class TaskProviderUnavailable extends Error { constructor(readonly event: TurnLogEntry) { super('no model provider answered'); } }
-export class TaskModelFailed extends Error { constructor(readonly code: string, readonly event: TurnLogEntry) { super(`task model call failed: ${code}`); } }
+export class TaskProviderUnavailable extends Error { constructor(readonly event: TurnLogEntry, readonly billed: readonly TurnLogEntry[] = []) { super('no model provider answered'); } }
+export class TaskModelFailed extends Error { constructor(readonly code: string, readonly event: TurnLogEntry, readonly billed: readonly TurnLogEntry[] = []) { super(`task model call failed: ${code}`); } }
 class TaskFenced extends Error { constructor() { super('task attempt fenced'); } }
 // The brain could not be reached. Not the task's failure: the attempt stops, its lease lapses, and the brain resumes it.
 class TaskBrainLost extends Error { constructor(cause: unknown) { super('task brain unreachable', { cause }); } }
@@ -150,6 +152,9 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
   let seq = claim.seq;
   let finished: TaskResult | undefined;
   let exit: LoopExit = 'completed';
+  const costOf = (entries: readonly TurnLogEntry[]) => entries.reduce((sum, entry) => sum + (entry.usage ? modelCost(entry.usage)?.total ?? 0 : 0), 0);
+  // Failed attempts a provider billed are worker spend too: they reach the brain's log and the owner's spend ceiling.
+  const bill = (entries: readonly TurnLogEntry[]) => { events.push(...entries); spend = { ...spend, costUsd: spend.costUsd + costOf(entries) }; };
   const flush = () => { const sent = { events: events.splice(0), spend, outcomes: deps.health?.drain() ?? [] }; spend = { rounds: 0, costUsd: 0 }; return sent; };
   const report = async (outcome: TaskOutcome): Promise<'reported' | 'fenced' | 'lost'> => {
     const { events: sent, spend: spent, outcomes } = flush();
@@ -191,9 +196,9 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
         try { step = await deps.model({ ticket, claim, system: TASK_WORKER_SYSTEM_PROMPT, content, tools, turns, canaries }); }
         finally { clearInterval(beat); }
         if (fenced) throw new TaskFenced();
-        const { response, event } = step;
-        events.push(event);
-        spend = { rounds: spend.rounds + 1, costUsd: spend.costUsd + (event.usage ? modelCost(event.usage)?.total ?? 0 : 0) };
+        const { response, event, billed = [] } = step;
+        bill([event, ...billed]);
+        spend = { ...spend, rounds: spend.rounds + 1 };
         return response;
       },
       onSettle: (settled) => { exit = settled; },
@@ -209,8 +214,8 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     if (error instanceof TaskFenced) return 'fenced';
     if (error instanceof TaskBrainLost) return 'lost';
     if (error instanceof TaskSliceEnded) return 'continue';
-    if (error instanceof TaskProviderUnavailable) { events.push(error.event); return report({ kind: 'unavailable' }); }
-    if (error instanceof TaskModelFailed) { events.push(error.event); return report({ kind: 'failed', code: error.code }); }
+    if (error instanceof TaskProviderUnavailable) { bill([error.event, ...error.billed]); return report({ kind: 'unavailable' }); }
+    if (error instanceof TaskModelFailed) { bill([error.event, ...error.billed]); return report({ kind: 'failed', code: error.code }); }
     return report({ kind: 'failed', code: 'worker_error' });
   }
 }
@@ -237,17 +242,19 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
       },
     }, { authenticatedUserId: claim.ownerRef, trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external', hasApproval: () => false, sanitise });
     const served = result.attempts.at(-1);
+    const billed = billedAttemptEntries(result.attempts, { trace: `task:${ticket.jobId}:${ticket.attempt}`, hop: 'llm_task_attempt', job_id: ticket.jobId, job_profile: claim.profile, cost_kind: 'worker' });
     const base: TurnLogEntry = {
       trace: `task:${ticket.jobId}:${ticket.attempt}`, hop: 'llm_task', ms: Date.now() - started, ok: result.ok, job_id: ticket.jobId, job_profile: claim.profile, cost_kind: 'worker',
       ...(served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {}),
     };
     if (!result.ok) {
       const event: TurnLogEntry = { ...base, code: result.reason, error_code: result.code };
-      if (result.reason === 'template_unavailable' || result.reason === 'gateway_exhausted') throw new TaskProviderUnavailable(event);
-      throw new TaskModelFailed(result.code, event);
+      if (result.reason === 'template_unavailable' || result.reason === 'gateway_exhausted') throw new TaskProviderUnavailable(event, billed);
+      throw new TaskModelFailed(result.code, event, billed);
     }
     return {
       response: result.response,
+      ...(billed.length ? { billed } : {}),
       event: { ...base, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}), web_searches: 0 } },
     };
   };

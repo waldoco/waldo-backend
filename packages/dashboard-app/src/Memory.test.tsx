@@ -22,6 +22,15 @@ describe('modern Memory presentation',()=>{
   expect(spot).toContain('Back to patterns');
   expect(detail).toContain('explore=1&amp;returnView=spots&amp;returnCursor=saved-page');
  });
+ it('shows a pattern resting on a replaced or dismissed note as incomplete, to correct or forget, never to confirm',()=>{
+  const raw=response('view=detail&id=synthetic-owner:node:1') as {item:{support:Record<string,unknown>}};
+  const incomplete={...raw,item:{...raw.item,support:{...raw.item.support,state:'incomplete',unavailable_count:1}},support_unavailable_count:1};
+  const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(incomplete) as MemoryDetail}/>);
+  expect(detail).toContain('Incomplete · Waldo’s read · from Gmail, Calendar');
+  expect(detail).toContain('Correct it in your words or forget it below.');
+  expect(detail).not.toContain('until you confirm it below');
+  expect(()=>readMemory({...raw,item:{...raw.item,support:{...raw.item.support,state:'invalid'}}})).toThrow();
+ });
  it('renders invalid Memory selectors as recovery without action controls or network requests',()=>{
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);vi.stubGlobal('window',{location:{hash:'#/memory/spots?id=1&owner=other'}});
   const html=renderToStaticMarkup(<MemoryPanel subview="spots"/>);
