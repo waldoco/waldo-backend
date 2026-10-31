@@ -64,6 +64,8 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
 import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
+import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, reconcileAgentMailRules } from './agent-mail/rules';
+import { agentMailDirectory } from './agent-mail/handles';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
@@ -2767,6 +2769,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await lane('whatsapp', () => this.recoverWhatsappPending());
     // Before any surface is chosen: mail that cannot run for want of one still expires.
     await lane('mail', async () => this.expireAgentMail());
+    await lane('mail', () => this.reconcileAgentMailRules());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
     const entered = await this.serialWithin(alarmEnd, async () => {
@@ -2998,6 +3001,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private expireAgentMail(): void {
     if (this.ctx.storage.kv.get(AGENT_MAIL_DUE_KEY) == null) return;
     for (let expired = agentMailInbox(this.ctx.storage).expire(); expired > 0; expired--) console.log(JSON.stringify({ hop: 'agent_mail_turn', code: 'expired' }));
+  }
+  // The Email Routing rules of this owner's handles: nothing is called while agent mail is off or its rule API unconfigured.
+  private async reconcileAgentMailRules(): Promise<void> {
+    const kv = this.ctx.storage.kv, due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY), doName = kv.get<string>('do_name');
+    if (due == null || due > Date.now()) return;
+    const setup = agentMailRouting(this.env), directory = doName === undefined ? null : agentMailDirectory(this.env, doName);
+    if (!setup || !directory) { kv.delete(AGENT_MAIL_RULE_DUE_KEY); return; }
+    await reconcileAgentMailRules({ kv, setup, directory, now: Date.now,
+      log: (code, cloudflare = []) => console.log(JSON.stringify({ hop: 'agent_mail_rule', code, ...(cloudflare.length ? { cloudflare } : {}) })) });
+    await this.rearmEveryWake();
   }
   // Mail turns run as the owner's job on the surface that takes their proactive work, as Mac reports do, and only while the
   // handle still routes here: a handle released after its mail arrived closes that mail unread.

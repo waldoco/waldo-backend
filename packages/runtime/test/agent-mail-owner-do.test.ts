@@ -7,6 +7,8 @@ import { AGENT_MAIL_DAILY_TURNS, AGENT_MAIL_DUE_KEY, AGENT_MAIL_HOLD_MS, agentMa
 import { READ_BODY_BUDGET } from '../src/tools/live/google';
 import { AGENT_MAIL_TURN_TOOLS, AGENT_MAIL_UNFINISHED } from '../src/channels/agent-mail/turn';
 import { presenceAuthority } from './helpers/directory-presence';
+import { agentMailDirectory, claimAgentMailHandle } from '../src/channels/agent-mail/handles';
+import { AGENT_MAIL_RULE_DUE_KEY, intendAgentMailRule } from '../src/channels/agent-mail/rules';
 
 // Mail to an owner's Waldo address, from the Worker's email handler through the owner's object to the alarm's turn. The
 // message is a real stream and real Headers, as the platform hands them over; the owner object is the pool's real one.
@@ -148,6 +150,28 @@ describe('agent mail inbound', () => {
     vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
     await expect(receiveAgentMail(platformMessage({}), mailEnv() as never)).rejects.toThrow('agent mail directory unavailable');
     expect(logs).toEqual([JSON.stringify({ hop: 'agent_mail_inbound', code: 'unavailable' })]);
+  });
+
+  it('email() throws only while a message could not be recorded, and accepts and drops everything else', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const email = (inbound: ReturnType<typeof platformMessage>, mailEnvironment: object) => worker.email!(inbound as unknown as ForwardableEmailMessage, mailEnvironment as never);
+    const refused: ReturnType<typeof platformMessage>[] = [];
+    const ownerDown = { ...mailEnv(), OWNER_DO: { idFromName: () => 'owner-id', get: () => ({ admitAgentMail: async () => { throw new Error('owner object reset'); } }) } };
+    const unreadable = { ...platformMessage({}), raw: new ReadableStream({ pull() { throw new Error('stream reset'); } }) };
+    for (const [inbound, environment, reason] of [[unreadable, mailEnv(), 'agent mail body unreadable'], [platformMessage({}), ownerDown, 'agent mail owner unavailable']] as const) {
+      await expect(email(inbound, environment)).rejects.toThrow(reason);
+      refused.push(inbound);
+    }
+    vi.stubGlobal('fetch', async () => new Response('down', { status: 503 }));
+    const directoryDown = platformMessage({});
+    await expect(email(directoryDown, mailEnv())).rejects.toThrow('agent mail directory unavailable');
+    refused.push(directoryDown);
+    const huge = { ...platformMessage({}), rawSize: 25 * 1024 * 1024 + 1 };
+    for (const [inbound, environment] of [[platformMessage({}), mailEnv('0')], [platformMessage({}, 'priya@other.test.invalid'), mailEnv()], [huge, mailEnv()]] as const) {
+      await expect(email(inbound, environment)).resolves.toBeUndefined();
+      refused.push(inbound);
+    }
+    for (const inbound of refused) for (const action of Object.values(inbound.actions)) expect(action).not.toHaveBeenCalled();
   });
 
   it('a forged owner From stays external, and a change it asks for becomes a card', async () => {
@@ -393,5 +417,58 @@ describe('agent mail inbound', () => {
       expect(codes).toEqual(['admitted', 'duplicate', 'cold_dropped', 'replied']);
       expect(proof.requests.some(request => request.includes('CANARY-BODY'))).toBe(true);
     }, { LANGFUSE_CAPTURE_TEXT: captureText });
+  });
+});
+
+describe('agent mail routing rule lane', () => {
+  const TOKEN = 'cf-routing-token-canary-41b7';
+  const ruleEnv = (flag: string) => ({ AGENT_MAIL_INBOUND: flag, AGENT_MAIL_ZONE_ID: '0123456789abcdef0123456789abcdef', CLOUDFLARE_EMAIL_ROUTING_TOKEN: TOKEN, WALDO_ENVIRONMENT: 'staging' });
+  // The directory's handle row and Cloudflare's rule list, behind the global fetch the owner object uses.
+  const rulesWorld = () => {
+    const world = { state: null as string | null, rules: [] as { id: string; name: string; matchers: unknown[]; actions: unknown[] }[], cloudflare: 0 };
+    const directoryFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.startsWith('https://api.cloudflare.com/')) {
+        world.cloudflare++;
+        if ((init?.method ?? 'GET') === 'POST') world.rules.push({ id: `r${world.rules.length + 1}`, ...JSON.parse(String(init?.body)) as { name: string; matchers: unknown[]; actions: unknown[] } });
+        return Response.json({ success: true, errors: [], messages: [], result: world.rules, result_info: { page: 1, per_page: 50, count: world.rules.length, total_count: world.rules.length, total_pages: 1 } });
+      }
+      const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
+      if (fn === 'claim_agent_mail_handle') { world.state = 'pending'; return Response.json('claimed'); }
+      if (fn === 'agent_mail_handle') return Response.json(world.state ? [{ handle: 'priya', rule_state: world.state }] : []);
+      if (fn === 'settle_agent_mail_rule') { const { p_state } = JSON.parse(String(init?.body)) as { p_state: string }; world.state = p_state; return Response.json(true); }
+      if (fn === 'agent_mail_held_handles') return Response.json([]);
+      return directoryFetch(input, init);
+    });
+    return world;
+  };
+
+  it('the alarm creates the claimed handle\'s rule and reports it live, without the token reaching logs or storage', async () => {
+    await withOwner(async ({ state, passes }) => {
+      const world = rulesWorld();
+      const logs: string[] = [];
+      vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+      expect(await claimAgentMailHandle(state.storage.kv, agentMailDirectory({ ...env, ...directory }, doName)!, 'priya')).toBe('claimed');
+      await passes(1);
+      expect(world.rules).toEqual([{ id: 'r1', name: 'waldo-staging-mail:priya', enabled: true,
+        matchers: [{ type: 'literal', field: 'to', value: `priya@${DOMAIN}` }], actions: [{ type: 'worker', value: ['waldo-runtime-staging'] }] }]);
+      expect(world.state).toBe('live');
+      expect(logs.filter(line => line.includes('agent_mail_rule'))).toEqual([JSON.stringify({ hop: 'agent_mail_rule', code: 'live' })]);
+      expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
+      expect(JSON.stringify(logs) + await everythingStored(state)).not.toContain(TOKEN);
+    }, ruleEnv('1'));
+  });
+
+  it('with agent mail off the alarm makes no Cloudflare call and stops waking for the rule', async () => {
+    await withOwner(async ({ state, passes }) => {
+      const world = rulesWorld();
+      world.state = 'pending';
+      intendAgentMailRule(state.storage.kv, 'priya', Date.now());
+      await passes(2);
+      expect(world.cloudflare).toBe(0);
+      expect(world.state).toBe('pending');
+      expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
+    }, ruleEnv('0'));
   });
 });

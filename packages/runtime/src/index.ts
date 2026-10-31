@@ -85,6 +85,8 @@ declare global {
       WALDO_RELEASE?: string;
       AGENT_MAIL_INBOUND?: string;
       AGENT_MAIL_DOMAIN?: string;
+      AGENT_MAIL_ZONE_ID?: string;
+      CLOUDFLARE_EMAIL_ROUTING_TOKEN?: string;
       LANGFUSE_PUBLIC_KEY?: string;
       LANGFUSE_SECRET_KEY?: string;
       LANGFUSE_BASE_URL?: string;
@@ -222,8 +224,8 @@ const worker = {
       },
     });
   },
-  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It never calls setReject: a reject bounces
-  // to the sender, which for forged mail is backscatter.
+  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It throws only while the message could
+  // not be recorded (receiveAgentMail's failure policy), and never calls setReject: a bounce to a forged sender is backscatter.
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
     await receiveAgentMail(message, env);
   },
