@@ -8,7 +8,11 @@ import { checkedGranola, type GranolaNotes } from './event-briefs';
 // description, which someone else may have written, to the reviewed Granola server only, through its read path.
 export const GRANOLA_PREP_TOOL = 'query_granola_meetings';
 const ATTENDEES = 10;
+// An address is someone else's chosen text even when it is valid, so it is held to the longest an address can be.
+const ADDRESS_CHARS = 254;
 const ADDRESS = /^[^\s@{}()"<>,;]+@[^\s@{}()"<>,;]+\.[^\s@{}()"<>,;]+$/;
+// Prep reads this much of Granola's answer, so the mail findings after it in the prompt keep their room.
+export const GRANOLA_ANSWER_CHARS = 16_384;
 
 export type GranolaSkip = 'not_connected' | 'not_reviewed' | 'reauth_needed' | 'no_attendees' | 'schema_unexpected' | 'read_failed' | 'empty';
 export type GranolaRead = Readonly<{ status: 'read'; text: string }> | Readonly<{ status: 'skipped'; code: GranolaSkip }>;
@@ -43,7 +47,7 @@ export const prepGranola = async (deps: PrepGranolaDeps, event: CalendarItem, ow
   if (!connection) return skipped('not_connected');
   if (!isReviewedGranola(connection.server_url, connection.issuer)) return skipped('not_reviewed');
   if (connection.status !== 'active') return skipped('reauth_needed');
-  const people = [...new Set((event.attendee_emails ?? []).map(email => email.toLowerCase()).filter(email => ADDRESS.test(email) && email !== owner?.toLowerCase()))];
+  const people = [...new Set((event.attendee_emails ?? []).map(email => email.toLowerCase()).filter(email => email.length <= ADDRESS_CHARS && ADDRESS.test(email) && email !== owner?.toLowerCase()))];
   if (!people.length) return skipped('no_attendees');
   try {
     const argument = questionArgument((await deps.describe(connection.name, GRANOLA_PREP_TOOL)).def);
@@ -51,7 +55,8 @@ export const prepGranola = async (deps: PrepGranolaDeps, event: CalendarItem, ow
     const answer = await deps.invoke({ server: connection.name, tool: GRANOLA_PREP_TOOL, args: { [argument]: granolaQuestion(people) }, mode: 'read' });
     if (!('result' in answer)) return skipped('read_failed');
     const text = answerText(answer.result);
-    return text ? { status: 'read', text } : skipped('empty');
+    if (!text) return skipped('empty');
+    return { status: 'read', text: text.length > GRANOLA_ANSWER_CHARS ? `${text.slice(0, GRANOLA_ANSWER_CHARS)}\n[Granola's answer continues; prep read only this much of it.]` : text };
   } catch {
     // A read that fails leaves the brief to its other sources; the caller logs the code.
     return skipped('read_failed');
