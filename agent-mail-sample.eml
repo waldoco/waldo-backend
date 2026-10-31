@@ -67,8 +67,8 @@ adding=3D"0" cellspacing=3D"0" border=3D"0"><tr><td style=3D"vertical-align=
 =3D"28" alt=3D"Waldo" style=3D"display:block;border:0;outline:none"></td><t=
 d style=3D"vertical-align:middle;padding:0 0 0 10px;font-family:ui-rounded,=
 'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helveti=
-ca,Arial,sans-serif;font-size:18px;font-weight:600;color:#1A1A1A">Waldo</td=
-></tr></table></td></tr>
+ca,Arial,sans-serif;font-size:18px;font-weight:bold;color:#1A1A1A">Waldo</t=
+d></tr></table></td></tr>
 <tr><td style=3D"background-color:#FFFFFF;border:1px solid #EDEDED;border-r=
 adius:16px;padding:28px;font-family:ui-rounded,'SF Pro Rounded',-apple-syst=
 em,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-siz=
@@ -90,22 +90,22 @@ with the new tiers</li><li style=3D"margin:0 0 6px 0">Next steps and owners=
 <table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" border=3D"=
 0" style=3D"border-collapse:collapse;margin:0 0 16px 0;font-size:14px;line-=
 height:1.45"><tr><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-=
-bottom:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:600=
-">Slot</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom=
-:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:600">Room=
-</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px s=
-olid #EDEDED;text-align:left;vertical-align:top;font-weight:600">Seats</th>=
-</tr><tr><td align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1=
-px solid #EDEDED;text-align:left;vertical-align:top">Fri 15:00</td><td alig=
-n=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDED;=
-text-align:left;vertical-align:top">Juniper</td><td align=3D"left" style=3D=
-"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDED;text-align:left;ver=
-tical-align:top">6</td></tr><tr><td align=3D"left" style=3D"padding:6px 12p=
-x 6px 0;border-bottom:1px solid #EDEDED;text-align:left;vertical-align:top"=
->Fri 16:00</td><td align=3D"left" style=3D"padding:6px 12px 6px 0;border-bo=
-ttom:1px solid #EDEDED;text-align:left;vertical-align:top">Cedar</td><td al=
-ign=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDE=
-D;text-align:left;vertical-align:top">4</td></tr></table>
+bottom:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:bol=
+d">Slot</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-botto=
+m:1px solid #EDEDED;text-align:left;vertical-align:top;font-weight:bold">Ro=
+om</th><th align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px=
+ solid #EDEDED;text-align:left;vertical-align:top;font-weight:bold">Seats</=
+th></tr><tr><td align=3D"left" style=3D"padding:6px 12px 6px 0;border-botto=
+m:1px solid #EDEDED;text-align:left;vertical-align:top">Fri 15:00</td><td a=
+lign=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDED=
+ED;text-align:left;vertical-align:top">Juniper</td><td align=3D"left" style=
+=3D"padding:6px 12px 6px 0;border-bottom:1px solid #EDEDED;text-align:left;=
+vertical-align:top">6</td></tr><tr><td align=3D"left" style=3D"padding:6px =
+12px 6px 0;border-bottom:1px solid #EDEDED;text-align:left;vertical-align:t=
+op">Fri 16:00</td><td align=3D"left" style=3D"padding:6px 12px 6px 0;border=
+-bottom:1px solid #EDEDED;text-align:left;vertical-align:top">Cedar</td><td=
+ align=3D"left" style=3D"padding:6px 12px 6px 0;border-bottom:1px solid #ED=
+EDED;text-align:left;vertical-align:top">4</td></tr></table>
 <p style=3D"margin:0 0 16px 0">The notes so far are in <a href=3D"https://d=
 ocs.example.com/review?id=3D42" style=3D"color:#1A1A1A;text-decoration:unde=
 rline;text-decoration-color:#FB943F">the shared doc</a> <span style=3D"colo=
@@ -117,13 +117,13 @@ le.com/e/9</a>.</p>
 <table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" border=3D"=
 0" style=3D"margin:4px 0 8px 0"><tr><td style=3D"background-color:#1A1A1A;b=
 order-radius:12px"><a href=3D"https://cal.example.com/accept/9" style=3D"di=
-splay:inline-block;padding:12px 20px;color:#FAFAF8;font-weight:600;text-dec=
-oration:none">Accept the new time</a></td></tr></table><p style=3D"margin:0=
- 0 16px 0;font-size:13px;color:#6B6B68;word-break:break-all">https://cal.ex=
-ample.com/accept/9</p><p style=3D"margin:8px 0 0 0;padding:16px 0 0 0;borde=
-r-top:1px solid #EDEDED;font-size:13px;line-height:1.5;color:#6B6B68"><stro=
-ng style=3D"color:#1A1A1A">Waldo</strong><br>Priya's assistant<br>priya@mai=
-l.heywaldo.in</p>
+splay:inline-block;padding:12px 20px;color:#FAFAF8;font-weight:bold;text-de=
+coration:none">Accept the new time</a></td></tr></table><p style=3D"margin:=
+0 0 16px 0;font-size:13px;color:#6B6B68;word-break:break-all">https://cal.e=
+xample.com/accept/9</p><p style=3D"margin:8px 0 0 0;padding:16px 0 0 0;bord=
+er-top:1px solid #EDEDED;font-size:13px;line-height:1.5;color:#6B6B68"><str=
+ong style=3D"color:#1A1A1A">Waldo</strong><br>Priya's assistant<br>priya@ma=
+il.heywaldo.in</p>
 </td></tr>
 </table>
 </td></tr></table>
