@@ -244,6 +244,7 @@ describe('hook registry', () => {
         'search_connector',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
       canary_tokens: validCanaries,
       iteration_count: 0,
