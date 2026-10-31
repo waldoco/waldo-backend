@@ -4941,7 +4941,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               log({ trace, hop: 'machine_check', ms: 0, ok: true, code, detail: id });
               if (decided) log({ trace: id, hop: 'machine_turn', ms: Date.now() - started, ok: code !== 'malformed_reply', code, detail: 'calendar_prep' });
             },
-            dayChangedSince: (at, event) => updates.changedSince(at, localIso(Date.now(), timezone).slice(0, 10), timezone,
+            dayChangedSince: (at, event) => updates.changedSince(at, localIso(Date.parse(event.start), timezone).slice(0, 10), timezone,
               (event.attendee_emails ?? []).filter(email => email.toLowerCase() !== client.account?.email?.toLowerCase())),
             decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
             enqueue: prepEnqueue(connectionId, timezone, current),
@@ -5141,9 +5141,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
       if (record.mailFollowup) loops.settleReview(record);
-      // A prep note that reached the app raises its own push; elsewhere the message itself is the notification.
-      if (record.calendarPrep && delivered && channel === 'app') await push('prep', undefined, prepPushBody({ title: record.calendarPrep.title, start: record.calendarPrep.start,
-        timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' }));
+      // A prep note that reached the app raises its own push; elsewhere the message itself is the notification. The push runs
+      // beside the drain, so the record is marked settled without waiting on Expo and a restart does not push it again.
+      if (record.calendarPrep && delivered && channel === 'app') this.ctx.waitUntil(push('prep', undefined, prepPushBody({ title: record.calendarPrep.title, start: record.calendarPrep.start,
+        timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' })));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
         if (delivered) updates.pushed(record.update.recordId, record.payload.text, Date.now());

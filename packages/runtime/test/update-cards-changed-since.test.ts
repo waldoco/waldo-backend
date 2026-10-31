@@ -17,6 +17,9 @@ it.each([
   { name: 'nothing recorded after the judgment', rows: [[AT - 1, [mail('Asha <asha@example.test>')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: false },
   { name: 'mail from an attendee', rows: [[AT + 1, [mail('Asha <ASHA@example.test>')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: true },
   { name: 'mail from someone else', rows: [[AT + 1, [mail('News <news@example.test>')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: false },
+  { name: 'a bare address from an attendee', rows: [[AT + 1, [mail('asha@example.test')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: true },
+  { name: 'an address that only contains an attendee\'s', rows: [[AT + 1, [mail('Masha <masha@example.test>')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: false },
+  { name: 'a look-alike domain', rows: [[AT + 1, [mail('Asha <asha@example.test.evil.net>')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: false },
   { name: 'a calendar change on another day', rows: [[AT + 1, [calendar('2026-10-05T04:30:00Z', '2026-10-05T05:00:00Z')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: false },
   { name: 'a calendar change touching today', rows: [[AT + 1, [calendar('2026-10-03T08:00:00Z', '2026-10-03T08:30:00Z')]]], day: '2026-10-03', zone: 'Asia/Kolkata', expected: true },
   // The 25-hour fall-back day in New York: 23:30 local is 04:30Z the next UTC day, and still that local day.

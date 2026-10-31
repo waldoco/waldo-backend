@@ -229,6 +229,49 @@ describe('applying a prep job', () => {
     });
   });
 
+  // Google maps a decline, a tentative and an unanswered invite alike: no owner_status.
+  it.each(['declined', 'left tentative or unanswered'])('a meeting the owner %s after the job was written gets no decision and no note', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, FOUND);
+      const { owner_status: _accepted, ...unanswered } = h.event;
+      h.latest.event = unanswered;
+      const a = applying(h);
+      await a.lane();
+      expect(a.decided).toEqual([]);
+      expect(a.delivered).toEqual([]);
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
+      expect(h.briefed()).toEqual([]);
+      expect(h.book.get(job.id)!.status).not.toBe('reported');
+    });
+  });
+
+  it('a meeting the owner declines while the decision runs gets no note, and nothing is recorded', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const { owner_status: _accepted, ...declined } = h.event;
+      const a = applyingWith(h, { decide: async () => { h.latest.event = declined; return JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }); } });
+      await a.lane();
+      expect(a.delivered).toEqual([]);
+      expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
+      expect(h.briefed()).toEqual([]);
+    });
+  });
+
+  it('a meeting still accepted, or organized by the owner, keeps its note when attendees change', async () => {
+    for (const status of ['accepted', 'organizer'] as const) {
+      await withPrep(event => ({ ...event, owner_status: status }), async (h) => {
+        await h.sweep();
+        report(h, FOUND);
+        h.latest.event = { ...h.event, attendee_emails: [...(h.event.attendee_emails ?? []), 'ben@example.test'] };
+        const a = applying(h);
+        await a.lane();
+        expect(a.delivered, status).toHaveLength(1);
+      });
+    }
+  });
+
   it('quiet hours by apply time: no decision', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();

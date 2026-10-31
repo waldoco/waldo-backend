@@ -94,6 +94,9 @@ it.each([
       state.storage.kv.put('owner_alarm_last_v1', 0);
       await owner.alarm();
       expect(prep()[0]?.status).toBe('delivered');
+      expect(prep()[0]?.settled).toBe(true);
+      // The push runs beside the drain, so it may land after the alarm returns.
+      await vi.waitFor(() => expect(wire.pushes).toHaveLength(1));
       expect(wire.pushes).toEqual([{ body, data: { trigger: 'pre_activity_spot' } }]);
       expect(JSON.stringify(wire.pushes)).not.toContain('pat@example.test');
       expect(JSON.stringify(wire.pushes)).not.toContain('onboarding mocks');
