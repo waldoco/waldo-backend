@@ -139,7 +139,7 @@ import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
-import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, type PrepGate } from './event-briefs';
+import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
@@ -4857,17 +4857,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const check = () => {
         const doName = identity.get<string>('do_name');
         const currentAccounts = storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [];
-        // Prep goes to the owner bound on this channel: the Telegram subject on this bot, or this owner's own app binding.
+        // Prep goes to the owner bound on this channel: the Telegram subject on this bot, this owner's own app binding, or the
+        // WhatsApp or iMessage subject this runtime was built for.
         const bound = channel === 'telegram' ? identity.get<string>('telegram_subject') === String(owner) && this.env.TELEGRAM_BOT_TOKEN === token
-          : channel === 'app' && !!doName && identity.get<string>('app_subject') === String(owner) && String(owner) === String(appSubjectFor(doName));
+          : channel === 'app' ? !!doName && identity.get<string>('app_subject') === String(owner) && String(owner) === String(appSubjectFor(doName))
+          : identity.get<string>(`${channel}_subject`) === String(owner);
         if (!bound || !doName || owner <= 0 || identity.get<boolean>(`${channel}_unlinked`) === true || timezone !== clock.timezone
           || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()
           || !currentAccounts.some(account => account.id === connectionId && googleHas(account.scopes, 'calendar'))) throw new Error('calendar prep authority changed');
         return doName;
       };
       const doName = check();
-      // The app has no presence check: the alarm admitted the owner through the directory, and the app delivery asks it again.
-      const present = channel === 'telegram' ? presenceRecheck(consoleAuth(this.env), doName, 'telegram', String(owner)) : null;
+      // The app and iMessage have no presence check here: the alarm admitted the owner through the directory, and their delivery
+      // asks it again.
+      const present = channel === 'telegram' || channel === 'whatsapp' ? presenceRecheck(consoleAuth(this.env), doName, channel, String(owner)) : null;
       if (present && !(await present())) throw new Error('calendar prep presence revoked');
       check();
     };
@@ -4893,10 +4896,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gmail: { book: gmailPushBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
-    // A pre-activity admission that lets a note out on this owner's chat surface.
+    // A pre-activity admission that lets a note out on this owner's surface: the app's feed, or the chat channel that Telegram,
+    // WhatsApp and iMessage share in the policy table.
     const prepAdmitted = (admission: ReturnType<typeof computeAdmission>) => ['send', 'degrade'].includes(admission.verdict) && admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram');
-    // Whether a prep note for this occurrence could go out now: not in quiet hours, and admitted by the owner's pre-activity
-    // budget. Advisory: the commit that queues the note runs the authoritative admission.
+    // Whether a prep note for this occurrence could go out now: not in quiet hours, and admitted by the delivery policy.
+    // Advisory: the commit that queues the note runs the authoritative admission.
     const prepGate = async (connectionId: string, occurrence: string, start: number, timezone: string): Promise<PrepGate | null> => {
       if (quiet()) return 'held_quiet';
       const now = Date.now();
@@ -4939,23 +4943,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT)),
       enqueue: (id, text, receipt, commit) => prepEnqueue(receipt.connectionId, clock.timezone, () => calendarOwnerCurrent(receipt.connectionId, clock.timezone))(id, text, receipt, commit),
     });
+    // A pass closes its trace with a machine_turn root that carries why it ended, so every send or skip reaches the exporter;
+    // each event the model was asked about closes its own trace the same way.
     const briefs = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
-      try {
+      const sweep = async (): Promise<string> => {
         if (proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) {
-          // Meeting prep goes to Telegram or the app; another surface still gets its update cards and mail follow-ups.
-          if (channel !== 'telegram' && channel !== 'app') return void (await updateCheck(`update:${entry.occurrence_at}`));
-          if (loops.proactivity().volume === 'low') return;
+          if (loops.proactivity().volume === 'low') return 'held_volume';
           const counterHold = calendarCounterHold();
           if (counterHold) {
             log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: `Counter timezone transition held: ${counterHold}.` });
-            return void (await updateCheck(`update:${entry.occurrence_at}`));
+            return 'calendar_counter_cutover_required';
           }
           const client = await google.client('calendar');
           const connectionId = client?.account?.connection_id;
           const timezone = clock.timezone;
-          if (!connectionId) return;
+          if (!connectionId) return 'no_calendar';
           const current = async () => {
             await calendarOwnerCurrent(connectionId, timezone);
             if (!proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity()) || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
@@ -4970,36 +4974,40 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, Date.now()); jobs += 1; }
               return made.code;
             }),
-            checked: (code, id) => log({ trace, hop: 'machine_check', ms: 0, ok: true, code, detail: id }),
+            checked: (code, id, decided) => {
+              log({ trace, hop: 'machine_check', ms: 0, ok: true, code, detail: id });
+              if (decided) log({ trace: id, hop: 'machine_turn', ms: Date.now() - started, ok: code !== 'malformed_reply', code, detail: 'calendar_prep' });
+            },
+            dayChangedSince: (at, event) => updates.changedSince(at, localIso(Date.parse(event.start), timezone).slice(0, 10), timezone,
+              (event.attendee_emails ?? []).filter(email => email.toLowerCase() !== client.account?.email?.toLowerCase())),
             decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
             enqueue: prepEnqueue(connectionId, timezone, current),
           });
           if (jobs) await armTaskJobsWake(storage, Date.now());
           log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; ${jobs} prep jobs written; delivery unconfirmed` });
-          await updateCheck(`update:${entry.occurrence_at}`);
-          return;
+          return queued || jobs ? 'queued' : 'swept';
         }
-        // The legacy sweep sends straight to the chat, with no outbox, cap or cooldown: on the app only grounded prep runs.
-        if (channel !== 'telegram') return void (await updateCheck(`update:${entry.occurrence_at}`));
+        // The legacy sweep sends straight to the chat, with no outbox: on any other surface only grounded prep runs.
+        if (channel !== 'telegram') return 'legacy_surface';
         // An owner who opted out of follow-ups gets no event brief either (the legacy sweep is a proactive send).
-        if (loops.proactivity().followups === false) {
-          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: owner opted out of follow-ups' });
-          return void (await updateCheck(`update:${entry.occurrence_at}`));
-        }
-        if (quiet()) {
-          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
-          return void (await updateCheck(`update:${entry.occurrence_at}`));
-        }
+        if (loops.proactivity().followups === false) return 'held_preference';
+        if (quiet()) return 'held_quiet';
         const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
           const at = Date.now();
           const text = (await responder.prompt(id, owner, said, async (hop, work) => work(), undefined, undefined, undefined, undefined, 'external')).trim();
           if (text) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
           log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
+          log({ trace: id, hop: 'machine_turn', ms: Date.now() - at, ok: true, code: text ? 'sent' : 'no_note', detail: 'event_brief' });
         });
         if (sent) log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${sent} sent` });
-      } catch (error) {
+        return sent ? 'sent' : 'swept';
+      };
+      let code: string, ok = true;
+      try { code = await sweep(); } catch (error) {
+        code = 'failed'; ok = false;
         log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: false, error: String(error) });
       }
+      log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, code, detail: 'brief_sweep' });
       await updateCheck(`update:${entry.occurrence_at}`);
     };
     const sweepSourceFollowups = () => proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
@@ -5170,6 +5178,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
       if (record.mailFollowup) loops.settleReview(record);
+      // A prep note that reached the app raises its own push; elsewhere the message itself is the notification. The push runs
+      // beside the drain, so the record is marked settled without waiting on Expo and a restart does not push it again.
+      if (record.calendarPrep && delivered && channel === 'app') this.ctx.waitUntil(push('prep', undefined, prepPushBody({ title: record.calendarPrep.title, start: record.calendarPrep.start,
+        timezone: record.calendarPrep.timezone, named: this.env.PREP_PUSH_NAMES === '1' })));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
         if (delivered) updates.pushed(record.update.recordId, record.payload.text, Date.now());
