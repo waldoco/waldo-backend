@@ -3736,8 +3736,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await storage.put('google:reauth-noticed', remaining);
         }
         if (!transition.send) return;
-        // A new ticket revokes the owner's open ones, so where no button can carry it nothing is minted.
-        if (nativeSurface(channel) || channel === 'whatsapp') { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
+        // A new ticket revokes the owner's open ones, so where no button can carry it (a surface that declares connect
+        // guidance) nothing is minted.
+        if (connectGuidance[channel] !== undefined) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
