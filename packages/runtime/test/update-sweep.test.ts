@@ -360,7 +360,7 @@ describe('the owner turning the sweep off', () => {
 // update, push with either, or nothing. Code holds the owner's quiet hours and which cards reached them; the model judges
 // what is worth it.
 type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; pushLines: { line: string; mail: readonly string[] }[] }>;
-const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief']): DayApply => {
+const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], surface = 'app'): DayApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, pushLines: DayApply['pushLines'] = [];
   const reply = { text: '{}' }, log: TurnLogEntry[] = [];
   const handler = updateSweepApplier({
@@ -370,7 +370,7 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief']):
     turn: async (trace, text, current) => { await current(); turns.push({ trace, text }); return reply.text; },
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
     dayState: {
-      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card),
+      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), surface,
       pushLine: async (line, mail) => { pushLines.push({ line, mail }); return `checked: ${line}`; }, chose: (_trace, code) => { chose.push(code); },
     },
   });
@@ -463,6 +463,17 @@ describe('applying a sweep job with the day state', () => {
       await a.lane();
       expect([a.effects, a.chose]).toEqual([[], ['say+quiet']]);
       expect(h.updates.unfolded('UTC')).toContain('Quote signed');
+    });
+  });
+
+  it('on a surface that cannot edit a card, the turn is told a revision goes out as a short note', async () => {
+    for (const surface of ['app', 'whatsapp']) await withSweep(async (h) => {
+      h.events.push(MOVED);
+      await h.check();
+      report(h, FOUND);
+      const a = applyingDay(h, ['card:brief'], surface);
+      await a.lane();
+      expect(a.turns[0]!.text.includes('where a card cannot be edited')).toBe(surface !== 'app');
     });
   });
 

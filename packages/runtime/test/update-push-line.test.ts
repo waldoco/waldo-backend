@@ -27,8 +27,9 @@ describe('the update push line', () => {
     expect(check(line)).toBe(PUSHES.update.body);
   });
 
-  it('drops email addresses and cuts a long line', () => {
+  it('drops links and email addresses, and cuts a long line', () => {
     expect(check('Sync with krati@example.com moved to 17:00')).toBe('Sync with moved to 17:00');
+    expect(check('Sync moved to 17:00 https://meet.example/abc?pwd=s3cr3t join www.example.test/x')).toBe('Sync moved to 17:00 join');
     const long = check(`The sync ${'moved again '.repeat(30)}`);
     expect(long.length).toBeLessThanOrEqual(UPDATE_PUSH_CHARS);
   });

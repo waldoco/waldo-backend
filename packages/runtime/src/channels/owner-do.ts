@@ -5098,7 +5098,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       ...(dayState ? { dayState: {
         quiet: () => channel === 'app' && quiet(),
-        cards: dayCards,
+        cards: dayCards, surface: channel,
         delivered: card => plans.reached(today(), card),
         pushLine: async (line, mail) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...mail, await healthLogLines()] }),
         chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),

@@ -93,8 +93,9 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
-// What an update push may say. It may name the change (a meeting's title, its times, its people); it never carries an email
-// address, a health value, or four words in a row from a mail or health line the turn read. Anything else, and every line
+// What an update push may say. It may name the change (a meeting's title, its times, its people); it never carries a link
+// (a meeting link can hold its passcode), an email address, a health value, or four words in a row from a mail or health
+// line the turn read. Anything else, and every line
 // while the owner has not turned named updates on, is the fixed line. A destination rule, so it holds at the send.
 export const UPDATE_PUSH_CHARS = 140;
 const SHARED_WORDS = 4;
@@ -102,7 +103,7 @@ const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filt
 const shingles = (text: string) => { const w = words(text); return w.slice(0, Math.max(0, w.length - SHARED_WORDS + 1)).map((_, i) => w.slice(i, i + SHARED_WORDS).join(' ')); };
 export const updatePushLine = (line: string, rules: Readonly<{ named: boolean; forbidden: readonly string[] }>): string => {
   const fixed = PUSHES.update.body;
-  const plain = line.replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim();
+  const plain = line.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ').replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!rules.named || !plain || numericHealthIn(plain)) return fixed;
   const seen = new Set(rules.forbidden.flatMap(shingles));
   if (shingles(plain).some(shingle => seen.has(shingle))) return fixed;
@@ -158,8 +159,9 @@ export type UpdateSweepApplyDeps = Readonly<{
   dayState?: Readonly<{
     // The owner's quiet hours: a revision still lands, a message and a push do not.
     quiet(): boolean;
-    // Where today's day cards stand, for the turn.
+    // Where today's day cards stand, for the turn, and the surface the owner reads Waldo on.
     cards(): string;
+    surface: string;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
     // The push line as it may go out (updatePushLine), given the mail the turn read.
@@ -194,7 +196,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
         return 'delivered';
       }
       const quiet = day.quiet();
-      const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet });
+      const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, surface: day.surface });
       const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
       const skip = (code: UpdateEffectCode) => { day.chose(io.trace, code); judged(row, io.settle); return 'skipped' as const; };
       if (chosen === 'invalid') return skip('effects_invalid');
