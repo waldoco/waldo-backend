@@ -2,6 +2,7 @@ import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
+import { costRollupDelta } from '../src/observability/cost-rollup';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
@@ -40,6 +41,19 @@ it('the reply call reports what fills its context, and the system sections add u
     expect(sections.clock).toBeUndefined();
     expect(context.context_sections!.clock).toBeGreaterThan(0);
     sectionsAddUp(shape);
+  });
+});
+
+// Only the source pass is background spend: the owner's own reply stays a turn in the cost ledger.
+it('the reply call is ledgered as turn spend', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-turn-cost-kind')), async (_instance, state) => {
+    const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
+    const logged: TurnLogEntry[] = [];
+    const responder = createOwnerResponder('fixture', undefined, store, entry => { logged.push(entry); }, undefined, []);
+    await responder.respond(ownerTyped({ traceId: 'tg-cost-1', conversationRef: 'owner', surface: 'telegram', text: 'what is on today?' }), (_name, work) => work());
+    const replies = logged.filter(entry => entry.hop === 'llm_reply');
+    expect(replies.length).toBeGreaterThan(0);
+    expect(replies.map(entry => costRollupDelta(entry, Date.now())?.kind)).toEqual(replies.map(() => 'turn'));
   });
 });
 

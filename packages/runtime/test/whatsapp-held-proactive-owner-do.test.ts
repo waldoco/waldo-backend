@@ -17,6 +17,7 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
@@ -144,7 +145,7 @@ const owned = async (name: string, script: (steps: Readonly<{
             body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
-          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await drainWhatsAppTurns(owner);
         },
         restart: () => { owner = build(); },
         later: async (ms, step) => {

@@ -164,9 +164,12 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
-    else if (r.signal === 'hrv_window' && hrvMethod(r.method)) { bucket.hrv = r.value; bucket.hrvMethod = hrvMethod(r.method); }
+    else if (r.signal === 'hrv_window' && hrvMethod(r.method)) {
+      const method = hrvMethod(r.method)!;
+      bucket.hrvReadings = [...bucket.hrvReadings.filter(reading => reading.method !== method), { value: r.value, method }];
+    }
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
     else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
