@@ -13,7 +13,7 @@ import { shardOf } from './shard';
 import { selectScenarios } from './subset';
 
 export const LIVE_RUNS = {
-  all: { trials: 3, total_cap: 4_400, shards: 4 },
+  all: { trials: 3, total_cap: 4_600, shards: 4 },
   subset: { trials: 2, total_cap: 600, shards: 1 },
 } as const;
 

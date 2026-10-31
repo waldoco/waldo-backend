@@ -20,7 +20,7 @@ import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore, FORGOTTEN } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
@@ -42,7 +42,8 @@ export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; t
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
-export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts' }>;
+// forgotten: the owner asked to forget this topic, so the claim is gone and the barrier that keeps it from being relearned stays.
+export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts'; forgotten?: string }>;
 // claims: the production memory store and tools. raw_history: no claim store and no memory tools, so the model has only
 // the conversation and search_episodes; the baseline a memory change is compared against.
 export type MemoryMode = 'claims' | 'raw_history';
@@ -63,6 +64,8 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Topics the owner asked to forget whose purge has not settled: claims that carry them stay out of every turn meanwhile.
+  held_topics?: readonly string[];
   // Loops the owner already gave Waldo to stay on, as the loop store holds them.
   loops?: readonly Readonly<{ title: string; due: string | null }>[];
   // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
@@ -268,7 +271,9 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   for (const seeded of seed.memory ?? []) {
     claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
+    if (seeded.forgotten !== undefined) { claims.forget(seeded.id); claims.barrier(seeded.forgotten, start); }
   }
+  for (const topic of seed.held_topics ?? []) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, start);
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   for (const seeded of seed.loops ?? []) loops.open(seeded);
@@ -378,7 +383,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   };
 
   return {
-    clock, conversation, memory, handlers, healthChange,
+    clock, conversation, memory, handlers, healthChange, sql,
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
     ready: Promise.all([mcpReady, chat.seed(conversation)]),
