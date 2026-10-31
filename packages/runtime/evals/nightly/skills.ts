@@ -1,6 +1,7 @@
 // The owner's reviewed skill book in a trial, as the owner object hands one to every turn: the index is in every prompt
 // and any turn, chat or card, may load a skill. The book follows the turn the trial is running, so a selection is that
-// turn's alone.
+// turn's alone. Every step gets the load-only book a machine turn gets; a production chat turn also offers skills_list and the
+// owner's /skills lifecycle commands, which no scenario here exercises.
 import type { OwnerSkillCapability } from '../../src/skills/curated-host';
 import { createJobSkillCapability } from '../../src/skills/curated-host';
 import { localTrustedBriefScheduleInput } from '../../src/llm/run-loop-adapters';
