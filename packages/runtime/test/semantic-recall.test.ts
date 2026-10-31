@@ -10,7 +10,8 @@ import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
 import { WORKERS_AI_BGE_M3_EMBEDDING_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { COST_ROLLUP_KEY, costRollup, type CostRollupRow } from '../src/observability/cost-rollup';
-import { estimatedTokens, fuseRanked, semanticRecall, semanticRecallFromEnv, semanticTraceEntry, workersAiEmbedder, type SemanticEvent, type SemanticRecall } from '../src/memory/semantic-recall';
+import { gateTraceEntry } from '../src/observability/trace-privacy';
+import { EMBED_TIMEOUT_MS, estimatedTokens, fuseRanked, semanticRecall, semanticRecallFromEnv, semanticTraceEntry, SWEEP_RETRY_KEY, SWEEP_RETRY_MS, SWEEP_TIMEOUT_MS, workersAiEmbedder, type SemanticEvent, type SemanticRecall } from '../src/memory/semantic-recall';
 import { fakeEmbeddings, type FakeEmbeddings } from '../src/testing/fake-embeddings';
 
 // Synthetic fixtures only: no owner text, and the one health reading is made up.
@@ -212,11 +213,95 @@ describe('semantic recall read path', () => {
   });
 });
 
-describe('semantic recall cost', () => {
-  const memoryKv = () => {
-    const rows = new Map<string, unknown>();
-    return { rows, get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
+const memoryKv = () => {
+  const rows = new Map<string, unknown>();
+  return { rows, get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
+};
+
+describe('semantic recall sweep after a failure', () => {
+  const START = Date.UTC(2026, 9, 31, 12);
+  // A sweep under test: its embedder gives up after 20 ms, kicks run on a clock the test moves, and each deferred sweep is awaited.
+  const sweeping = (world: World, kv = memoryKv()) => {
+    const clock = { at: START };
+    const events: SemanticEvent[] = [], pending: Promise<unknown>[] = [];
+    const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), sweepEmbedder: workersAiEmbedder(world.ai, 20), kv, now: () => clock.at, defer: (work) => pending.push(work), log: (event) => events.push(event) });
+    const kick = async () => { semantic.kick(); await Promise.all(pending.splice(0)); };
+    return { clock, events, kick, kv };
   };
+  const billed = (events: readonly SemanticEvent[]) => events.filter((event) => event.usage);
+
+  it('a sweep whose embedder hangs is priced once; no kick sends again until the retry time, and then the backlog drains', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST); owned(world.store, GYM);
+      const { clock, events, kick } = sweeping(world);
+      world.ai.hold = new Promise(() => undefined);
+      await kick();
+      expect(world.ai.calls).toBe(1);
+      expect(billed(events)).toEqual([expect.objectContaining({ ok: false, code: 'embed_failed', cost_kind: 'background' })]);
+      for (let kicks = 0; kicks < 3; kicks += 1) await kick();
+      clock.at = START + SWEEP_RETRY_MS - 1;
+      await kick();
+      expect(world.ai.calls).toBe(1);
+      expect(billed(events)).toHaveLength(1);
+      world.ai.hold = undefined;
+      clock.at = START + SWEEP_RETRY_MS;
+      await kick();
+      expect(vectorRows(world.sql).map((row) => row.claim_id)).toEqual([1, 2]);
+      // An answered sweep clears the wait: the next claim is embedded on the next kick.
+      owned(world.store, 'Espresso before ten, never after');
+      await kick();
+      expect(vectorRows(world.sql).map((row) => row.claim_id)).toEqual([1, 2, 3]);
+    });
+  });
+
+  it('the wait is kept in the owner\'s KV, so another runtime of the same owner waits too', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST);
+      const first = sweeping(world);
+      world.ai.fail = true;
+      await first.kick();
+      expect(first.kv.get<number>(SWEEP_RETRY_KEY)).toBe(START + SWEEP_RETRY_MS);
+      world.ai.fail = false;
+      await sweeping(world, first.kv).kick();
+      expect(world.ai.calls).toBe(1);
+      expect(vectorRows(world.sql)).toEqual([]);
+    });
+  });
+
+  it('a query keeps its short wait while the sweep waits longer for the same slow answer', async () => {
+    await inOwner(async ({ sql, store }) => {
+      owned(store, DENTIST);
+      const ai = fakeEmbeddings();
+      const slow = { run: async (...args: Parameters<FakeEmbeddings['run']>) => { await new Promise((resolve) => setTimeout(resolve, EMBED_TIMEOUT_MS + 100)); return ai.run(...args); } };
+      const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: slow }, { sql, transaction: (fn) => fn() })!;
+      const [query, sweep] = await Promise.allSettled([semantic.near('my dentist'), semantic.sync()]);
+      expect(query).toEqual({ status: 'rejected', reason: new Error('embedding timed out') });
+      expect(sweep).toEqual({ status: 'fulfilled', value: { embedded: 1, withheld: 0 } });
+      expect(EMBED_TIMEOUT_MS).toBeLessThan(SWEEP_TIMEOUT_MS);
+    });
+  });
+
+  it('keeps its counts in the trace with text capture off', async () => {
+    await inOwner(async (world) => {
+      owned(world.store, DENTIST); owned(world.store, GYM);
+      const events: SemanticEvent[] = [];
+      const semantic = semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => events.push(event) });
+      await semantic.sync();
+      await semantic.near('my dentist');
+      world.ai.fail = true;
+      await expect(semantic.near('my dentist')).rejects.toThrow();
+      const gated = events.map((event) => gateTraceEntry(semanticTraceEntry(event), false));
+      expect(gated.map((entry) => [entry.hop, entry.ok, entry.code, entry.detail])).toEqual([
+        ['memory_embedding', true, undefined, 'sweep texts=2'],
+        ['memory_embedding', true, undefined, expect.stringMatching(/^query rows=2 scan_ms=\d+$/)],
+        ['memory_embedding', false, 'embed_failed', 'query'],
+      ]);
+      expect(gated.every((entry) => entry.usage !== undefined)).toBe(true);
+    });
+  });
+});
+
+describe('semantic recall cost', () => {
   const priced = (world: World, events: SemanticEvent[]) =>
     semanticRecall({ sql: world.sql, transaction: (fn) => fn(), embedder: workersAiEmbedder(world.ai), log: (event) => events.push(event) });
   const billed = (events: readonly SemanticEvent[]) => events.filter((event) => event.usage);
