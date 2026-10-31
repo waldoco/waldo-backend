@@ -3,13 +3,16 @@ import { pushNotificationSchema, type PushNotification } from '../../../contract
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-// Each push has a fixed line per trigger and the ids the app opens, never health, email content or names. An approval push
-// names the approval it opens, which the caller adds; the text never says what it suggests or why. A prep push may carry a
-// caller's body in place of its fixed line (channels/event-briefs.ts prepPushBody decides what that body may say).
+// Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
+// the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
+// a caller's body in place of its fixed line, which may name a meeting, its times and its people; the caller checks it
+// (channels/event-briefs.ts prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it
+// revised.
 export const PUSHES = {
   brief: { body: 'Your Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
   approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
   prep: { body: 'Waldo has a note before your next meeting', data: { trigger: 'pre_activity_spot' } },
+  update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 export const PUSH_DAILY_LIMIT = 3;
@@ -57,11 +60,12 @@ const unregistered = (ticket: unknown) => {
 // counted before it is sent, so an unknown outcome never lets a retry pass the limit. Failures are logged as a code and
 // never thrown, so the work that triggered the push is not affected. The last slot of the day is the Brief's: approval pushes
 // stop one short of the limit until the Brief has been pushed that day. The send and the read of its receipt are bounded.
-export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string, prepBody?: string): Promise<void> => {
+export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string, checkedBody?: string, cardRef?: string): Promise<void> => {
   if (!deps.accessToken) return deps.log('not_configured', 0);
   const { data: fixed } = PUSHES[kind];
-  const body = kind === 'prep' && prepBody ? prepBody : PUSHES[kind].body;
-  const data = pushNotificationSchema.safeParse({ ...fixed, ...(approvalId === undefined ? {} : { approval_id: approvalId }) });
+  const body = (kind === 'prep' || kind === 'update') && checkedBody ? checkedBody : PUSHES[kind].body;
+  const data = pushNotificationSchema.safeParse({ ...fixed, ...(approvalId === undefined ? {} : { approval_id: approvalId }),
+    ...(kind === 'update' && cardRef !== undefined ? { card_ref: cardRef } : {}) });
   if (!data.success) return deps.log('invalid_payload', 0);
   if (deps.quiet()) return deps.log('quiet', 0);
   const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : PROACTIVE_BUDGET_KEY;
