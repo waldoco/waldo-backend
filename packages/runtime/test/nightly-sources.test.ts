@@ -258,6 +258,23 @@ describe('the pass on its own', () => {
     });
   });
 
+  // Rows a forget still holds are skipped without a call, and the mark moves past them under the same rule.
+  it('a pass whose rows a forget holds moves the mark only from where it read it', async () => {
+    await withStorage('nightly-sources-held-race', async (state) => {
+      const book = updateBook(state.storage.sql);
+      book.record('2026-10-12', NOW - HOUR, [meeting], null);
+      // A forget of the topic is still unfinished.
+      claimStore(state.storage.sql);
+      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES ('fp-design-review', 'design review', ?, 'everywhere')", new Date(NOW - DAY).toISOString());
+      const asked: string[] = [];
+      // Another pass commits between this pass's read of the mark and its move of it.
+      const updates = { ...book, recordedAfter: (after: number, limit: number) => { const rows = book.recordedAfter(after, limit); state.storage.kv.put(NIGHTLY_SOURCES_THROUGH_KEY, NOW - 1); return rows; } };
+      expect(await consolidateSources(deps(state, { updates, ask: async (text) => { asked.push(text); return addOne('unused'); } }), 't')).toBe('raced');
+      expect(asked).toEqual([]);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - 1);
+    });
+  });
+
   it('reads no more calls than it is given, and leaves the rest for a later pass', async () => {
     await withStorage('nightly-sources-one-call', async (state) => {
       const book = updateBook(state.storage.sql);

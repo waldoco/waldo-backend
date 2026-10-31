@@ -3,6 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { NIGHTLY_SOURCES_THROUGH_KEY } from '../src/channels/nightly-sources';
+import { costRollupDelta } from '../src/observability/cost-rollup';
+import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { MEMORY_DAYTIME_ID } from '../src/memory/consolidator';
 import { recallForTurn } from '../src/memory/turn-recall';
@@ -21,13 +23,14 @@ vi.mock('../src/connectors/google', async load => {
     changedEvents: async () => fixture.calendar, newMail: async () => fixture.mail, events: async () => [],
   }) };
 });
-const model = vi.hoisted(() => ({ sources: [] as string[] }));
+const model = vi.hoisted(() => ({ sources: [] as string[], instructions: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format?.name === 'source_claims') {
       model.sources.push(JSON.stringify(request.messages));
+      model.instructions.push(request.system ?? '');
       const add = (text: string, evidence: string, kind = 'fact') => ({ kind, text, source: 'stated', evidence, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false });
       return done(JSON.stringify({ add: [add('Has a design review with Asha on Friday', 'Design review Friday'), add('Resting heart rate is 48', '"resting heart rate 48"', 'health')] }));
     }
@@ -37,7 +40,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-beforeEach(() => { fixture.mail = []; fixture.calendar = []; model.sources = []; });
+beforeEach(() => { fixture.mail = []; fixture.calendar = []; model.sources = []; model.instructions = []; });
 afterEach(() => { vi.restoreAllMocks(); });
 
 type Flags = Readonly<{ daytime?: string; sources?: string }>;
@@ -72,6 +75,8 @@ const ON: Flags = { daytime: '1', sources: '1' };
 
 it('a 09:00 mail is an untrusted candidate the same morning; the hint only armed the pass', async () => {
   await withOwner('memory-daytime-golden', ON, async ({ state, scheduler, clock, sweep, wake }) => {
+    const logged: TurnLogEntry[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => { if (typeof line === 'string' && line.startsWith('{')) logged.push(JSON.parse(line) as TurnLogEntry); });
     mailFromAsha();
     await sweep('changed');
     // The hint wrote one schedule row and nothing else: no model call, no read of the changes, no mark.
@@ -82,6 +87,11 @@ it('a 09:00 mail is an untrusted candidate the same morning; the hint only armed
     expect(model.sources).toHaveLength(1);
     expect(model.sources[0]).toContain('Design review Friday');
     expect(model.sources[0]).toContain('outside content');
+    // The instruction is the nightly run's too, so it names no time of day.
+    expect(model.instructions[0]).not.toMatch(/\bnight\b/i);
+    // The pass runs apart from any owner turn, so the cost ledger files its call as background spend.
+    const calls = logged.filter((entry) => entry.hop === 'llm_memory_nightly_sources');
+    expect(calls.map((entry) => costRollupDelta(entry, clock.at)?.kind)).toEqual(['background']);
     const written = claimStore(state.storage.sql).claims().filter((claim) => claim.text !== 'Lives in Pune');
     expect(written.map((claim) => [claim.text, claim.origin])).toEqual([['Has a design review with Asha on Friday', 'untrusted']]);
     expect(written[0]!.verification_status).not.toBe('owner-grounded');

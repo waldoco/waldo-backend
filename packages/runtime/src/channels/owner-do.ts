@@ -4786,7 +4786,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     });
     const daytimeOn = this.env.MEMORY_DAYTIME_CONSOLIDATOR === '1' && this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1';
-    const daytime = daytimeMemory({ kv: storage.kv, scheduler, now: Date.now, timezone: () => clock.timezone, sources: sourcesFor, runs,
+    const daytime = daytimeMemory({ kv: storage.kv, scheduler, now: Date.now, sources: sourcesFor, runs,
       enabled: () => daytimeOn && responder.sourceClaims !== undefined && schedPrefs.enabled('nightly'),
       capped: () => { const month = spend?.(); return month !== undefined && month.spentUsd >= month.ceilingUsd; } });
     const nightly = (entry: ScheduleEntry) => entry.id === MEMORY_DAYTIME_ID ? daytime.run(entry).then(() => undefined) : nightlyPass(entry);

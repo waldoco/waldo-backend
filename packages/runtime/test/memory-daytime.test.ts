@@ -11,7 +11,7 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
 // The daytime consolidator: a hint from the update sweep arms one pass, and the pass reads the recorded mail and calendar
-// changes through the nightly source pass, one model call at a time, at most six a local day. Synthetic fixtures only.
+// changes through the nightly source pass, one model call at a time, at most six in any 24 hours. Synthetic fixtures only.
 const NOON = Date.parse('2026-10-31T12:00:00Z');
 const HOUR = 3_600_000;
 const meeting: Change = { source: 'calendar', kind: 'added', detail: JSON.stringify({ id: 'evt_1', summary: 'Design review', recurrence: 'a weekly design review on Thursdays' }), ref: 'event:evt_1' };
@@ -33,7 +33,7 @@ const inOwner = (work: (world: World) => Promise<void>) =>
       transaction: (fn) => state.storage.transactionSync(fn), timezone: clock.zone, now: () => clock.at, health: true, log: () => undefined,
       ask: async (text) => { asked.push(text); if (fail.on) throw new Error('synthetic provider outage'); return addOne(`Has a weekly design review ${asked.length}`); },
     });
-    const daytime = daytimeMemory({ kv: state.storage.kv, scheduler, now: () => clock.at, timezone: () => clock.zone, enabled: () => flags.on, capped: () => flags.capped, sources });
+    const daytime = daytimeMemory({ kv: state.storage.kv, scheduler, now: () => clock.at, enabled: () => flags.on, capped: () => flags.capped, sources });
     try { await work({ state, scheduler, clock, flags, asked, fail, daytime }); } finally { await state.storage.deleteAlarm(); }
   });
 const armed = (scheduler: Scheduler) => { const found = scheduler.lookup(MEMORY_DAYTIME_ID); return found.state === 'entry' ? found.entry.due_at : null; };
@@ -110,7 +110,7 @@ describe('the pass', () => {
     });
   });
 
-  it('makes at most six model calls a local day; an empty pass costs none, and a failed one still counts', async () => {
+  it('makes at most six model calls in 24 hours; an empty pass costs none, and a failed one still counts', async () => {
     await inOwner(async (world) => {
       expect(await pass(world)).toBe('empty');
       world.fail.on = true;
@@ -124,22 +124,40 @@ describe('the pass', () => {
     });
   });
 
-  // The count is kept for one local date, the owner's at the time of the pass. A move to a zone where it is already tomorrow
-  // starts tomorrow's count; a move back to a date already counted starts that date afresh, so a zone change can add at most
-  // one day's calls.
-  it('counts by the owner\'s local date across a change of zone, both ways', async () => {
+  // The window rolls by the clock, not the owner's date: a zone that flips back and forth at every pass gets no fresh count.
+  it('makes at most six calls in any 24 hours, however often the owner\'s zone changes', async () => {
     await inOwner(async (world) => {
       world.clock.at = Date.parse('2026-10-31T20:00:00Z');
-      for (let call = 0; call < DAYTIME_CALLS_PER_DAY; call += 1) { record(world.state, world.clock.at - 1); await pass(world); world.clock.at += 60_000; }
+      const first = world.clock.at;
+      for (let turn = 0; turn < 24; turn += 1) {
+        world.clock.zone = turn % 2 ? 'Asia/Kolkata' : 'UTC';
+        record(world.state, world.clock.at - 1);
+        await pass(world);
+        world.clock.at += DAYTIME_GAP_MS;
+      }
+      expect(world.asked).toHaveLength(DAYTIME_CALLS_PER_DAY);
       record(world.state, world.clock.at - 1);
       expect(await pass(world)).toBe('day_spent');
-      world.clock.zone = 'Asia/Kolkata';
+      world.clock.at = first + 24 * HOUR + 1;
       expect(await pass(world)).toBe('consolidated');
-      world.clock.zone = 'UTC';
-      record(world.state, world.clock.at);
-      world.clock.at += 1;
-      expect(await pass(world)).toBe('consolidated');
-      expect(world.asked).toHaveLength(DAYTIME_CALLS_PER_DAY + 2);
+      expect(world.asked).toHaveLength(DAYTIME_CALLS_PER_DAY + 1);
+    });
+  });
+
+  it('makes one call a pass however much is waiting, and never more than the 24 hours have left', async () => {
+    await inOwner(async (world) => {
+      const long = (n: number): Change => ({ ...meeting, detail: JSON.stringify({ id: `evt_${n}`, summary: `Design review ${n}`, notes: 'x'.repeat(30_000) }), ref: `event:evt_${n}` });
+      updateBook(world.state.storage.sql).record('2026-10-31', NOON - 2, [long(1)], null);
+      updateBook(world.state.storage.sql).record('2026-10-31', NOON - 1, [long(2)], null);
+      expect(await pass(world)).toBe('more');
+      expect(world.asked).toHaveLength(1);
+      for (let call = 1; call < DAYTIME_CALLS_PER_DAY - 1; call += 1) { world.clock.at += DAYTIME_GAP_MS; record(world.state, world.clock.at - 1); await pass(world); }
+      expect(world.asked).toHaveLength(DAYTIME_CALLS_PER_DAY - 1);
+      world.clock.at += DAYTIME_GAP_MS;
+      updateBook(world.state.storage.sql).record('2026-10-31', world.clock.at - 2, [long(3)], null);
+      updateBook(world.state.storage.sql).record('2026-10-31', world.clock.at - 1, [long(4)], null);
+      expect(await pass(world)).toBe('more');
+      expect(world.asked).toHaveLength(DAYTIME_CALLS_PER_DAY);
     });
   });
 
@@ -152,7 +170,7 @@ describe('the pass', () => {
       const sources = () => ({ kv: world.state.storage.kv, updates: updateBook(world.state.storage.sql), claims: claimStore(world.state.storage.sql, (fn) => world.state.storage.transactionSync(fn)),
         transaction: <R>(fn: () => R) => world.state.storage.transactionSync(fn), timezone: 'UTC', now: () => world.clock.at, health: true, log: () => undefined,
         ask: async () => { if (world.fail.on) throw new Error('synthetic provider outage'); return addOne('Has a weekly design review'); } });
-      const recording = daytimeMemory({ kv: world.state.storage.kv, scheduler: world.scheduler, now: () => world.clock.at, timezone: () => 'UTC', enabled: () => true, capped: () => false, sources, runs });
+      const recording = daytimeMemory({ kv: world.state.storage.kv, scheduler: world.scheduler, now: () => world.clock.at, enabled: () => true, capped: () => false, sources, runs });
       expect(await recording.run({ id: MEMORY_DAYTIME_ID, occurrence_at: NOON })).toBe('empty');
       expect(recorded).toEqual([]);
       record(world.state, NOON - 1);
@@ -169,7 +187,7 @@ describe('the pass', () => {
   it('never throws, so the scheduler never retries it and no failure notice goes out', async () => {
     await inOwner(async (world) => {
       record(world.state, NOON - HOUR);
-      const broken = daytimeMemory({ kv: world.state.storage.kv, scheduler: world.scheduler, now: () => world.clock.at, timezone: () => 'UTC', enabled: () => true, capped: () => false,
+      const broken = daytimeMemory({ kv: world.state.storage.kv, scheduler: world.scheduler, now: () => world.clock.at, enabled: () => true, capped: () => false,
         sources: () => { throw new Error('synthetic setup failure'); } });
       expect(await broken.run({ id: MEMORY_DAYTIME_ID, occurrence_at: NOON })).toBe('failed');
     });
