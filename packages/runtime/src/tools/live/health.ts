@@ -1,7 +1,8 @@
 import {
-  getHealthArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  getHealthArgsSchema, HEALTH_READ_MAX_SESSIONS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type ToolHandler,
 } from '@waldo/contracts';
+import type { z } from 'zod';
 import { md5Hex } from '../../channels/md5';
 import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
@@ -97,6 +98,25 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   steps: { stored: 'steps_window', unit: 'count', fold: 'sum' },
   active_energy: { stored: 'active_energy_window', unit: 'kcal', fold: 'sum' },
   mindful: { stored: 'mindful_duration', unit: 'minutes', fold: 'sum' },
+  body_mass: { stored: 'body_mass', unit: 'kg', fold: 'newest' },
+  body_fat: { stored: 'body_fat_percentage', unit: 'percent', fold: 'newest' },
+  lean_body_mass: { stored: 'lean_body_mass', unit: 'kg', fold: 'newest' },
+  stand_hours: { stored: 'stand_hour', unit: 'count', fold: 'sum' },
+};
+type Session = z.infer<typeof healthWorkoutSessionSchema>;
+// One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
+// rate above the maximum keeps neither, since one of the two is wrong and nothing says which.
+const sessionOf = (reading: Reading): Session | null => {
+  const workout = reading.workout;
+  if (!workout?.activity) return null;
+  const stored: Record<string, unknown> = { ...workout.detail, zone_minutes: workout.zoneSeconds?.map(seconds => round1(seconds / 60)) };
+  const parts = Object.fromEntries(Object.entries(healthWorkoutSessionParts).flatMap(([key, part]) => {
+    const parsed = part.safeParse(stored[key]);
+    return stored[key] !== undefined && parsed.success ? [[key, parsed.data]] : [];
+  }));
+  if (typeof parts.avg_hr_bpm === 'number' && typeof parts.max_hr_bpm === 'number' && parts.avg_hr_bpm > parts.max_hr_bpm) { delete parts.avg_hr_bpm; delete parts.max_hr_bpm; }
+  const session = healthWorkoutSessionSchema.safeParse({ day: reading.day, activity: workout.activity, minutes: reading.value, ...parts });
+  return session.success ? session.data : null;
 };
 const FRESH_MS = 36 * 3_600_000;
 const STALE_MS = 72 * 3_600_000;
@@ -147,7 +167,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings, by local day. Sleep is time asleep, never time in bed. Overnight HRV and wrist temperature carry their method and are never blended. heart_rate, respiratory_rate, spo2 and hr_recovery (the drop a minute after a workout) are day means. Daily values or a summary, up to 31 days ending today. One source per signal. The numbers stay in this turn: nothing is stored or logged.",
+    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -194,11 +214,17 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
         : { ...base, days: values });
     }
     if (valued === 0) return unavailable('no_readings');
+    const workoutGroup = args.aggregation === 'daily' && signals.includes('workouts') ? chooseGroup('workouts', sources) : null;
+    const sessions = workoutGroup?.readings
+      .filter(reading => daysBetween(args.from, reading.day) >= 0 && daysBetween(reading.day, args.to) >= 0)
+      .sort((a, b) => a.day.localeCompare(b.day) || (a.startAt ?? '').localeCompare(b.startAt ?? ''))
+      .flatMap(reading => sessionOf(reading) ?? []).slice(-HEALTH_READ_MAX_SESSIONS);
     const age = clock.now().getTime() - newest;
     return result({
       state: 'available', timezone, from: args.from, to: args.to, read_at: parsed.series.readAt, signals: series,
       freshness: age <= FRESH_MS ? 'fresh' : age <= STALE_MS ? 'stale' : 'expired',
       coverage: Math.round((valued / (signals.length * days.length)) * 1000) / 1000,
+      ...(sessions ? { sessions } : {}),
     });
   },
 });

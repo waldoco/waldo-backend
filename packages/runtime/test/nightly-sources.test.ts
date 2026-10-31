@@ -171,10 +171,10 @@ it('a change carrying a topic a forget still holds never reaches the model', asy
   });
 });
 
-it('ships off in every wrangler environment', async () => {
+it('ships off in production and on in staging', async () => {
   // @ts-expect-error vite-only API
   const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"']);
+  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "1"']);
 });
 
 it('reads no constellation node drawn from health beside the changes, as for any job built from outside content', async () => {
@@ -227,6 +227,17 @@ describe('the pass on its own', () => {
     ask: async () => addOne('Has a weekly design review'), log: () => undefined, ...over,
   });
 
+  // Evidence that quotes the changes grounds as shared content; this one quotes nothing, so it is a paraphrase of outside
+  // content, still untrusted, never Waldo's own read.
+  it('a claim whose evidence is not in the changes is untrusted too', async () => {
+    await withStorage('nightly-sources-ungrounded', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      const paraphrase = JSON.stringify({ add: [{ kind: 'fact', text: 'Meets the design leads every week', source: 'inferred', evidence: 'seems to be a standing sync with the leads', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] });
+      expect(await consolidateSources(deps(state, { ask: async () => paraphrase }), 't')).toBe('consolidated');
+      expect(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.origin, claim.source])).toEqual([['Meets the design leads every week', 'untrusted', 'inferred']]);
+    });
+  });
+
   it('the adds and the mark commit together: a stop between them writes nothing, and the rerun writes once', async () => {
     await withStorage('nightly-sources-atomic', async (state) => {
       updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
@@ -237,6 +248,52 @@ describe('the pass on its own', () => {
       expect(await consolidateSources(deps(state), 't')).toBe('consolidated');
       expect(await consolidateSources(deps(state), 't')).toBe('empty');
       expect(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.origin])).toEqual([['Has a weekly design review', 'untrusted']]);
+    });
+  });
+
+  // A daytime pass and the nightly run read the same mark. The mark is the single writer: two passes over the same rows
+  // write one set of claims and move it once, and the one that lost the race writes nothing.
+  it('two passes over the same rows consolidate them once', async () => {
+    await withStorage('nightly-sources-race', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const logged: string[] = [];
+      const first = consolidateSources(deps(state, { ask: async () => { await held; return addOne('Has a weekly design review'); }, log: (entry) => { if (entry.code) logged.push(entry.code); } }), 'first');
+      expect(await consolidateSources(deps(state, { ask: async () => addOne('Has a design review on Thursdays') }), 'second')).toBe('consolidated');
+      release();
+      expect(await first).toBe('raced');
+      expect(logged).toEqual(['raced']);
+      expect(claimStore(state.storage.sql).claims().map((claim) => claim.text)).toEqual(['Has a design review on Thursdays']);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - HOUR);
+    });
+  });
+
+  // Rows a forget still holds are skipped without a call, and the mark moves past them under the same rule.
+  it('a pass whose rows a forget holds moves the mark only from where it read it', async () => {
+    await withStorage('nightly-sources-held-race', async (state) => {
+      const book = updateBook(state.storage.sql);
+      book.record('2026-10-12', NOW - HOUR, [meeting], null);
+      // A forget of the topic is still unfinished.
+      claimStore(state.storage.sql);
+      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES ('fp-design-review', 'design review', ?, 'everywhere')", new Date(NOW - DAY).toISOString());
+      const asked: string[] = [];
+      // Another pass commits between this pass's read of the mark and its move of it.
+      const updates = { ...book, recordedAfter: (after: number, limit: number) => { const rows = book.recordedAfter(after, limit); state.storage.kv.put(NIGHTLY_SOURCES_THROUGH_KEY, NOW - 1); return rows; } };
+      expect(await consolidateSources(deps(state, { updates, ask: async (text) => { asked.push(text); return addOne('unused'); } }), 't')).toBe('raced');
+      expect(asked).toEqual([]);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - 1);
+    });
+  });
+
+  it('reads no more calls than it is given, and leaves the rest for a later pass', async () => {
+    await withStorage('nightly-sources-one-call', async (state) => {
+      const book = updateBook(state.storage.sql);
+      const mail = (i: number, j: number): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from: `sender${j}@example.com`, subject: `Thread ${i}-${j}`, snippet: 'synthetic preview text '.repeat(16), at: '2026-10-12T10:00:00Z' }), ref: `message:m${i}-${j}` });
+      for (let i = 0; i < 20; i++) book.record('2026-10-12', NOW - DAY + 1 + i * 60_000, Array.from({ length: 10 }, (_, j) => mail(i, j)), null);
+      const asked: string[] = [];
+      expect(await consolidateSources(deps(state, { ask: async (text) => { asked.push(text); return addOne(`Busy ${asked.length}`); } }), 't', 1)).toBe('more');
+      expect(asked).toHaveLength(1);
     });
   });
 
