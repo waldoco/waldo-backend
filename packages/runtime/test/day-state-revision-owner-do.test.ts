@@ -185,11 +185,12 @@ it.each([
 // it the Close holds nothing, so the model judges a change after it; quiet hours on the app still write the job (a revision
 // may land) while on a surface that would have to send, they hold it.
 it.each([
-  { state: undefined, case: 'after the Close', job: false },
-  { state: '1', case: 'after the Close', job: true },
-  { state: '1', case: 'in quiet hours on the app', job: true },
-])('day state $state, $case: a reader job written is $job', async ({ state: dayState, case: when, job }) => {
-  const name = `day-state-gate-${dayState ?? 'off'}-${when.replace(/\W+/g, '-')}`;
+  { state: undefined, case: 'after the Close', surface: 'app', job: false },
+  { state: '1', case: 'after the Close', surface: 'app', job: true },
+  { state: '1', case: 'in quiet hours', surface: 'app', job: true },
+  { state: '1', case: 'in quiet hours', surface: 'telegram', job: false },
+] as const)('day state $state, $case on $surface: a reader job written is $job', async ({ state: dayState, case: when, surface, job }) => {
+  const name = `day-state-gate-${dayState ?? 'off'}-${when.replace(/\W+/g, '-')}-${surface}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     clock = Date.parse('2026-10-20T22:00:00Z');
@@ -197,15 +198,17 @@ it.each([
     try {
       claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
       state.storage.kv.put('do_name', name);
-      state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+      if (surface === 'telegram') state.storage.kv.put('telegram_subject', '7001');
+      else state.storage.kv.put('app_subject', String(appSubjectFor(name)));
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: dayState, CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
-        OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
+      // A Telegram owner here is the single owner a deploy without the directory names.
+      const owner = new OwnerDO(state, { ...env, ...(surface === 'app' ? directory : {}), WALDO_DAY_STATE: dayState, CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+        OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: surface === 'app' ? undefined : '7001',
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
-      await owner.setup('app').ready;
+      await owner.setup(surface).ready;
       if (when === 'after the Close') dayPlanBook(state.storage.sql).sent('2026-10-20', 'card:close');
       else loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: () => clock }).setProactivity({ quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' });
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());

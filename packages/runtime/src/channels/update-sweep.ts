@@ -53,9 +53,9 @@ export type SweepCheckDeps = Readonly<{
 
 // The job's key is the window it covers: the watermarks before this tick moved them.
 // wakeAt: when a debounced tick's changes can next be judged. recorded: the update record this tick committed with changes,
-// and the sources they came from.
+// and the sources they came from. seedCapped: the day's read of events was cut at its cap.
 type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow; wakeAt?: number;
-  recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }> }>;
+  recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true }>;
 export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
   // A sweep still open holds the window: nothing is read, so the next tick after it settles reads everything since.
@@ -94,7 +94,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
   // recorded. A failed ask never costs the update.
   if (changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
-  return checked;
+  return read.seen?.seedCapped ? { ...checked, seedCapped: true } : checked;
 };
 
 // The harness's wake hint after an ingestion commits: ids only, never text, emitted outside the transaction. Each consumer
