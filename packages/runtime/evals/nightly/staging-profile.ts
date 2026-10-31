@@ -45,6 +45,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial; staging has it off'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes; staging has it off'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial; staging has it off'),
+  MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial; staging has it off'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
 

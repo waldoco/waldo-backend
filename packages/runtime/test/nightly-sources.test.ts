@@ -240,6 +240,35 @@ describe('the pass on its own', () => {
     });
   });
 
+  // A daytime pass and the nightly run read the same mark. The mark is the single writer: two passes over the same rows
+  // write one set of claims and move it once, and the one that lost the race writes nothing.
+  it('two passes over the same rows consolidate them once', async () => {
+    await withStorage('nightly-sources-race', async (state) => {
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting], null);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const logged: string[] = [];
+      const first = consolidateSources(deps(state, { ask: async () => { await held; return addOne('Has a weekly design review'); }, log: (entry) => { if (entry.code) logged.push(entry.code); } }), 'first');
+      expect(await consolidateSources(deps(state, { ask: async () => addOne('Has a design review on Thursdays') }), 'second')).toBe('consolidated');
+      release();
+      expect(await first).toBe('raced');
+      expect(logged).toEqual(['raced']);
+      expect(claimStore(state.storage.sql).claims().map((claim) => claim.text)).toEqual(['Has a design review on Thursdays']);
+      expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - HOUR);
+    });
+  });
+
+  it('reads no more calls than it is given, and leaves the rest for a later pass', async () => {
+    await withStorage('nightly-sources-one-call', async (state) => {
+      const book = updateBook(state.storage.sql);
+      const mail = (i: number, j: number): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from: `sender${j}@example.com`, subject: `Thread ${i}-${j}`, snippet: 'synthetic preview text '.repeat(16), at: '2026-10-12T10:00:00Z' }), ref: `message:m${i}-${j}` });
+      for (let i = 0; i < 20; i++) book.record('2026-10-12', NOW - DAY + 1 + i * 60_000, Array.from({ length: 10 }, (_, j) => mail(i, j)), null);
+      const asked: string[] = [];
+      expect(await consolidateSources(deps(state, { ask: async (text) => { asked.push(text); return addOne(`Busy ${asked.length}`); } }), 't', 1)).toBe('more');
+      expect(asked).toHaveLength(1);
+    });
+  });
+
   it('a busy day is read in bounded calls, and what is left waits for the next run', async () => {
     await withStorage('nightly-sources-busy', async (state) => {
       const book = updateBook(state.storage.sql);
