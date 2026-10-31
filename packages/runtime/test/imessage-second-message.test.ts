@@ -83,7 +83,9 @@ async function world() {
     expect((await host.capabilities()).status).toBe(200);
   };
   const threaded = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().map(record => record.replyTo !== undefined));
-  const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().map(record => record.result?.state ?? record.state));
+  // Each record as kind:outcome, in the order it was frozen.
+  const outcomes = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0))
+    .map(record => `${record.replyRef.split(':')[0]}:${record.result?.state ?? record.state}`));
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records().map(record => record.state));
   return { host, pump, handOver, activate, inbox, threaded, outcomes };
 }
@@ -137,21 +139,23 @@ it('queues B behind a running A: no steer reaches A, A is not interrupted, and e
 }, 30_000);
 
 // Only in this case does A's reply thread onto A's message, so only here does a host that reports verified replies get a
-// threaded send. A host that then refuses it (on Photon: the target message cannot be resolved) settles A's reply for good:
-// the outbox keeps the first terminal result and never resends it plain. The owner sees B answered and A never answered.
-it('a host that refuses A\'s threaded reply loses A\'s answer for good, while B\'s plain reply goes out', async () => {
+// threaded send. A host that refuses it before sending anything (on Photon: the target message cannot be resolved) settles
+// that send as not_started, and the outbox sends the same answer once more, plain, ahead of B's.
+it('a host that refuses A\'s threaded reply before sending still gets A\'s answer, once, plain, and then B\'s', async () => {
   const w = await world();
   await w.activate();
   expect((await w.host.capabilities(true, false, true)).status).toBe(200);
   await twoInARow(w);
 
-  const first = await answer(w, command => ({ version: 1, commandId: command.commandId, target: command.target as IMessageResult['target'], state: 'rejected', disposition: 'not_started', reason: 'photon_target_unavailable' }));
-  expect(first).toContain('Reply to turn 1.');
-  expect((JSON.parse(first) as { target: { messageGuid?: string } }).target.messageGuid).toBeDefined();
-  const second = await answer(w);
-  expect(second).toContain('Reply to turn 2.');
+  const threaded = await answer(w, command => ({ version: 1, commandId: command.commandId, target: command.target as IMessageResult['target'], state: 'rejected', disposition: 'not_started', reason: 'photon_target_unavailable' }));
+  expect(threaded).toContain('Reply to turn 1.');
+  expect((JSON.parse(threaded) as { target: { messageGuid?: string } }).target.messageGuid).toBeDefined();
+  const plain = await answer(w);
+  expect(plain).toContain('Reply to turn 1.');
+  expect((JSON.parse(plain) as { target: { messageGuid?: string } }).target.messageGuid).toBeUndefined();
+  expect(await answer(w)).toContain('Reply to turn 2.');
 
   expect((await w.host.pull()).delivery).toBeNull();
-  expect(w.host.nativeSends.map(send => send.text)).toEqual(['Reply to turn 2.']);
-  expect(await w.outcomes()).toEqual(['rejected', 'local_recorded']);
+  expect(w.host.nativeSends.map(send => send.text)).toEqual(['Reply to turn 1.', 'Reply to turn 2.']);
+  expect(await w.outcomes()).toEqual(['reply:rejected', 'reply:local_recorded', 'plain:local_recorded']);
 }, 30_000);
