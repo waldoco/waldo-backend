@@ -602,8 +602,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
         // The replacement stays filed where the old claim was, by whoever filed it, unless the writer files it anew. A writer
-        // never moves it out of body or mind.
-        const kept = claim.area === undefined || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
+        // never refiles what the owner filed, and never moves it out of body or mind.
+        const kept = claim.area === undefined || old.area_by === 'owner' || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
         const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
         const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
@@ -619,7 +619,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const stored = filedArea(area);
       return sql.exec(`UPDATE claims SET area = ?, area_by = ? WHERE id = ? AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}'
         AND (? = 'owner' OR (COALESCE(area_by, '') != 'owner' AND (COALESCE(area, '') NOT IN ('body', 'mind') OR area IS ?))) RETURNING id`,
-        stored, stored ? by : null, id, by, stored).toArray().length === 1;
+        stored, stored || by === 'owner' ? by : null, id, by, stored).toArray().length === 1;
     },
     setStatus(id: number, status: string): void {
       sql.exec('UPDATE claims SET status = ? WHERE id = ?', status, id);

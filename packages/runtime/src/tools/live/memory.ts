@@ -8,12 +8,15 @@ import { jobsCarry } from '../../tasks/jobs';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
+import { outsideSafe } from '../../memory/outside-view';
 
 // Supplied by the authenticated conversation host, never by model arguments. Each text is
 // the owner's own message body; quote ranges exclude forwarded/provider-authored chunks.
 export type MemoryOwnerTurn = Readonly<{ message_ref: string; text: string; sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[] }>;
 export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
+  // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
+  memoryOutside?: boolean;
 };
 type Dependencies = Readonly<{
   sql: Pick<SqlStorage, 'exec'>;
@@ -133,7 +136,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (query !== undefined && deps.semantic) { near = await deps.semantic.near(query).catch(() => []); await ready(ctx); }
         const lexical = match === null ? store.claims().concat(store.claims('promoted')) : sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid WHERE claim_recall MATCH ? AND claims.status IN ('active','promoted') AND COALESCE(claims.origin, '') != 'untrusted' AND claims.kind != '${NODE_STATEMENT}' ORDER BY bm25(claim_recall), claims.last_seen_at DESC, claims.id DESC`, match).toArray();
         const rows = near.length ? fuseRanked([lexical, store.recall('', near.length, near)], (claim) => claim.id) : lexical;
-        const selected = rows.filter(claim => claim.origin !== 'untrusted' && !claim.valid_to && !hidden(claim) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind)) && (!area || (claim.area ?? 'unsorted') === area)).slice(0, limit).map(provenance);
+        const selected = rows.filter(claim => claim.origin !== 'untrusted' && !claim.valid_to && !hidden(claim) && (!ctx.memoryOutside || outsideSafe(claim)) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind)) && (!area || (claim.area ?? 'unsorted') === area)).slice(0, limit).map(provenance);
         // Whole claims only: one that would push the result past the budget is named, never cut into partial words.
         const claims: typeof selected = []; const omitted_claim_ids: number[] = []; let bytes = 0;
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }

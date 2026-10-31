@@ -69,6 +69,19 @@ describe('filing a claim', () => {
     });
   });
 
+  it('the owner\'s choice stands against a model correction, and their "unsorted" against a model refile', async () => {
+    await withStore((store) => {
+      const rent = said(store, 'Rent is due on the first', 'fact', 'money');
+      expect(store.setArea(rent.id, 'work', 'owner')).toBe(true);
+      expect(store.correct(rent.id, { kind: 'fact', text: 'Rent is due on the fifth', source: 'stated', evidence: 'x', origin: 'owner', source_ref: 'owner, tg-fix', area: 'home' }, AT)).toBe(true);
+      expect(store.claims().find((claim) => claim.text === 'Rent is due on the fifth')).toMatchObject({ area: 'work', area_by: 'owner' });
+      const tea = said(store, 'Prefers tea', 'preference', 'home');
+      expect(store.setArea(tea.id, 'unsorted', 'owner')).toBe(true);
+      expect(store.setArea(tea.id, 'people', 'model')).toBe(false);
+      expect(store.claims().find((claim) => claim.id === tea.id)).toMatchObject({ area: null, area_by: 'owner' });
+    });
+  });
+
   it('the model is asked for an area on every new claim and may refile by id, and sees each claim\'s area', async () => {
     await withStore((store) => {
       said(store, 'Rent is due on the first', 'fact', 'money');
