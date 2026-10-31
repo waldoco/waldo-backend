@@ -221,7 +221,7 @@ job's code, with no tool and no action. #1494's law needs no change, because no 
 - Each interpretation node gains an optional `sources` key: an array of `apple_health | health_connect | calendar | tasks | gmail`,
   taken from its supports' `source_ref`. It is empty for a nightly node backed by owner words.
 - Each interpretation node gains an optional `confirmation`: `'waldos_read' | 'confirmed'`. It is `confirmed` when the owner
-  confirmed the node's own wording, or when it rests only on the owner's own grounded words (amended 30 Oct 2026, O3). The app can replace its hardcoded "Unverified" badge with it.
+  confirmed the node's own wording, and only then, whoever wrote or confirmed the notes under it (amended 30 Oct 2026, O3). The app can replace its hardcoded "Unverified" badge with it.
 - An old build drops all three keys (tolerant reader). No existing field changes, and no value is added to an existing enum.
 
 **Act: `POST /app/v1/actions`, constellation view, beside M-8's claim actions.**

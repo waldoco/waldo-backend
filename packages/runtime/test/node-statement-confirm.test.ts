@@ -96,23 +96,60 @@ describe('confirming the pattern itself', () => {
     });
   });
 
-  it('leaves a pattern resting only on the owner\'s own words confirmed without a statement', async () => {
+  it('a pattern resting only on the owner\'s own words is still Waldo\'s wording until they confirm it', async () => {
     await withStore((store) => {
       const supports = [owned(store, 'Writes before ten'), owned(store, 'Mutes chat until noon', '2026-10-29T04:00:00Z')];
       const id = store.saveNode({ id: null, domain: 'work', label: 'Deep work mornings', summary: 'Focused work before noon', strength: 0.7, status: 'active', supporting_spots: supports }, AT);
-      expect(confirmation(store, id)).toBe('confirmed');
+      expect(confirmation(store, id)).toBe('waldos_read');
+      expect(block(store)).toContain(`[n${id} · their words · waldo's read] Deep work mornings`);
+      expect(confirmWelcomeNode(store, id, AT)).toBe(true);
       expect(block(store)).toContain(`[n${id} · their words · confirmed] Deep work mornings`);
-      expect(statements(store)).toEqual([]);
     });
   });
 
-  it('a correction replaces the node with the owner\'s words and takes the old statement with it', async () => {
+  it('a correction replaces the node with the owner\'s words, which are their yes to it, and takes the old statement with it', async () => {
     await withStore((store) => {
       const { id } = mailNode(store);
       confirmWelcomeNode(store, id, AT);
       expect(correctWelcomeNode(store, id, 'Writes to investors after standup', AT)).not.toBeNull();
-      expect(statements(store)).toEqual([]);
+      expect(statements(store).map((claim) => [claim.text, claim.status])).toEqual([['Writes to investors after standup: Writes to investors after standup', 'active']]);
       expect(confirmation(store, id)).toBe('confirmed');
+    });
+  });
+});
+
+describe('a pattern the nightly promotion draws', () => {
+  const DAY2 = '2026-10-31T04:00:00Z';
+  const nightly = (store: ClaimStore, text: string, at: string) => {
+    store.add({ kind: 'observation', text, source: 'inferred', evidence: 'nightly read of a mail thread', origin: 'untrusted' }, at);
+    return store.allClaims().find((claim) => claim.text === text)!.id;
+  };
+  const promote = (store: ClaimStore, node: Readonly<{ id: number | null; label: string; summary: string }>, spots: readonly number[]) =>
+    applyPromotion(store, JSON.stringify({ nodes: [{ ...node, domain: 'work', strength: 0.6, status: 'active', supporting_spots: spots, durable: true, reason: 'two days' }], edges: [], promoted: [] }), DAY2);
+
+  it('is Waldo\'s read in every turn when its notes came from outside content, though the owner confirmed each note', async () => {
+    await withStore((store, sql) => {
+      const supports = [nightly(store, 'Thursday deadlines pile up', AT), nightly(store, 'Late replies on Thursdays', DAY2)];
+      for (const support of supports) expect(store.ownerGround(support, DAY2, 'owner, console')).toBe(true);
+      expect(promote(store, { id: null, label: 'Thursday crunch', summary: 'Thursdays run late' }, supports)).toBe('nodes1 edges0 promoted0');
+      const id = store.nodes().find((node) => node.label === 'Thursday crunch')!.id;
+      expect(confirmation(store, id)).toBe('waldos_read');
+      expect(block(store)).not.toContain('· confirmed] Thursday crunch');
+      expect(readMemoryGraph(sql, 'memory').nodes.find((node) => node.local_id === id)?.confirmation).toBe('waldos_read');
+    });
+  });
+
+  it('keeps the owner\'s yes through a nightly re-save of the same wording, and drops it when the wording changes', async () => {
+    await withStore((store) => {
+      const supports = [owned(store, 'Writes before ten'), owned(store, 'Mutes chat until noon', DAY2)];
+      expect(promote(store, { id: null, label: 'Deep mornings', summary: 'Focus first' }, supports)).toBe('nodes1 edges0 promoted0');
+      const id = store.nodes().find((node) => node.label === 'Deep mornings')!.id;
+      expect(confirmWelcomeNode(store, id, AT)).toBe(true);
+      promote(store, { id, label: 'Deep mornings', summary: 'Focus first' }, supports);
+      expect(confirmation(store, id)).toBe('confirmed');
+      promote(store, { id, label: 'Deep mornings', summary: 'Focus until noon' }, supports);
+      expect(confirmation(store, id)).toBe('waldos_read');
+      expect(statements(store).filter((claim) => claim.status !== 'superseded')).toEqual([]);
     });
   });
 });
@@ -233,6 +270,9 @@ describe('patterns already confirmed before this change', () => {
         console: legacy(store, 'Console confirmed', ['owner, console:node.confirm']),
         mixed: legacy(store, 'Mixed confirmed', ['owner, console', 'owner, app:node.confirm']),
         perNote: legacy(store, 'Note by note', ['owner, console', 'owner, console']),
+        ownWords: store.saveNode({ id: null, domain: 'work', label: 'Own words confirmed', summary: 'Own words summary', strength: 0.5, status: 'active',
+          supporting_spots: [owned(store, 'Own words note')].map((id) => (store.ownerGround(id, AT, 'owner, app:node.confirm'), id)) }, AT),
+        ownWordsUnconfirmed: store.saveNode({ id: null, domain: 'work', label: 'Own words only', summary: 'Never confirmed', strength: 0.5, status: 'active', supporting_spots: [owned(store, 'Another own note')] }, AT),
       };
       sql.exec('DROP TABLE IF EXISTS node_statement_backfill');
       return ids;
@@ -242,8 +282,10 @@ describe('patterns already confirmed before this change', () => {
       expect(confirmation(store, ids.console)).toBe('confirmed');
       expect(confirmation(store, ids.mixed)).toBe('confirmed');
       expect(confirmation(store, ids.perNote)).toBe('waldos_read');
-      expect(statements(store).map((claim) => claim.source_ref).sort()).toEqual([`node:${ids.app}:backfill:node.confirm`, `node:${ids.console}:backfill:node.confirm`, `node:${ids.mixed}:backfill:node.confirm`].sort());
+      expect(confirmation(store, ids.ownWords)).toBe('confirmed');
+      expect(confirmation(store, ids.ownWordsUnconfirmed)).toBe('waldos_read');
+      expect(statements(store).map((claim) => claim.source_ref).sort()).toEqual([ids.app, ids.console, ids.mixed, ids.ownWords].map((id) => `node:${id}:backfill:node.confirm`).sort());
     }, name);
-    await withStore((store) => expect(statements(store)).toHaveLength(3), name);
+    await withStore((store) => expect(statements(store)).toHaveLength(4), name);
   });
 });
