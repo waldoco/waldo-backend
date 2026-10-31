@@ -18,7 +18,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const reply = request.request.response_format === undefined && Boolean(request.request.tools?.length);
     const said = request.request.messages.at(-1)?.content ?? '';
     const turns = request.request.tool_turns ?? [];
-    const answer = (data: Record<string, unknown>) => ({ ok: true as const, data: { model: request.request.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0, ...data } });
+    const answer = (data: { text: string; tool_calls?: { call_id: string; name: string; arguments: string }[] }) => ({ ok: true as const, data: { model: request.request.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0, ...data } });
     if (!reply) return answer({ text: request.request.response_format ? '{}' : 'Noted.' });
     if (turns.length === 0) model.seen.push({ said: said.split('\n')[0]!, carried: said.includes(HEADER_TEXT) });
     if (said.startsWith('show reminders')) {
