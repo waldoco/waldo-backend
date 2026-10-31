@@ -150,8 +150,10 @@ describe('renderAgentMail', () => {
     const { mime, preview } = ok(render());
     it('uses inline styles, tables, a 600px column and a system font stack only', () => {
       expect(preview.html).not.toMatch(/<style|<link|<script|<svg|<iframe|<form|<object|@import|@font-face|url\(|javascript:|\sclass=|\son[a-z]+=/i);
-      expect(preview.html).toContain('width="600"');
-      expect(preview.html).toContain('max-width:100%');
+      expect(preview.html).toContain('style="width:100%;max-width:600px"');
+      // Only Outlook's Word engine reads the fixed 600px column; everyone else gets the fluid one.
+      expect([...preview.html.matchAll(/<!--\[if mso\]>(.*?)<!\[endif\]-->/g)].map(match => match[1])).toEqual(['<table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>', '</td></tr></table>']);
+      expect(preview.html.replace(/<!--\[if mso\]>.*?<!\[endif\]-->/g, '')).not.toContain('width="600"');
       expect(preview.html).toContain("font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif");
       expect(preview.html).not.toMatch(/rgba?\(/);
       expect([...preview.html.matchAll(/<img [^>]*src="([^"]*)"/g)].map(match => match[1])).toEqual(['cid:waldo-mark@mail.test.invalid']);
@@ -244,7 +246,7 @@ describe('renderAgentMail', () => {
         expect(result.mime).toMatch(/^[\x00-\x7f]*$/);
         expect(result.mime.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
         expect(headerNames(result.mime)).toEqual(['From', 'To', 'Cc', 'Subject', 'Date', 'Message-ID', 'MIME-Version', 'Content-Type']);
-        expect(result.preview.html).not.toMatch(/<(?!\/?(?:!doctype|html|head|meta|title|body|table|tr|td|th|img|p|br|strong|em|a|span|ul|ol|li)\b)/i);
+        expect(result.preview.html.replace(/<!--\[if mso\]>.*?<!\[endif\]-->/g, '')).not.toMatch(/<(?!\/?(?:!doctype|html|head|meta|title|body|table|tr|td|th|img|p|br|strong|em|a|span|ul|ol|li)\b)/i);
         expect([...result.preview.html.matchAll(/href="([^"]*)"/g)].every(match => /^https?:\/\//.test(match[1]!))).toBe(true);
         await expectRoundTrip(result);
       }

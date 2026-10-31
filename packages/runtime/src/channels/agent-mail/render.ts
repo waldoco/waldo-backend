@@ -264,10 +264,13 @@ const htmlDocument = (subject: string, blocks: readonly Block[], callout: readon
   return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">'
     + `<title>${escape(subject)}</title></head>\n<body style="margin:0;padding:0;background-color:${CANVAS}">\n`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${CANVAS}"><tr><td align="center" style="padding:24px 12px">\n`
-    + `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%">\n`
+    // The column is fluid up to 600px, so a phone never lays out wider than its screen. Outlook for Windows renders with
+    // Word, which ignores max-width; only it reads the conditional table that fixes its column at 600px.
+    + '<!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->\n'
+    + `<table role="presentation" width="100%" align="center" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px">\n`
     + `<tr><td style="padding:0 4px 14px 4px;font-family:${FONT};font-size:18px;font-weight:bold;color:${INK}">Waldo</td></tr>\n`
     + `<tr><td style="background-color:${CARD};border:1px solid ${BORDER};border-radius:16px;padding:28px;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n`
-    + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n</td></tr></table>\n</body></html>`;
+    + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</td></tr></table>\n</body></html>`;
 };
 
 export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, recipients: AgentMailRecipients, wire: AgentMailWire): AgentMailRendered {
