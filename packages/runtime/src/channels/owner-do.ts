@@ -64,6 +64,9 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
 import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
+import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, deferAgentMailRules, reconcileAgentMailRules } from './agent-mail/rules';
+import { agentMailDirectory } from './agent-mail/handles';
+import type { AgentMailControlsDeps } from './agent-mail/controls';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
@@ -149,7 +152,7 @@ import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-c
 import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
-import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updatePushLine, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
@@ -190,6 +193,7 @@ import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
+import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
@@ -352,7 +356,7 @@ const TASK_JOBS_DORMANT_RECHECK_MS = 15 * 60_000;
 type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding; authority?: OwnerRuntimeAuthority; current(): boolean }> | Readonly<{ kind: 'dormant' | 'retry' }>;
 
 // The notice for a run that stopped before it finished, so its outcome is unknown.
-const RUN_DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const RUN_DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 
 const validZone = (zone: string): boolean => {
   try {
@@ -723,13 +727,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!eligible) continue;
       const noticeId = `${ordinary ? 'failure' : 'steer-failure'}:${child.id}:${child.attempt}`;
       const noticeText = ordinary
-          ? child.reason === 'common_execution_indeterminate' ? 'The task expired before its result could be verified for delivery. A private result may already be saved. I did not send the unverified final or run the work again. Check the saved result before retrying changes.'
-            : child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
+          ? child.reason === 'common_execution_indeterminate' ? INTERRUPTED_NOTICES.unconfirmed
+            : child.reason === 'owner_stopped' ? INTERRUPTED_NOTICES.stopped
             : child.reason === 'execution_closed' ? RUN_DID_NOT_FINISH
-            : 'Your request was interrupted, and its outcome is uncertain. Some changes may have completed. Please check the result before retrying.'
+            : INTERRUPTED_NOTICES.uncertain
           : child.reason === 'not_consumed'
           ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
-          : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.';
+          : INTERRUPTED_NOTICES.steer;
       await this.setup().finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
         payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\n${this.requestReceived(child.admittedAt)}` : '') },
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
@@ -1003,8 +1007,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     let known: boolean;
     try { known = new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
-    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass.
-    if (known && observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now())) await this.rearmEveryWake();
+    // A scheduled message's result also ends the delivery record waiting on it, which settles its job on the next pass; a refused thread leaves a plain resend due.
+    if (known && (observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now()) || new IMessageFinalOutbox(this.ctx.storage).dueAt() !== null)) await this.rearmEveryWake();
     return known;
   }
   private async drainIMessage(alarmEnd?: number): Promise<void> {
@@ -1749,7 +1753,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
@@ -2527,7 +2531,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if((await response.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){const headers=new Headers(response.headers);for(const name of [CONSOLE_COOKIE,OWNER_COOKIE])headers.append('set-cookie',clearConsoleCookie(name));return new Response(response.body,{status:response.status,headers});}
             return response;
           }
-          const channel={imessage:this.imessageHost.env,phone:this.env,devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked,onWhatsAppUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(this.ctx.storage.kv.get<string>('do_name')??'')};
+          const channel={imessage:this.imessageHost.env,phone:this.env,agentMail:this.agentMailControls(this.ctx.storage.kv.get<string>('do_name')??''),devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked,onWhatsAppUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(this.ctx.storage.kv.get<string>('do_name')??'')};
           if(channelRead)return channelControlsRead(channelRead,channel);
           if(channelAction)return channelControlsAction(await request.formData(),channel);
           const runtime=this.setup();await runtime.ready;
@@ -2798,6 +2802,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await lane('whatsapp', () => this.recoverWhatsappPending());
     // Before any surface is chosen: mail that cannot run for want of one still expires.
     await lane('mail', async () => this.expireAgentMail());
+    await lane('mail', () => this.reconcileAgentMailRules());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
     const entered = await this.serialWithin(alarmEnd, async () => {
@@ -3031,6 +3036,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private expireAgentMail(): void {
     if (this.ctx.storage.kv.get(AGENT_MAIL_DUE_KEY) == null) return;
     for (let expired = agentMailInbox(this.ctx.storage).expire(); expired > 0; expired--) console.log(JSON.stringify({ hop: 'agent_mail_turn', code: 'expired' }));
+  }
+  private agentMailControls(doName: string): AgentMailControlsDeps {
+    return { env: this.env, kv: this.ctx.storage.kv, owner: doName, ownerName: () => ownerName(claimStore(this.ctx.storage.sql)), wake: () => this.rearmEveryWake() };
+  }
+  // The Email Routing rules of this owner's handles: nothing is called while agent mail is off or its rule API unconfigured.
+  private async reconcileAgentMailRules(): Promise<void> {
+    const kv = this.ctx.storage.kv, due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY), doName = kv.get<string>('do_name');
+    if (due == null || due > Date.now()) return;
+    const setup = agentMailRouting(this.env), directory = doName === undefined ? null : agentMailDirectory(this.env, doName);
+    if (!setup || !directory) deferAgentMailRules(kv);
+    else await reconcileAgentMailRules({ kv, setup, directory, now: Date.now,
+      log: (code, cloudflare = []) => console.log(JSON.stringify({ hop: 'agent_mail_rule', code, ...(cloudflare.length ? { cloudflare } : {}) })) });
+    await this.rearmEveryWake();
   }
   // Mail turns run as the owner's job on the surface that takes their proactive work, as Mac reports do, and only while the
   // handle still routes here: a handle released after its mail arrived closes that mail unread.
@@ -5139,7 +5157,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         quiet: () => revisesCards && quiet(),
         cards: dayCards, revisesCards,
         delivered: card => plans.reached(today(), card),
-        pushLine: async (line, outside) => updatePushLine(line, { named: this.env.UPDATE_PUSH_NAMES === '1', forbidden: [...outside, await healthLogLines()] }),
+        named: () => this.env.UPDATE_PUSH_NAMES === '1',
         chose: (trace, code) => log({ trace, hop: 'update_effects', ms: 0, ok: true, code }),
         settled: () => this.ctx.waitUntil(wakeBriefSweep(scheduler, Date.now()).then(() => undefined, () => undefined)),
       } } : {}),

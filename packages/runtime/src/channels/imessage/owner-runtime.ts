@@ -174,6 +174,8 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
       outcome = await handOff(host, row);
       for (let polls = 0; outcome.kind === 'busy' && polls < BUSY_POLLS; polls++) {
         await wait(BUSY_POLL_MS);
+        // An earlier reply that became due on this bridge while this one waited (a refused thread's plain resend) goes first.
+        if (outbox.due().find((due) => due.bridgeDoName === row.bridgeDoName)?.replyRef !== row.replyRef) break;
         outcome = await handOff(host, row);
       }
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }

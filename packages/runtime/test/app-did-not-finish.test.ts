@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { APP_UPDATE_BASE, appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
@@ -8,7 +9,7 @@ import { APP_INBOX_DUE_KEY, rearmSharedAlarm, TASK_JOBS_DUE_KEY } from '../src/s
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-const NOTICE = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const NOTICE = INTERRUPTED_NOTICES.unfinished;
 const model = vi.hoisted(() => ({ requests: [] as string[], fail: false, effectThenFail: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
