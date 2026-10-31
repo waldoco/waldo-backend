@@ -15,8 +15,8 @@ export const setHealthMemory = (kv: Kv, value: string): boolean => {
   return true;
 };
 
-// Health notes saved on Waldo's own since the owner last heard about them. Ids only: the next reply reads each note from
-// memory then, so a note forgotten or corrected in between is never named in its old words.
+// Health notes saved on Waldo's own since the owner last heard about them. Ids only: the next reply checks each is still in
+// memory then, so a note forgotten or corrected in between is not counted.
 export const HEALTH_SAVED_KEY = 'health_memory_saved_v1';
 const KEPT = 50;
 const NAMED = 5;
@@ -26,26 +26,31 @@ export const noteHealthSaved = (kv: Kv, ids: readonly number[]): void => {
   kv.put(HEALTH_SAVED_KEY, [...new Set([...waiting, ...ids])].slice(-KEPT));
 };
 
-// One line naming up to five waiting notes that are still in memory, and how to correct, forget or stop them; null when
-// nothing that waits is still there. The notes it names stop waiting only when taken, once the reply carrying the line is
-// saved, so a run that closes first names them next time. A note the line only counts, or one saved after it was read,
-// keeps waiting to be named; one no longer in memory stops waiting.
-export type HealthNotice = Readonly<{ line: string; taken(): void }>;
-export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id' | 'text'>[]): HealthNotice | null => {
+// One line counting up to five waiting notes that are still in memory, and how to change, forget or stop them; null when
+// nothing that waits is still there. The owner is told how many, never the notes' words or ids: a quoted note can carry a
+// reading they did not ask to see. modelLine is the same line with the ids it counts, for the reply as the model reads it
+// back, so "forget that" reaches those claims. The notes it counts stop waiting only when taken, once the reply carrying the
+// line is saved, so a run that closes first counts them next time. A note counted only as "more", or saved after the line
+// was read, keeps waiting; one no longer in memory stops waiting.
+export type HealthNotice = Readonly<{ line: string; modelLine: string; taken(): void }>;
+export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id'>[]): HealthNotice | null => {
   const waiting = kv.get<number[]>(HEALTH_SAVED_KEY);
   if (!waiting?.length) return null;
-  const byId = new Map(active().map((claim) => [claim.id, claim.text]));
-  const saved = waiting.filter((id) => byId.has(id));
+  const present = new Set(active().map((claim) => claim.id));
+  const saved = waiting.filter((id) => present.has(id));
   const named = saved.slice(0, NAMED);
-  const done = waiting.filter((id) => !byId.has(id) || named.includes(id));
+  const done = waiting.filter((id) => !present.has(id) || named.includes(id));
   const taken = () => {
     const rest = (kv.get<number[]>(HEALTH_SAVED_KEY) ?? []).filter((id) => !done.includes(id));
     if (rest.length) kv.put(HEALTH_SAVED_KEY, rest);
     else kv.delete(HEALTH_SAVED_KEY);
   };
   if (!named.length) { taken(); return null; }
-  const more = saved.length > NAMED ? `; and ${saved.length - NAMED} more` : '';
-  return { line: `Saved to memory from our earlier chat: ${named.map((id) => `"${byId.get(id)}" (c${id})`).join('; ')}${more}. Tell me to correct or forget any of it, or turn health notes off in your settings.`, taken };
+  const one = named.length === 1;
+  const more = saved.length > NAMED ? `, plus ${saved.length - NAMED} more` : '';
+  const line = `I kept ${one ? 'a note' : `${named.length} notes`} about your health from earlier${more}. Say if you want ${one ? 'it' : 'any'} changed or gone, or turn health notes off in settings.`;
+  const ids = named.map((id) => `c${id}`).join(', ');
+  return { line, modelLine: `${line}\n[Not shown to the owner: the notes are ${ids}. forget_memory takes them as claim_ids; remember takes one as replaces_id.]`, taken };
 };
 
 // Before older chat leaves the model's view, what the owner said there is kept as memory, read from the episode rows of the
@@ -57,7 +62,7 @@ export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id' | '
 // The mark is written once the save returns, so a flush that fails is tried again.
 export const FLUSH_SPAN_CHARS = 40_000;
 const FLUSHED_THROUGH_PREFIX = 'memory_flushed_through_v1:';
-export const memoryFlushHooks = (deps: Readonly<{ kv: Kv; episodes: Pick<EpisodeIndex, 'of'>; claims: () => readonly Pick<Claim, 'id' | 'text'>[]; timezone: () => string }>) => ({
+export const memoryFlushHooks = (deps: Readonly<{ kv: Kv; episodes: Pick<EpisodeIndex, 'of'>; claims: () => readonly Pick<Claim, 'id'>[]; timezone: () => string }>) => ({
   compactionFlush: (async (span, keep) => {
     const day = consolidationDay(deps.episodes.of(span.entryIds, FLUSH_SPAN_CHARS));
     if (!day.length) return;
