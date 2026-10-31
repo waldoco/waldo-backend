@@ -4,6 +4,7 @@ import { OPENAI_GPT_6_1_TERRA_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { OwnerDO } from '../src/channels/owner-do';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 
 const SUBJECT = 81201;
 const proof = vi.hoisted(() => ({ models: [] as string[], delivered: [] as string[] }));
@@ -77,7 +78,7 @@ it('an owner turn on Terra that funds a browser trial run gets a coded refusal i
       expect(ledgers).toHaveLength(1);
       expect(ledgers[0].calls.some((call: any) => call.id.startsWith('browser:'))).toBe(true);
       expect(ledgers[0].calls.some((call: any) => call.id.startsWith('model:'))).toBe(false);
-      expect(proof.delivered.at(-1)).toContain('This run did not finish.');
+      expect(proof.delivered.at(-1)?.startsWith(`${INTERRUPTED_NOTICES.unfinished}\n\n`)).toBe(true);
       await state.storage.deleteAlarm();
     });
   } finally { logs.mockRestore(); directory.mockRestore(); }
