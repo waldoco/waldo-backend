@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -34,6 +35,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
+import { unfinishedReply } from '../src/conversation/tool-loop';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -460,7 +462,7 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
-const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 // Every model call fails, so a retry inside the responder cannot rescue the turn.
 const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
 const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));
@@ -572,7 +574,7 @@ it('an iMessage turn that runs out of time while the model works answers with it
   shortDeadline(300);
   proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
   await replyFor(w, 'Plan my afternoon');
-  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  expect(JSON.parse((await sendNext(w)).body).text).toBe(unfinishedReply('time_exhausted', []));
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
   expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);

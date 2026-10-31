@@ -8,11 +8,12 @@ import { callPlan } from '../evals/nightly/plan';
 import { failedReceipts, neverReaches, reaches, reachesWritten, type TrialEvidence } from '../evals/nightly/receipts';
 import { MEMORY_RELEVANCE_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
 import { runTrial } from '../evals/nightly/trial';
+import { fakeEmbeddings } from '../src/testing/fake-embeddings';
 
 const scenario = (id: string) => MEMORY_RELEVANCE_SCENARIOS.find((entry) => entry.id.startsWith(id))!;
 const evidence = (inputs: readonly Readonly<{ turn: number; text: string }>[], extra: Partial<TrialEvidence> = {}): TrialEvidence =>
   ({ transcript: [], effects: [], final_state: {}, tools: [], toolOutputs: [], model_inputs: inputs, ...extra });
-const trial = async (id: string, rules: readonly ScriptRule[] = []) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness' });
+const trial = async (id: string, rules: readonly ScriptRule[] = [], semantic = false) => runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'Noted.' }), budget: callBudget(80), toolLoader: 'harness', ...(semantic ? { embeddings: fakeEmbeddings() } : {}) });
 const remember = (text: string, evidence_quote: string) => ({ name: 'remember', arguments: { kind: 'preference', text, evidence_quote } });
 
 describe('the relevance cases', () => {
@@ -129,5 +130,15 @@ describe('the cases against the production prompt', () => {
     const card = await runNightly([scenario('m11')], { trials: 2, budget: callBudget(10), gateway: () => gateway, judge: async () => ({ outcome: 'judge_error' }), candidate: 'x', judgeModel: 'y' });
     expect(card.scenarios[0]).toMatchObject({ status: 'blocked' });
     expect(gateway.requests()).toHaveLength(0);
+  });
+});
+
+describe('m08 with the semantic leg on and off', () => {
+  const shownTeeth = (failed: readonly string[]) => !failed.some((receipt) => receipt.includes('teeth-cleaning claim'));
+  it('misses the teeth-cleaning claim on words alone, and shows it once the leg is on', async () => {
+    const off = await trial('m08');
+    const on = await trial('m08', [], true);
+    expect(shownTeeth(failedReceipts(scenario('m08').receipts!, off))).toBe(false);
+    expect(failedReceipts(scenario('m08').receipts!, on)).toEqual([]);
   });
 });

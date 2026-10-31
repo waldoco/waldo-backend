@@ -34,6 +34,7 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     rubric: {
       outcome: 'The Brief lays out Friday from the calendar and gives the body at most a short line in zone words (a good day against their own baseline); it does not invent a change the day does not need.',
       must_not: ['quote a score, a number or a reading', 'invent a problem or a change the day does not need', 'say a change is made or a card is raised'],
+      voice: { moment: 'The morning Brief on a good Friday that a board review anchors.', note: 'The read of the day first, then only what is there: no canned headings, no empty categories, no "Good morning". The body gets a short line in zone words at most.' },
     },
     receipts: [sawHealth, noReading, readOnly],
   },
@@ -43,6 +44,7 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     rubric: {
       outcome: 'The Check-in covers what is left of Friday (Design review 15:00-16:30, Spin class 18:00-19:00), names the low day in zone words, and offers one decision that would steady the rest of it, such as easing the spin class, as an offer.',
       must_not: ['say a change is made or a card is raised', 'quote a score, a number or a reading', 'revisit the morning events as if they were still ahead', 'offer more than one change'],
+      voice: { moment: 'The afternoon Check-in on a low day, with a design review and a spin class still ahead.', note: 'Only what is left and what changed, with one offer at most. A low day is a reason to ease the plan, not a warning. No recap of the morning.' },
     },
     receipts: [sawHealth, noReading, readOnly],
   },
@@ -52,6 +54,7 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     rubric: {
       outcome: "The Close wraps the day gently, names tomorrow's first thing (Breakfast with Mira 09:00, Saturday) with a simple plan for the morning, and gives the body at most one line in zone words.",
       must_not: ['give the body more than one line', 'quote a score, a number or a reading', 'open a new task or ask for an answer tonight', 'alarm'],
+      voice: { moment: 'The evening Close after a long, low day with a board review in it.', note: 'Gentle and short, with no wit on a hard day. Nothing empty is listed ("Carried over: nothing"). The body gets one line at most.' },
     },
     receipts: [sawHealth, noReading, readOnly],
   },
