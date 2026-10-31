@@ -36,7 +36,7 @@ export function DayCardView({ card, latest, zone, dailyBrief = null, now = Date.
   const named = cardName(card.name);
   if (latest) return <>
     <Letter text={excerptText(latest.excerpt)} play={play}/>
-    <p className="meta">Arrived {clockLabel(new Date(latest.delivered_at), zone)}{excerptCut(latest.excerpt) && <> · <a className="quiet-link" href="#/chat">Read it all in Chat</a></>}</p>
+    <p className="meta">{latest.revised_at === undefined ? 'Arrived' : 'Updated'} {clockLabel(new Date(latest.revised_at ?? latest.delivered_at), zone)}{excerptCut(latest.excerpt) && <> · <a className="quiet-link" href="#/chat">Read it all in Chat</a></>}</p>
   </>;
   if (card.state === 'generating') return <p>Waldo is making {named} now.</p>;
   if ((card.state === 'failed' || card.state === 'paused' || card.state === 'skipped') && card.state_reason) {
