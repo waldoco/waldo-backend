@@ -6,7 +6,7 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
-import { CLASH_LINE, DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
+import { CLASH_LINE, DAY_CARDS, PROSE_RULE, dayCardPrompt } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -93,6 +93,13 @@ describe('the body in a day card', () => {
     for (const card of DAY_CARDS) {
       const prompt = dayCardPrompt(card, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
       expect(prompt.split(BODY_RULE)).toHaveLength(2);
+    }
+  });
+
+  it('every card carries the prose rule once', () => {
+    for (const card of DAY_CARDS) {
+      const prompt = dayCardPrompt(card, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
+      expect(prompt.split(PROSE_RULE)).toHaveLength(2);
     }
   });
 

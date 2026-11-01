@@ -1,5 +1,6 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerHeldError } from '../identity/open-owner-hold';
 import { OWNER_REQUEST_HOP } from './harness';
 import { applyForgetBarrier, barrierMemory, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { heldTopicsOf } from '../memory/forget-guard';
@@ -49,7 +50,7 @@ import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
-import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
+import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
@@ -266,6 +267,7 @@ export const createOwnerResponder = (
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
     await assertCurrent();
+    if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
@@ -1077,10 +1079,10 @@ export const createOwnerResponder = (
     },
     // One welcome stage's structured call. The memory_ purpose keeps its text out of every trace: the health stage's input
     // carries the owner's readings.
-    async welcome(trace, stage, input) {
-      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input));
+    async welcome(trace, stage, input, version) {
+      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input, version));
       if (asOwner !== undefined) return asOwner;
-      return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     },
     async promote(trace, gate) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));

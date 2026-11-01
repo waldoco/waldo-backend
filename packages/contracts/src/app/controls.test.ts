@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -56,6 +56,22 @@ describe('Google connect from the app', () => {
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA' }).success).toBe(true);
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(true);
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA', handoff: 'BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(false);
+  });
+
+  it('takes account signin on google.connect alone', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, account: 'signin' }).success).toBe(true);
+    for (const account of ['', 'other', 'owner@example.test', 'SIGNIN']) expect(appControlActionV1Schema.safeParse({ ...connect, account }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'granola.connect', account: 'signin', revision, request_id: 'connect-0002' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'google.disconnect', id: 'acct-1', account: 'signin', revision, request_id: 'connect-0003' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'day', action: 'timezone.set', value: 'UTC', account: 'signin', revision, request_id: 'connect-0004' }).success).toBe(false);
+  });
+
+  it('the connections view may name the sign-in account, an address and nothing else', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin: { email: 'owner@example.test' } } })).success).toBe(true);
+    for (const signin of [{}, { email: 'not an address' }, { email: 'owner@example.test', subject: '1234' }, null]) {
+      expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin } })).success).toBe(false);
+    }
   });
 });
 
@@ -257,13 +273,14 @@ describe('constellation view', () => {
       { ...valid[2], items: [{ ...node, sources: ['apple_health', 'calendar'], confirmation: 'waldos_read' }] },
       { ...valid[2], items: [{ ...node, sources: [], confirmation: 'confirmed' }] },
       { ...valid[4], item: { ...node, sources: ['gmail'], confirmation: 'waldos_read' } },
+      { ...valid[2], items: [{ ...node, sources: ['web', 'setup', 'calendar'] }] },
     ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(true);
     for (const data of [
       { ...valid[0], welcome: { ...welcome, state: 'failed' } }, { ...valid[0], welcome: { ...welcome, stages: { ...stages, web: 'failed' } } },
       { ...valid[0], welcome: { ...welcome, stages: { health: 'done', calendar: 'done', mail: 'done' } } }, { ...valid[0], welcome: { ...welcome, nodes: -1 } },
       { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: null } }, { ...valid[0], welcome: { ...welcome, finished_at: 1 } },
       { ...valid[0], welcome: { ...welcome, state: 'not_started' } },
-      { ...valid[2], items: [{ ...node, sources: ['web'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
+      { ...valid[2], items: [{ ...node, sources: ['lookup'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
       { ...valid[1], welcome },
     ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(false);
   });
@@ -669,6 +686,11 @@ describe('where Waldo writes first, from the day view', () => {
     data: { timezone: 'Europe/London', date: '2026-10-11', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
   });
   it('is revision 11', () => expect(APP_CONTROLS_PROACTIVE_SURFACE_REVISION).toBe(11));
+  it('names web and setup node sources from revision 13, beside the five of revision 1', () => {
+    expect(APP_CONTROLS_WELCOME_WEB_REVISION).toBe(13);
+    expect(appNodeSourceV13Schema.options).toEqual([...appNodeSourceV1Schema.options, 'web', 'setup']);
+    expect(appNodeSourceV1Schema.safeParse('web').success).toBe(false);
+  });
   it('names one of the first run\'s surfaces in value, from the day view, and nothing else', () => {
     for (const value of ['app', 'whatsapp', 'both', 'app_imessage']) expect(appControlActionV1Schema.safeParse(set({ value })).success).toBe(true);
     for (const bad of [set({ value: undefined }), set({ value: 'telegram' }), set({ value: 'WhatsApp' }), set({ value: '' }), set({ view: 'connections' }), set({ view: 'account' }),

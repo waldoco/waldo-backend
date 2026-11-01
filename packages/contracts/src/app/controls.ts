@@ -57,6 +57,9 @@ export const appControlActionV1Schema = z.strictObject({
   code: z.string().regex(/^\d{6}$/).optional(),
   // The version of the agent mail notice the owner was shown, for agent_mail.claim only.
   notice: agentMailNoticeVersion.optional(),
+  // google.connect only, and only while the connections view offers google.signin: connect the Google account the owner
+  // signs in with. The backend resolves it from the owner's own sign-in identity; the app never names an address.
+  account: z.literal('signin').optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   // Try again on one of today's cards: revision 3, the day view, the card's id and nothing else.
@@ -66,6 +69,7 @@ export const appControlActionV1Schema = z.strictObject({
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  if (action.account !== undefined && action.action !== 'google.connect') ctx.addIssue({ code: 'custom', path: ['account'], message: 'account belongs to google.connect alone' });
   // Disconnecting Google names the account's connections id and nothing else; the receipt is recorded once Waldo has dropped it.
   if (action.action === 'google.disconnect' && (action.view !== 'connections' || !action.id
     || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'google.disconnect starts from the connections view and names one Google account in id, nothing else' });
@@ -238,7 +242,10 @@ export const appConnectorTileV1Schema = z.strictObject({
   connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable(),
 });
 export const appControlConnectionsDataV1Schema = z.strictObject({
-  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })) }),
+  // signin: the owner signs in with Google and that account is not connected yet, so the app can offer to connect that same
+  // account with google.connect account 'signin'. Its presence is the capability: a backend without it never offers it, and
+  // an older app reads the view tolerantly and drops it. email is the owner's own confirmed address.
+  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
   // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo
   // can no longer read it and connecting again fixes that. connected_at is epoch ms.
   granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
@@ -278,11 +285,15 @@ const memoryClaim = z.strictObject({
 // said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote
 // or confirmed the notes under it.
 export const appNodeSourceV1Schema = z.enum(['apple_health', 'health_connect', 'calendar', 'tasks', 'gmail']);
+// Controls revision 13 (`controls=13`) names two more node sources: web, a node Waldo drew from what the owner look-up found,
+// and setup, one drawn from the owner's own setup answers. Revisions below it never receive either.
+export const APP_CONTROLS_WELCOME_WEB_REVISION = 13;
+export const appNodeSourceV13Schema = z.enum([...appNodeSourceV1Schema.options, 'web', 'setup']);
 const memoryNode = z.strictObject({
   id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
   estimate, estimate_kind: z.literal('uncalibrated_model_estimate'),
   support: z.strictObject({ state: z.enum(['stored_links', 'incomplete', 'invalid']), claim_ids: z.array(memoryId), unavailable_count: count, distinct_source_refs: count, independent_observations: z.literal('unverified') }),
-  sources: z.array(appNodeSourceV1Schema).max(appNodeSourceV1Schema.options.length).optional(),
+  sources: z.array(appNodeSourceV13Schema).max(appNodeSourceV13Schema.options.length).optional(),
   confirmation: z.enum(['waldos_read', 'confirmed']).optional(),
 });
 // The one-time welcome build that starts when setup ends. Each source's stage settles: done with nodes, empty when the
@@ -449,3 +460,4 @@ export type AppControlResultV1 = z.infer<typeof appControlResultV1Schema>;
 export type AppChannelStatusV1 = z.infer<typeof appChannelStatusV1Schema>;
 export type AppWelcomeBuildV1 = z.infer<typeof appWelcomeBuildV1Schema>;
 export type AppNodeSourceV1 = z.infer<typeof appNodeSourceV1Schema>;
+export type AppNodeSourceV13 = z.infer<typeof appNodeSourceV13Schema>;

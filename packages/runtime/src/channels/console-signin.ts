@@ -17,6 +17,7 @@ import { DASHBOARD_HELD_CHANGES_PATH } from './dashboard-held-changes';
 import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
 import { fenceSession, ownerSessionHash } from './session-fence';
 import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
+import { markOpenOwner } from '../identity/open-owner-hold';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -32,7 +33,7 @@ export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
 // CONSOLE_GOOGLE_SIGNIN "1" offers Google on the sign-in page; it needs the callback on Supabase's redirect allow list first.
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string; OPEN_SIGNUP?: string }>;
 // The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
 const dashboardJson = (url: URL, request: Request) =>
   [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_ACCESS_LOG_PATH,DASHBOARD_HELD_CHANGES_PATH].includes(url.pathname)
@@ -244,6 +245,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   // The owner's console session, the same whichever way they proved their email. retry is the page to show on a failure.
   const signInOwner = async (doName: string, hop: string, retry: (note: string) => Response, cookies: readonly string[] = []): Promise<Response> => {
     const withCookies = (response: Response) => { cookies.forEach(cookie => response.headers.append('set-cookie', cookie)); return finish(response); };
+    let marked: boolean;
+    try { marked = await markOpenOwner(env, auth.openOwnerState, owners, doName); } catch { marked = false; }
+    if (!marked) {
+      event(hop, false, 'open_owner_mark_failed');
+      return withCookies(retry('Sign-in is having trouble. Try again in a moment.'));
+    }
     const grant = await owners.get(owners.idFromName(doName))
       .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: grantHeaders(doName, request) });
     if (!grant.ok) {
