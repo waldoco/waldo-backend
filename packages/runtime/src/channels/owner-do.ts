@@ -5,7 +5,7 @@ import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeSupportIds } from '../onboarding/welcome';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
-import type { IMessageProof } from './dashboard-phone';
+import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
 import { enrollAtTap, iMessageNumberView } from './imessage/enrollment';
 import { photonConfig } from './imessage/photon';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
@@ -1247,6 +1247,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(canEnroll ? { enroll: async (phone: string) => (await enrollAtTap(env, doName, phone)).kind } : {}),
     };
   }
+  // Whether the owner can prove a number from WhatsApp, as the app's link route reads it, and the end of the number their WhatsApp is linked from.
+  private whatsappProof(doName: string): WhatsAppProof {
+    const auth = consoleAuth(this.env);
+    return {
+      offered: () => chatChannelLinks({ env: this.env, kv: this.ctx.storage.kv, doName, auth }).offered('whatsapp'),
+      hint: async () => (await auth?.whatsAppHandleHint?.(doName)) ?? null,
+    };
+  }
   private whatsappUnlinked = async (): Promise<void> => {
     let retired: readonly string[] = [];
     this.ctx.storage.transactionSync(() => { retired = this.bindWhatsApp(null); });
@@ -1782,7 +1790,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
             chatLinks:()=>this.proactiveLinks(auth),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
