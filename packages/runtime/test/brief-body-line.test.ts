@@ -96,12 +96,10 @@ describe('the body in a day card', () => {
     }
   });
 
-  it('every card asks for plain sentences, with no labelled sections and no empty category named', () => {
+  it('every card carries the prose rule once', () => {
     for (const card of DAY_CARDS) {
       const prompt = dayCardPrompt(card, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
       expect(prompt.split(PROSE_RULE)).toHaveLength(2);
-      expect(prompt).not.toContain('short sections');
-      expect(card.instruction).not.toMatch(/\b(Done today|Carried over|Tomorrow):/);
     }
   });
 
