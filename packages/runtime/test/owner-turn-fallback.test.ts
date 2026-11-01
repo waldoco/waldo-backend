@@ -308,14 +308,14 @@ const claudeResponder = (gateway: LLMGatewayAdapter) => {
 
 it('with Claude chosen, an owner turn tries Sonnet with full then reduced context, then Terra, then the floor', async () => {
   const { gateway, models } = scriptedProviders({});
-  const reply = await claudeResponder(gateway).respond(ownerTyped({ traceId: 'claude-turn-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
+  const reply = await claudeResponder(gateway).respond(ownerTyped({ traceId: 'sonnet-first-turn-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
   expect(models()).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
   expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
 });
 
 it('with Claude chosen, Sonnet answers at medium effort with room for its thinking, its prompt cached provider-side', async () => {
   const { gateway, requests } = scriptedProviders({ [ANTHROPIC_PROVIDER]: [{ text: 'Your day is clear.' }] });
-  await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'claude-turn-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).resolves.toBe('Your day is clear.');
+  await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'sonnet-first-turn-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).resolves.toBe('Your day is clear.');
   expect(requests[0]!.step).toMatchObject({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, cache: 'anthropic_native' });
   expect(requests[0]!.request).toMatchObject({ reasoning_effort: 'medium', max_tokens: 32_000 });
 });
@@ -325,7 +325,7 @@ it('with Claude chosen, an owner turn whose Sonnet dies mid-turn is finished by 
     [ANTHROPIC_PROVIDER]: [{ tool: 'get_context', topic: 'one' }, { fail: 'transient' }],
     [OPENAI_PROVIDER]: [{ tool: 'get_context', topic: 'two' }, { text: 'Done.' }],
   });
-  await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'claude-turn-3', conversationRef: 'telegram-1', surface: 'telegram', text: 'two steps please', memoryWrites: false }), time)).resolves.toBe('Done.');
+  await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'sonnet-first-turn-3', conversationRef: 'telegram-1', surface: 'telegram', text: 'two steps please', memoryWrites: false }), time)).resolves.toBe('Done.');
   const openai = requests.filter((request) => request.step.provider === OPENAI_PROVIDER);
   expect(openai[0]!.request.tool_turns?.map((turn) => JSON.parse(turn.call.arguments).topic)).toEqual(['one']);
   expect(openai[0]!.request).toMatchObject({ reasoning_effort: 'medium', max_tokens: 25_000 });
@@ -333,7 +333,7 @@ it('with Claude chosen, an owner turn whose Sonnet dies mid-turn is finished by 
 
 it('with Claude chosen, a side job tries Haiku with full then reduced context, then Luna', async () => {
   const { gateway, models } = scriptedProviders({});
-  await expect(claudeResponder(gateway).chooseReaction(ownerTyped({ traceId: 'claude-reaction-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }))).rejects.toThrow(/live model failed/);
+  await expect(claudeResponder(gateway).chooseReaction(ownerTyped({ traceId: 'sonnet-first-reaction', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }))).rejects.toThrow(/live model failed/);
   expect(models()).toEqual([ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, OPENAI_GPT_6_LUNA_MODEL]);
 });
 
@@ -345,7 +345,7 @@ it('with Claude chosen, a file Claude cannot carry is answered by Terra, and a b
       if (input.step.provider === ANTHROPIC_PROVIDER) return { ok: false, code: 'invalid_args', error: 'no wire for it', ...failure };
       return { ok: true, data: { model: input.request.model, text: 'Read your notes.', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } };
     } };
-    const reply = await claudeResponder(gateway).respond(ownerTyped({ traceId: `claude-file-${String(failure.unsendable)}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'read this', memoryWrites: false }), time).catch((error: unknown) => error);
+    const reply = await claudeResponder(gateway).respond(ownerTyped({ traceId: `sonnet-first-file-${String(failure.unsendable)}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'read this', memoryWrites: false }), time).catch((error: unknown) => error);
     return { reply, models: requests.map((request) => request.request.model) };
   };
   await expect(run({ unsendable: true })).resolves.toEqual({ reply: 'Read your notes.', models: [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL] });

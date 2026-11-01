@@ -49,6 +49,13 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '0' }).memorySelection).toBe(false);
   });
 
+  it('runs the OpenAI chat model while staging runs OpenAI, and refuses to stand in for a Claude staging it cannot judge apart', () => {
+    expect(stagingProfile({ ...STAGING, WALDO_MODEL_PROVIDER: 'openai' }).model).toBe(WALDO_CHAT_MODEL);
+    for (const value of ['anthropic', '']) {
+      expect(() => stagingProfile({ ...STAGING, WALDO_MODEL_PROVIDER: value }), value).toThrow(/Claude/);
+    }
+  });
+
   it('runs semantic recall when staging turns it on, and not otherwise', () => {
     expect(stagingProfile({ ...STAGING, MEMORY_SEMANTIC_RECALL: '1' }).semantic).toBe(true);
     expect(stagingProfile({ ...STAGING, MEMORY_SEMANTIC_RECALL: '0' }).semantic).toBe(false);

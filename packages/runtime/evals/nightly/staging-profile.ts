@@ -3,10 +3,11 @@
 // keep. Every variable in that block is classified here; a test goes red on one that is not, so a new flag that shapes
 // turns cannot reach staging without the eval's owner deciding what to do about it.
 import { readFileSync } from 'node:fs';
-import { WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
+import { OPENAI_PROVIDER, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { parseJsonc } from '../../../../scripts/jsonc.mjs';
 import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
+import { modelProviderSetting } from '../../src/llm/owner-routes';
 
 export type StagingVars = Readonly<Record<string, string>>;
 
@@ -25,6 +26,7 @@ const WHATSAPP = 'WhatsApp surface setup; the trial runs the app surface';
 const SYNTHETIC_TOOLS = 'the trial\'s tools are the synthetic handlers of world.ts, not the live registry';
 
 export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
+  WALDO_MODEL_PROVIDER: mapped("'openai' runs the OpenAI chat model; a Claude staging is refused, since the judge is Claude"),
   WALDO_TOOL_LOADER: mapped("'harness' loads core tools up front and the rest through find_tools and use_tool"),
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
@@ -104,8 +106,10 @@ export type StagingProfile = Readonly<{
   semantic: boolean;
 }>;
 
-// The owner object's own precedence: the harness loader wins over provider tool search.
+// The owner object's own precedence: the harness loader wins over provider tool search. A staging that runs Claude has no
+// stand-in here: the candidate would be judged by its own model family, so the eval refuses instead of scoring OpenAI.
 export const stagingProfile = (vars: StagingVars): StagingProfile => {
+  if (modelProviderSetting(vars.WALDO_MODEL_PROVIDER) !== OPENAI_PROVIDER) throw new Error('staging runs Claude; the eval judges with Claude, so it has no independent staging profile for it');
   const harness = vars.WALDO_TOOL_LOADER === 'harness';
   return {
     label: 'staging', model: WALDO_CHAT_MODEL,
