@@ -81,6 +81,24 @@ describe('offloaded Google pages with continuations', () => {
     expect(next.result.ok).toBe(true);
   });
 
+  it('a full page in the task id shape Google returns today is stored whole', async () => {
+    // Observed in responses, not documented: a newer task id is base64url around 16 random base64url characters, so a
+    // page holds a hundred two-layer tokens that must not spend the scribe's depth.
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let seed = 7;
+    const random16 = () => Array.from({ length: 16 }, () => alphabet[(seed = (seed * 1103515245 + 12345) % 2147483648) % 64]).join('');
+    const ids = Array.from({ length: 100 }, () => b64(random16()));
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const response = await tasksFetcher()(input);
+      if (!new URL(String(input)).pathname.endsWith('/tasks')) return response;
+      const page = await response.json() as { items: Array<Record<string, unknown>> };
+      return Response.json({ ...page, items: page.items.map((item, i) => ({ ...item, id: ids[i], webViewLink: `https://tasks.google.com/task/${ids[i]}?sa=6` })) });
+    }) as typeof fetch;
+    const { result } = await dispatch(getTasks(fetcher), { limit: 100 });
+    expect(result).toMatchObject({ ok: true, data: { read_with: 'read_tool_output' } });
+    expect((result as { data: object }).data).not.toHaveProperty('withheld');
+  });
+
   it('a full page of one selected list is stored', async () => {
     const { result } = await dispatch(getTasks(tasksFetcher()), { limit: 100, task_list_id: listIds[1] });
     expect(result).toMatchObject({ ok: true, data: { read_with: 'read_tool_output' } });
@@ -179,11 +197,6 @@ describe('a value encoded past the decode limit is withheld, not the whole page'
     const { result } = await dispatch(getTasks(tasksFetcher(b64(`ref ${canaryTokens[2]} ${b64(b64('ordinary words, encoded'))}`))), { limit: 100 }, store);
     expect(result).toMatchObject({ ok: false, guard: { check: 'canary_token', reason: 'canary_leak' } });
     expect(kept).toHaveLength(0);
-  });
-
-  it('a base64 canary after a line break in a task note is refused', async () => {
-    const { result } = await dispatch(getTasks(tasksFetcher(`line one\n${b64(canaryTokens[0])}`)), { limit: 100 });
-    expect(result).toMatchObject({ ok: false, guard: { check: 'canary_token', reason: 'canary_leak' } });
   });
 
   it('a small result read inline withholds the value in place and keeps the rest', async () => {

@@ -751,6 +751,16 @@ function withholdDeepEncoding(input: PreparedInput): SanitiseResult | { payload:
   return { payload, redactions: count === 0 ? [] : [{ kind: 'deep_encoding', count }] };
 }
 
+// The scans run as they always have; only a decode refusal of external content read into the model is run again, once,
+// with its deep values withheld, so an ordinary read pays nothing for this.
+function withDeepEncodingWithheld(input: PreparedInput, checks: (input: PreparedInput, withheld: Redaction[]) => SanitiseResult): SanitiseResult {
+  const result = checks(input, []);
+  if (result.ok || result.diagnostic?.stage !== 'decode') return result;
+  const deep = withholdDeepEncoding(input);
+  if ('ok' in deep) return deep;
+  return deep.redactions.length === 0 ? result : checks({ ...input, payload: deep.payload }, deep.redactions);
+}
+
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
@@ -1476,22 +1486,21 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, guardPrepared);
+}
 
-  const deep = withholdDeepEncoding(input);
-  if ('ok' in deep) return deep;
-  const scanned = { ...input, payload: deep.payload };
-
-  const secret = containsCanaryOrSecret(scanned.payload, scanned);
+function guardPrepared(input: PreparedInput, withheld: Redaction[]): SanitiseResult {
+  const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
-  const health = containsForbiddenHealth(scanned);
+  const health = containsForbiddenHealth(input);
   if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
-  const pii = redactPii(scanned.payload, 'memory_block', input.source_taint, input.canary_tokens);
+  const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return denyInvalid({ stage: 'pii' });
-  pii.redactions.unshift(...deep.redactions);
+  pii.redactions.unshift(...withheld);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
@@ -1541,19 +1550,19 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, sanitisePrepared);
+}
 
-  const deep = withholdDeepEncoding(input);
-  if ('ok' in deep) return deep;
-
-  const secret = containsCanaryOrSecret(deep.payload, input);
+function sanitisePrepared(input: PreparedInput, deep: Redaction[]): SanitiseResult {
+  const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
   // External content to the model: withhold matched health spans, then the unchanged scan below
   // still denies structured health correlation.
   const withheld =
     input.source_taint === 'external' && input.destination === 'internal_context'
-      ? redactExternalHealthSpans(deep.payload, deep.redactions, sparesPlainWords(input))
-      : { invalid: false, payload: deep.payload, redactions: deep.redactions };
+      ? redactExternalHealthSpans(input.payload, deep, sparesPlainWords(input))
+      : { invalid: false, payload: input.payload, redactions: deep };
   if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
 
