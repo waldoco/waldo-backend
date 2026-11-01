@@ -58,6 +58,17 @@ describe('calendar writes carry the calendar, guests, place, notes, Meet link an
     expect(JSON.parse(String(calls[1]!.init.body))).not.toHaveProperty('summary');
   });
 
+  it('a marked cancel answers the version it left, and a restore puts the event back on that version only', async () => {
+    const { calls, client } = recorder();
+    expect(await client.cancelEvent('evt-1', '"v1"', 'm4', { calendarId: TEAM })).toMatchObject({ id: 'evt-1', etag: '"v2"' });
+    await client.restoreEvent('evt-1', '"v2"', 'm5', { calendarId: TEAM, sendUpdates: 'all' });
+    const { url, init } = calls[1]!;
+    expect(init.method).toBe('PATCH');
+    expect(url.searchParams.get('sendUpdates')).toBe('all');
+    expect(new Headers(init.headers).get('If-Match')).toBe('"v2"');
+    expect(JSON.parse(String(init.body))).toMatchObject({ status: 'confirmed', extendedProperties: { private: { waldoOperation: 'm5' } } });
+  });
+
   it.each([{ calendarId: '' }, { calendarId: 'x'.repeat(255) }])('an invalid calendar id %j is refused before any call', async (options) => {
     const { calls, client } = recorder();
     await expect(client.moveEvent('evt-1', start, end, '"v1"', 'm', options)).rejects.toThrow();

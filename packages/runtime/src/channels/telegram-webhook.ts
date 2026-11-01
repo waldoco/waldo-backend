@@ -49,6 +49,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
   HEALTH_EASE_WORKOUT?: string;
+  // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
+  // the connector-proxy function must be deployed with restoreEvent first.
+  CALENDAR_UNDO_CANCEL?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

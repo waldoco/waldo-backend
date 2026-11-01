@@ -51,3 +51,10 @@ describe('HEALTH_EASE_WORKOUT in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('0');
   });
 });
+
+describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+    expect(parsed.vars.CALENDAR_UNDO_CANCEL).toBe('0');
+    expect(parsed.env.staging.vars.CALENDAR_UNDO_CANCEL).toBe('0');
+  });
+});

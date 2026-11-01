@@ -22,7 +22,7 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 // A move that renamed the event keeps the old title, so undo gives it back.
-type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string; title?: string; name_kept?: true }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
+type Undo = ({ op: 'cancel'; id: string } | { op: 'restore'; id: string } | { op: 'move'; id: string; start: string; end: string; title?: string; name_kept?: true }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
 // card_waits_on: the surface whose card for this request waits for the owner's next message there.
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null; card_waits_on?: string | null };
 // running: approved, and its frozen call waits for or runs on the jobs lane.
@@ -450,6 +450,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   writesFirstNow?: () => boolean;
   // Whether a move may also rename the event (rename_to), to swap one thing for another in its slot.
   renames?: boolean;
+  // Whether a cancel can be undone, by putting the event back on the version the cancel left.
+  undoCancels?: boolean;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -629,6 +631,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
+      ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: entry.decided_at + UNDO_WINDOW_MS } : {}),
       ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry) };
   };
   const describeAny = (entry: LedgerRow) => {
@@ -692,7 +695,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (p.rename_to && applied.title !== p.rename_to) return { op: 'move', id: p.event_id!, start: before.start, end: before.end, name_kept: true, ...(applied.etag ? { applied_etag: applied.etag } : {}), ...undoTarget };
         return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, ...(p.rename_to ? { title: before.title } : {}), applied_etag: applied.etag, ...undoTarget } : null;
       }
-      await client.cancelEvent(p.event_id!, before.etag, marker, target);
+      const cancelled = await client.cancelEvent(p.event_id!, before.etag, marker, target);
+      // Only the version this cancel wrote may be put back; a connector that does not say which one offers no undo.
+      if (deps.undoCancels && marker && cancelled?.etag && cancelled.status === 'cancelled') return { op: 'restore', id: p.event_id!, applied_etag: cancelled.etag, ...undoTarget };
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -708,6 +713,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
       if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker, target);
+      else if (undo.op === 'restore') await client.restoreEvent(undo.id, undo.applied_etag, marker, target);
       else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker, undo.title ? { ...target, title: undo.title } : target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
@@ -1135,7 +1141,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             async () => ({ provider_id: undo.id, result: await revert(client, undo, marker) }), async () => {
               try {
                 const current = await client.event(undo.id, undo.calendar_id);
-                if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end && (!undo.title || current.title === undo.title)))
+                if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : undo.op === 'restore' ? current.status !== 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end && (!undo.title || current.title === undo.title)))
                   return {status:'done',receipt:{provider_id:undo.id,result:'undone'}};
               } catch (error) { deps.log({trace,hop:'calendar_undo_readback',ms:0,ok:false,error:String(error)}); }
               return {status:'unknown'};
