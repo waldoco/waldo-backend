@@ -38,6 +38,8 @@ export default defineConfig({
           RUN_LOOP_PROVIDER_MODE: 'fake',
           RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
           RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
+          // WhatsApp text turns start at once here; the quiet window has its own tests.
+          WHATSAPP_QUIET_MS: '0',
         },
       },
       wrangler: { configPath: './wrangler.jsonc' },

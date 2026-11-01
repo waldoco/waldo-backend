@@ -90,6 +90,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   // Waldo's WhatsApp number as E.164 digits without the plus, for the one-tap wa.me link; unset or malformed links by code alone.
   WHATSAPP_WALDO_NUMBER?: string;
+  // Milliseconds of owner quiet before a WhatsApp text turn starts, so a thought typed across messages is one turn. Unset: 3000.
+  WHATSAPP_QUIET_MS?: string;
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
