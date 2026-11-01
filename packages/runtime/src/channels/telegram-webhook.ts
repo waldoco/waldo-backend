@@ -32,6 +32,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  // The provider that runs the owner path: 'openai' or 'anthropic' (the default). The other provider is every route's
+  // fallback when its key is deployed; a chosen provider without a deployed key yields to the one that has it.
+  WALDO_MODEL_PROVIDER?: string;
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;
@@ -46,6 +49,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
   HEALTH_COACHING?: string;
+  // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
+  // renaming it; the connector-proxy function must be deployed with the rename first.
+  HEALTH_EASE_WORKOUT?: string;
+  // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
+  // the connector-proxy function must be deployed with restoreEvent first.
+  CALENDAR_UNDO_CANCEL?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

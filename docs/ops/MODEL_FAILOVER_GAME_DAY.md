@@ -6,12 +6,14 @@ This is a plan. It has not been run. Running it changes staging secrets, so it n
 
 With OpenAI unavailable on staging for 30 minutes:
 
-- the owner's turns are answered by the second provider (`claude-opus-5-5`), and side jobs by `claude-haiku-5-5`;
+- the owner's turns are answered by the second provider (`claude-sonnet-5-5`), and side jobs by `claude-haiku-5-5`;
 - the shared breaker opens after three provider misses and later turns stop asking OpenAI;
 - no turn tells the owner "please try again" because of the outage;
 - when OpenAI comes back, the breaker cools down and turns return to the primary.
 
 It does not prove the deferred answer (R-4). Until R-4 lands, a turn that fails on both providers still ends the way it did before this work.
+
+This plan is written for `WALDO_MODEL_PROVIDER=openai`. With `anthropic`, the roles reverse: the operator replaces `ANTHROPIC_API_KEY` instead, owner turns should be answered by `gpt-6.1-terra` and side jobs by `gpt-6-luna`, and the breaker opens on `anthropic`. Voice transcription and `browse_page` keep working, since they use the OpenAI key.
 
 ## Preconditions
 
