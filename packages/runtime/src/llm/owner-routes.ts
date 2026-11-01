@@ -33,8 +33,10 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // toolLoader 'harness': the reply loads core tools up front and the rest through the harness's own find_tools and use_tool
 // (tools/loader.ts), on any provider. It wins over toolSearch.
 // onAttempts: told every model call's attempts, so a provider that refused the key is noticed whichever call met it.
+// held: true while the owner may not spend on models (an open owner before their agreements); each owner-path model call asks
+// it first. A task worker builds its own access, so its owner fences the claim instead.
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
-  onAttempts?: (attempts: readonly LLMAttempt[]) => void }>;
+  onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

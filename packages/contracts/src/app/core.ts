@@ -146,7 +146,11 @@ export const appIMessageLinkCodeV1Schema = z.strictObject({
   code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/), text: z.string().regex(/^waldo [A-HJ-NP-Z2-9]{10}$/),
   address: z.string().min(3).max(320), send_url: z.string().startsWith('sms:').max(512), expires_in_seconds: z.literal(600),
 });
+// Before sign-in: whether this server admits a new account with no invite. Open, sign-up asks for no invite code; closed, it
+// does. A Worker without the route answers 404, which reads as closed.
+export const appAuthOptionsV1Schema = z.strictObject({ open_signup: z.boolean() });
 export const appCoreRoutesV1 = [
+  { method: 'GET', path: '/app/v1/auth/options', response: appAuthOptionsV1Schema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   // A Worker without this route answers 404; the app then offers the email code only.

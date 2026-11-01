@@ -50,6 +50,16 @@ const scripted = (script: Script, seen: Array<{ turns: readonly LLMToolTurn[]; c
 };
 
 describe('a task worker attempt', () => {
+  it('stops at the job\'s own round cap, where its brief carries one', async () => {
+    const capped: TaskBrief = { ...brief, machine: { job: 'owner_lookup', input_digest: 'd', scope: 'owner', refs: ['name'], max_rounds: 2 } };
+    const { brain, log } = fakeBrain({ brief: capped });
+    await runTaskAttempt(ticket, { brain, model: scripted([{ call: 'search_communication', args: { query: 'again' } }]), sliceEnd: Date.now() + 60_000 });
+    expect(log.tools.length).toBeLessThanOrEqual(2);
+    const uncapped = fakeBrain();
+    await runTaskAttempt(ticket, { brain: uncapped.brain, model: scripted([...Array.from({ length: 4 }, (_, i) => ({ call: 'search_communication', args: { query: `q${i}` } })), { call: FINISH_TASK, args: result }]), sliceEnd: Date.now() + 60_000 });
+    expect(uncapped.log.tools.length).toBe(4);
+  });
+
   it('reads through the brain, checkpoints each round, and reports its structured result once', async () => {
     const { brain, log } = fakeBrain();
     const seen: Parameters<typeof scripted>[1] = [];

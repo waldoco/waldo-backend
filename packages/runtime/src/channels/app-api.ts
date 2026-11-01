@@ -1,6 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
-import { APP_CHAT_FILES_REVISION, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { APP_CHAT_FILES_REVISION, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
@@ -18,6 +18,8 @@ import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { APP_RATING_SUFFIX } from './app-rating';
+import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
+import { markOpenOwner } from '../identity/open-owner-hold';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -30,7 +32,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -141,8 +143,10 @@ const devicesRequest = async (request: Request, path: string, who: { doName: str
   return parsed.success ? ok(parsed.data) : fail(503);
 };
 
-// The answer to a sign-in that resolved an owner: the same session whichever way the owner proved their email.
-const appSignIn = async (auth: ConsoleAuth, doName: string): Promise<Response> => {
+// The answer to a sign-in that resolved an owner: the same session whichever way the owner proved their email. An owner who
+// joined openly has their object marked first, so no credential reaches them before their hold does.
+const appSignIn = async (env: AppEnv, auth: ConsoleAuth, doName: string): Promise<Response> => {
+  try { if (!(await markOpenOwner(env, auth.openOwnerState, env.OWNER_DO, doName))) return fail(503); } catch { return fail(503); }
   let credential: string | null;
   try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
   if (!credential) return fail(503);
@@ -161,6 +165,13 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
 
+  if (url.pathname === `${APP_PATH}/auth/options`) {
+    if (request.method !== 'GET') return fail(405);
+    if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-options-ip:${request.headers.get('cf-connecting-ip') ?? 'unknown'}` })).success) return fail(429); } catch { return fail(503); }
+    return ok(appAuthOptionsV1Schema.parse({ open_signup: openSignupCaps(env) !== null }));
+  }
+
   if (url.pathname === `${APP_PATH}/auth/code`) {
     if (request.method !== 'POST') return fail(405);
     const body = await readJson(request);
@@ -169,8 +180,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const gate = await admit(env, auth, request, 'send', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
-    // Unknown addresses get the same answer; sendCode itself only emails members and holders of a matching invite.
-    try { await auth.sendCode(email, typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
+    // Unknown addresses get the same answer; sendCode itself only emails members, holders of a matching invite and, with
+    // open sign-up, anyone while a join could still fit.
+    try { await auth.sendCode(email, typeof body?.invite === 'string' ? body.invite : '', openSignupFor(env, request)); } catch { return fail(503); }
     return ok({ ok: true });
   }
 
@@ -184,9 +196,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : ''); } catch { return fail(503); }
+    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : '', openSignupFor(env, request)); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
-    return appSignIn(auth, doName);
+    return appSignIn(env, auth, doName);
   }
 
   if (url.pathname === `${APP_PATH}/auth/id_token`) {
@@ -199,7 +211,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithIdToken']>>>;
-    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? ''); } catch { return fail(503); }
+    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? '', openSignupFor(env, request)); } catch { return fail(503); }
     if (signedIn.state === 'refused') {
       console.error(JSON.stringify({ hop: 'app_id_token', ok: false, code: signedIn.reason === 'token' ? 'id_token_refused' : 'id_token_no_email', provider }));
       return fail(403);
@@ -213,7 +225,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       try { if (!(await auth.sendCode(signedIn.email))) return fail(503); } catch { return fail(503); }
       return ok({ state: 'confirm_with_email_code', email: signedIn.email, link: signedIn.link });
     }
-    return appSignIn(auth, signedIn.doName);
+    return appSignIn(env, auth, signedIn.doName);
   }
 
   const who = await authenticate(request, auth);

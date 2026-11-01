@@ -1,4 +1,4 @@
-import { APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -12,6 +12,7 @@ import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof } from './dashboard-phone';
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
+import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
@@ -25,7 +26,7 @@ export type AppControlsHost = Readonly<{
   cardsLatest?(view:ConsoleView,revised:boolean):Promise<ConsoleView['cards']>;
   // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
   days?(date?:string):Promise<object|null>;
-  act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
+  act(action:ConsoleAction,fields?:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt>;
   // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
   welcome?():AppWelcomeBuildV1;
   // What the owner asked to be called, or null when the memory holds no name to serve.
@@ -47,17 +48,22 @@ const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
 const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
-const withoutLocalId=({local_id:_local,...item}:Item)=>item;
+// A build below controls revision 13 knows five node sources: a web or setup source is left out of what it reads.
+const V1_SOURCES:ReadonlySet<unknown>=new Set(appNodeSourceV1Schema.options);
+const withoutLocalId=(webSources:boolean)=>({local_id:_local,...item}:Item)=>webSources||!Array.isArray(item.sources)?item:{...item,sources:item.sources.filter(source=>V1_SOURCES.has(source))};
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
 // A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
 // revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
 const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
   :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
-const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins?:ReadonlyMap<number,string>)=>({
-  ...rest,memory_view:view,
-  ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(pinOf(pins)(item as Item))}:{}),
-  ...(center?{center:withoutLocalId(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(withoutLocalId)}:{}),
-});
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins:ReadonlyMap<number,string>|undefined,webSources:boolean)=>{
+  const shown=withoutLocalId(webSources);
+  return {
+    ...rest,memory_view:view,
+    ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(shown)}:{}),...(item?{item:shown(pinOf(pins)(item as Item))}:{}),
+    ...(center?{center:shown(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(shown)}:{}),
+  };
+};
 type Book=Record<string,{receipt:unknown;expires:number}>;
 // A build before controls revision 5 knows four stages: the setup stage is left out of what it reads.
 const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBuildV1=>{
@@ -66,7 +72,14 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
   return {...build,stages};
 };
 const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
+// The owner's Google sign-in account while it can be connected and is not yet: left out when the directory cannot say.
+const googleSignin=async(env:PhoneSmsEnv,owner:string,google:{connectAvailable:boolean;accounts:readonly {email:string}[]})=>{
+  if(!google.connectAvailable)return {};
+  const signin=await ownerGoogleSignin(env,owner);
+  return signin&&!google.accounts.some(account=>account.email.toLowerCase()===signin.email)?{signin:{email:signin.email}}:{};
+};
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
+const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
 // Controls revision 12 names WhatsApp as a way to prove the number; builds below it never receive it.
 const whatsappProofFor=(request:Request,host:AppControlsHost)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WHATSAPP_PROOF_REVISION?host.whatsappProof:undefined;
 const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
@@ -93,9 +106,9 @@ const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:s
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
 const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit'};
 // One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
-const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean)=>{
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean,webSources:boolean)=>{
   const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
-  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined)}:{status:paged.status,error:paged.body.error};
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined,webSources)}:{status:paged.status,error:paged.body.error};
 };
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
@@ -124,7 +137,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
       let graph:ReturnType<typeof constellationData>;
-      try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
+      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request));}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
@@ -168,7 +181,11 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const day=query.data.view==='day'?dayForRevision(request,shown):shown;
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
-    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface},revision});
+    // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
+    // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
+    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
+    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)}}:{};
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
@@ -189,7 +206,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request));return detail.status===200?detail.data as never:null;},
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request),namesWebSources(request));return detail.status===200?detail.data as never:null;},
       act:async node=>{await host.assertCurrent();return host.act({...node,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
@@ -202,7 +219,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true);return detail.status===200?detail.data as never:null;},
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true,namesWebSources(request));return detail.status===200?detail.data as never:null;},
       act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
@@ -227,7 +244,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
       act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-      act:async action=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):host.act(action);}});
+      act:async(action,fields)=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):action.action==='google.connect'?host.act(action,fields):host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.
