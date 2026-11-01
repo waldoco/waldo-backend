@@ -57,6 +57,22 @@ describe('Google connect from the app', () => {
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(true);
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA', handoff: 'BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(false);
   });
+
+  it('takes account signin on google.connect alone', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, account: 'signin' }).success).toBe(true);
+    for (const account of ['', 'other', 'owner@example.test', 'SIGNIN']) expect(appControlActionV1Schema.safeParse({ ...connect, account }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'granola.connect', account: 'signin', revision, request_id: 'connect-0002' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'google.disconnect', id: 'acct-1', account: 'signin', revision, request_id: 'connect-0003' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'day', action: 'timezone.set', value: 'UTC', account: 'signin', revision, request_id: 'connect-0004' }).success).toBe(false);
+  });
+
+  it('the connections view may name the sign-in account, an address and nothing else', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin: { email: 'owner@example.test' } } })).success).toBe(true);
+    for (const signin of [{}, { email: 'not an address' }, { email: 'owner@example.test', subject: '1234' }, null]) {
+      expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin } })).success).toBe(false);
+    }
+  });
 });
 
 describe('channel status in the connections view', () => {

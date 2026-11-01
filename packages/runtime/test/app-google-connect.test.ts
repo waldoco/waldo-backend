@@ -14,8 +14,12 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 
 const SECRET = 'fictional-connect-app-router-secret-0000000000', STATE_SECRET = 'fictional-connect-state-secret', DIRECTORY = 'https://connect-app.fixture.invalid', ORIGIN = 'https://app.fixture.invalid';
 const OWNER = '10000000-0000-0000-0000-000000000002', AUTH = '20000000-0000-0000-0000-000000000002', EMAIL = 'connect-owner@example.test';
+const SUBJECT = '109876543210987654321';
+// What the directory answers for the owner's Google sign-in identity; null for an owner who signs in another way.
+const directory = vi.hoisted(() => ({ signin: null as unknown, signinStatus: 200, lookups: 0 }));
 
-const fixture = async (google: boolean, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: OwnerDO) => Promise<void>, signedInAgo = 0) => {
+type App = (path: string, body?: unknown, credential?: string, contract?: string) => Promise<Response>;
+const fixture = async (google: boolean, run: (app: App, issued: Record<string, string>[], instance: OwnerDO, state: DurableObjectState) => Promise<void>, signedInAgo = 0) => {
   const name = `app-connect-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
@@ -40,21 +44,26 @@ const fixture = async (google: boolean, run: (app: (path: string, body?: unknown
       if (fn === 'workspace_owner_binding') return Response.json({ owner_id: OWNER, environment: 'staging', namespace: 'connect-app-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 });
       if (fn === 'health_plane' || fn === 'health_context_read') return Response.json(null);
       if (fn === 'google_connections' || fn === 'connections_list') return Response.json([]);
+      if (fn === 'owner_google_signin') {
+        expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, `googlesignin.${a.p_do_name}`));
+        directory.lookups += 1;
+        return directory.signinStatus === 200 ? Response.json(a.p_do_name === name ? directory.signin : null) : new Response('down', { status: directory.signinStatus });
+      }
       throw Error(`Unlisted fixture RPC ${fn}`);
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'connect-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined,
       WALDO_OAUTH_STATE_SECRET: STATE_SECRET, GOOGLE_CLIENT_ID: google ? 'fictional-client.apps.googleusercontent.com' : undefined, GOOGLE_CLIENT_SECRET: google ? 'fictional-client-secret' : undefined };
     const instance = new OwnerDO(state, settings as never);
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
-    const app = async (path: string, body?: unknown, credential?: string) => {
-      const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
+    const app = async (path: string, body?: unknown, credential?: string, contract?: string) => {
+      const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}), ...(contract ? { 'x-waldo-app-contract': contract } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
       expect(response).not.toBeNull(); return response!;
     };
-    try { await run(app, issued, instance); } finally { fetcher.mockRestore(); }
+    try { await run(app, issued, instance, state); } finally { fetcher.mockRestore(); directory.signin = null; directory.signinStatus = 200; directory.lookups = 0; }
   });
 };
 
-const signIn = async (app: (path: string, body?: unknown, credential?: string) => Promise<Response>) => {
+const signIn = async (app: App) => {
   expect((await app('/auth/code', { email: EMAIL })).status).toBe(200);
   return ((await (await app('/auth/verify', { email: EMAIL, code: '123456' })).json()) as { credential: string }).credential;
 };
@@ -84,7 +93,7 @@ it('an app-only owner starts Google connect from the app: a first-party ticket i
   });
 });
 
-const connectFrom = async (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, credential: string) => {
+const connectFrom = async (app: App, credential: string) => {
   const { revision } = await (await app('/controls?view=connections', undefined, credential)).json() as { revision: string };
   return app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-request-0002' }, credential);
 };
@@ -136,4 +145,98 @@ it('a connect receipt carries only this deployment\'s own start links: the conso
   for (const [link, origin] of [[handed, undefined], [handed, 'https://other.example'], [`${ORIGIN}/c/AAAAAAAAAAAAAAAAAAAAAA`, ORIGIN], [`${handed}&next=x`, ORIGIN], [`${handed}#x`, ORIGIN],
     [`${ORIGIN}/c/short?handoff=BBBBBBBBBBBBBBBBBBBBBB`, ORIGIN], [`${ORIGIN}/console`, ORIGIN], [`https://other.example${console}`, ORIGIN], [`${console}x`, ORIGIN]] as const)
     expect([link, googleConnectReceipt(link, origin).state]).toEqual([link, 'rejected']);
+});
+
+type Connections = { revision: string; data: { google: { connectAvailable: boolean; signin?: { email: string } } } };
+const begin = async (instance: OwnerDO, ticketHashOf: string) => {
+  const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: ticketHashOf }) }));
+  return new URL((await begun.json() as { url: string }).url);
+};
+const tickets = (issued: Record<string, string>[]) => issued.filter(row => row.p_ticket_hash);
+
+it('a Google signer-in is offered their sign-in account, and connecting it sends Google there with consent still asked', async () => {
+  directory.signin = { subject: SUBJECT, email: EMAIL };
+  await fixture(true, async (app, issued, instance, state) => {
+    const logs = vi.spyOn(console, 'log'), errors = vi.spyOn(console, 'error');
+    const credential = await signIn(app);
+    const offered = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    expect(offered.data.google.signin).toEqual({ email: EMAIL });
+    // Outside the view's revision: an action read before or after the offer appears is not stale.
+    directory.signin = null;
+    const without = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    expect('signin' in without.data.google).toBe(false);
+    expect(without.revision).toBe(offered.revision);
+    directory.signin = { subject: SUBJECT, email: EMAIL };
+    const response = await app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', account: 'signin', revision: offered.revision, request_id: 'connect-request-0101' }, credential);
+    expect(appControlResultV1Schema.parse(await response.json()).receipt.state).toBe('recorded');
+    const [ticket] = tickets(issued);
+    expect([...state.storage.kv.list({ prefix: 'connect_hint:' })]).toHaveLength(1);
+    const consent = await begin(instance, ticket!.p_ticket_hash!);
+    expect(consent.searchParams.get('login_hint')).toBe(SUBJECT);
+    expect(consent.searchParams.get('prompt')).toBe('consent');
+    expect(consent.searchParams.get('include_granted_scopes')).toBe('true');
+    expect([...state.storage.kv.list({ prefix: 'connect_hint:' })]).toEqual([]);
+    const logged = JSON.stringify([...logs.mock.calls, ...errors.mock.calls]);
+    expect(logged).not.toContain(SUBJECT);
+    expect(logged).not.toContain(EMAIL);
+    logs.mockRestore(); errors.mockRestore();
+  });
+});
+
+it('a different account, an owner with no Google sign-in, or a directory that cannot answer gets Google\'s chooser', async () => {
+  directory.signin = { subject: SUBJECT, email: EMAIL };
+  await fixture(true, async (app, issued, instance) => {
+    const credential = await signIn(app);
+    const { revision } = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    const lookups = directory.lookups;
+    await app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-request-0102' }, credential);
+    expect(directory.lookups).toBe(lookups);
+    const consent = await begin(instance, tickets(issued)[0]!.p_ticket_hash!);
+    expect(consent.searchParams.has('login_hint')).toBe(false);
+    expect(consent.searchParams.get('prompt')).toBe('consent select_account');
+  });
+  for (const [signin, status] of [[null, 200], [{ subject: 'has space', email: EMAIL }, 200], [{ subject: SUBJECT, email: EMAIL }, 503]] as const) {
+    directory.signin = signin; directory.signinStatus = status;
+    await fixture(true, async (app, issued, instance) => {
+      const credential = await signIn(app);
+      const read = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+      expect('signin' in read.data.google).toBe(false);
+      const response = await app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', account: 'signin', revision: read.revision, request_id: 'connect-request-0103' }, credential);
+      expect(appControlResultV1Schema.parse(await response.json()).receipt.state).toBe('recorded');
+      const consent = await begin(instance, tickets(issued)[0]!.p_ticket_hash!);
+      expect(consent.searchParams.has('login_hint')).toBe(false);
+      expect(consent.searchParams.get('prompt')).toBe('consent select_account');
+    });
+  }
+});
+
+it('the sign-in account is not offered once it is connected, nor while Google cannot be connected', async () => {
+  directory.signin = { subject: SUBJECT, email: EMAIL };
+  await fixture(true, async (app, _issued, _instance, state) => {
+    await state.storage.put('google:accounts', [{ id: `local:${EMAIL}`, email: EMAIL, refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    const credential = await signIn(app);
+    const read = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    expect('signin' in read.data.google).toBe(false);
+  });
+  await fixture(false, async (app, issued) => {
+    const credential = await signIn(app);
+    const read = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    expect(read.data.google.connectAvailable).toBe(false);
+    expect('signin' in read.data.google).toBe(false);
+    expect(directory.lookups).toBe(0);
+  });
+});
+
+it('account belongs to google.connect alone, and is part of what a request id stands for', async () => {
+  directory.signin = { subject: SUBJECT, email: EMAIL };
+  await fixture(true, async (app, issued) => {
+    const credential = await signIn(app);
+    const { revision } = await (await app('/controls?view=connections', undefined, credential)).json() as Connections;
+    expect((await app('/actions', { view: 'connections', action: 'granola.connect', account: 'signin', revision, request_id: 'connect-request-0104' }, credential)).status).toBe(400);
+    const first = await app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', account: 'signin', revision, request_id: 'connect-request-0105' }, credential);
+    expect(first.status).toBe(200);
+    const again = await app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-request-0105' }, credential);
+    expect([again.status, (await again.json() as { error: string }).error]).toEqual([409, 'request_reused']);
+    expect(tickets(issued)).toHaveLength(1);
+  });
 });
