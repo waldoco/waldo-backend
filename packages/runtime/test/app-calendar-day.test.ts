@@ -47,7 +47,7 @@ beforeEach(() => {
     wire.asked.push({ fn, body });
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json(wire.session ? { owner_id: OWNER_ID, do_name: body.p_do_name, session_hash: body.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 } : null);
-    if (fn === 'health_scores_read') return Response.json(wire.scores);
+    if (fn === 'health_scores_read') { if (wire.scores === 'throw') throw new Error('synthetic health store outage'); return Response.json(wire.scores); }
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(false);
@@ -91,8 +91,8 @@ const DESIGN = item({ id: 'provider-event-design', title: 'Synthetic design revi
   attendee_emails: ['asha@example.test', 'ravi@example.test', 'mina@example.test', 'tom@example.test', 'lee@example.test'] });
 // Google lists the owner and a guest who declined; the connector's guest list holds neither.
 const ONE_ON_ONE = item({ id: 'provider-event-one-on-one', title: 'Synthetic one to one', start: '2026-10-03T11:00:00Z', end: '2026-10-03T11:30:00Z',
-  attendees: 3, attendee_names: ['Owner Fixture', 'Pat Fixture'], attendee_emails: ['pat@example.test'] });
-const DECLINED_ONLY = item({ id: 'provider-event-declined', title: 'Synthetic declined sync', start: '2026-10-03T12:00:00Z', end: '2026-10-03T12:30:00Z', attendees: 2, attendee_names: ['Owner Fixture'] });
+  attendees: 3, attendee_names: ['Pat Fixture'], attendee_emails: ['pat@example.test'] });
+const DECLINED_ONLY = item({ id: 'provider-event-declined', title: 'Synthetic declined sync', start: '2026-10-03T12:00:00Z', end: '2026-10-03T12:30:00Z', attendees: 2 });
 const FOCUS = item({ id: 'provider-event-focus', title: 'Synthetic writing block', start: '2026-10-03T07:00:00Z', end: '2026-10-03T08:30:00Z' });
 const HOLIDAY = item({ id: 'provider-event-holiday', title: 'Synthetic holiday', start: '2026-10-03', end: '2026-10-04', all_day: true });
 const CANCELLED = item({ id: 'provider-event-cancelled', title: 'Synthetic cancelled sync', start: '2026-10-03T10:00:00Z', end: '2026-10-03T10:30:00Z', status: 'cancelled' });
@@ -109,7 +109,7 @@ describe('GET /app/v1/calendar/day', () => {
       expect(body).toMatchObject({ day: '2026-10-03', timezone: 'UTC', compiled_at: new Date(AT).toISOString(), freshness: 'fresh',
         calendar: { state: 'available', read_at: new Date(AT).toISOString() }, form: { state: 'unavailable', reason: 'intraday_inputs_unavailable' } });
       expect(body.events.map(event => event.title)).toEqual(['Synthetic writing block', 'Synthetic design review', 'Synthetic one to one', 'Synthetic declined sync']);
-      expect(body.events.slice(2).map(event => [event.category, event.attendees])).toEqual([['meeting', { names: ['Owner Fixture'], more: 0 }], ['other', null]]);
+      expect(body.events.slice(2).map(event => [event.category, event.attendees])).toEqual([['meeting', { names: ['Pat Fixture'], more: 0 }], ['other', null]]);
       expect(body.events[0]).toMatchObject({ start: '2026-10-03T07:00:00.000Z', end: '2026-10-03T08:30:00.000Z', category: 'other', attendees: null, detail: null, badges: [] });
       expect(body.events[1]).toMatchObject({ start: '2026-10-03T08:30:00.000Z', end: '2026-10-03T09:30:00.000Z', category: 'meeting', detail: 'Room 4',
         attendees: { names: ['Asha Fixture', 'Ravi Fixture', 'Mina Fixture'], more: 2 }, badges: [] });
@@ -197,6 +197,34 @@ describe('GET /app/v1/calendar/day', () => {
     });
   });
 
+  it('only a missing calendar scope is a reconnect: any other 403 is a failed read, never a reason to reconnect', async () => {
+    fixture.events = [FOCUS];
+    for (const [failure, name] of [[new GoogleError(403, 'synthetic quota exceeded'), 'quota'], [new GoogleError(403, 'synthetic api off', 'SERVICE_DISABLED'), 'disabled']] as const) {
+      fixture.failure = failure;
+      await withOwner(`owner-calendar-403-${name}`, [account('owner@example.test')], async owner => {
+        const response = await ask(owner, `owner-calendar-403-${name}`);
+        expect([response.status, await response.json()], name).toEqual([503, { error: 'unavailable' }]);
+      });
+    }
+    fixture.failure = new GoogleError(403, 'synthetic scope', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT');
+    await withOwner('owner-calendar-403-scope', [account('owner@example.test')], async owner => {
+      expect(calendarDayV1Schema.parse(await (await ask(owner, 'owner-calendar-403-scope')).json())).toMatchObject({ calendar: { state: 'needs_reconnect' }, events: [] });
+    });
+  });
+
+  it('a health store that cannot be asked leaves Form unavailable, and the calendar still answers', async () => {
+    fixture.events = [FOCUS];
+    wire.scores = 'throw';
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(' ')); });
+    await withOwner('owner-calendar-health-down', [account('owner@example.test')], async owner => {
+      const response = await ask(owner, 'owner-calendar-health-down');
+      expect(response.status).toBe(200);
+      expect(calendarDayV1Schema.parse(await response.json())).toMatchObject({ calendar: { state: 'available' }, events: [{ title: 'Synthetic writing block' }], form: { state: 'unavailable', reason: 'intraday_inputs_unavailable' } });
+      expect(logs.filter(line => line.includes('"hop":"app_calendar_day"')).map(line => JSON.parse(line).code)).toEqual(['scores_read_failed', 'calendar_available']);
+    });
+  });
+
   it('consent withdrawn: Form fails closed with the reason, and the calendar still answers', async () => {
     fixture.events = [FOCUS];
     for (const [answer, reason] of [[{ error: 'consent_withdrawn' }, 'consent_withdrawn'], [{ error: 'consent_required' }, 'consent_required'], [{ error: 'not_linked' }, 'not_linked'],
@@ -239,7 +267,7 @@ describe('GET /app/v1/calendar/day', () => {
 
   it('refuses a malformed query and anything but GET', async () => {
     await withOwner('owner-calendar-query', [account('owner@example.test')], async owner => {
-      for (const query of ['?day=today', '?day=2026-02-30', '?day=2026-10-03&owner=someone-else', '?days=7']) {
+      for (const query of ['?day=today', '?day=2026-02-30', '?day=2026-10-03&owner=someone-else', '?days=7', '?day=2026-10-03&day=2026-10-04']) {
         const response = await ask(owner, 'owner-calendar-query', query);
         expect(response.status, query).toBe(400);
         expect(await response.json()).toEqual({ error: 'invalid_request' });

@@ -103,7 +103,8 @@ export const appCalendarDayRequest = async (request: Request, host: CalendarDayH
   try {
     [calendar, scores] = await Promise.all([
       readCalendar(host.google, new Date(window.start).toISOString(), new Date(window.end).toISOString()),
-      host.readScores(day).catch(() => { log(false, 'scores_read_failed'); return null; }),
+      // The health store's client answers null when it could not be asked; either way Form is unavailable and the day still answers.
+      host.readScores(day).catch(() => null).then(answer => { if (answer === null) log(false, 'scores_read_failed'); return answer; }),
     ]);
   } catch { log(false, 'calendar_read_failed'); return refuse('unavailable', 503); }
   const readAt = new Date(host.now()).toISOString();
