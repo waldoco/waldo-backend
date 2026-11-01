@@ -32,7 +32,7 @@ The app (PR #218) now draws the phone's own readings. What makes Bevel read as a
 | 1 | **S1 Parts**: part scores, part direction, sleep need, per-part calibration, Form's rows | B16, B17 (need), B22, B23 | High: a number on every Tier 2 row, and the parts add up | Medium: the maths exists; the fence, read and revision are new | No. These are base §3 "canonical component scores" |
 | 2 | **S2 Usual**: the personal usual band per signal | B14 | High: the band on every chart and card | Medium | Yes, one new row |
 | 3 | **S3 Signals**: a per-signal series for 90 days, plus today's hours | B15, B17 (stages) | High: charts past the phone's 30 days, and Android parity | Medium: a new signed read and a new route | No. Base §3 "health-detail contract" |
-| 4 | **S4 Day load**: a per-day load score with the owner's usual band | B20 | High for the athlete tester | Medium | Yes: a candidate algorithm and a row |
+| 4 | **S4 Day load**: a per-day load score with the owner's usual band | B20 | High for the athlete tester | Medium | Yes: candidate acceptance (stored in the existing component-score class) |
 | 5 | **S5 Curves**: the measured Form curve (#1660) and a new hourly stress curve on Body | B18, B19 | Medium | Medium: rebase #1660, plus one new producer | Yes: a destination extension and a candidate |
 | 6 | **S6 Waldo's read**: one model-written read per pillar per day | B21 | High | High: a new generation path, LLM cost, and a privacy path | Yes: a clarification of the narrative row |
 | — | Deferred: a sleep composite score; a 60-day window (HI-7) | B17 (score), B14 (60 d) | | | |
@@ -122,7 +122,7 @@ usual: [{
 
 **Computed:** in the same producer run that writes the day's scores ("recomputed with the day's scores", as asked), over the same 30-day read, from the same chosen source.
 
-**Stored:** as a `usual` key on today's derived row, nothing else. A past day's row keeps the band that was current on that day, so a chart can draw the band as it was.
+**Stored:** in its own `usual` column on the derived row, not inside a pillar's JSON, because `waldo.health_context_read` passes the pillar objects and `sleep_debt` whole into the owner's DO for model context (`supabase/migrations/20261031170000_health_training_load.sql:213-216`, `:224`). `health_scores_read` returns the column; `health_context_read` does not. A past day's row keeps the band that was current on that day, so a chart can draw the band as it was.
 
 **Reuses:**
 - `estimate`, `standing` and `circularStanding`, unchanged;
@@ -160,7 +160,7 @@ usual: [{
 - Nothing is stored.
 - A new signed read, `waldo.health_signal_read`, takes one signal over at most 92 days. Only nightly or daily signals get the full span; hourly signals get today's hours.
   - 90 nights of a nightly signal is about 90 rows.
-  - 90 days of an hourly signal would be about 2,160 rows. That is why hourly signals give today only, and their days come from the daily reduction.
+  - 90 days of an hourly signal is about 2,160 rows, under the 8,000 cap. The route reduces them to one value a day with the producer's reducers, and returns today's hours as well.
 - The route reduces in the DO isolate and answers. Nothing is held.
 - It requires `storage_compute` consent only, as `/scores` does: showing the owner their own readings in the app is not model processing.
 - It spends the same per-owner health budget as every `/app/v1/health/*` route.
@@ -199,7 +199,9 @@ components: [{
 
 **Computed:** in the same producer run. `Component` carries its `z` and `own` outward. No formula changes, so no version changes: rows are byte-identical in score, which a golden test proves.
 
-**Stored:** a `components` key per pillar on the derived row. The pillar fence widens.
+**Stored:** in its own `components` column on the derived row, keyed by pillar, not nested in the pillar JSON. `health_context_read` passes the pillar objects whole into the owner's DO (`20261031170000_health_training_load.sql:213-216`), so a nested key would cross into model-context reads; a separate column does not. `health_scores_read` and `health_scores_history` return it.
+
+**Engine:** only the provisional engine (`HEALTH_PROVISIONAL_SCORES=1`, staging today) produces the baseline label, own-day counts and own share. The earlier engine production runs has none of them (`producer.ts:359-362`), so S1 and S2 take effect only on rows from the provisional engine.
 
 **History:** `/scores/history` at the same revision gains per-day part scores, for the app's Components toggle.
 
@@ -217,7 +219,7 @@ components: [{
 - **Sleep efficiency** is ingested and feeds model context only.
 
 **Proposed:**
-- **S1:** the `sleep` part of B16, carrying `need_minutes` and `need_basis`. This is "Sleep needed 7 h 44 m". The need is a derived value of the owner's own nights or their statement, already within the component-score class.
+- **S1:** the `sleep` part of B16, carrying `need_minutes` and `need_basis`. This is "Sleep needed 7 h 44 m". The need is a derived value of the owner's own nights or their statement, already within the component-score class. It goes in the `components` column, not in `sleep_debt`, which `health_context_read` passes into the DO.
 - **S3:** asleep minutes, the four stage minutes as used, and efficiency, as `/signals` series. These are raw values on the health-detail contract, not on `/scores`.
 - **No stage targets.** A deep or REM target is a population threshold, which is ruled out. Stages are read against the owner's own usual (B14) once their driver subjects are built.
 - **"Tonight's sleep needed"** is the same `need_minutes`. A need that grows with load (the WHOOP style) is a new derived value, deferred (HI-12).
@@ -273,7 +275,7 @@ components: [{
 - **Score:** served as a score on the scale the owner picks (Q4), with the owner's usual band of day load (B14's `own_mean_sd` over observed days among the last 28), the method, and `approximate: true` when zones came from an observed peak.
 - **Passive load is not in v1.** The phone sends hourly min, mean and max, not seconds in zones, so passive time in zones cannot be faithfully computed. Hourly means would understate and smear it. It needs a per-hour zone summary from the phone: a new input and a new revision.
 - **No target formula.** The gate ruled on 31 Oct that how hard to train is the model's call ("no computed target number", coaching plan B). The owner's usual band stands in for Bevel's target band, and the model says in words whether today has room. Q5 asks whether the owner wants a formula band instead.
-- **Stored:** a `day_load` key on the derived row, numeric, with a new matrix row. **Shown:** `/scores` at S4's revision, and as the Load row's reading on Weight's detail.
+- **Stored:** in its own `day_load` column on the derived row, numeric, in the existing component-score class; the candidate needs acceptance, not a new row. **Shown:** `/scores` at S4's revision, and as the Load row's reading on Weight's detail.
 - **Weight's formula is unchanged.** Replacing Weight's physical-load part with day load would be `weight.v6` and a separate decision.
 
 ### B21: a written read per score and part
@@ -327,8 +329,8 @@ A slice with the flag at `"0"` writes and serves byte-identical rows to today, a
 
 | Slice | Flag (proposed name, default `"0"` in both var blocks) | Health revision (asked of the gate) | Migration (asked of the gate) | Depends on |
 |---|---|---|---|---|
-| S1 Parts | `HEALTH_SCORE_PARTS` | R-a (next free after 7) | M-a: the fence admits pillar `components` and `sleep_debt.need_minutes`; `health_scores_read` and `health_scores_history` return them | — |
-| S2 Usual | `HEALTH_USUAL` | R-a (shipped with S1) | M-a (same migration) | the amendment §3 row |
+| S1 Parts | `HEALTH_SCORE_PARTS` | R-a (next free after 7) | M-a: new `components` and `usual` columns with their fence; `health_scores_read` and `health_scores_history` return them, `health_context_read` does not | `HEALTH_PROVISIONAL_SCORES=1` |
+| S2 Usual | `HEALTH_USUAL` | R-a (shipped with S1) | M-a (same migration) | the amendment §3 row; `HEALTH_PROVISIONAL_SCORES=1` |
 | S3 Signals | `HEALTH_SIGNALS_READ` | R-b (the route exists only from R-b, like `/scores/history` at 4) | M-b: the new `waldo.health_signal_read` | S2, for the `usual` key |
 | S4 Day load | `HEALTH_DAY_LOAD` | R-c | M-c: `day_load` column and fence | Q4, Q5; amendment §5 |
 | S5 Curves | `HEALTH_FORM_CURVE` (already named by ADR and #1660) plus `HEALTH_STRESS_CURVE` | R-c (shipped with S4) | M-d: #1660 re-timestamped, plus `stress_curve` | #1660 rebased; amendment §6 |
@@ -361,7 +363,7 @@ The app lane pins each revision after its PR deploys.
    - Recommend allowing it. It is arithmetic on readings the phone itself holds (or on served numbers), with no verdict, never uploaded, and not a score, band or direction, so ADR-0081 §1 and §4 do not reach it. The same goes for `needed − own_days` and ordering parts by points.
    - **Condition:** once S2 serves the usual band, the mean line must not look or read like a second "usual".
    - Would flip if the owner reads "no app-side computation" as no arithmetic at all; then S3 serves the window's mean too.
-4. **Load scale: 0–21 or 0–100.**
+4. **Load scale: 0–21 or 0–100.** The owner asked for "Load as 0–21" (#1820), so this is pushback on a stated preference.
    - Recommend 0–100, log-shaped over the day's TRIMP with one pinned scale constant, the same on every account. Every other ring on Body is 0–100.
    - 0–21 invites a number-for-number comparison with WHOOP that Waldo's maths will not match.
    - The scale constant is a unit, not a judgment threshold.
