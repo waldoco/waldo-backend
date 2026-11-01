@@ -677,6 +677,97 @@ export const carriesSecretOrCanary = (text: string, canaries: readonly string[] 
   return found || result.invalid !== undefined;
 };
 
+// Lowercase words with no '=', so no decoder reads it as an encoding.
+export const DEEP_ENCODING_MARKER = '[withheld: content encoded too deeply to check]';
+// Every character a base64, base64url, percent or JSON escape can be made of.
+const ENCODING_CHARACTER = /[A-Za-z0-9+/=_%\\-]/;
+
+// External content read into the model or the offload store: a value still decodable after MAX_DECODE_PASSES is
+// withheld in place, so one such value no longer refuses the whole read. The offending token goes first, then the whole
+// value if it still nests. A JSON document inside a string is walked, never withheld whole, and keys are never
+// rewritten, so a nested key still refuses through the scans after this. What the partial decode already shows is scanned first: a canary or a secret there refuses the read, as it would
+// in plain sight. A value inside an embedded document is also checked as it sits serialized, where an escape such as
+// \n runs into the next token, because the whole-text scans read it that way and the model may read it either way.
+function withholdDeepEncoding(input: PreparedInput): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
+  if (input.source_taint !== 'external' || input.destination !== 'internal_context') return { payload: input.payload, redactions: [] };
+  const canaries = input.canary_tokens.map((token) => token.toLowerCase());
+  let tripwire: 'canary' | 'secret' | null = null;
+  let count = 0;
+  const failing = (text: string, serialized: boolean): boolean => {
+    let failed = false;
+    for (const form of new Set(serialized ? [text, JSON.stringify(text).slice(1, -1)] : [text])) {
+      const bundle = decodedViews(form);
+      failed ||= bundle.invalid;
+      if (!bundle.invalid && !serialized) continue;
+      for (const view of bundle.views) {
+        const hit = canaryOrSecretIn(view, canaries);
+        if (hit === 'canary' || (hit === 'secret' && tripwire === null)) tripwire = hit;
+      }
+    }
+    return failed;
+  };
+  const embedded = (text: string): JsonValue | undefined => {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[') && !trimmed.startsWith('"')) return undefined;
+    let parsed: unknown;
+    try { parsed = JSON.parse(trimmed); } catch { return undefined; }
+    if (typeof parsed !== 'string' && (typeof parsed !== 'object' || parsed === null)) return undefined;
+    const prepared = prepareInput({ ...input, payload: parsed } as SanitiseInput);
+    return prepared === undefined || 'reason' in prepared ? undefined : prepared.payload;
+  };
+  const withholdText = (text: string, nest: number): string => {
+    // Embedded documents are walked as deep as the health scan parses them.
+    const document = nest < MAX_DECODE_PASSES ? embedded(text) : undefined;
+    if (document !== undefined) {
+      const walked = walk(document, nest + 1);
+      return walked === document ? text : JSON.stringify(walked);
+    }
+    const serialized = nest > 0;
+    if (!failing(text, serialized)) return text;
+    // A failing span is widened to the run of encoding characters around it: when the decoder wraps only part of a
+    // token, the rest of that token is still most of the encoded content, shifted out of alignment.
+    const runs: Array<{ start: number; end: number }> = [];
+    for (const span of encodedSpans(text)) {
+      if (!failing(text.slice(span.start, span.end), serialized)) continue;
+      let { start, end } = span;
+      while (start > 0 && ENCODING_CHARACTER.test(text[start - 1]!)) start -= 1;
+      while (end < text.length && ENCODING_CHARACTER.test(text[end]!)) end += 1;
+      const last = runs.at(-1);
+      if (last !== undefined && start <= last.end) last.end = Math.max(last.end, end);
+      else runs.push({ start, end });
+    }
+    let narrowed = text;
+    for (const { start, end } of [...runs].reverse()) narrowed = `${narrowed.slice(0, start)}${DEEP_ENCODING_MARKER}${narrowed.slice(end)}`;
+    const kept = runs.length > 0 && !failing(narrowed, serialized);
+    count += kept ? runs.length : 1;
+    return kept ? narrowed : DEEP_ENCODING_MARKER;
+  };
+  const walk = (value: JsonValue, nest: number): JsonValue => {
+    if (typeof value === 'string') return withholdText(value, nest);
+    if (typeof value !== 'object' || value === null) return value;
+    if (Array.isArray(value)) {
+      const items = value.map((item) => walk(item, nest));
+      return items.every((item, index) => item === value[index]) ? value : items;
+    }
+    const entries = Object.entries(value).map(([key, item]) => [key, walk(item, nest)] as const);
+    return entries.every(([key, item]) => item === value[key]) ? value : Object.fromEntries(entries);
+  };
+  const payload = walk(input.payload, 0);
+  if (tripwire === 'canary') return deny('canary_token', 'canary_leak');
+  if (tripwire === 'secret') return deny('canary_token', 'secret_leak');
+  return { payload, redactions: count === 0 ? [] : [{ kind: 'deep_encoding', count }] };
+}
+
+// The scans run as they always have; only a decode refusal of external content read into the model is run again, once,
+// with its deep values withheld, so an ordinary read pays nothing for this.
+function withDeepEncodingWithheld(input: PreparedInput, checks: (input: PreparedInput, withheld: Redaction[]) => SanitiseResult): SanitiseResult {
+  const result = checks(input, []);
+  if (result.ok || result.diagnostic?.stage !== 'decode') return result;
+  const deep = withholdDeepEncoding(input);
+  if ('ok' in deep) return deep;
+  return deep.redactions.length === 0 ? result : checks({ ...input, payload: deep.payload }, deep.redactions);
+}
+
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
@@ -1402,7 +1493,10 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, guardPrepared);
+}
 
+function guardPrepared(input: PreparedInput, withheld: Redaction[]): SanitiseResult {
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
@@ -1413,6 +1507,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return denyInvalid({ stage: 'pii' });
+  pii.redactions.unshift(...withheld);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
@@ -1462,7 +1557,10 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, sanitisePrepared);
+}
 
+function sanitisePrepared(input: PreparedInput, deep: Redaction[]): SanitiseResult {
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
@@ -1470,8 +1568,8 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   // still denies structured health correlation.
   const withheld =
     input.source_taint === 'external' && input.destination === 'internal_context'
-      ? redactExternalHealthSpans(input.payload, [], sparesPlainWords(input))
-      : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
+      ? redactExternalHealthSpans(input.payload, deep, sparesPlainWords(input))
+      : { invalid: false, payload: input.payload, redactions: deep };
   if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
 

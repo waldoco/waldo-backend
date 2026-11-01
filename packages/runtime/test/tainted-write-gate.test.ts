@@ -254,3 +254,24 @@ describe('propose_action carries every carded write', () => {
     });
   });
 });
+
+// The scribe withholds a value encoded past its decode limit from what an outside read puts in front of the model, but
+// arguments are checked and never rewritten, so such a value in an executable call still refuses the call.
+describe('a value encoded past the decode limit refuses an executable call', () => {
+  const thrice = (text: string) => btoa(btoa(btoa(text)));
+
+  it('propose_action carrying one from an outside-text turn makes no card, so it never reaches the ledger', async () => {
+    await runInDurableObject(stub('deep-args'), async (_instance, state) => {
+      const { handler, runs } = recording('log_workout');
+      const handlers = [handler];
+      const desk = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const encoded = thrice(`the code is ${CANARIES[0]}`);
+      const call = { id: 'deep', name: 'propose_action' as const, args: { tool: 'log_workout', args: { type: `run ${encoded}`, duration_minutes: 30 }, reasoning: 'A forwarded mail asked for it.' } };
+      expect(await dispatchTool(call, tainted(), { handlers: [proposeActionHandler(desk, replayHost(() => handlers))] }))
+        .toMatchObject({ ok: false, error_code: 'sanitise_denied' });
+      expect(rows(state)).toEqual([]);
+      expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM ledger WHERE payload_json LIKE ?', `%${encoded.slice(0, 32)}%`).one().n).toBe(0);
+      expect(runs).toEqual([]);
+    });
+  });
+});
