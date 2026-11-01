@@ -111,8 +111,10 @@ describe('producer: a need saved while it runs', () => {
     expect(w.notices).toEqual([]);
   });
 
+  // A need that moved is redone by the recompute its save asked for, so the run is not a failure. A read that failed asked
+  // for nothing, so the run fails and the recompute's retry redoes today.
   it('leaves today\'s row and the late days alone when the second read fails or the need moved, and still writes yesterday\'s', async () => {
-    for (const second of [new Error('down'), { sleep_need_minutes: 540, updated_at: T1 }]) {
+    for (const [second, outcome] of [[new Error('down'), 'failed'], [{ sleep_need_minutes: 540, updated_at: T1 }, 'written']] as const) {
       const w = world(), late: unknown[] = [];
       w.need.answers = [{ sleep_need_minutes: null, updated_at: null }];
       w.need.current = second as never;
@@ -121,7 +123,7 @@ describe('producer: a need saved while it runs', () => {
       deps.readSettings = async () => { const answer = await settings(); if (answer instanceof Error) throw answer; return answer; };
       const writeContext = deps.writeContext;
       deps.writeContext = async payload => { if (JSON.parse(payload).backfilled === true) late.push(payload); return writeContext(payload); };
-      expect(await produceHealthScores(deps, { now: NOW, timezone: 'UTC' }), String(second)).toBe('written');
+      expect(await produceHealthScores(deps, { now: NOW, timezone: 'UTC' }), String(second)).toBe(outcome);
       expect([...w.rows.keys()], String(second)).toEqual([addDays(TODAY, -1)]);
       expect(late, String(second)).toEqual([]);
     }
