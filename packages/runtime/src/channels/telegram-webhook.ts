@@ -46,6 +46,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
   HEALTH_COACHING?: string;
+  // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
+  // renaming it; the connector-proxy function must be deployed with the rename first.
+  HEALTH_EASE_WORKOUT?: string;
+  // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
+  // the connector-proxy function must be deployed with restoreEvent first.
+  CALENDAR_UNDO_CANCEL?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
