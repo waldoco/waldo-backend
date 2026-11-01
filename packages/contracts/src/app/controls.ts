@@ -329,7 +329,7 @@ export const appControlConstellationDataV1Schema = z.union([
 ]);
 // The owner's number on file and how to prove it: texting a code is listed only while it is offered and would be
 // accepted now, checking only while a code waits with checks left, and setting the number while it can be proven, by a
-// texted code or by the owner sending their iMessage link code from it. proof names those ways. imessage.enroll is listed
+// texted code, by the owner sending their iMessage link code from it, or (controls revision 12) by sending their WhatsApp link code from it. proof names those ways. imessage.enroll is listed
 // where Waldo's iMessage needs the number set up first (Photon) and it is not yet. imessage_from says how
 // the owner's linked iMessage relates to the number on file, never the handle: none (not linked), number (its last
 // digits match), email (an Apple ID email, which proves no number) or other_number. Both are absent from older servers.
@@ -341,9 +341,15 @@ export const appControlPhoneDataV1Schema = z.strictObject({
     retry_at: z.int().positive().nullable(), checks_left: z.int().min(0).max(5),
   }).nullable(),
   actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check', 'phone.set', 'imessage.enroll'])),
-  proof: z.array(z.enum(['sms', 'imessage'])).optional(),
+  proof: z.array(z.enum(['sms', 'imessage', 'whatsapp'])).optional(),
   imessage_from: z.enum(['none', 'number', 'email', 'other_number']).optional(),
+  whatsapp_from: z.enum(['none', 'number', 'other_number']).optional(),
 });
+// Controls revision 12 (`controls=12`): whatsapp in proof, and whatsapp_from. Sending Waldo the link code from WhatsApp proves
+// the number it is sent from, and takes it as the number on file while none is proven, so no number is set first. whatsapp_from
+// says how the owner's linked WhatsApp relates to the number on file, never the number: none (not linked), number (its last
+// digits match) or other_number. A build below revision 12 never receives either, so its strict proof list never meets whatsapp.
+export const APP_CONTROLS_WHATSAPP_PROOF_REVISION = 12;
 // The receipt for each phone.set outcome. The app tells taken and the other refusals apart by these exact messages, so
 // they are contract, and none of them repeats the number. unavailable covers a server that does not offer texting.
 export const APP_PHONE_SET_RECEIPTS_V1 = {

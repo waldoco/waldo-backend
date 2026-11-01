@@ -1,4 +1,4 @@
-import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -9,7 +9,7 @@ import type { ConsoleAction, ConsoleView } from './console';
 import { memoryRevision } from '../memory/claims';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
-import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-phone';
+import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof } from './dashboard-phone';
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
@@ -36,6 +36,8 @@ export type AppControlsHost = Readonly<{
   whatsappUnlinked():Promise<void>;
   // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
   imessageProof?:IMessageProof;
+  // Whether the owner can prove a number by sending their WhatsApp link code from it (controls revision APP_CONTROLS_WHATSAPP_PROOF_REVISION); absent means they cannot.
+  whatsappProof?:WhatsAppProof;
   // The owner's Waldo address (controls revision APP_CONTROLS_AGENT_MAIL_REVISION); absent where it is not offered.
   agentMail?:AgentMailControlsDeps;
   // Which chats are linked to the owner now, for where Waldo writes first (controls revision 11); absent where it is not offered.
@@ -71,6 +73,8 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
 const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
 const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
+// Controls revision 12 names WhatsApp as a way to prove the number; builds below it never receive it.
+const whatsappProofFor=(request:Request,host:AppControlsHost)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WHATSAPP_PROOF_REVISION?host.whatsappProof:undefined;
 const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
 // A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
 // is still unfinished, so it reads as pending.
@@ -141,7 +145,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     }
     if(query.data.view==='phone'){
       let controls:Awaited<ReturnType<typeof phoneControls>>;
-      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof);}catch{return reply({error:'projection_unavailable'},503);}
+      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof,undefined,whatsappProofFor(request,host));}catch{return reply({error:'projection_unavailable'},503);}
       const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
@@ -223,7 +227,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   let mailRead:AgentMailControls|undefined;
   const response=await controlAction(form,phone
     ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
-      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof):null,
+      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof,undefined,whatsappProofFor(request,host)):null,
       act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked,host.imessageProof);}}
     :mail?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
