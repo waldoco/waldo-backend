@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appControlProjectionV1Schema } from '../../contracts/src/app/controls';
+import { APP_PROACTIVE_SURFACE_RECEIPTS_V1, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import type { CalendarChange, CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
@@ -75,11 +75,12 @@ const DAY = '2026-10-03';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
 // presence: the directory's answer for the WhatsApp presence, or 'outage' when it cannot be reached.
-const wire = { presence: true as boolean | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0 };
+// hint: the directory's WhatsApp presence hint, which the surface choice reads.
+const wire = { presence: true as boolean | 'outage', hint: 'linked' as 'linked' | 'not_linked' | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0 };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.reminderText = null;
-  wire.presence = true; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0;
+  wire.presence = true; wire.hint = 'linked'; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -93,6 +94,11 @@ beforeEach(() => {
       if (asked.p_provider !== 'whatsapp') return Response.json(true);
       if (wire.presence === 'outage') throw new Error('directory unavailable');
       return Response.json(wire.presence);
+    }
+    if (fn === 'presence_hint') {
+      if (asked.p_provider !== 'whatsapp') return Response.json(null);
+      if (wire.hint === 'outage') return new Response('down', { status: 503 });
+      return Response.json(wire.hint === 'linked' ? '1111' : null);
     }
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (/^https:\/\/graph\.facebook\.com\/v[\d.]+\/fictional-phone-id\/messages$/.test(url)) {
@@ -633,10 +639,11 @@ describe('owners the setting does not route', { timeout: 20_000 }, () => {
 describe('the console control', () => {
   const root = 'https://telegram-owner';
   type Read = { csrf: string; revision: string; data: { proactive_surface?: unknown } };
-  const withConsole = async (name: string, run: (stub: DurableObjectStub, token: string) => Promise<void>) => {
+  // With the directory, a chat counts as linked only while the directory says so too; without one, the binding this object holds.
+  const withConsole = async (name: string, run: (stub: DurableObjectStub, token: string) => Promise<void>, options: { directory?: boolean } = {}) => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
     const token = await runInDurableObject(stub, (instance, state) => {
-      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', ...whatsapp });
+      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', ...whatsapp, ...(options.directory ? directory : {}) });
       state.storage.kv.put('do_name', name);
       bindWhatsAppNumber(state.storage.kv, SUBJECT);
       return consoleAccess(state.storage).grant();
@@ -682,6 +689,44 @@ describe('the console control', () => {
       expect(((await read(stub, token)) as Read & { data: { health_memory?: unknown } }).data.health_memory).toBe(false);
       await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(HEALTH_MEMORY_KEY)).toBe(false));
     });
+  });
+
+  it('holds the console to the app\'s rule: a WhatsApp no longer linked is shown unlinked and refused, and the app stays choosable', async () => {
+    await withConsole('surface-console-unlinked', async (stub, token) => {
+      await runInDurableObject(stub, (_instance, state) => { state.storage.kv.put('whatsapp_unlinked', true); });
+      const before = await read(stub, token);
+      expect(before.data.proactive_surface).toMatchObject({ value: 'app', whatsapp_linked: false });
+      for (const [value, id] of [['whatsapp', 'surface-request-05'], ['both', 'surface-request-06']] as const) {
+        const refused = await post(stub, token, before, { value, request_id: id });
+        expect([refused.status, (await refused.json() as { receipt: unknown }).receipt]).toEqual([409, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked]);
+      }
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBeUndefined());
+      const kept = await post(stub, token, before, { value: 'app', request_id: 'surface-request-07' });
+      expect((await kept.json() as { receipt: unknown }).receipt).toEqual(APP_PROACTIVE_SURFACE_RECEIPTS_V1.unchanged);
+    });
+  });
+
+  it('with the directory: what it says decides the read and the action alike, and a directory that cannot say shows the binding but refuses as unchecked', async () => {
+    await withConsole('surface-console-directory', async (stub, token) => {
+      const linked = await read(stub, token);
+      expect(linked.data.proactive_surface).toMatchObject({ value: 'app', whatsapp_linked: true });
+      wire.hint = 'not_linked';
+      const unlinked = await read(stub, token);
+      expect(unlinked.data.proactive_surface).toMatchObject({ whatsapp_linked: false });
+      const refused = await post(stub, token, unlinked, { value: 'whatsapp', request_id: 'surface-request-08' });
+      expect([refused.status, (await refused.json() as { receipt: unknown }).receipt]).toEqual([409, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked]);
+      // Unknown is never shown as unlinked: the read keeps what this object knows, and the action will not guess.
+      wire.hint = 'outage';
+      const unknown = await read(stub, token);
+      expect(unknown.data.proactive_surface).toMatchObject({ whatsapp_linked: true });
+      const unchecked = await post(stub, token, unknown, { value: 'both', request_id: 'surface-request-09' });
+      expect([unchecked.status, (await unchecked.json() as { receipt: unknown }).receipt]).toEqual([409, APP_PROACTIVE_SURFACE_RECEIPTS_V1.unchecked]);
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBeUndefined());
+      wire.hint = 'linked';
+      const saved = await post(stub, token, await read(stub, token), { value: 'whatsapp', request_id: 'surface-request-10' });
+      expect((await saved.json() as { receipt: unknown }).receipt).toEqual(APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved);
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBe('whatsapp'));
+    }, { directory: true });
   });
 
   it('refuses a value it does not know and a request without the session\'s CSRF value, and changes nothing', async () => {
