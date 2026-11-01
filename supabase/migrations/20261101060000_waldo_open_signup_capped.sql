@@ -163,7 +163,7 @@ end $$;
 revoke all on function waldo.release_open_owner(text, bigint, text) from public, anon, authenticated, service_role;
 grant execute on function waldo.release_open_owner(text, bigint, text) to anon;
 
--- Link codes: re-created whole from their last definitions (20260924130000, 20261014120000) with one change, a held
+-- Link codes: re-created whole from their last definitions (both 20261014120000) with one change, a held
 -- open owner is refused. Signatures, canonical strings, security definer, search_path and grants are kept.
 create or replace function waldo.issue_link_code(p_do_name text, p_code_hash text, p_at bigint, p_sig text) returns boolean
 language plpgsql security definer set search_path = '' as $$
@@ -174,7 +174,7 @@ begin
   end if;
   select id into v_owner from waldo.owners where do_name = p_do_name and state = 'active';
   if v_owner is null or waldo.open_owner_held(v_owner) then return false; end if;
-  delete from waldo.link_codes where owner_id = v_owner and used_at is null;
+  delete from waldo.link_codes where owner_id = v_owner and provider = 'telegram' and used_at is null;
   insert into waldo.link_codes (code_hash, owner_id, provider, expires_at) values (p_code_hash, v_owner, 'telegram', now() + interval '10 minutes');
   return true;
 end $$;
