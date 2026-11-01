@@ -211,9 +211,10 @@ describe('the rules that pulled against each other are gone', () => {
   // boundary, to about 19,320. A greeting that keeps the conversation going, from the turn context, adds about 130 bytes
   // to the greeting rule, to about 19,470. The sleep-need memory rule adds about 90 bytes to Remembering, to about 19,560:
   // remember's description is at its cap, and every owner turn must read that memory keeps no figure for the stated need.
+  // The tracked-medicine memory rule adds about 100 bytes beside it, to about 19,655, for the same reason.
   // Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 19,600 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_600);
+  it('keeps every delivered behaviour text under 19,700 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_700);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -222,7 +223,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_600 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_700 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });

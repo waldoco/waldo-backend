@@ -58,3 +58,10 @@ describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
     expect(parsed.env.staging.vars.CALENDAR_UNDO_CANCEL).toBe('0');
   });
 });
+
+describe('MEDICATIONS in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
+    expect(parsed.vars.MEDICATIONS).toBe('0');
+    expect(parsed.env.staging.vars.MEDICATIONS).toBe('0');
+  });
+});

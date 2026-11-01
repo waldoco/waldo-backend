@@ -172,6 +172,7 @@ import { webSearchHandler, webSearchOffered } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } from './health-log';
 import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
+import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
@@ -3543,6 +3544,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
+    const meds = this.env.MEDICATIONS === '1'
+      ? medicationBook(this.ctx.storage.sql, scheduler, clock, (operation, payload) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload))
+      : null;
     const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, nativeSurface(channel) ? 'console' : channel as 'telegram' | 'whatsapp', clock, (error) =>
       log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
     );
@@ -4380,7 +4384,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -4550,7 +4554,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const timing = { due: localIso(entry.occurrence_at, clock.timezone), now: localIso(Date.now(), clock.timezone), timezone: clock.timezone };
         // No model on any provider says nothing about the reminder, so the owner still gets it on time: their own note, marked as
         // sent without the model. The scheduler never retries it, so the row cannot sit quarantined for a day.
-        const text = await responder.remind(trace, owner, note, time, timing).then(checkBackReply, (error: unknown) => {
+        // A medicine's reminder is worded by its book from a fresh health-plane read, never by the model, so it cannot carry advice
+        // about the medicine. A failed read sends nothing and throws to the scheduler's retry; a medicine that is gone ends it.
+        const medication = meds?.owns(entry.id) ? await meds.reminder(entry.id) : null;
+        if (medication?.state === 'unavailable') throw new Error('medication read failed');
+        if (medication?.state === 'gone') {
+          book.fired(entry);
+          runs.finish(run.id, 'completed', 'medication reminder: medicine no longer tracked');
+          log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, detail: 'medication_gone' });
+          log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
+          return;
+        }
+        const text = medication?.state === 'text' ? medication.text : await responder.remind(trace, owner, note, time, timing).then(checkBackReply, (error: unknown) => {
           if (!(error instanceof ModelUnavailableError)) throw error;
           log({ trace, hop: 'reminder_floor', ms: Date.now() - started, ok: true, code: error.reason });
           return reminderFloorText(note);
@@ -4578,7 +4593,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await time('send', async () => sentOrThrow(api.sendMessage({ chat_id: owner, text })));
         book.fired(entry);
         runs.finish(run.id, 'completed', 'reminder sent');
-        log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, text: { input: note, output: text } });
+        log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, ...(medication === null ? { text: { input: note, output: text } } : { detail: 'medication' }) });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
       } catch (error) {
         runs.finish(run.id, 'failed', 'reminder failed');
