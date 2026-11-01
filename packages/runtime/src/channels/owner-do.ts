@@ -98,6 +98,8 @@ import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '..
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, recordSignupName } from '../onboarding/first-run';
+import { openLookup, startLookup } from '../onboarding/lookup';
+import { ownerAccountEmail } from '../identity/owner-account-email';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
@@ -283,6 +285,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
+  // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
+  lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   probeCapture: ProbeCaptureSlot;
@@ -348,6 +352,8 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+// The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
+const LOOKUP_STARTED_KEY = 'owner_lookup_started';
 // The last message row of one chain. Every chain of an owner shares one history store, so the store's own leaf can sit in another chain.
 const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
   [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
@@ -1751,7 +1757,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
-            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);},
+            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);this.reconcileLookup(runtime);},
+            lookupChanged:()=>{this.bindAppSubject(name);this.reconcileLookup(this.setup('app'));},
             admit:async(client,text)=>{
               this.bindAppSubject(name);
               const result=await this.appInbox.admit(name,hash,client,text,mainRef);
@@ -1974,13 +1981,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
     if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
     if(result.kind==='admitted')this.compactionAbort?.abort();
-    this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+    this.drainOwnerMessages();
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
   }
   // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
   private appAdmitted(): void {
     this.compactionAbort?.abort();
-    this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+    this.drainOwnerMessages();
+  }
+  // The owner's queued app messages get their turns; once they are answered, an owner look-up waiting on the first reply starts.
+  private drainOwnerMessages(): void {
+    this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');})
+      .then(()=>this.setup('app').lookup.afterReply()).catch(()=>{console.error(JSON.stringify({hop:'lookup_release',ok:false}));}));
+  }
+  private reconcileLookup(runtime: OwnerRuntime): void {
+    this.ctx.waitUntil(runtime.lookup.reconcile().catch(()=>{console.error(JSON.stringify({hop:'lookup_reconcile',ok:false}));}));
   }
   private bindAppSubject(name: string): void {
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
@@ -3837,7 +3852,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
     };
     const googleEnvironment = this.env;
-    const welcomeAfterConnect = () => this.continueWelcome(runtime);
+    const welcomeAfterConnect = () => { runtime.welcome.googleConnected(); this.continueWelcome(runtime); };
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
       // A proxy link carries only the connection id. A raw token is kept here only when no proxy exists.
@@ -5396,13 +5411,46 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // Each stage's call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
       // a build taken up again after a cut must not add to a trace an earlier run already closed.
-      ask: (stage, text) => this.serial(async () => {
+      ask: (stage, text, version) => this.serial(async () => {
         const started = Date.now(), trace = `welcome:${stage}:${started}`;
         let answered = false;
-        try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text)); answered = true; return said; }
+        try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
         finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'welcome' }); }
-      }) });
-    const runtime: OwnerRuntime = { welcome, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+      }),
+      // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
+      ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => openLookup(this.jobs()) !== null } } : {}) });
+    // The owner look-up (ONBOARDING_LOOKUP): written once the owner's yes and their name are both here, at most once a grant, and
+    // stopped and fenced when the yes no longer counts. Its worker's page reads take the owner's serial lane, so it starts once
+    // the owner's first reply is out (afterReply), or a minute after the yes.
+    const lookupOn = this.env.ONBOARDING_LOOKUP === '1';
+    const lookupConsent = () => consentLedger(storage.sql, consentSwitches(this.env));
+    const lookup: OwnerRuntime['lookup'] = {
+      reconcile: async () => {
+        if (!lookupOn) return;
+        if (!lookupConsent().active('owner_lookup')) {
+          for (const id of this.jobs().cancelMachine('owner_lookup')) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
+          return;
+        }
+        const name = ownerName(memory), doName = identity.get<string>('do_name');
+        const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
+        const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, timezone: clock.timezone, surface: 'app',
+          started: () => identity.get<number>(LOOKUP_STARTED_KEY) ?? null, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
+        if (made.code !== 'enqueued') return;
+        log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
+        await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
+      },
+      afterReply: async () => {
+        const open = lookupOn ? openLookup(this.jobs()) : null;
+        if (!open || !storage.transactionSync(() => this.jobs().bringForward(open.id, Date.now()))) return;
+        log({ trace: `task:${open.id}`, hop: 'lookup_released', ms: 0, ok: true, job_id: open.id });
+        await armTaskJobsWake(storage, Date.now());
+      },
+    };
+    // The look-up's worker records its findings as it goes, so its apply tells the owner nothing; its end lets a web stage that
+    // settled without it read the findings.
+    const lookupApply = { decidesOnEmpty: true, apply: async (_row: unknown, _result: unknown, io: { settle(): void }) => { io.settle(); return 'skipped' as const; },
+      ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
       replayApproval: approvalJobReplay({ current: (id, digest) => desk.replayCurrent(id, digest), handlers: () => replayHandlers,
