@@ -336,3 +336,19 @@ it('with Claude chosen, a side job tries Haiku with full then reduced context, t
   await expect(claudeResponder(gateway).chooseReaction(ownerTyped({ traceId: 'claude-reaction-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }))).rejects.toThrow(/live model failed/);
   expect(models()).toEqual([ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, OPENAI_GPT_6_LUNA_MODEL]);
 });
+
+it('with Claude chosen, a file Claude cannot carry is answered by Terra, and a bad request still ends at the first provider', async () => {
+  const run = async (failure: Readonly<{ unsendable?: true }>) => {
+    const requests: LLMGatewayRequest[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (input) => {
+      requests.push(input);
+      if (input.step.provider === ANTHROPIC_PROVIDER) return { ok: false, code: 'invalid_args', error: 'no wire for it', ...failure };
+      return { ok: true, data: { model: input.request.model, text: 'Read your notes.', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } };
+    } };
+    const reply = await claudeResponder(gateway).respond(ownerTyped({ traceId: `claude-file-${String(failure.unsendable)}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'read this', memoryWrites: false }), time).catch((error: unknown) => error);
+    return { reply, models: requests.map((request) => request.request.model) };
+  };
+  await expect(run({ unsendable: true })).resolves.toEqual({ reply: 'Read your notes.', models: [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL] });
+  const refused = await run({});
+  expect(refused.models).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+});

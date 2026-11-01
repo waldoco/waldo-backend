@@ -326,7 +326,7 @@ describe('checkpoint trimming', () => {
 describe('failed attempts a provider billed', () => {
   const claim: TaskClaim = { jobId: ticket.jobId, profile: 'reader', brief: { ...brief, effort: 'deep' }, tools: [search], mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 60_000, roundsUsed: 0, ownerRef: 'owner-1' };
   const billed = { input_tokens: 40_000, output_tokens: 2_000, cache_read_input_tokens: 0 };
-  const access = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' };
+  const access = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' as const };
   const answered = (model: string) => ({ ok: true as const, data: { model, text: 'Nothing waits on you.', input_tokens: 900, output_tokens: 30, cache_read_input_tokens: 0, latency_ms: 1 } });
   const terraBilledThenSonnet = { complete: async (request: { request: { model: string } }) => request.request.model === OPENAI_GPT_6_1_TERRA_MODEL ? { ok: false as const, code: 'transient' as const, error: 'down', spent: billed } : answered(request.request.model) };
   const allBilledFailures = { complete: async () => ({ ok: false as const, code: 'transient' as const, error: 'down', spent: billed }) };

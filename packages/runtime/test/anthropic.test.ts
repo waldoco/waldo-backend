@@ -393,3 +393,119 @@ describe('AnthropicMessagesAdapter cache breakpoints', () => {
     expect((bodies[0]!.tools as Array<Record<string, unknown>>).some((tool) => 'cache_control' in tool)).toBe(false);
   });
 });
+
+describe('AnthropicMessagesAdapter as the primary provider', () => {
+  it('refuses a request it cannot send as unsendable, so the route can move to a provider that can', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Read it.' }])]);
+    const base = gatewayRequest();
+    const docx = { kind: 'file' as const, mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: 'notes.docx', data_base64: 'UEsDBA==' };
+    await expect(adapter.complete({ ...base, request: { ...base.request, attachments: [docx] } })).resolves.toMatchObject({ ok: false, code: 'invalid_args', unsendable: true });
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('sends a text file as a plain-text document, its bytes read as UTF-8', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Read it.' }])]);
+    const base = gatewayRequest();
+    const text = 'name,city\nAsha,Pune — ok\n';
+    const data_base64 = Buffer.from(text, 'utf8').toString('base64');
+    for (const mime_type of ['text/plain', 'text/csv', 'text/markdown', 'text/html', 'application/json', 'application/xml']) {
+      await adapter.complete({ ...base, request: { ...base.request, attachments: [{ kind: 'file', mime_type, filename: 'f', data_base64 }] } });
+      expect((bodies.at(-1)!.messages as Array<{ content: unknown[] }>)[0]!.content.at(-1), mime_type).toEqual({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: text }, title: 'f' });
+    }
+  });
+
+  it('fails a refusal that wrote some text before declining, so none of it reaches the owner', async () => {
+    const { adapter } = recording([reply([{ type: 'text', text: 'Sure, here is' }], 'refusal', { stop_details: { type: 'refusal', category: 'general_harms', explanation: 'secret explanation' } })]);
+    const result = await adapter.complete(gatewayRequest());
+    expect(result).toMatchObject({ ok: false, code: 'rejected', error: 'Anthropic refused the request (general_harms)', spent: { input_tokens: 10, output_tokens: 3 } });
+    expect(JSON.stringify(result)).not.toContain('Sure, here is');
+  });
+});
+
+// A scripted Messages stream: the raw events in order, each after its delay, then the final message. Aborting the call's
+// signal ends it the way the SDK does.
+type Timed = Readonly<{ after?: number; event: Record<string, unknown> }>;
+const streamingClient = (events: readonly Timed[], final: unknown) => {
+  const calls: Array<{ body: Record<string, unknown> }> = [];
+  const client = { messages: {
+    create: async () => { throw new Error('the unstreamed call ran'); },
+    stream: (body: Record<string, unknown>, options: { signal?: AbortSignal }) => {
+      calls.push({ body });
+      const run = (async function* () {
+        for (const { after = 0, event } of events) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, after);
+            options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true });
+          });
+          yield event;
+        }
+      })();
+      return { [Symbol.asyncIterator]: () => run, finalMessage: async () => { for await (const _event of run) { /* drain */ } return final; } };
+    },
+  } };
+  return { client, calls };
+};
+const textStart = (index: number) => ({ event: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } } });
+const textDelta = (index: number, text: string, after = 0) => ({ after, event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } } });
+const sink = () => {
+  const seen: string[] = [];
+  return { seen, deltas: { delta: (text: string) => seen.push(text), retract: () => seen.push('<retract>') } };
+};
+
+describe('AnthropicMessagesAdapter streaming', () => {
+  it('streams the answer text as it is written and returns what the unstreamed call would, with the first-token time', async () => {
+    const { client, calls } = streamingClient([{ event: { type: 'message_start' } }, textStart(0), textDelta(0, 'Your day '), textDelta(0, 'is clear.')], reply([{ type: 'text', text: 'Your day is clear.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never });
+    const { seen, deltas } = sink();
+    const result = await adapter.complete({ ...gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native'), stream: deltas });
+    expect(seen).toEqual(['Your day ', 'is clear.']);
+    expect(result).toMatchObject({ ok: true, data: { text: 'Your day is clear.', ttft_ms: expect.any(Number) } });
+    expect(calls[0]!.body).toMatchObject({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, system: [{ type: 'text', text: 'Be concise.', cache_control: { type: 'ephemeral' } }] });
+    expect(calls[0]!.body).not.toHaveProperty('stream');
+  });
+
+  it('takes back text it streamed when the response goes on to call a tool, and streams nothing from thinking', async () => {
+    const tool = { type: 'tool_use', id: 'c1', name: 'get_context', input: {} };
+    const { client } = streamingClient([
+      { event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } },
+      { event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hidden' } } },
+      textStart(1), textDelta(1, 'Let me check.'),
+      { event: { type: 'content_block_start', index: 2, content_block: tool } },
+    ], reply([{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: 'Let me check.' }, tool], 'tool_use'));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never });
+    const { seen, deltas } = sink();
+    const result = await adapter.complete({ ...gatewayRequest(), stream: deltas });
+    expect(seen).toEqual(['Let me check.', '<retract>']);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'get_context' }] } });
+  });
+
+  it('streams a second text block after a break, so the shown text stays a prefix of the reply', async () => {
+    const { client } = streamingClient([textStart(0), textDelta(0, 'One.'), textStart(1), textDelta(1, 'Two.')], reply([{ type: 'text', text: 'One.' }, { type: 'text', text: 'Two.' }]));
+    const { seen, deltas } = sink();
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never }).complete({ ...gatewayRequest(), stream: deltas });
+    expect(seen.join('')).toBe('One.\nTwo.');
+    expect(result).toMatchObject({ ok: true, data: { text: 'One.\nTwo.' } });
+  });
+
+  it('with a provider ahead, abandons a call that shows nothing in the first-token window, without counting against the provider', async () => {
+    const { client } = streamingClient([{ event: { type: 'message_start' } }, { after: 200, ...textStart(0) }], reply([{ type: 'text', text: 'late' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 20 });
+    const result = await adapter.complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true });
+    expect(result).toMatchObject({ ok: false, code: 'transient', firstTokenLate: true, retry: { allowed: false } });
+  });
+
+  it('counts a thinking block as the first token, so a model that reasons first is not abandoned', async () => {
+    const { client } = streamingClient([
+      { after: 5, event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } },
+      { after: 60, ...textStart(1) }, textDelta(1, 'Thought it through.'),
+    ], reply([{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: 'Thought it through.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 30 });
+    await expect(adapter.complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true })).resolves.toMatchObject({ ok: true, data: { text: 'Thought it through.' } });
+  });
+
+  it('without a provider ahead, keeps waiting past the first-token window', async () => {
+    const { client } = streamingClient([{ after: 60, ...textStart(0) }, textDelta(0, 'Slow but here.')], reply([{ type: 'text', text: 'Slow but here.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 10 });
+    await expect(adapter.complete({ ...gatewayRequest(), stream: sink().deltas })).resolves.toMatchObject({ ok: true, data: { text: 'Slow but here.' } });
+  });
+});

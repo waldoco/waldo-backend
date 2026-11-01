@@ -154,8 +154,9 @@ export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean
 // a reply with neither text nor a tool call; they join the usage of the attempt that succeeds, so a retried model step
 // is metered whole. `retry` carries the provider's own retry headers to the one retry owner. `firstTokenLate`: a streamed
 // call showed nothing within the first-token window and was cut to fail over; the provider was slow, not failing, so it
-// does not count against the provider's circuit.
-export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true }>;
+// does not count against the provider's circuit. `unsendable`: the provider has no wire for this request (an attachment type
+// it cannot carry), which says nothing about the request, so the route moves on to a provider that may.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true; unsendable?: true }>;
 
 export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
 
@@ -598,11 +599,12 @@ export class RuntimeLLMProvider {
         if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push(failure(plan, gatewayResult.code, gatewayResult.spent));
         if (gatewayResult.code === 'invalid_args') {
-          // A provider reached only because an earlier one was unhealthy may be unable to send this request at all (an attachment
-          // type it has no wire for). That says nothing about the request being bad, so the walk goes on to the floor.
+          // A provider with no wire for this request (an attachment type it cannot carry), or one reached only because an
+          // earlier one was unhealthy, says nothing about the request being bad, so the walk goes on to the next provider
+          // and then the floor.
           const reachedByOutage = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
             && PROVIDER_HEALTH_CODES.has(attempt.code) && attempt.provider !== plan.step.provider);
-          if (!reachedByOutage) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          if (!reachedByOutage && !gatewayResult.unsendable) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
           settledModels.add(modelKey(plan.step));
           continue;
         }
