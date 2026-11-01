@@ -1,4 +1,4 @@
-import { APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -13,6 +13,7 @@ import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
+import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
@@ -37,6 +38,8 @@ export type AppControlsHost = Readonly<{
   imessageProof?:IMessageProof;
   // The owner's Waldo address (controls revision APP_CONTROLS_AGENT_MAIL_REVISION); absent where it is not offered.
   agentMail?:AgentMailControlsDeps;
+  // Which chats are linked to the owner now, for where Waldo writes first (controls revision 11); absent where it is not offered.
+  chatLinks?():Promise<ChatLinks>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -60,6 +63,7 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
   const {setup:_setup,...stages}=build.stages;
   return {...build,stages};
 };
+const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
 const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
 // A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
@@ -158,7 +162,9 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const named=query.data.view==='day'&&namesOwner(request)?host.ownerName?.()??null:null;
     const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
     const day=query.data.view==='day'?dayForRevision(request,shown):shown;
-    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory},revision});
+    // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
+    const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
@@ -203,6 +209,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   // Disconnecting Google came with controls=7: a build below it never named it, so it gets what it got before.
   if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.action==='proactive_surface.set'&&!choosesSurface(request,host))return reply({error:'invalid_action'},400);
   if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
@@ -216,7 +223,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
       act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-      act:async action=>{await host.assertCurrent();return host.act(action);}});
+      act:async action=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.

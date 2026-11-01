@@ -215,7 +215,7 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
 import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memory';
-import { linkingAppRows, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveSurface, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -1423,6 +1423,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Whether iMessage takes copies of proactive work: the composition is deployed, the owner has written from a sender, and the
   // directory still binds that sender to this owner. An unlink or a relink to another number ends it at once; the newest inbox
   // record alone outlives both. Null when the directory could not say.
+  // Whether each chat a proactive surface names is linked now: the directory binds it to this owner, which is what the
+  // connections tile shows, and, for WhatsApp, this object holds the binding delivery uses. null when the directory cannot say;
+  // without a directory, the binding this object holds.
+  private async proactiveLinks(auth: ReturnType<typeof consoleAuth>): Promise<ChatLinks> {
+    const name = this.ctx.storage.kv.get<string>('do_name');
+    if (!auth || !name) return { whatsapp: this.whatsappBound(), imessage: false };
+    const hinted = async () => { if (!auth.whatsAppHandleHint) return false; try { return (await auth.whatsAppHandleHint(name)) !== null; } catch { return null; } };
+    const [whatsapp, imessage] = await Promise.all([hinted(), this.imessageLinked(auth)]);
+    return { whatsapp: whatsapp === null ? null : whatsapp && this.whatsappBound(), imessage };
+  }
   private async imessageLinked(auth: NonNullable<ReturnType<typeof consoleAuth>>): Promise<boolean | null> {
     const latest = new IMessageOwnerInbox(this.ctx.storage).latest(), doName = this.ctx.storage.kv.get<string>('do_name');
     if (iMessageComposition(this.imessageHost.env) === null || !latest || !doName) return false;
@@ -1542,8 +1552,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv, auth = consoleAuth(this.env);
     // A directory that cannot say leaves iMessage's state out rather than guessing it.
-    const imessage = auth ? await this.imessageLinked(auth) : false;
-    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), ...(imessage === null ? {} : { imessage_linked: imessage }), telegram_linked: telegramLinked(kv) }, health_memory: healthMemoryOn(kv) } };
+    const links = await this.proactiveLinks(auth);
+    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: links.whatsapp ?? this.whatsappBound(), ...(links.imessage === null ? {} : { imessage_linked: links.imessage }), telegram_linked: telegramLinked(kv) }, health_memory: healthMemoryOn(kv) } };
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1770,6 +1780,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
+            chatLinks:()=>this.proactiveLinks(auth),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
@@ -2558,7 +2569,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
               }
-              if(action.action==='proactive_surface.set')return setProactiveSurface(this.ctx.storage.kv,action.value);
+              if(action.action==='proactive_surface.set')return proactiveSurfaceReceipt(chooseProactiveSurface(this.ctx.storage.kv,action.value,await this.proactiveLinks(consoleAuth(this.env))));
               if(action.action==='health_memory.set')return setHealthMemory(this.ctx.storage.kv,action.value);
               if(action.action==='whatsapp.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name');
