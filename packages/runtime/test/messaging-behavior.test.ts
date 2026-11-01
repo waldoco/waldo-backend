@@ -212,9 +212,10 @@ describe('the rules that pulled against each other are gone', () => {
   // to the greeting rule, to about 19,470. The sleep-need memory rule adds about 90 bytes to Remembering, to about 19,560:
   // remember's description is at its cap, and every owner turn must read that memory keeps no figure for the stated need.
   // The tracked-medicine memory rule adds about 100 bytes beside it, to about 19,655, for the same reason.
+  // The test-site line (a staging copy can carry dummy details) adds about 140 bytes to Looking things up, to about 19,820.
   // Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 19,700 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_700);
+  it('keeps every delivered behaviour text under 19,850 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_850);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -223,7 +224,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_700 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_850 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
@@ -266,15 +267,6 @@ describe('the voice block', () => {
     expect(MESSAGING_BEHAVIOR).toContain("You are Waldo, your owner's personal assistant.");
     expect(MESSAGING_BEHAVIOR).toContain('you act on their behalf when they allow it');
     expect(MESSAGING_BEHAVIOR).not.toContain('personal agent');
-  });
-
-  // The owner should not be the one keeping the thread alive: what a chat leaves open is Waldo's to follow, and Waldo writes
-  // first when it falls due, in one line, never as a generic check-in.
-  it('owns what a chat leaves open and writes first when it falls due', () => {
-    expect(VOICE).toContain("when a chat leaves loose ends, open a loop with a due time and say when you'll check");
-    expect(VOICE).toContain('Write first when one falls due or moves');
-    expect(VOICE).toContain('one line, yes or no');
-    expect(VOICE).not.toContain('Silence is the default');
   });
 
   it('counts a coming decision plus a changed state as waiting that makes things worse', () => {

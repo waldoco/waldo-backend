@@ -1,5 +1,4 @@
 import OpenAI from 'openai';
-import { testSiteHost } from '../security/test-site';
 import { validModelCredential } from './credential-shape';
 import {
   OPENAI_PROVIDER,
@@ -119,13 +118,6 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         searched.push(...response.output);
         bill(response);
         response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
-      }
-      // An answer resting on a test or staging copy of a site is asked once more without it; the discarded answer still
-      // cost its tokens. A second answer that leans on one anyway carries the caution instead of a third call.
-      const testSites = [...new Set(citedUrls(response).flatMap((url) => testSiteHost(url) ?? []))];
-      if (testSites.length > 0) {
-        bill(response);
-        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[], { role: 'developer', content: testSiteNote(testSites) }] });
       }
       const text = withOneSource(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
@@ -352,9 +344,6 @@ function hostedWebSearch(search: NonNullable<LLMGatewayRequest['request']['web_s
   return { type: 'web_search', user_location: { type: 'approximate', ...search } } as unknown as OpenAI.Responses.Tool;
 }
 
-export const TEST_SITE_CAUTION = 'I could only find this on a test version of that site, so check it on the official site before relying on it.';
-const testSiteNote = (hosts: readonly string[]) => `Sources you used (${hosts.join(', ')}) are test or staging copies of a site, not its public site, so their details (numbers, prices, policies) may be fake or out of date. Answer again without anything taken from them: use the organisation's public site, or say you could not confirm it there.`;
-
 const citedUrls = (response: OpenAI.Responses.Response): string[] => [...new Set(response.output.flatMap((item) => item.type !== 'message' ? []
   : item.content.flatMap((part) => part.type !== 'output_text' ? [] : (part.annotations ?? []).flatMap((annotation) => annotation.type === 'url_citation' ? [annotation.url] : []))))];
 
@@ -371,7 +360,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\
 
 // OpenAI requires web results shown to people to carry a visible, clickable citation. A chat reply carries its answer,
 // not a bibliography: search's parenthesised citations leave the sentences, a cited link the model wrote keeps its words,
-// and the first cited public page is the one source link at the end. Links that are not citations stay as written.
+// and the first cited page is the one source link at the end. Links that are not citations stay as written.
 function withOneSource(text: string, response: OpenAI.Responses.Response): string {
   const cited = citedUrls(response);
   if (cited.length === 0) return text;
@@ -380,8 +369,7 @@ function withOneSource(text: string, response: OpenAI.Responses.Response): strin
     const link = `\\[([^\\[\\]\\n]*)\\]\\(${escapeRegExp(url)}\\)`;
     body = body.replace(new RegExp(`\\s*\\(${link}\\)`, 'g'), '').replace(new RegExp(link, 'g'), '$1');
   }
-  const source = cited.find((url) => testSiteHost(url) === null);
-  return [body.trim(), source ? `Source: ${cleanUrl(source)}` : '', cited.some((url) => testSiteHost(url) !== null) ? TEST_SITE_CAUTION : ''].filter(Boolean).join('\n\n');
+  return `${body.trim()}\n\nSource: ${cleanUrl(cited[0]!)}`;
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {
