@@ -242,6 +242,11 @@ describe('a value encoded past the decode limit is withheld, not the whole page'
       for (const scribed of [inline(page), offload(page)]) expect(scribed).toMatchObject({ ok: false, check: 'canary_token', reason: 'canary_leak' });
     });
 
+    it('a plain canary glued to a deep token refuses the page rather than going with the widened span', () => {
+      const page = { tasks: [{ notes: `ref ${canaryTokens[1]}${deep} y` }] };
+      for (const scribed of [inline(page), offload(page)]) expect(scribed).toMatchObject({ ok: false, check: 'canary_token', reason: 'canary_leak' });
+    });
+
     it('a deep key beside a deep value refuses the page as a decode, inline and offloaded', () => {
       const page = { tasks: [{ notes: deep }, { [thrice('another key, encoded three times')]: 'x' }] };
       for (const scribed of [inline(page), offload(page)]) {
