@@ -448,4 +448,14 @@ describe('WhatsApp as a way to prove the number', () => {
       expect(w.twilio).toHaveLength(1);
     }, undefined, imessage(false), whatsappOf(true));
   });
+  it('is left out at act time too for a build below revision 12, so its read’s revision still matches the action', async () => {
+    const w = world();
+    await app('1', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const sent = await act({ view: 'phone', action: 'phone.sms_send', revision: projection.revision, request_id: 'phone-request-wa11' });
+      expect(sent.status).toBe(200);
+      expect(appControlResultV1Schema.parse(sent.body).receipt.state).toBe('recorded');
+      expect(w.twilio).toHaveLength(1);
+    }, undefined, imessage(false), whatsappOf(true, null, 11));
+  });
 });
