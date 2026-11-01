@@ -108,6 +108,7 @@ const expectedMigrations = [
   '20261101010000_health_settings_write_integer.sql',
   '20261101020000_health_zone_observed_peak.sql',
   '20261101040000_health_medications.sql',
+  '20261101060000_waldo_open_signup_capped.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
