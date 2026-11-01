@@ -4,7 +4,9 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appControlsRequest, type AppControlsHost } from '../src/channels/app-controls';
-import { phoneControlAct, type IMessageProof, type IMessageReach } from '../src/channels/dashboard-phone';
+import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
+import { APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../contracts/src/app/controls';
+import { phoneControlAct, type IMessageProof, type IMessageReach, type WhatsAppProof } from '../src/channels/dashboard-phone';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-app', CODE = '424242', PHONE = '+919800000001';
 // Synthetic numbers: NEW is free, TAKEN is verified on another owner in the fake ledger.
@@ -57,13 +59,14 @@ function world() {
   });
   return { ledger, twilio, sets, failSets: () => { failSet = true; } };
 }
-const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString(), imessageProof?: IMessageProof) =>
+const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString(), imessageProof?: IMessageProof, whatsapp?: Readonly<{ proof: WhatsAppProof; revision: number | null }>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-phone-${crypto.randomUUID()}`)), async (_i, state) => {
     const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt, storage: state.storage, assertCurrent: async () => {},
       sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 60_000 }], view: unused, act: unused,
       account: { owner: 'owner-app-phone', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
-      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; }, ...(imessageProof ? { imessageProof } : {}) };
-    const call = async (request: Request) => { const response = await appControlsRequest(request, host); return { status: response.status, body: await response.json() as Record<string, unknown> }; };
+      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; }, ...(imessageProof ? { imessageProof } : {}), ...(whatsapp ? { whatsappProof: whatsapp.proof } : {}) };
+    const withRevision = (request: Request) => { if (whatsapp?.revision) request.headers.set(APP_CONTRACT_HEADER, `controls=${whatsapp.revision}`); return request; };
+    const call = async (request: Request) => { const response = await appControlsRequest(withRevision(request), host); return { status: response.status, body: await response.json() as Record<string, unknown> }; };
     await run({
       read: () => call(new Request('https://app.fixture.invalid/app/v1/controls?view=phone')),
       act: (body) => call(new Request('https://app.fixture.invalid/app/v1/actions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })),
@@ -370,5 +373,79 @@ describe('iMessage set-up where Waldo\'s iMessage runs on Photon', () => {
       expect(await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-41' })).toMatchObject({ status: 403, body: { error: 'step_up_required' } });
       expect(enrolls).toEqual([]);
     }, new Date(Date.now() - 3 * 60 * 60_000).toISOString(), imessage(unenrolled, null, photon()));
+  });
+});
+
+// WhatsApp as a way to prove the number: offered where the server can link it, only to a build that reads controls revision 12.
+// offered: whether this server can link WhatsApp for the owner; hint: the last characters of the number their WhatsApp is linked from.
+const whatsappOf = (offered: boolean | 'unknown', hint: string | null = null, revision: number | null = APP_CONTROLS_WHATSAPP_PROOF_REVISION) => ({
+  proof: { offered: async () => { if (offered === 'unknown') throw new Error('directory unreadable'); return offered; }, hint: async () => hint } satisfies WhatsAppProof, revision });
+
+describe('WhatsApp as a way to prove the number', () => {
+  it.each([
+    ['0', [], ['whatsapp']],
+    ['1', ['phone.sms_send', 'phone.set'], ['sms', 'whatsapp']],
+  ] as const)('with texting %s it is offered beside the other ways, and needs no number set first', async (on, actions, proof) => {
+    world();
+    await app(on, async ({ read }) => {
+      expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { actions, proof } });
+    }, undefined, imessage(false), whatsappOf(true));
+  });
+
+  it('comes after iMessage in the list of ways, and sets a number where iMessage can prove it', async () => {
+    world();
+    await app('1', async ({ read }) => {
+      expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { proof: ['sms', 'imessage', 'whatsapp'] } });
+    }, undefined, imessage(true), whatsappOf(true));
+  });
+
+  it.each([[11], [1], [null]])('is never named to a build below controls revision 12 (%s), which cannot read it', async revision => {
+    world();
+    await app('1', async ({ read }) => {
+      const body = (await read()).body;
+      expect(appControlProjectionV1Schema.parse(body)).toMatchObject({ data: { proof: ['sms'] } });
+      expect(body.data).not.toHaveProperty('whatsapp_from');
+    }, undefined, imessage(false), whatsappOf(true, '0001', revision));
+  });
+
+  it.each([[false], ['unknown']] as const)('is left out where this server cannot link WhatsApp or cannot say (%s), and the view still answers', async offered => {
+    world();
+    await app('1', async ({ read }) => {
+      const response = await read();
+      expect(response.status).toBe(200);
+      const parsed = appControlProjectionV1Schema.parse(response.body);
+      expect(parsed).toMatchObject({ data: { proof: ['sms'] } });
+      expect(parsed.data).not.toHaveProperty('whatsapp_from');
+    }, undefined, imessage(false), whatsappOf(offered, '0001'));
+  });
+
+  it.each([
+    [null, 'none'], ['0001', 'number'], ['9999', 'other_number'],
+  ] as const)('says how the linked WhatsApp relates to the number on file (hint %s: %s), never the number it is linked from', async (hint, from) => {
+    world();
+    await app('0', async ({ read }) => {
+      const response = await read();
+      expect(appControlProjectionV1Schema.parse(response.body)).toMatchObject({ data: { whatsapp_from: from } });
+      if (hint && !PHONE.endsWith(hint)) expect(JSON.stringify(response.body)).not.toContain(hint);
+    }, undefined, imessage(false), whatsappOf(true, hint));
+  });
+
+  it('gives no relation when the directory cannot say how WhatsApp is linked', async () => {
+    world();
+    await app('0', async ({ read }) => {
+      const parsed = appControlProjectionV1Schema.parse((await read()).body);
+      expect(parsed).toMatchObject({ data: { proof: ['whatsapp'] } });
+      expect(parsed.data).not.toHaveProperty('whatsapp_from');
+    }, undefined, imessage(false), { proof: { offered: async () => true, hint: async () => { throw new Error('directory unreadable'); } }, revision: APP_CONTROLS_WHATSAPP_PROOF_REVISION });
+  });
+
+  it('reads the same at read and act time, so an action taken on a revision 12 read is not stale', async () => {
+    const w = world();
+    await app('1', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const sent = appControlResultV1Schema.parse((await act({ view: 'phone', action: 'phone.sms_send', revision: projection.revision, request_id: 'phone-request-wa1' })).body);
+      expect(sent.receipt.state).toBe('recorded');
+      expect(w.twilio).toHaveLength(1);
+    }, undefined, imessage(false), whatsappOf(true));
   });
 });
