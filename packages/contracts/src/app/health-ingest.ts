@@ -212,12 +212,15 @@ const stagesMatchContext = (sample: { method?: string | undefined; value: number
 // A workout's type is `activity` and its minutes are `value`, as before; every key below is optional, so a type-minutes-energy
 // workout is unchanged. Pace and speed are distance over minutes, so neither is sent.
 export const HEALTH_COACH_REVISION_V1 = 5;
+// Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, rather than a measured or entered
+// maximum, name the basis observed_workout_peak, so the model can call them approximate. An older build never sends it.
+export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
 const zoneSeconds = z.int().min(0).max(86_400);
 export const healthWorkoutZonesV1Schema = z.strictObject({
-  basis: z.enum(['heart_rate_reserve', 'max_heart_rate', 'provider']),
+  basis: z.enum(['heart_rate_reserve', 'max_heart_rate', 'provider', 'observed_workout_peak']),
   lower_bounds_bpm: z.tuple([bpm, bpm, bpm, bpm]).nullable(),
   seconds: z.tuple([zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds]),
 }).refine(zones => zones.lower_bounds_bpm === null ? zones.basis === 'provider' : zones.lower_bounds_bpm.every((bound, i, all) => i === 0 || all[i - 1]! < bound),

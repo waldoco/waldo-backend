@@ -22,6 +22,7 @@ describe('health context: candidate training load', () => {
     expect(summary(load())).toContain('Training load this week (candidate, from time in heart-rate zones): heavier than usual against your own usual.');
     expect(summary(load({ method: 'effort', phrase: 'about usual' }))).toContain('(candidate, from session effort): about usual against');
     expect(summary(load({ method: 'minutes', phrase: 'much lighter than usual' }))).toContain('(candidate, from workout minutes): much lighter than usual against');
+    expect(summary(load({ method: 'hr_zones_observed_peak' }))).toContain('(candidate, from time in approximate heart-rate zones, set from the highest heart rate seen in a workout rather than a measured maximum): heavier than usual against');
   });
 
   it('words each phrase the producer writes', () => {
