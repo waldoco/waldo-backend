@@ -43,6 +43,8 @@ export const statedNeedOf = (raw: unknown): StatedNeed | null => {
   const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
   return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
 };
+// The row is on the current need when the need read again is the figure it was computed on, even if the owner saved it again.
+const sameNeed = (read: StatedNeed, again: StatedNeed | null): boolean => again !== null && again.minutes === read.minutes;
 // A row compiled before the need last changed, or at that instant, may move zone only because the need moved, not the body,
 // so its move is not told to the health trigger. The next compile is on the new need on both sides.
 const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
@@ -504,7 +506,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
-    let provisional = false;
+    let provisional = false, needMoved = false;
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
@@ -515,6 +517,13 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const before = await storedBefore(deps.readScores, targetDay);
+      // A need saved since this run read it would leave today's row on the old need but stamped after the change, out of
+      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days.
+      if (targetDay === today && deps.readSettings && !sameNeed(stated, statedNeedOf(await deps.readSettings().catch(() => null)))) {
+        outcomes.push('stale');
+        needMoved = true;
+        continue;
+      }
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
@@ -524,7 +533,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
-    if (provisional && deps.readHistory) {
+    if (provisional && deps.readHistory && !needMoved) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.
       try { await backfill(deps.readHistory); } catch { console.error('health backfill failed'); }
     }

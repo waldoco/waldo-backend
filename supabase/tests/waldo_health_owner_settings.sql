@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(23);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -43,6 +43,15 @@ select is((select count(*)::int from unnest(array[
   '[]', 'null', '480', 'not json'
 ]) bad where pg_temp.h('settings_write','need-owner-a',bad)->>'error' = 'invalid_request'),13,'every write outside the closed shape is refused');
 select is(pg_temp.need('need-owner-a'),'480'::jsonb,'and none of them touched the stored need');
+-- JSON has one number type: a whole number written with a fraction or an exponent is that whole number, and a part minute is
+-- still refused.
+select is((select array_agg(pg_temp.h('settings_write','need-owner-a',body)->'sleep_need_minutes' order by n) from unnest(array[
+  '{"sleep_need_minutes":450.0}', '{"sleep_need_minutes":4.2e2}', '{"sleep_need_minutes":6.00e2}'
+]) with ordinality as t(body, n)),array['450','420','600']::jsonb[],'a whole number written with a fraction or an exponent is stored as that number');
+select is((select count(*)::int from unnest(array[
+  '{"sleep_need_minutes":480.5}', '{"sleep_need_minutes":4.805e2}', '{"sleep_need_minutes":6.001e2}', '{"sleep_need_minutes":3.59e2}', '{"sleep_need_minutes":1e400}'
+]) bad where pg_temp.h('settings_write','need-owner-a',bad)->>'error' = 'invalid_request'),5,'a part minute, or a figure outside the bounds in any notation, is still refused');
+select is(pg_temp.h('settings_write','need-owner-a','{"sleep_need_minutes":480}')->'sleep_need_minutes','480'::jsonb,'and the stored need is back where it was');
 select is(pg_temp.h('settings_read','need-owner-a','{"day":"2026-03-30"}'),'{"error":"invalid_request"}'::jsonb,'the read takes no arguments');
 select is(pg_temp.h('settings_read','nobody'),'{"error":"not_linked"}'::jsonb,'an unknown owner is not linked');
 select throws_ok($$ update waldo.health_owner_settings set sleep_need_minutes = 700 $$,'23514',null,'the table itself holds the engine''s bounds');

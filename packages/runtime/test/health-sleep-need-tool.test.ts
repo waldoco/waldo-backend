@@ -51,10 +51,12 @@ describe('set_sleep_need', () => {
 });
 
 describe('the stated sleep need and memory', () => {
-  it('every background memory writer is told the sleep need lives in the health settings, with no figure in memory', async () => {
+  it('every memory writer is told to keep no sleep-need figure, in words true whether or not the setting is offered', async () => {
     const { HEALTH_MEMORY_RULES, SLEEP_NEED_MEMORY_RULE } = await import('../src/memory/health-rules');
     const { NIGHTLY_MEMORY_INSTRUCTION, MIGRATION_INSTRUCTION } = await import('../src/memory/claims');
-    expect(SLEEP_NEED_MEMORY_RULE).toContain('keep no figure for it');
+    expect(SLEEP_NEED_MEMORY_RULE).toMatch(/^Never keep a figure for the owner's sleep need in memory/);
+    // With coaching off there is no setting, so the rule names no place the need is kept.
+    expect(SLEEP_NEED_MEMORY_RULE).not.toMatch(/settings|lives in|kept in|saved/);
     for (const instruction of [NIGHTLY_MEMORY_INSTRUCTION, MIGRATION_INSTRUCTION]) expect(instruction).toContain(SLEEP_NEED_MEMORY_RULE);
     // remember's description is at the 1,024-character cap and set_sleep_need is not always offered, so in chat every owner
     // turn reads the rule in the system prompt, switch on or off, tool loaded or deferred.
