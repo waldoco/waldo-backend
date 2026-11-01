@@ -1,5 +1,6 @@
 import { withRequestTimeout } from './request-timeout';
 import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
+import { OPEN_SIGNUP_EMAIL_DAILY_LIMIT, OPEN_SIGNUP_IP_DAILY_LIMIT, type OpenSignup } from './open-signup';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 import { openValue, sealValue } from './sealed-value';
 
@@ -63,25 +64,29 @@ export const SIGNIN_LINK_SECONDS = 15 * 60;
 const SIGNIN_LINK_PURPOSE = 'signinlink';
 
 export type ConsoleAuth = Readonly<{
-  sendCode(email: string, code?: string): Promise<boolean>;
+  // With open sign-up, an address that is not a member also gets a code while a join could still fit.
+  sendCode(email: string, code?: string, open?: OpenSignup): Promise<boolean>;
   // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
   // the per-location binding layer, which only expresses 10s/60s periods.
   throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
   // Console sign-in: resolves an existing member only; new console members use the signup flow.
   // A link from a confirm also records that Apple or Google identity as trusted, once the code proves the mailbox.
   verify(email: string, code: string, phone?: string, inviteCode?: string, link?: string): Promise<string | null>;
-  // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite. The phone is
-  // kept, unverified, only on a join; an existing member's sign-in never changes the number on file.
-  verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string, link?: string): Promise<string | null>;
+  // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite, otherwise, with open
+  // sign-up, joins openly. The phone is kept, unverified, only on a join; an existing member's sign-in never changes the
+  // number on file.
+  verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string, link?: string, open?: OpenSignup): Promise<string | null>;
   // App sign-in with Apple or Google: Supabase checks the identity token's signature, audience and nonce, and the owner
   // resolves from the email it confirms as verifyOrJoin resolves it. An identity signs an existing owner in only once it
-  // is trusted: it created the owner through an invite, or the owner confirmed it with an email code. Supabase links a new
+  // is trusted: it created the owner (through an invite or an open join), or the owner confirmed it with an email code. Supabase links a new
   // identity to the Auth user holding the same verified email, and a provider's verified flag is the provider's view of the
   // address (Google's covers whoever held a custom domain's address before), so the mailbox decides.
-  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string): Promise<IdentitySignIn>;
+  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string, open?: OpenSignup): Promise<IdentitySignIn>;
   // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
   signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
   issueLinkCode(doName: string): Promise<string | null>;
+  // Whether the active owner joined without an invite: held until released after their agreements, released, or a member.
+  openOwnerState?(doName: string): Promise<'member' | 'held' | 'released' | null>;
   /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
@@ -236,7 +241,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
     return revoked;
   };
-  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '', link = '') => {
+  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '', link = '', open?: OpenSignup) => {
     const address = email.trim().toLowerCase();
     const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
       if (!response.ok) return null;
@@ -244,7 +249,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return user;
     });
     if (!user?.id || user.email?.toLowerCase() !== address) return null;
-    const owner = await ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone);
+    const owner = await ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone, undefined, open);
     const ticket = owner && link ? await openValue(secret, SIGNIN_LINK_PURPOSE, link, now(), SIGNIN_LINK_SECONDS) : null;
     if (ticket && ticket.user === user.id && ticket.email === address && (ticket.provider === 'apple' || ticket.provider === 'google') && typeof ticket.subject === 'string')
       await trustIdentity({ id: user.id, email: address }, ticket.provider, ticket.subject);
@@ -255,14 +260,21 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
   // joined: this call created the owner, spending its invite. With an identity, the same transaction trusts it, and
   // joined comes from that transaction: an owner another sign-in created first is only found.
+  // With open sign-up an invite still goes first, so the one who sent it stays named; a join it cannot make joins openly.
   const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = '',
-    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>, open?: OpenSignup): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
     const address = user.email;
     const phoneE164 = '';
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
     const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     if (owner) return { doName: owner, joined: false };
-    if (!join || !codeHash) return null;
+    if (!join) return null;
+    const invited = codeHash ? await inviteJoin(user, codeHash, joinPhone, identity) : null;
+    return invited ?? (open ? openJoin(user, joinPhone, identity, open) : null);
+  };
+  const inviteJoin = async (user: Readonly<{ id: string; email: string }>, codeHash: string, joinPhone: string,
+    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    const address = user.email;
     if (identity) {
       const { provider, subject } = identity;
       const result = (await rpc('signup_owner_with_signin_identity', `signinid.signup.${user.id}.${address}.${provider}.${subject}.${joinPhone}.${codeHash}`,
@@ -271,6 +283,30 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     }
     const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
     return typeof joined === 'string' && joined.length > 0 ? { doName: joined, joined: true } : null;
+  };
+  const refuseOpen = (code: 'open_signup_limited' | 'open_signup_cap' | 'open_signup_taken') => {
+    console.error(JSON.stringify({ hop: 'open_signup', ok: false, code }));
+    return null;
+  };
+  // Each attempt spends one of the address's and one of the email's daily attempts, keyed by a router-keyed digest, so a
+  // leaked key names neither an address nor an email that can be guessed and hashed. The database
+  // counts the day's joins against the signed caps under one lock and trusts the joining identity as an invite join does.
+  const openJoin = async (user: Readonly<{ id: string; email: string }>, joinPhone: string,
+    identity: Readonly<{ provider: 'apple' | 'google'; subject: string }> | undefined, open: OpenSignup): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    const address = user.email;
+    const attempt = async (key: string, limit: number) =>
+      (await rpc('open_signup_throttle', `signup.open.throttle.${key}.${limit}`, { p_key: key, p_limit: limit })) === true;
+    const keyed = (text: string) => routerSignature(secret, 0, `openthrottle.${text}`);
+    if (!(await attempt(`ip.${await keyed(open.ip)}`, OPEN_SIGNUP_IP_DAILY_LIMIT)) || !(await attempt(`email.${await keyed(address)}`, OPEN_SIGNUP_EMAIL_DAILY_LIMIT)))
+      return refuseOpen('open_signup_limited');
+    const provider = identity?.provider ?? '', subject = identity?.subject ?? '';
+    const result = (await rpc('signup_owner_open', `signup.open.${user.id}.${address}.${provider}.${subject}.${joinPhone}.${open.dailyCap}.${open.totalCap}`,
+      { p_auth_user: user.id, p_email: address, p_provider: provider, p_subject: subject, p_phone: joinPhone, p_daily_cap: open.dailyCap, p_total_cap: open.totalCap })) as
+      { do_name?: unknown; created?: unknown; refused?: unknown } | null;
+    if (typeof result?.do_name === 'string' && result.do_name.length > 0) return { doName: result.do_name, joined: result.created === true };
+    if (result?.refused === 'cap') return refuseOpen('open_signup_cap');
+    if (result?.refused === 'taken') return refuseOpen('open_signup_taken');
+    return null;
   };
   type Identity = Readonly<{ id: string; email: string }>;
   const identityTrusted = async (user: Identity, provider: string, subject: string) =>
@@ -303,11 +339,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     return typeof id === 'string' && id.length > 0 && id.length <= 255 ? id : null;
   }) : Promise.resolve(null);
   const signInIdentity = async (grant: Awaited<ReturnType<typeof granted>>, provider: 'apple' | 'google', subject: (granted: Extract<typeof grant, { state: 'user' }>) => Promise<string | null>,
-    inviteCode: string, join: boolean, joinPhone = ''): Promise<IdentitySignIn> => {
+    inviteCode: string, join: boolean, joinPhone = '', open?: OpenSignup): Promise<IdentitySignIn> => {
     if (grant.state === 'refused') return grant;
     const user = { id: grant.id, email: grant.email }, sub = await subject(grant);
     if (!sub) return { state: 'refused', reason: 'token' };
-    const owner = await ownerFor(user, inviteCode, join, joinPhone, { provider, subject: sub });
+    const owner = await ownerFor(user, inviteCode, join, joinPhone, { provider, subject: sub }, open);
     if (!owner) return { state: 'needs_invite' };
     if (!owner.joined && !(await identityTrusted(user, provider, sub)))
       return { state: 'confirm', email: user.email, link: await sealValue(secret, SIGNIN_LINK_PURPOSE, { user: user.id, email: user.email, provider, subject: sub, expires: Math.floor(now() / 1000) + SIGNIN_LINK_SECONDS }) };
@@ -317,11 +353,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     async throttle(key, limit, windowSeconds) {
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
     },
-    // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
-    async sendCode(email, code = '') {
+    // Unknown addresses get no email and the same answer, so the page never reveals who is invited. With open sign-up
+    // they get one while a join could still fit.
+    async sendCode(email, code = '', open) {
       const address = email.trim().toLowerCase();
       const codeHash = code ? await linkCodeHash(code) : '';
-      if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))) return false;
+      if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))
+        && !(open && (await rpc('open_signup_room', `signup.open.room.${open.dailyCap}.${open.totalCap}`, { p_daily_cap: open.dailyCap, p_total_cap: open.totalCap })) === true)) return false;
       // Supabase may create an Auth identity here; this does not create a Waldo owner.
       return auth('otp', { email: address, create_user: true }, response => {
         if (!response.ok) throw new Error(`otp send ${response.status}`);
@@ -329,16 +367,21 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       });
     },
     verify: (email, code, _phone, inviteCode = '', link = '') => resolveOwner(email, code, inviteCode, false, '', link),
-    verifyOrJoin: (email, code, inviteCode, phone = '', link = '') => resolveOwner(email, code, inviteCode, true, phone, link),
+    verifyOrJoin: (email, code, inviteCode, phone = '', link = '', open) => resolveOwner(email, code, inviteCode, true, phone, link, open),
     // The identity is the token's own subject. Supabase accepted these exact bytes, so the claim is authentic; the grant's
     // identity list cannot name it, because Supabase leaves an identity it links in this call out of that list.
-    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '') =>
-      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone),
+    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '', open) =>
+      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone, open),
     // Google names the account behind this flow's token; it must be one of this user's Google identities.
     signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', async grant => {
       const sub = await googleSubject(grant.providerToken);
       return sub && grant.identities.some(identity => identity.provider === 'google' && identity.id === sub) ? sub : null;
     }, '', false),
+    async openOwnerState(doName) {
+      const state = await rpc('open_owner_state', `openowner.state.${doName}`, { p_do_name: doName });
+      if (state !== null && state !== 'member' && state !== 'held' && state !== 'released') throw new Error('open owner state unavailable');
+      return state;
+    },
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);

@@ -9,6 +9,8 @@ import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
 import { enrollAtTap, iMessageNumberView } from './imessage/enrollment';
 import { photonConfig } from './imessage/photon';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
+import { OPEN_OWNER_PATH, openOwnerHold, verifiedOpenOwnerMark, type OpenOwnerHold } from '../identity/open-owner-hold';
+import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
@@ -114,7 +116,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { adminSpendFor } from './admin-spend';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, clearConsoleCookie, consoleAccess, consoleCookie, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_START_PATH, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, openOwnerConsolePage, clearConsoleCookie, consoleAccess, consoleCookie, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_START_PATH, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { appConsoleLinks, appConsoleRoute, consoleLinkSender, whatsappConsoleRoute, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { iMessageScheduledRoute, observeIMessageReports } from './imessage/scheduled-route';
@@ -667,7 +669,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book. Storage with no job
   // book (an owner erase since the worker started) has no attempt to serve: the call is fenced before the book is opened,
   // which would make its table again.
-  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return jobsKept(this.ctx.storage.sql) ? this.tasks.claim(ticket) : 'fenced'; }
+  // A task worker's model access is its own, so an owner held after joining openly is fenced here, before any attempt runs.
+  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return jobsKept(this.ctx.storage.sql) && !(await this.openHold().held()) ? this.tasks.claim(ticket) : 'fenced'; }
   async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return jobsKept(this.ctx.storage.sql) ? this.tasks.tool(ticket, call, canaries) : 'fenced'; }
   async taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'> {
     return jobsKept(this.ctx.storage.sql) ? this.tasks.checkpoint(ticket, seq, turns, events, spend, outcomes) : 'fenced';
@@ -989,6 +992,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly appAttempts = new Set<string>();
   private activeApp: AppInboxRecord | null = null;
   private get appInbox(): AppInbox { return new AppInbox(this.ctx.storage); }
+  private ownerHold?: OpenOwnerHold;
+  private openHold(): OpenOwnerHold {
+    return this.ownerHold ??= openOwnerHold({ kv: this.ctx.storage.kv, doName: () => this.ctx.storage.kv.get<string>('do_name'), call: signedRpc(this.env),
+      agreed: () => { const consent = consentLedger(this.ctx.storage.sql, consentSwitches(this.env)); return consent.agreed() && consent.ageAttested(); } });
+  }
   // Account deletion removes stored files before the directory entry; false means a prefix could not be named or confirmed empty.
   private async purgeOwnerFiles(): Promise<boolean> {
     const prefixes = ownerFilePrefixes(this.ctx.id.toString(), this.ctx.storage.sql);
@@ -1731,6 +1739,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(knownPrincipal!==undefined&&knownPrincipal!==principal)return fail();
     this.ctx.storage.kv.put('do_name',name);if(knownPrincipal===undefined)this.ctx.storage.kv.put('owner_principal_ref',principal);
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
+    // An owner who joined openly writes nothing outside the first run and the consents until they accept the agreements.
+    if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
       try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId));}catch{return fail(503);}
@@ -1903,6 +1913,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
     if(path===HEALTH_ZONE_CHANGE_PATH)return this.healthZoneChange(request);
+    if(path===OPEN_OWNER_PATH){
+      if(!(await verifiedOpenOwnerMark(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString())))return new Response('forbidden',{status:403});
+      this.openHold().mark();
+      return new Response(null,{status:204});
+    }
     if(path===HEALTH_SAMPLES_PATH)return this.healthSamples(request);
     if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
@@ -2425,6 +2440,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async console(request: Request): Promise<Response> {
+    if (await this.openHold().held()) return openOwnerConsolePage();
     const access = consoleAccess(this.ctx.storage);
     const renews = !fromAnotherSite(request);
     const url = new URL(request.url);
@@ -4393,7 +4409,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const forgetBarrier: ForgetBarrierMode = this.env.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads';
     const profileView = this.env.OWNER_PROFILE === '1';
     const forgetPass = () => this.forgetPurgeJob().run();
-    const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: MONTHLY_SPEND_CEILING_USD }) : undefined;
+    // An owner who joined openly runs under open sign-up's lower ceiling.
+    const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : MONTHLY_SPEND_CEILING_USD }) : undefined;
     // When every provider fails on the owner's own message, the reply promises a time and the retry job written with it keeps
     // the promise (tasks/retry-turn.ts): the row and its wake commit together before the text goes out. The alarm is then
     // moved earlier; if that never runs, the next arbitration arms it from the committed key.
@@ -4422,7 +4439,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const onAttempts = (attempts: readonly LLMAttempt[]) => {
       try { observeModelAuth(storage.sql, attempts, Date.now(), log); } catch { console.error(JSON.stringify({ hop: 'model_auth_failed', ok: false, code: 'observe_failed' })); }
     };
-    const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts };
+    const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
