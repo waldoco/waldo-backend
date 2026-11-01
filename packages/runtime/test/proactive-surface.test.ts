@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
-import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
+import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
+import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
   waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -27,6 +28,50 @@ describe('the owner\'s proactive surface setting', () => {
     setProactiveSurface(kv, 'both');
     for (const value of ['telegram', 'imessage', 'iMessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
     expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
+  });
+});
+
+describe('choosing the surface from the app or the console', () => {
+  const links = (whatsapp: boolean | null, imessage: boolean | null) => ({ whatsapp, imessage });
+  it('offers a surface only while every chat it names is linked; the app is always offered', () => {
+    expect(proactiveSurfaceChoices(links(true, true))).toEqual(['app', 'whatsapp', 'both', 'app_imessage']);
+    expect(proactiveSurfaceChoices(links(true, false))).toEqual(['app', 'whatsapp', 'both']);
+    expect(proactiveSurfaceChoices(links(false, true))).toEqual(['app', 'app_imessage']);
+    expect(proactiveSurfaceChoices(links(null, null))).toEqual(['app']);
+  });
+
+  it('stores exactly what it offers and refuses everything else, for every link state', () => {
+    for (const whatsapp of [true, false, null]) for (const imessage of [true, false, null]) for (const value of PROACTIVE_SURFACES) {
+      const kv = memoryKv(), state = links(whatsapp, imessage), offered = proactiveSurfaceChoices(state).includes(value);
+      kv.put(PROACTIVE_SURFACE_KEY, value === 'app' ? 'both' : 'app');
+      const outcome = chooseProactiveSurface(kv, value, state);
+      expect([value, whatsapp, imessage, outcome === 'saved']).toEqual([value, whatsapp, imessage, offered]);
+      expect(proactiveSurface(kv) === value).toBe(offered);
+    }
+  });
+
+  it('names the chat that is not linked, and says unchecked, never unlinked, when a link cannot be read', () => {
+    const kv = memoryKv();
+    expect(chooseProactiveSurface(kv, 'whatsapp', links(false, true))).toBe('whatsapp_not_linked');
+    expect(chooseProactiveSurface(kv, 'both', links(false, null))).toBe('whatsapp_not_linked');
+    expect(chooseProactiveSurface(kv, 'app_imessage', links(true, false))).toBe('imessage_not_linked');
+    expect(chooseProactiveSurface(kv, 'whatsapp', links(null, true))).toBe('unchecked');
+    expect(chooseProactiveSurface(kv, 'app_imessage', links(true, null))).toBe('unchecked');
+    expect(kv.map.has(PROACTIVE_SURFACE_KEY)).toBe(false);
+  });
+
+  it('says unchanged for the surface already in use, and refuses a value it does not know without storing it', () => {
+    const kv = memoryKv();
+    expect(chooseProactiveSurface(kv, 'app', links(null, null))).toBe('unchanged');
+    expect(chooseProactiveSurface(kv, 'both', links(true, false))).toBe('saved');
+    expect(chooseProactiveSurface(kv, 'both', links(true, false))).toBe('unchanged');
+    for (const value of ['telegram', 'WhatsApp', '']) expect(chooseProactiveSurface(kv, value, links(true, true))).toBe('invalid');
+    expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
+  });
+
+  it('answers each outcome with its contract receipt, and an unknown value with a plain refusal', () => {
+    for (const outcome of ['saved', 'unchanged', 'whatsapp_not_linked', 'imessage_not_linked', 'unchecked'] as const) expect(proactiveSurfaceReceipt(outcome)).toEqual(APP_PROACTIVE_SURFACE_RECEIPTS_V1[outcome]);
+    expect(proactiveSurfaceReceipt('invalid')).toBe(false);
   });
 });
 
