@@ -70,6 +70,7 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
 };
 const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
+const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
 const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
 // A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
 // is still unfinished, so it reads as pending.
@@ -125,7 +126,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
       let graph:ReturnType<typeof constellationData>;
-      try{graph=constellationData(host.storage,paging,showsPins(request),appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION);}catch{return reply({error:'projection_unavailable'},503);}
+      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request));}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
@@ -190,7 +191,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request));return detail.status===200?detail.data as never:null;},
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request),namesWebSources(request));return detail.status===200?detail.data as never:null;},
       act:async node=>{await host.assertCurrent();return host.act({...node,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
@@ -203,7 +204,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true);return detail.status===200?detail.data as never:null;},
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true,namesWebSources(request));return detail.status===200?detail.data as never:null;},
       act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});

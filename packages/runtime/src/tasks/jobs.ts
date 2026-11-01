@@ -18,7 +18,8 @@ export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect'
 export type CancelReason = 'owner' | 'forgotten';
 
 // Reader jobs the brain starts on its own schedule, not because the owner asked. Their origin names the job.
-export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep';
+// owner_lookup is the one the owner's consent starts, not a schedule: it looks the owner up on the public web once per yes.
+export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep' | 'owner_lookup';
 export const MACHINE_ORIGIN = 'machine:';
 export const isMachine = (row: Pick<JobRow, 'origin'>): boolean => row.origin.startsWith(MACHINE_ORIGIN);
 // What a machine job was started on: a digest of its inputs, the scope it holds open (one open job per job and scope), the
@@ -29,6 +30,8 @@ export type MachineBrief = Readonly<{
   source?: Readonly<{ connection_id: string }>; run_id?: string; record_id?: number;
   // Refs whose words the worker was not shown because they carry health values: the brain judges those itself.
   withheld?: readonly string[];
+  // The tool rounds the job's whole run gets, where it is fewer than any task's.
+  max_rounds?: number;
 }>;
 
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
@@ -398,6 +401,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // left no turn in flight. updated_at keeps the time the job was reported, which bounds how long its apply is retried.
     postpone(id: string, dueAt: number): boolean {
       return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1, inflight_json = NULL WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
+    },
+    // A queued job written to start later starts at `at` instead, when that is sooner.
+    bringForward(id: string, at: number): boolean {
+      return sql.exec("UPDATE task_jobs SET due_at = ? WHERE id = ? AND status = 'queued' AND attempt = 0 AND due_at > ?", at, id, at).rowsWritten > 0;
     },
     // The next moment the brain has something to do: a queued job's due time, a running attempt's lease end, or now for a report.
     // While every task slot is taken, a queued task waits for a report rather than its due time. A job in `busy` has a call

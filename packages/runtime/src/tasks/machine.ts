@@ -27,6 +27,8 @@ export type MachineSpec = Readonly<{
   source?: MachineBrief['source']; runId?: string; recordId?: number;
   // The job's own digest of its inputs, where it already has one its apply compares against (meeting prep's event digest).
   inputDigest?: string;
+  // When the worker may start, if later than now; and the tool rounds its whole run gets, if fewer than a task's.
+  dueAt?: number; maxRounds?: number;
 }>;
 export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }> | Readonly<{ code: 'held_topic' }>;
 
@@ -48,13 +50,13 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly 
     machine: {
       job: spec.job, input_digest: spec.inputDigest ?? md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
       ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}), ...(spec.recordId === undefined ? {} : { record_id: spec.recordId }),
-      ...(withheld.length ? { withheld } : {}),
+      ...(withheld.length ? { withheld } : {}), ...(spec.maxRounds === undefined ? {} : { max_rounds: spec.maxRounds }),
     },
   };
   if (carriesForgotten(held, [JSON.stringify(brief), ...spec.items.flatMap(({ ref, detail }) => [ref, detail])])) return { code: 'held_topic' };
   const { job, created } = book.create({
     kind: 'task', profile: 'reader', idempotencyKey: spec.key, origin: `${MACHINE_ORIGIN}${spec.job}`, surface: spec.surface,
-    brief, dueAt: spec.now, deadlineAt: spec.deadlineAt, taint: 'external',
+    brief, dueAt: spec.dueAt ?? spec.now, deadlineAt: spec.deadlineAt, taint: 'external',
   });
   return { code: created ? 'enqueued' : 'existing', job };
 };
@@ -83,6 +85,8 @@ export type MachineHandler = Readonly<{
   noNews?(row: JobRow, settle: () => void): void | Promise<void>;
   // The apply runs on an empty result too: the job's judgment does not rest on the worker's findings alone.
   decidesOnEmpty?: boolean;
+  // The job left the lane, however it ended (applied, parked, dropped): for work waiting on it, never for a message.
+  ended?(row: JobRow): void;
 }>;
 export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler>>>;
 
@@ -94,6 +98,13 @@ export const APPLY_RETRY_MS = 60 * 60_000;
 export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void;
 }>): Promise<void> => {
+  try { await applyOnce(row, deps); } finally {
+    const after = deps.book.get(row.id);
+    if (after && SETTLED.has(after.status)) deps.appliers[taskBrief(row).machine!.job]?.ended?.(after);
+  }
+};
+const SETTLED: ReadonlySet<string> = new Set(['applied', 'parked', 'cancelled']);
+const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1]): Promise<void> => {
   const { book } = deps;
   const job = taskBrief(row).machine!.job;
   const settle = () => { if (!book.settle(row.id)) throw new ClosedRunError(); };

@@ -161,12 +161,13 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     try { return (await brain.report(ticket, outcome, sent, spent, outcomes)) === 'fenced' ? 'fenced' : 'reported'; } catch { return 'lost'; }
   };
   const content = taskBriefText(claim.brief, claim.turns.length);
+  const rounds = Math.max(1, Math.min(TASK_MAX_ROUNDS, claim.brief.machine?.max_rounds ?? TASK_MAX_ROUNDS) - claim.roundsUsed);
   try {
     const text = await runToolLoop({
       handlers: [],
       ctx: { authenticatedUserId: claim.ownerRef, trigger: 'user_message', canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: 'external', session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: now() }) },
-      maxSteps: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed),
-      budget: { remaining: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed), deadline: claim.deadlineAt },
+      maxSteps: rounds,
+      budget: { remaining: rounds, deadline: claim.deadlineAt },
       // A resumed step whose effect cannot be told apart from a crash is never offered to run again.
       resume: { turns: claim.turns, repeatable: (name) => !unreplayable(name) },
       remote: {
