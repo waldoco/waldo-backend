@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -651,5 +651,32 @@ describe('the agent_mail view', () => {
     const messages = Object.values(APP_AGENT_MAIL_RECEIPTS_V1).map(receipt => receipt.message);
     expect(new Set(messages).size).toBe(messages.length);
     expect(APP_AGENT_MAIL_RECEIPTS_V1.unknown.state).toBe('unconfirmed');
+  });
+});
+
+describe('where Waldo writes first, from the day view', () => {
+  const set = (extra: object = {}) => ({ view: 'day', action: 'proactive_surface.set', value: 'whatsapp', revision, request_id: 'surface-0001', ...extra });
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-10-11', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  it('is revision 11', () => expect(APP_CONTROLS_PROACTIVE_SURFACE_REVISION).toBe(11));
+  it('names one of the first run\'s surfaces in value, from the day view, and nothing else', () => {
+    for (const value of ['app', 'whatsapp', 'both', 'app_imessage']) expect(appControlActionV1Schema.safeParse(set({ value })).success).toBe(true);
+    for (const bad of [set({ value: undefined }), set({ value: 'telegram' }), set({ value: 'WhatsApp' }), set({ value: '' }), set({ view: 'connections' }), set({ view: 'account' }),
+      set({ id: 'whatsapp' }), set({ volume: 'low' }), set({ confirmation: 'DELETE' }), set({ code: '123456' }), set({ notice: '2026-10-31' })]) expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+  it('the day view says where Waldo writes and what can be chosen, and stays optional for a build below 11', () => {
+    for (const valid of [{}, { proactive_surface: { value: 'app', choices: ['app'] } }, { proactive_surface: { value: 'whatsapp', choices: ['app', 'whatsapp', 'both'] } },
+      // A chat unlinked since it was chosen is still named, though it is no longer offered.
+      { proactive_surface: { value: 'both', choices: ['app'] } }]) expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [{ proactive_surface: { value: 'app', choices: [] } }, { proactive_surface: { value: 'app', choices: ['app', 'app'] } }, { proactive_surface: { value: 'telegram', choices: ['app'] } },
+      { proactive_surface: { value: 'app' } }, { proactive_surface: { value: 'app', choices: ['app'], linked: true } }, { proactive_surface: 'app' }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
+  });
+  it('has one fixed receipt per outcome, each a receipt the app can parse, with distinct messages', () => {
+    for (const receipt of Object.values(APP_PROACTIVE_SURFACE_RECEIPTS_V1)) expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true);
+    const messages = Object.values(APP_PROACTIVE_SURFACE_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    expect([APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved.state, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked.state]).toEqual(['recorded', 'rejected']);
   });
 });

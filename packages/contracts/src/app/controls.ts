@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { appProactiveSurfaceV1Schema } from './onboarding';
 import { messagingSurfaceV1Schema } from './surfaces';
 
 const text = z.string();
@@ -47,7 +48,7 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -116,6 +117,9 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'agent_mail.claim' && !(action.value && action.value.trim().length >= 1 && action.value.length <= APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `agent_mail.claim names the handle in value, up to ${APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1} characters` });
   // Claiming is the owner's opt-in: it names the version of the notice the owner was shown and accepted.
   if ((action.notice !== undefined) !== (action.action === 'agent_mail.claim')) ctx.addIssue({ code: 'custom', path: ['notice'], message: 'agent_mail.claim alone carries notice, the version of the notice it showed, and always does' });
+  // Where Waldo writes first, from the day view: one of the surfaces in value and nothing else (revision 11).
+  if (action.action === 'proactive_surface.set' && (action.view !== 'day' || !appProactiveSurfaceV1Schema.safeParse(action.value).success
+    || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'proactive_surface.set starts from the day view and names one surface in value, nothing else' });
   if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
 });
 
@@ -186,6 +190,11 @@ export const appControlDayDataV1Schema = z.strictObject({
   carrying: firstPage(carried).optional(),
   open_loops: firstPage(openLoop).optional(),
   updates: updates.optional(),
+  // Controls revision 11: where Waldo writes first (value) and what the owner can choose now (choices). A choice is offered
+  // only while every chat it names is linked. value can name a chat that has since been unlinked; Waldo then writes in the
+  // app until it is linked again.
+  proactive_surface: z.strictObject({ value: appProactiveSurfaceV1Schema, choices: z.array(appProactiveSurfaceV1Schema).min(1).max(appProactiveSurfaceV1Schema.options.length)
+    .refine(choices => new Set(choices).size === choices.length, 'A choice is listed once') }).optional(),
 });
 // Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
 // them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets
@@ -394,6 +403,17 @@ export const APP_AGENT_MAIL_RECEIPTS_V1 = {
   notice_stale: { state: 'rejected', message: 'The notice changed since you read it. Read the new one, then claim again.' },
   unknown: { state: 'unconfirmed', message: 'The change was not confirmed. Refresh to see your address.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
+// Controls revision 11 (`controls=11`): the day view says where Waldo writes first and takes proactive_surface.set, which
+// the owner's first run sets too. A build below it never receives the field and is refused the action.
+export const APP_CONTROLS_PROACTIVE_SURFACE_REVISION = 11;
+// The receipt for each proactive_surface.set outcome. The app tells them apart by these exact messages, so they are contract.
+export const APP_PROACTIVE_SURFACE_RECEIPTS_V1 = {
+  saved: { state: 'recorded', message: 'Saved. Waldo sends its next messages there.' },
+  unchanged: { state: 'recorded', message: 'Waldo already sends its messages there.' },
+  whatsapp_not_linked: { state: 'rejected', message: 'Link WhatsApp first, then choose it here.' },
+  imessage_not_linked: { state: 'rejected', message: 'Link iMessage first, then choose it here.' },
+  unchecked: { state: 'rejected', message: 'Waldo could not check your linked chats just now. Try again in a moment.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),

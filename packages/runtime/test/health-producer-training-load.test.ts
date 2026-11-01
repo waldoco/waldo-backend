@@ -71,6 +71,15 @@ describe('producer: candidate training load', () => {
     expect(plain.at(-1)?.training_load).toMatchObject({ method: 'minutes', phrase: 'about usual' });
   });
 
+  it('writes zones set from an observed workout peak as their own method, from one such workout in the window', async () => {
+    const peak = (seconds: number[]) => ({ hr_zones: { basis: 'observed_workout_peak', lower_bounds_bpm: [110, 124, 138, 152], seconds } });
+    const writes = await run(seriesOf(month((day, thisWeek) => (day === addDays(TODAY, -10) ? peak : zones)(thisWeek ? [0, 600, 600, 600, 600] : [600, 1200, 600, 0, 0]))), { trainingLoad: true });
+    expect(writes.at(-1)?.training_load).toMatchObject({ method: 'hr_zones_observed_peak', phrase: 'much heavier than usual' });
+    const parsed = parseSeries(seriesOf([workout(TODAY, 40, peak([600, 600, 600, 600, 0])), workout(TODAY, 40, zones([600, 600, 600, 600, 0]))]));
+    if (parsed.kind !== 'series') throw new Error(parsed.kind);
+    expect(parsed.series.sources[0]!.readings.map(r => r.workout?.zonesFromObservedPeak)).toEqual([true, false]);
+  });
+
   it('reads a steady six-day routine as about usual on a training morning, before today\'s session and after it', async () => {
     // Four weeks of the same routine, a rest day every seventh day; today is a training day. Today is not over, so the
     // week is the seven whole days ending yesterday on both rows.

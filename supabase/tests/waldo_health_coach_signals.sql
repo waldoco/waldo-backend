@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(17);
+select plan(19);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -87,6 +87,13 @@ select ok(not exists (select 1 from jsonb_array_elements(pg_temp.series('["worko
   'the read carries no part of a workout''s origin');
 select is((select jsonb_agg(s->'value' order by s->>'signal', (s->>'value')::numeric desc) from jsonb_array_elements(pg_temp.series('["body_mass","body_fat_percentage","stand_hour"]')->'sources'->0->'samples') s),
   '[14.2,72.4,1,0]'::jsonb,'body composition and stand hours come back as readings');
+
+-- Health revision 6: zones set from the highest heart rate seen in a workout are stored and read back with that basis.
+select is(pg_temp.h('ingest','coach-owner',pg_temp.batch('coach-peak-00001',jsonb_build_array(pg_temp.point('ride','workout','minutes',45,
+  '{"activity":"cycling","hr_zones":{"basis":"observed_workout_peak","lower_bounds_bpm":[110,125,140,155],"seconds":[600,900,900,300,0]}}',45)),'[]',true))->>'accepted',
+  '1','a workout whose zones were set from an observed peak is stored');
+select is((select s->'workout'->'hr_zones'->>'basis' from jsonb_array_elements(pg_temp.series('["workout"]')->'sources'->0->'samples') s where s->>'activity' = 'cycling'),
+  'observed_workout_peak','and the series read gives the producer its basis');
 
 select * from finish();
 rollback;

@@ -26,6 +26,7 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
+import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange, type HealthRecomputeCause } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import type { HealthWakeReason } from '../health/wakes';
@@ -214,7 +215,7 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
 import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memory';
-import { linkingAppRows, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveSurface, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -321,6 +322,8 @@ type OwnerRuntime = Readonly<{
   connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
   issueTicket(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null>;
   calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
+  // GET /app/v1/calendar/day for this owner, after appRoute checked the session.
+  calendarDay(request: Request): Promise<Response>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
     beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
@@ -385,7 +388,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating' | 'app_calendar_day', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -1419,6 +1422,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const auth = consoleAuth(this.env);
     return !auth || telegramLinked(this.ctx.storage.kv) || this.appBound() || this.whatsappBound() || (this.imessageBound() && await this.imessageLinked(auth) !== false);
   }
+  // Whether each chat a proactive surface names is linked now: the directory binds it to this owner, which is what the
+  // connections tile shows, and, for WhatsApp, this object holds the binding delivery uses. null when the directory cannot say;
+  // without a directory, the binding this object holds.
+  private async proactiveLinks(auth: ReturnType<typeof consoleAuth>): Promise<ChatLinks> {
+    const name = this.ctx.storage.kv.get<string>('do_name');
+    if (!auth || !name) return { whatsapp: this.whatsappBound(), imessage: false };
+    const hinted = async () => { if (!auth.whatsAppHandleHint) return null; try { return (await auth.whatsAppHandleHint(name)) !== null; } catch { return null; } };
+    const [whatsapp, imessage] = await Promise.all([hinted(), this.imessageLinked(auth)]);
+    return { whatsapp: whatsapp === null ? null : whatsapp && this.whatsappBound(), imessage };
+  }
   // Whether iMessage takes copies of proactive work: the composition is deployed, the owner has written from a sender, and the
   // directory still binds that sender to this owner. An unlink or a relink to another number ends it at once; the newest inbox
   // record alone outlives both. Null when the directory could not say.
@@ -1541,8 +1554,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv, auth = consoleAuth(this.env);
     // A directory that cannot say leaves iMessage's state out rather than guessing it.
-    const imessage = auth ? await this.imessageLinked(auth) : false;
-    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), ...(imessage === null ? {} : { imessage_linked: imessage }), telegram_linked: telegramLinked(kv) }, health_memory: healthMemoryOn(kv) } };
+    const links = await this.proactiveLinks(auth);
+    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: links.whatsapp ?? this.whatsappBound(), ...(links.imessage === null ? {} : { imessage_linked: links.imessage }), telegram_linked: telegramLinked(kv) }, health_memory: healthMemoryOn(kv) } };
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1760,6 +1773,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),
+            chatLinks:()=>this.proactiveLinks(auth),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
@@ -1778,6 +1792,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
+    }
+    if(path===APP_CALENDAR_DAY_PATH){
+      let step='read';
+      try{const answer=await this.setup('app').calendarDay(request);step='session';await this.appAuthority(name,hash);return answer;}catch(error){logAppReadFailure('app_calendar_day',step,error);return fail(503);}
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       this.recoverApp();
@@ -2553,7 +2571,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
               }
-              if(action.action==='proactive_surface.set')return setProactiveSurface(this.ctx.storage.kv,action.value);
+              if(action.action==='proactive_surface.set')return proactiveSurfaceReceipt(chooseProactiveSurface(this.ctx.storage.kv,action.value,await this.proactiveLinks(consoleAuth(this.env))));
               if(action.action==='health_memory.set')return setHealthMemory(this.ctx.storage.kv,action.value);
               if(action.action==='whatsapp.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name');
@@ -5545,6 +5563,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
         accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
         client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
+      calendarDay: (request) => appCalendarDayRequest(request, { now: Date.now, timezone: () => clock.timezone, google,
+        readScores: day => healthRpc('scores_read', JSON.stringify({ day })) }),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;
