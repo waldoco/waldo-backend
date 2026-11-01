@@ -275,14 +275,20 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
 };
 
 // Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
-// already holds is not counted twice. Known only on a day with a movement reading or a workout: heart-rate or daylight
-// hours alone say nothing about load.
+// already holds is not counted twice. Workout time is the union of the day's workout spans: two apps' copies of one
+// session, or two sessions that overlap, are each minute once. Known only on a day with a movement reading or a workout:
+// heart-rate or daylight hours alone say nothing about load.
+const unionOf = (spans: readonly Span[]): [number, number][] => spans
+  .map(s => [Date.parse(s.startAt), Date.parse(s.endAt)] as [number, number]).filter(([from, to]) => from < to).sort((a, b) => a[0] - b[0])
+  .reduce<[number, number][]>((merged, [from, to]) => {
+    const last = merged.at(-1);
+    if (last && from < last[1]) last[1] = Math.max(last[1], to); else merged.push([from, to]);
+    return merged;
+  }, []);
 const physicalLoadOf = (day: DayRecord): number | null => {
   const moving = day.hourly.filter(bucket => bucket.movementMinutes !== null);
   if (!moving.length && !day.workouts.length) return null;
-  const workoutMs = day.workouts.reduce((sum, workout) => {
-    const from = Date.parse(workout.startAt), to = Date.parse(workout.endAt);
-    if (!(from < to)) return sum;
+  const workoutMs = unionOf(day.workouts).reduce((sum, [from, to]) => {
     const counted = moving.reduce((inside, bucket) => { const start = Date.parse(bucket.startAt); return inside + Math.max(0, Math.min(to, start + HOUR_MS) - Math.max(from, start)); }, 0);
     return sum + to - from - counted;
   }, 0);

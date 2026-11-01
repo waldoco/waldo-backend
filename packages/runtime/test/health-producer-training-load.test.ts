@@ -126,6 +126,11 @@ describe('producer: candidate training load', () => {
     expect(await loadWith(day => session(day, '07:00:00.000', '08:00:00.000', zoned)), 'back to back').toMatchObject({ phrase: 'much heavier than usual', method: 'hr_zones' });
     expect(await loadWith(day => session(day, '06:45:00.000', '07:45:00.000', zoned)), 'a quarter shared').toMatchObject({ phrase: 'much heavier than usual', method: 'hr_zones' });
     expect(await loadWith(day => session(day, '06:20:00.000', '06:40:00.000')), 'a copy inside').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    expect(await loadWith(day => session(day, '06:00:00.000', '07:00:00.000', zoned)), 'one app recording twice').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    // Apps name sports differently (one's run is another's "other"), so the sport never decides; the shared span does.
+    const cycling = (day: string, from: string, to: string): Sample => ({ ...session(day, from, to, zoned), activity: 'cycling' });
+    expect(await loadWith(day => cycling(day, '06:50:00.000', '07:50:00.000')), 'another sport, a sixth shared').toMatchObject({ phrase: 'much heavier than usual' });
+    expect(await loadWith(day => cycling(day, '06:05:00.000', '07:05:00.000')), 'another sport, nearly all shared').toMatchObject({ phrase: 'about usual' });
   });
 
   it('says why when the window cannot carry a load', async () => {
