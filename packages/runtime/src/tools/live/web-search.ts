@@ -3,6 +3,7 @@ import {
   type ModelProvider, type ToolHandler, type ToolName, type WebSearchArgs,
 } from '@waldo/contracts';
 import { searchLocation } from './search-location';
+import { testSiteHost } from '../../security/test-site';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { effectSignal } from '../../channels/run-effect-scope';
 
@@ -46,7 +47,7 @@ export const webSearchHandler = (
     await ctx?.assertTaskSourceCurrent?.();
     const hits = (body.web?.results ?? [])
       .map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: r.description ?? '' }))
-      .filter((hit) => hit.url !== '')
+      .filter((hit) => hit.url !== '' && testSiteHost(hit.url) === null)
       .slice(0, limit);
     return { ok: true, data: { query, hits }, source_taint: 'external' };
   },

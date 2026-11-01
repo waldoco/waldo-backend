@@ -8,6 +8,7 @@ import {
 } from '@waldo/contracts';
 import {
   OpenAIResponsesAdapter,
+  TEST_SITE_CAUTION,
   type OpenAIResponsesClient,
 } from '../src/llm/openai';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -468,7 +469,9 @@ describe('OpenAIResponsesAdapter hosted web search', () => {
     expect((bodies[0]!.tools as Array<{ type: string }>).map((tool) => tool.type)).toEqual(['function']);
   });
 
-  it('adds every cited link the reply text does not already show', async () => {
+  // A chat reply carries its answer, not its bibliography: the inline citations come out of the sentences and the first
+  // cited page is the one visible, clickable source at the end, without tracking parameters.
+  it('moves the citations out of the text and ends with one clean source link', async () => {
     const text = 'The Lalit is 1.2 km from the venue ([thelalit.com](https://www.thelalit.com/bangalore?utm_source=openai)).';
     const output = [
       { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
@@ -477,15 +480,70 @@ describe('OpenAIResponsesAdapter hosted web search', () => {
     const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output, usage }]);
     const result = await adapter.complete(request({ country: 'IN' }));
     if (!result.ok) throw Error(result.error);
-    expect(result.data.text).toBe(`${text}\n\nSources:\n- Route map: https://maps.example/route?utm_source=openai`);
+    expect(result.data.text).toBe('The Lalit is 1.2 km from the venue.\n\nSource: https://www.thelalit.com/bangalore');
   });
 
-  it('leaves a reply whose citations are all shown unchanged', async () => {
-    const text = 'Rooms from ₹6,000 ([agoda.com](https://www.agoda.com/x?utm_source=openai)).';
-    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: 'https://www.agoda.com/x?utm_source=openai', title: 'Agoda' }])], usage }]);
+  it('keeps a cited link the model wrote into a sentence as its words, and every link that is not a citation', async () => {
+    const cited = 'https://www.agoda.com/x?id=7&utm_source=openai#:~:text=Rooms';
+    const text = `Rooms at [the Agoda listing](${cited}) from ₹6,000. Connect Google here: [Connect](https://waldo.example/connect/abc).`;
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: cited, title: 'Agoda' }])], usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe('Rooms at the Agoda listing from ₹6,000. Connect Google here: [Connect](https://waldo.example/connect/abc).\n\nSource: https://www.agoda.com/x?id=7');
+  });
+
+  it('leaves a reply without citations unchanged', async () => {
+    const text = 'Rooms from ₹6,000 at [Agoda](https://www.agoda.com/x).';
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [])], usage }]);
     const result = await adapter.complete(request({ country: 'IN' }));
     if (!result.ok) throw Error(result.error);
     expect(result.data.text).toBe(text);
+  });
+
+  describe('an answer that cites a test or staging copy of a site', () => {
+    const uat = 'https://uat.axisbank.com/support/home?utm_source=openai';
+    const bad = `Call Axis on +91 22 0000 0000 ([uat.axisbank.com](${uat})).`;
+    const good = 'Call the number on the Axis contact page ([axisbank.com](https://www.axisbank.com/contact-us?utm_source=openai)).';
+
+    it('is asked once more without it, and the second answer is the reply; both answers count', async () => {
+      const { bodies, adapter, request } = searching([
+        { id: 'r1', status: 'completed', output_text: bad, output: [message(bad, [{ url: uat, title: 'Axis UAT' }])], usage },
+        { id: 'r2', status: 'completed', output_text: good, output: [message(good, [{ url: 'https://www.axisbank.com/contact-us?utm_source=openai', title: 'Axis' }])], usage },
+      ]);
+      const result = await adapter.complete(request({ country: 'IN' }));
+      if (!result.ok) throw Error(result.error);
+      expect(bodies).toHaveLength(2);
+      const note = (bodies[1]!.input as Array<{ role?: string; content?: unknown }>).at(-1)!;
+      expect(note.role).toBe('developer');
+      expect(String(note.content)).toContain('uat.axisbank.com');
+      expect(result.data.text).toBe('Call the number on the Axis contact page.\n\nSource: https://www.axisbank.com/contact-us');
+      expect(result.data.input_tokens).toBe(2);
+      expect(result.data.output_tokens).toBe(2);
+    });
+
+    it('still reports the discarded answer\'s tokens when the second call fails', async () => {
+      let calls = 0;
+      const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => {
+        calls += 1;
+        if (calls === 2) throw Error('network down');
+        return { id: 'r1', status: 'completed', output_text: bad, output: [message(bad, [{ url: uat, title: 'Axis UAT' }])], usage };
+      }) });
+      const base = gatewayRequest();
+      const result = await adapter.complete({ ...base, request: { ...base.request, web_search: { country: 'IN' } } });
+      expect(result).toMatchObject({ ok: false, spent: { input_tokens: 1, output_tokens: 1 } });
+    });
+
+    it('is not asked a third time: a second answer that still relies on it never shows it as the source and says to check the official site', async () => {
+      const { bodies, adapter, request } = searching([
+        { id: 'r1', status: 'completed', output_text: bad, output: [message(bad, [{ url: uat, title: 'Axis UAT' }])], usage },
+        { id: 'r2', status: 'completed', output_text: bad, output: [message(bad, [{ url: uat, title: 'Axis UAT' }])], usage },
+      ]);
+      const result = await adapter.complete(request({ country: 'IN' }));
+      if (!result.ok) throw Error(result.error);
+      expect(bodies).toHaveLength(2);
+      expect(result.data.text).not.toContain('uat.axisbank.com');
+      expect(result.data.text).toBe(`Call Axis on +91 22 0000 0000.\n\n${TEST_SITE_CAUTION}`);
+    });
   });
 
   it('replays a round with a hosted search untouched ahead of its function call output', async () => {

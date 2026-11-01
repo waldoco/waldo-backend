@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { testSiteHost } from '../security/test-site';
 import { validModelCredential } from './credential-shape';
 import {
   OPENAI_PROVIDER,
@@ -73,9 +74,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     // The request's own limit, cut to what is left of the turn.
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
-    // Declared outside the try: a search-only response was billed even when its continuation then fails.
+    // Declared outside the try: a search-only response, or an answer sent back for citing a test site, was billed even when
+    // the call after it fails.
     const searched: OpenAI.Responses.ResponseOutputItem[] = [];
     const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0 };
+    let billedRounds = 0;
     try {
       const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
@@ -101,19 +104,30 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         ttftMs ??= streamed.ttftMs;
         return streamed.response;
       };
+      const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
+      const bill = (billed: OpenAI.Responses.Response) => {
+        billedRounds += 1;
+        searchSpent.input_tokens += billed.usage?.input_tokens ?? 0;
+        searchSpent.output_tokens += billed.usage?.output_tokens ?? 0;
+        searchSpent.cache_read_input_tokens += billed.usage?.input_tokens_details?.cached_tokens ?? 0;
+        searchSpent.cache_write_input_tokens += cacheWrites(billed);
+      };
       let response = await send(body);
       // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
       // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
         searched.push(...response.output);
-        searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
-        searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
-        searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
-        searchSpent.cache_write_input_tokens += cacheWrites(response);
-        const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
+        bill(response);
         response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
       }
-      const text = withCitedLinks(responseText(response).trim(), response);
+      // An answer resting on a test or staging copy of a site is asked once more without it; the discarded answer still
+      // cost its tokens. A second answer that leans on one anyway carries the caution instead of a third call.
+      const testSites = [...new Set(citedUrls(response).flatMap((url) => testSiteHost(url) ?? []))];
+      if (testSites.length > 0) {
+        bill(response);
+        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[], { role: 'developer', content: testSiteNote(testSites) }] });
+      }
+      const text = withOneSource(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
       const incomplete = response.status === 'incomplete';
@@ -152,13 +166,13 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
-      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
       const detail = error instanceof OpenAI.APIError
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
         : '';
       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
@@ -338,21 +352,36 @@ function hostedWebSearch(search: NonNullable<LLMGatewayRequest['request']['web_s
   return { type: 'web_search', user_location: { type: 'approximate', ...search } } as unknown as OpenAI.Responses.Tool;
 }
 
-// OpenAI requires web results shown to people to carry visible, clickable citations. The model usually links its
-// sources inline; a cited source the text does not link is listed after it, so every citation reaches the owner.
-function withCitedLinks(text: string, response: OpenAI.Responses.Response): string {
-  const missing = new Map<string, string>();
-  for (const item of response.output) {
-    if (item.type !== 'message') continue;
-    for (const part of item.content) {
-      if (part.type !== 'output_text') continue;
-      for (const annotation of part.annotations ?? []) {
-        if (annotation.type === 'url_citation' && !text.includes(annotation.url)) missing.set(annotation.url, annotation.title.replace(/\s+/g, ' ').trim());
-      }
-    }
+export const TEST_SITE_CAUTION = 'I could only find this on a test version of that site, so check it on the official site before relying on it.';
+const testSiteNote = (hosts: readonly string[]) => `Sources you used (${hosts.join(', ')}) are test or staging copies of a site, not its public site, so their details (numbers, prices, policies) may be fake or out of date. Answer again without anything taken from them: use the organisation's public site, or say you could not confirm it there.`;
+
+const citedUrls = (response: OpenAI.Responses.Response): string[] => [...new Set(response.output.flatMap((item) => item.type !== 'message' ? []
+  : item.content.flatMap((part) => part.type !== 'output_text' ? [] : (part.annotations ?? []).flatMap((annotation) => annotation.type === 'url_citation' ? [annotation.url] : []))))];
+
+// The page itself, without the tracking parameters search adds or a highlight fragment.
+const cleanUrl = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    for (const key of [...parsed.searchParams.keys()]) if (key.toLowerCase().startsWith('utm_')) parsed.searchParams.delete(key);
+    if (parsed.hash.startsWith('#:~:')) parsed.hash = '';
+    return parsed.toString();
+  } catch { return url; }
+};
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// OpenAI requires web results shown to people to carry a visible, clickable citation. A chat reply carries its answer,
+// not a bibliography: search's parenthesised citations leave the sentences, a cited link the model wrote keeps its words,
+// and the first cited public page is the one source link at the end. Links that are not citations stay as written.
+function withOneSource(text: string, response: OpenAI.Responses.Response): string {
+  const cited = citedUrls(response);
+  if (cited.length === 0) return text;
+  let body = text;
+  for (const url of cited) {
+    const link = `\\[([^\\[\\]\\n]*)\\]\\(${escapeRegExp(url)}\\)`;
+    body = body.replace(new RegExp(`\\s*\\(${link}\\)`, 'g'), '').replace(new RegExp(link, 'g'), '$1');
   }
-  if (missing.size === 0) return text;
-  return `${text}\n\nSources:\n${[...missing].map(([url, title]) => `- ${title ? `${title}: ` : ''}${url}`).join('\n')}`;
+  const source = cited.find((url) => testSiteHost(url) === null);
+  return [body.trim(), source ? `Source: ${cleanUrl(source)}` : '', cited.some((url) => testSiteHost(url) !== null) ? TEST_SITE_CAUTION : ''].filter(Boolean).join('\n\n');
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {

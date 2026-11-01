@@ -24,6 +24,13 @@ describe('web_search', () => {
     expect(result.data.hits[0]).toEqual({ title: 't0', url: 'https://example.com/0', snippet: 'd0' });
   });
 
+  it('leaves out results from a test or staging copy of a site', async () => {
+    const results = [{ title: 'Axis UAT', url: 'https://uat.axisbank.com/support', description: 'd' }, { title: 'Axis', url: 'https://www.axisbank.com/contact-us', description: 'd' }];
+    const result = await webSearchHandler('key', braveOk(results) as typeof fetch).handle({ query: 'axis lost card', limit: 5 }, ctx);
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.hits.map((hit) => hit.url)).toEqual(['https://www.axisbank.com/contact-us']);
+  });
+
   it.each([
     { timezone: 'Asia/Kolkata', country: 'IN' },
     { timezone: 'UTC', country: 'IN' },
