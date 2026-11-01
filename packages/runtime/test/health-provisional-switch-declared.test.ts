@@ -39,9 +39,9 @@ describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
 });
 
 describe('HEALTH_COACHING in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+  it('is on for staging, which deploys with migrations 20261101000000 and 20261101020000, and off for production', () => {
     expect(parsed.vars.HEALTH_COACHING).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('1');
   });
 });
 
