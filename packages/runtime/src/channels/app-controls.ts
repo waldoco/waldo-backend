@@ -12,6 +12,7 @@ import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof } from './dashboard-phone';
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
+import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
@@ -25,7 +26,7 @@ export type AppControlsHost = Readonly<{
   cardsLatest?(view:ConsoleView,revised:boolean):Promise<ConsoleView['cards']>;
   // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
   days?(date?:string):Promise<object|null>;
-  act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
+  act(action:ConsoleAction,fields?:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt>;
   // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
   welcome?():AppWelcomeBuildV1;
   // What the owner asked to be called, or null when the memory holds no name to serve.
@@ -71,6 +72,12 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
   return {...build,stages};
 };
 const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
+// The owner's Google sign-in account while it can be connected and is not yet: left out when the directory cannot say.
+const googleSignin=async(env:PhoneSmsEnv,owner:string,google:{connectAvailable:boolean;accounts:readonly {email:string}[]})=>{
+  if(!google.connectAvailable)return {};
+  const signin=await ownerGoogleSignin(env,owner);
+  return signin&&!google.accounts.some(account=>account.email.toLowerCase()===signin.email)?{signin:{email:signin.email}}:{};
+};
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
 const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
 // Controls revision 12 names WhatsApp as a way to prove the number; builds below it never receive it.
@@ -174,7 +181,11 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const day=query.data.view==='day'?dayForRevision(request,shown):shown;
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
-    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface},revision});
+    // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
+    // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
+    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
+    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)}}:{};
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
@@ -233,7 +244,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
       act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-      act:async action=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):host.act(action);}});
+      act:async(action,fields)=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):action.action==='google.connect'?host.act(action,fields):host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.

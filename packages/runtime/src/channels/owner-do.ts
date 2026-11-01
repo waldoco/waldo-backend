@@ -197,6 +197,7 @@ import { connectAppHandler } from '../tools/live/connect-app';
 import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
+import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
 import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
@@ -322,10 +323,10 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
-  googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
+  googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel, opts?: Readonly<{ handoff?: boolean; signin?: boolean }>): Promise<string | null>;
   googleConsoleStart(): Promise<string | null>;
   connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
-  issueTicket(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null>;
+  issueTicket(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean; loginHint?: string }>): Promise<Readonly<{ url: string; hash: string }> | null>;
   calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
   // GET /app/v1/calendar/day for this owner, after appRoute checked the session.
   calendarDay(request: Request): Promise<Response>;
@@ -1798,8 +1799,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             days:(date?:string)=>this.appDays(runtime,name,hash,date),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             ownerName:()=>ownerName(claimStore(this.ctx.storage.sql)),
-            act:async(action:ConsoleAction)=>action.action==='google.connect'
-              ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true}):null,this.ctx.storage.kv.get<string>('origin'))
+            act:async(action:ConsoleAction,fields?:Readonly<Record<string,string>>)=>action.action==='google.connect'
+              ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true,signin:fields?.account==='signin'}):null,this.ctx.storage.kv.get<string>('origin'))
               :action.action==='granola.connect'?this.granolaConnect(runtime)
               :action.action==='granola.disconnect'?this.granolaDisconnect()
               :action.action==='app.connect'?this.appTileConnect(runtime,action.id)
@@ -3823,7 +3824,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Connect links are short and first-party: /c/<ticket>, for Google or Granola. The provider URL is minted at click time
     // (BEGIN_SESSION_PATH) and never passes through model-visible text. A link for a surface that holds the owner's session
     // also carries a one-time handoff code, so only the browser that surface opens it in can take the hop.
-    const issueTicket = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null> => {
+    const issueTicket = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean; loginHint?: string }>): Promise<Readonly<{ url: string; hash: string }> | null> => {
       const origin = await storage.get<string>('origin');
       const callRpc = signedRpc(env);
       const doName = vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
@@ -3841,6 +3842,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!sessionId) return null;
       // The channel that issued the link decides where the completion page routes back to.
       await storage.put(`connect_channel:${hash}`, channel);
+      // The Google account to go to, kept until the ticket's Continue begins consent. Only the newest ticket keeps one, so a
+      // link never opened leaves nothing behind once another is issued.
+      if (opts?.loginHint) {
+        const stale = [...(await storage.list({ prefix: 'connect_hint:' })).keys()];
+        if (stale.length) await storage.delete(stale);
+        await storage.put(`connect_hint:${hash}`, opts.loginHint);
+      }
       log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
       return { url: handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`, hash };
     };
@@ -3955,14 +3963,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return `${CONSOLE_GOOGLE_START_PATH}${nonce}`;
       },
       takeStart: (nonce: string) => takeStart(consentDeps, nonce),
-      async connectUrl(_feature: GoogleFeature, channel: ConnectChannel = 'telegram', opts?: Readonly<{ handoff?: boolean }>) {
-        return google.configured() ? connectLink('google', channel, opts) : null;
+      // signin: connect the Google account the owner signs in with. Without a trusted identity the owner gets the chooser.
+      async connectUrl(_feature: GoogleFeature, channel: ConnectChannel = 'telegram', opts?: Readonly<{ handoff?: boolean; signin?: boolean }>) {
+        if (!google.configured()) return null;
+        const doName = vaultOwner();
+        const loginHint = opts?.signin && doName ? (await ownerGoogleSignin(env, doName))?.subject : undefined;
+        return (await issueTicket('google', channel, { ...(opts?.handoff ? { handoff: true } : {}), ...(loginHint ? { loginHint } : {}) }))?.url ?? null;
       },
       async beginSession(ticketHash: string) {
         const app = await googleApp();
         const channel = await storage.get<string>(`connect_channel:${ticketHash}`);
         const surface = channel === 'console' ? 'dashboard' : channel === 'telegram' || channel === 'app' ? channel : undefined;
-        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { session: ticketHash, ...(surface ? { surface } : {}) }) : null;
+        const loginHint = await storage.get<string>(`connect_hint:${ticketHash}`);
+        if (loginHint !== undefined) await storage.delete(`connect_hint:${ticketHash}`);
+        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { session: ticketHash, ...(surface ? { surface } : {}), ...(loginHint ? { loginHint } : {}) }) : null;
       },
       async finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> {
         const started = Date.now();
