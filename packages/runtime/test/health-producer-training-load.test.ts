@@ -131,6 +131,20 @@ describe('producer: candidate training load', () => {
     const cycling = (day: string, from: string, to: string): Sample => ({ ...session(day, from, to, zoned), activity: 'cycling' });
     expect(await loadWith(day => cycling(day, '06:50:00.000', '07:50:00.000')), 'another sport, a sixth shared').toMatchObject({ phrase: 'much heavier than usual' });
     expect(await loadWith(day => cycling(day, '06:05:00.000', '07:05:00.000')), 'another sport, nearly all shared').toMatchObject({ phrase: 'about usual' });
+    // The line is half of the shorter span: 29 of 60 minutes shared is two sessions, 31 is one.
+    expect(await loadWith(day => session(day, '06:31:00.000', '07:31:00.000', zoned)), '29 minutes shared').toMatchObject({ phrase: 'much heavier than usual' });
+    expect(await loadWith(day => session(day, '06:29:00.000', '07:29:00.000', zoned)), '31 minutes shared').toMatchObject({ phrase: 'about usual' });
+  });
+
+  it('keeps the copy with the most detail, whichever started first', async () => {
+    const session = (day: string, from: string, detail?: Sample): Sample => ({ ...workout(day, 60, detail), start_at: `${day}T${from}Z`, end_at: `${day}T${from.replace(/^06/, '07').replace(/^05/, '06')}Z` });
+    // The session itself every day; this week another app's bare copy, which starts a minute earlier, is in the store too.
+    // It comes first, as the series read orders a day's readings by start.
+    const loadOf = async (detail: Sample) => (await run(seriesOf(Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), ...(i < 8 ? [session(day, '05:59:00.000')] : []), session(day, '06:00:00.000', detail),
+    ])), { trainingLoad: true })).at(-1)?.training_load;
+    expect.soft(await loadOf(zones([600, 1200, 1200, 600, 0])), 'zones').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    expect.soft(await loadOf({ effort: { score: 6, method: 'rated' } }), 'effort').toMatchObject({ phrase: 'about usual', method: 'effort' });
   });
 
   it('says why when the window cannot carry a load', async () => {

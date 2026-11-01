@@ -371,7 +371,8 @@ const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): ob
 const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
 // A phone's store holds every app's copy of a session: the watch's, and the one Strava or Garmin wrote back. Two workouts
 // that share more than half of the shorter one's span are one session, and the copy with the most detail stands for it
-// (zones, then effort; the earlier read on a tie). A workout without a span is kept as it is.
+// (zones, then effort). On a tie the first in the read's order stands: day, start, then sample id. Each workout is matched
+// against the copies kept so far, not every one seen. A workout without a span is kept as it is.
 const detailOf = (r: Reading): number => (r.workout?.zoneSeconds ? 2 : r.workout?.effort ? 1 : 0);
 const sameSession = (a: Reading, b: Reading): boolean => {
   const [aFrom, aTo, bFrom, bTo] = [a.startAt, a.endAt, b.startAt, b.endAt].map(at => Date.parse(at!));
