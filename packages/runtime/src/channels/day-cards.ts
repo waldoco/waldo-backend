@@ -225,6 +225,46 @@ export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timez
   return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
 };
 
+// The owner's night is in (the wake Brief): a Brief still to come may go now, at an earlier time still to come, or at its
+// planned time, which in wake mode is the latest it should go. It is never moved later, and never woken past local midday.
+export const WAKE_TURNS_PER_MORNING = 3;
+const WAKE_TURNS_KEY = 'wake_brief_turns_v1';
+const NO_FRESHNESS: CardFreshness = { closeDue: null, quietStart: null };
+export const wakeTarget = (book: DayPlanBook, timezone: string, now: number): Readonly<{ card: DayCard; time: string }> | 'nothing_to_move' | 'past_fresh' => {
+  const brief = movableCards(book, timezone, now).find(entry => entry.card.id === 'card:brief');
+  if (!brief || brief.time === null) return 'nothing_to_move';
+  return now >= cardFreshUntil(brief.card, dayWindow(now, timezone).from, timezone, NO_FRESHNESS) ? 'past_fresh' : { card: brief.card, time: brief.time };
+};
+// A cost backstop on how often a morning asks the model, not a product rule.
+export const takeWakeTurn = (kv: Kv, day: string): boolean => {
+  const turns = kv.get<{ day: string; count: number }>(WAKE_TURNS_KEY);
+  const count = turns?.day === day ? turns.count : 0;
+  if (count >= WAKE_TURNS_PER_MORNING) return false;
+  kv.put(WAKE_TURNS_KEY, { day, count: count + 1 });
+  return true;
+};
+export type WakeReply = Readonly<{ time: string; reason: string }>;
+// "now", or a time after now and before the latest-by. Anything else, an unreadable reply included, keeps the Brief.
+export const parseWakeReply = (raw: string, latestBy: string, nowClock: string): WakeReply | null => {
+  let planned: unknown;
+  try { planned = (JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { cards?: unknown }).cards; } catch { return null; }
+  const entry = Array.isArray(planned) ? planned.find((item: { id?: unknown } | null) => item?.id === 'card:brief') as { time?: unknown; reason?: unknown } | undefined : undefined;
+  const time = typeof entry?.time === 'string' ? entry.time.trim() : '';
+  const reason = typeof entry?.reason === 'string' && entry.reason ? entry.reason : 'no reason given';
+  if (time === 'now') return { time, reason };
+  return isClock(time) && time > nowClock && time < latestBy ? { time, reason } : null;
+};
+export const applyWake = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, reply: WakeReply): Promise<readonly CardPlan[]> => {
+  const target = wakeTarget(book, timezone, now);
+  if (typeof target === 'string') return [];
+  if (reply.time !== 'now') return applyReplan(scheduler, book, timezone, now, [{ card: 'card:brief', time: reply.time, reason: reply.reason }], [target]);
+  if (scheduler.lookup('card:brief').state === 'unreadable') return [];
+  const entry: CardPlan = { card: 'card:brief', time: localIso(now, timezone).slice(11, 16), reason: reply.reason };
+  book.save(localIso(now, timezone).slice(0, 10), entry);
+  await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: now, dueAt: now, recurrence: null });
+  return [entry];
+};
+
 // One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
 // change is always planned on and a burst costs at most two model calls.
 export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {

@@ -28,7 +28,7 @@ import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type De
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange, type HealthRecomputeCause } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
-import type { HealthWakeReason } from '../health/wakes';
+import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
@@ -144,7 +144,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
-import { applyDayPlan, applyReplan, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, applyWake, coalesced, movableCards, parseWakeReply, takeWakeTurn, wakeTarget, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -4623,6 +4623,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
+    const wakeBrief = this.env.WAKE_BRIEF === '1' && this.env.WALDO_DAY_STATE === '1';
     const planToday = async (trace: string) => {
       const started = Date.now();
       const now = Date.now();
@@ -4630,7 +4631,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (cards.length === 0) return;
       try {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
-        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
+        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()), wakeMode: wakeBrief });
         const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards), true, schedPrefs.enabled('daily_brief'));
         // Count only - the planned times are the owner's schedule, not trace content.
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: dayPlanTraceDetail(applied) });
@@ -4663,6 +4664,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // queued job never ends in an unhandled rejection.
     const replanToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => replanCards(trace))
       .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'replan_failed' })));
+    // The owner's night is in (the wake Brief): a Brief still to come gets one turn on a queue of its own, so a wake is never
+    // absorbed into a calendar re-plan whose prompt does not know the night is in. The turn sends it now, earlier, or at its
+    // latest-by; three turns a morning at most. The trace carries codes and counts, never a time.
+    const wakeCards = async (trace: string) => {
+      const started = Date.now(), now = Date.now(), local = localIso(now, clock.timezone);
+      const target = schedPrefs.enabled('daily_brief') ? wakeTarget(plans, clock.timezone, now) : 'nothing_to_move';
+      const code = typeof target === 'string' ? target : takeWakeTurn(storage.kv, local.slice(0, 10)) ? null : 'wake_limit';
+      if (typeof target === 'string' || code) {
+        log({ trace, hop: 'day_plan', ms: 0, ok: true, code: code ?? undefined, detail: code ?? undefined });
+        return;
+      }
+      try {
+        const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
+        const said = dayPlanInput({ localNow: local, calendar, cards: [target.card], proactivity: proactivityLine(loops.proactivity()),
+          wake: { latestBy: target.time, weekday: new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: clock.timezone }).format(now) } });
+        const reply = parseWakeReply(await responder.planDay(trace, said), target.time, local.slice(11, 16));
+        const applied = reply ? await applyWake(scheduler, plans, clock.timezone, Date.now(), reply) : [];
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.length ? dayPlanTraceDetail(applied) : 'kept' });
+      } catch (error) {
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+      }
+    };
+    const wakeToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => wakeCards(trace))
+      .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'wake_failed' })));
     // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
     // lands in the schedule retry/quarantine policy unchanged. Past-due loops become a reader job written with the scan; the
     // worker checks them off this pass, and the jobs lane applies what it found (heartbeatApply below).
@@ -4832,14 +4857,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (reasons.filter(reason => healthBook.markOnce(day, Date.now(), reason)).length) await armHealthTrigger();
     };
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
+    // The newest derived row under model-use consent: with that consent withdrawn it returns nothing.
+    const readModelHealth = async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; };
+    // The health plane says the night chosen for today changed: the day, nothing else. It wakes the Brief only while the
+    // owner's daily Brief is on and the model-use read shows today.
+    const nightRecorded = async (day: string) => {
+      if (!wakeBrief) return;
+      const trace = `night-recorded:${Date.now()}`;
+      const code = !schedPrefs.enabled('daily_brief') ? 'brief_off' : day !== localIso(Date.now(), clock.timezone).slice(0, 10) ? 'not_today'
+        : healthSnapshot(await readModelHealth())?.day !== day ? 'no_consent' : 'woke';
+      log({ trace, hop: 'night_recorded', ms: 0, ok: true, code, detail: code });
+      if (code === 'woke') wakeToday(trace);
+    };
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })), readHistory: days => healthRpc('scores_history', JSON.stringify({ days })),
       compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1',
       ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
+      nightRef: wakeBrief, onNightRecorded: nightRecorded,
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
-        readContext: async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } } });
+        readContext: readModelHealth } });
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
     const healthSamples = async (cause: HealthRecomputeCause = 'readings') => {
