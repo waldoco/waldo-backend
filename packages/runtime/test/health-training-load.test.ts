@@ -28,6 +28,14 @@ describe('training-load.candidate.v1', () => {
     expect(trainingLoad({ throughDay: TODAY, observedDays: ALL, workouts: workouts.map(w => ({ ...w, zoneSeconds: null })) })).toMatchObject({ method: 'minutes', phrase: 'about usual' });
   });
 
+  it('names zones built on an observed workout peak as their own method, counted the same way, so the model can call them approximate', () => {
+    const easy = [600, 1200, 600, 0, 0], hard = [0, 600, 600, 600, 600];
+    const measured = [...CHRONIC.map(day => zoned(day, easy)), ...ACUTE.map(day => zoned(day, hard))];
+    const onePeak = measured.map((w, i) => (i === 3 ? { ...w, zonesFromObservedPeak: true } : w));
+    expect(trainingLoad({ throughDay: TODAY, observedDays: ALL, workouts: measured })).toMatchObject({ method: 'hr_zones', phrase: 'much heavier than usual' });
+    expect(trainingLoad({ throughDay: TODAY, observedDays: ALL, workouts: onePeak })).toMatchObject({ method: 'hr_zones_observed_peak', phrase: 'much heavier than usual' });
+  });
+
   it('uses session RPE when every workout has an effort score of one kind, and never adds two methods together', () => {
     const rated = [...CHRONIC.map(day => run(day, 60, { effort: { score: 4, method: 'rated' } })), ...ACUTE.map(day => run(day, 60, { effort: { score: 6, method: 'rated' } }))];
     expect(trainingLoad({ throughDay: TODAY, observedDays: ALL, workouts: rated })).toMatchObject({ method: 'effort', phrase: 'heavier than usual' });

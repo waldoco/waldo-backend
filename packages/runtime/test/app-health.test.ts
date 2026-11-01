@@ -308,6 +308,20 @@ describe('app health ingest: per-sample rejection at health revision 3', () => {
   });
 });
 
+// Health revision 6: zones the phone set from the highest heart rate seen in a workout reach the database with that basis, so the
+// producer can call them approximate.
+describe('app health ingest: zones from an observed workout peak at health revision 6', () => {
+  it('forwards the workout whole, its zone basis included', async () => {
+    const coach = (await import('../../contracts/src/app/fixtures/health-ingest-coach.v5.json')).default.request;
+    const workout = coach.samples[0]!, ride = { ...workout, hr_zones: { ...workout.hr_zones, basis: 'observed_workout_peak' } };
+    const upload = { ...coach, request_id: 'health-upload-peak-1', samples: [ride], deletions: [] };
+    rpcResult = { ...receipt, request_id: upload.request_id, anchor_after: upload.anchor_after };
+    const response = await post('/app/v1/health/ingest', upload, { 'x-waldo-app-contract': 'approvals=2,health=6', 'idempotency-key': upload.request_id });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string).samples).toEqual([ride]);
+  });
+});
+
 describe('app health routes: error mapping', () => {
   const statuses: Record<string, number> = { invalid_request: 400, not_linked: 403, consent_required: 403, consent_withdrawn: 403, epoch_conflict: 409, idempotency_conflict: 409, anchor_conflict: 409, sample_conflict: 409, unavailable: 503 };
   it('maps every closed error code to one status and passes only the code', async () => {

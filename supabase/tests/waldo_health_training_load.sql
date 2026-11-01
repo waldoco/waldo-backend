@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(13);
+select plan(15);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -39,6 +39,9 @@ select col_type_is('public','health_context_daily','training_load','jsonb','the 
 select is(pg_temp.write(jsonb_build_object('training_load',pg_temp.load()))->>'written','true','a row with a candidate load is written');
 select is(pg_temp.model_read('load-owner')->'context'->'training_load',pg_temp.load(),'the model''s read returns it as written');
 select ok(not (pg_temp.h('scores_read','load-owner')->'scores' ? 'training_load'),'the app''s scores read never does');
+-- Health revision 6: zones built on the highest heart rate seen in a workout are their own method, so the model can call them approximate.
+select is(pg_temp.write(jsonb_build_object('training_load',pg_temp.load('{"method":"hr_zones_observed_peak"}')))->>'written','true','a load from zones on an observed workout peak is written');
+select is(pg_temp.model_read('load-owner')->'context'->'training_load'->>'method','hr_zones_observed_peak','and read back with its method');
 select is(pg_temp.write(jsonb_build_object('training_load','{"state":"unavailable","reason":"baseline_immature"}'::jsonb))->>'written','true','an unavailable load with its reason is written');
 select is(pg_temp.write()->>'written','true','a row written without a load lands');
 select ok(not (pg_temp.model_read('load-owner')->'context' ? 'training_load'),'and clears it, so no load outlives the recompute that had none');

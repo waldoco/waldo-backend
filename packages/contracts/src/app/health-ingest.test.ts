@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -556,6 +556,14 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
     for (const sample of [full, ride, swim, { ...workout, hr_zones: { ...zones, basis: 'provider', lower_bounds_bpm: null } }, { ...workout, hr_zones: { ...zones, basis: 'max_heart_rate' } }]) {
       expect(healthSampleV1Schema.safeParse(sample).success, JSON.stringify(sample)).toBe(true);
     }
+  });
+  // Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, not a measured maximum, say so,
+  // so the model can call them approximate. They name their bounds like any phone-built zones.
+  it('takes zones on the highest observed workout peak from revision 6, with their bounds', () => {
+    expect(HEALTH_OBSERVED_PEAK_REVISION_V1).toBe(HEALTH_COACH_REVISION_V1 + 1);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_workout_peak' } }).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_workout_peak', lower_bounds_bpm: null } }).success).toBe(false);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_peak' } }).success).toBe(false);
   });
   it('refuses a workout whose heart rate, zones or effort cannot be one session', () => {
     rejected(healthSampleV1Schema, [
