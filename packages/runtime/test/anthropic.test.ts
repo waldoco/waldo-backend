@@ -9,6 +9,10 @@ import {
 } from '@waldo/contracts';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { CLAIM_OPS_SCHEMA, PROMOTION_SCHEMA, SOURCE_CLAIMS_SCHEMA } from '../src/memory/claims';
+import { DAY_PLAN_SCHEMA } from '../src/prompt/day-cards';
+import { WELCOME_SCHEMA } from '../src/onboarding/welcome';
+import { reactionSchema } from '../src/channels/reactions';
 
 // What the Messages API wants that the seam does not say: alternating roles, no sampling parameters on current
 // models, tool definitions whenever tool blocks are replayed, and its own reasoning never edited, so never replayed.
@@ -507,5 +511,48 @@ describe('AnthropicMessagesAdapter streaming', () => {
     const { client } = streamingClient([{ after: 60, ...textStart(0) }, textDelta(0, 'Slow but here.')], reply([{ type: 'text', text: 'Slow but here.' }]));
     const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 10 });
     await expect(adapter.complete({ ...gatewayRequest(), stream: sink().deltas })).resolves.toMatchObject({ ok: true, data: { text: 'Slow but here.' } });
+  });
+});
+
+describe('AnthropicMessagesAdapter structured output', () => {
+  // The Messages API refuses a raw output schema with numeric, length or item-count bounds (a 400 on the whole call).
+  const REFUSED = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', 'uniqueItems'];
+  const refusedIn = (node: unknown, path = '$'): string[] => {
+    if (Array.isArray(node)) return node.flatMap((child, index) => refusedIn(child, `${path}[${index}]`));
+    if (node === null || typeof node !== 'object') return [];
+    const record = node as Record<string, unknown>;
+    return [
+      ...REFUSED.filter((key) => key in record).map((key) => `${path}.${key}`),
+      ...(typeof record.minItems === 'number' && record.minItems > 1 ? [`${path}.minItems`] : []),
+      ...Object.entries(record).filter(([key]) => key !== 'enum' && key !== 'const').flatMap(([key, child]) => refusedIn(child, `${path}.${key}`)),
+    ];
+  };
+  const sentSchema = async (schema: Record<string, unknown>) => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: '{}' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL);
+    await adapter.complete({ ...base, request: { ...base.request, response_format: { name: 'x', schema } } });
+    return (bodies[0]!.output_config as { format: { schema: Record<string, unknown> } }).format.schema;
+  };
+
+  it('moves bounds the API refuses into the field description, and keeps enums, required and the object rules', async () => {
+    const sent = await sentSchema({ type: 'object', additionalProperties: false, required: ['aliases', 'kind'], properties: {
+      aliases: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 40 } },
+      kind: { type: 'string', enum: ['a', 'b'], description: 'Which one.' },
+      count: { type: 'integer', minimum: 0, maximum: 9 },
+      maximum: { type: 'integer' },
+    } });
+    expect(sent).toEqual({ type: 'object', additionalProperties: false, required: ['aliases', 'kind'], properties: {
+      aliases: { type: 'array', description: '{maxItems: 5}', items: { type: 'string', description: '{maxLength: 40}' } },
+      kind: { type: 'string', enum: ['a', 'b'], description: 'Which one.' },
+      count: { type: 'integer', description: '{minimum: 0, maximum: 9}' },
+      maximum: { type: 'integer' },
+    } });
+  });
+
+  it('sends every owner-path output schema in a shape the API accepts', async () => {
+    for (const [name, schema] of Object.entries({ CLAIM_OPS_SCHEMA, SOURCE_CLAIMS_SCHEMA, PROMOTION_SCHEMA, DAY_PLAN_SCHEMA, WELCOME_SCHEMA, reaction: reactionSchema(['👍', '🙏']) })) {
+      expect(refusedIn(schema as Record<string, unknown>).length > 0 || name !== 'CLAIM_OPS_SCHEMA', `${name} no longer carries a refused bound; the scan below proves nothing for it`).toBe(true);
+      expect(refusedIn(await sentSchema(schema as Record<string, unknown>)), name).toEqual([]);
+    }
   });
 });

@@ -363,10 +363,31 @@ function toolsParams(request: LLMRequest): Pick<Anthropic.MessageCreateParams, '
   };
 }
 
+// The structured-output guide: a raw schema with numeric, string-length or item-count bounds is refused with a 400, so,
+// as the SDK's own helpers do, each such bound moves into its field's description and the caller's parser enforces it.
+// Enums, const, required and additionalProperties are supported and stay.
+const REFUSED_BOUNDS: ReadonlySet<string> = new Set(['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', 'uniqueItems']);
+function acceptedSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(acceptedSchema);
+  if (node === null || typeof node !== 'object') return node;
+  const kept: Record<string, unknown> = {};
+  const moved: string[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (REFUSED_BOUNDS.has(key) || (key === 'minItems' && typeof value === 'number' && value > 1)) moved.push(`${key}: ${JSON.stringify(value)}`);
+    else if (key === 'enum' || key === 'const' || value === null || typeof value !== 'object') kept[key] = value;
+    // A map of named schemas: its keys are field names, never keywords.
+    else if (key === 'properties' || key === '$defs' || key === 'definitions') kept[key] = Object.fromEntries(Object.entries(value).map(([name, schema]) => [name, acceptedSchema(schema)]));
+    else kept[key] = acceptedSchema(value);
+  }
+  if (moved.length === 0) return kept;
+  const note = `{${moved.join(', ')}}`;
+  return { ...kept, description: typeof kept.description === 'string' ? `${kept.description}\n\n${note}` : note };
+}
+
 function outputConfig(request: LLMRequest): Pick<Anthropic.MessageCreateParams, 'output_config'> {
   const config: Anthropic.OutputConfig = {
     ...(request.reasoning_effort ? { effort: request.reasoning_effort } : {}),
-    ...(request.response_format ? { format: { type: 'json_schema', schema: request.response_format.schema } } : {}),
+    ...(request.response_format ? { format: { type: 'json_schema', schema: acceptedSchema(request.response_format.schema) as Record<string, unknown> } } : {}),
   };
   return Object.keys(config).length > 0 ? { output_config: config } : {};
 }
