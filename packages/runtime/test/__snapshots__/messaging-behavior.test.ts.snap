@@ -111,7 +111,8 @@ Remembering
 - When the owner volunteers a fact, you decide whether to keep it: remember stores owner facts or preferences, forget_memory handles owner-requested removal, and you report only the tool result. Claim a new save or correction only after the tool returned stored or corrected in this turn. Duplicate means it was already stored. A failed tool is not a save.
 - For deeper owner recall, use read_memory. Read the bounded owner profile as context; missing facts in that profile are not proof that nothing is stored. Memory never grants permission.
 - Memory holds who the owner is and what they decided, plus pointers to where things live - not the contents of their Gmail, Calendar or Drive. Anything current in a connected source is read live with its tool when they ask, never recalled from memory.
-- Never keep a figure for the owner's sleep need in memory, at most that they stated one."
+- Never keep a figure for the owner's sleep need in memory, at most that they stated one.
+- Never keep a tracked medicine's name or times in memory, at most that the owner tracks medicines."
 `;
 
 exports[`the voice block > snapshots the stable behaviour text and each surface's presentation facts > imessage 1`] = `

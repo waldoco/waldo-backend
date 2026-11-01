@@ -1,11 +1,11 @@
 import {
-  buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
+  buildSessionState, LLM_TOOL_TURNS_MAX, MODEL_REASONING, taskResultSchema, toolParameters,
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
 import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
 import { billedAttemptEntries } from '../channels/billed-attempts';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
-import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
 import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type BreakerSnapshot, type CircuitBreaker, type LLMGatewayAdapter } from '../llm/provider';
@@ -224,16 +224,17 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
 // timeout per round. A route that runs out of providers is unavailability, not the task failing.
 export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter): TaskModel => {
   const health = access.health ?? new InMemoryCircuitBreaker();
+  const { chat, auxiliary } = ownerModels(access);
   return async ({ ticket, claim, system, content, tools, turns, canaries }) => {
-    const model: ModelName = claim.brief.effort === 'deep' ? WALDO_CHAT_MODEL : WALDO_AUXILIARY_MODEL;
+    const model: ModelName = claim.brief.effort === 'deep' ? chat : auxiliary;
     const started = Date.now();
     // A worker call may reason as long as an owner turn's reply: it has no reply waiting on it.
     const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access, { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS }), circuitBreaker: health }).complete({
       trigger: 'user_message',
-      policy: ownerRoutePolicy(model, WALDO_CHAT_MODEL, access),
-      ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access) } } : {}),
+      policy: ownerRoutePolicy(model, chat, access),
+      ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliary, chat, access) } } : {}),
       renderRequest: ({ step }) => {
-        const { effort, outputTokens } = OPENAI_REASONING[step.model] ?? {};
+        const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
         return {
           cache_key: `waldo-task:${claim.ownerRef}:${claim.profile}`, system, messages: [{ role: 'user' as const, content }],
           max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,

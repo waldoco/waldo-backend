@@ -1,5 +1,5 @@
 import {
-  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_AUXILIARY_MODEL,
+  OPENAI_PROVIDER, OWNER_MODELS, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema,
   type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
 import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
@@ -13,8 +13,9 @@ const BASE = 'https://api.stagehand.browserbase.com';
 // Browserbase GET /v1/sessions/{id}/debug lists the session's open pages (docs.browserbase.com/reference/api/session-live-urls).
 const BROWSERBASE_BASE = 'https://api.browserbase.com';
 // Stagehand's model only picks page elements and extracts page text for the owner turn's model, and a Stagehand
-// session names a model with no reasoning effort, so it stays on the auxiliary model.
-const MODEL = `${PROVIDER_OF[WALDO_AUXILIARY_MODEL]}/${WALDO_AUXILIARY_MODEL}`;
+// session names a model with no reasoning effort, so it stays on a small model: OpenAI's, whichever provider runs the owner
+// path, because the session is given the OpenAI key.
+const MODEL = `${OPENAI_PROVIDER}/${OWNER_MODELS[OPENAI_PROVIDER].auxiliary}`;
 
 
 // Provider failure bodies are untrusted and may echo credentials or page instructions.

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, WORKERS_AI_GEMMA_4_26B_MODEL, modelNameSchema, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, WORKERS_AI_GEMMA_4_26B_MODEL, modelNameSchema, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 
 const M = 1_000_000;
@@ -81,4 +81,17 @@ it('never prices uncached input below zero when a provider reports reads and wri
 it('prices every model the router can pick, Workers AI included', () => {
   for (const model of modelNameSchema.options) expect(modelCost({ model, input: 1, output: 1, cached: 0 }), model).not.toBeNull();
   expect(modelCost({ model: WORKERS_AI_GEMMA_4_26B_MODEL, input: M, output: M, cached: 0 })?.total).toBeCloseTo(0.4, 10);
+});
+
+// Haiku 5.5 bills a whole call at its higher card once the prompt (cache reads and writes included) passes 100,000 tokens.
+it('prices Haiku at $0.10 / $0.01 / $0.50 up to 100,000 prompt tokens and at $0.50 / $0.05 / $2.50 for the whole call above', () => {
+  const short = modelCost({ model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, input: 100_000, output: 1_000, cached: 40_000 })!;
+  expect(short.total).toBeCloseTo((60_000 * 0.1 + 40_000 * 0.01 + 1_000 * 0.5) / M, 12);
+  const long = modelCost({ model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, input: 100_001, output: 1_000, cached: 40_000, cache_write: 10_000 })!;
+  expect(long).toEqual({
+    input: expect.closeTo((50_001 * 0.5 + 40_000 * 0.05) / M, 12),
+    cache_write: expect.closeTo((10_000 * 0.625) / M, 12),
+    output: expect.closeTo((1_000 * 2.5) / M, 12),
+    total: expect.closeTo((50_001 * 0.5 + 40_000 * 0.05 + 10_000 * 0.625 + 1_000 * 2.5) / M, 12),
+  });
 });

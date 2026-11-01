@@ -28,19 +28,29 @@ export const modelNameSchema = z.enum([
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
-// The owner's own conversation turns, on the app, iMessage and Telegram, and the delegate tasks they spawn.
-export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_TERRA_MODEL;
-// Every call that is not an owner's conversation turn: reaction choice, thread titles, memory extraction and
-// consolidation, conversation compaction, reminder, day-card, brief and heartbeat wording, and background decisions.
-// Not ROSTER.auxiliary below, which is the run loop's classifier role.
-// A model swap is a pin change here; a new model also needs its roster entry, PROVIDER_OF, OPENAI_REASONING, a
+// The OpenAI models of the owner path. On OpenAI, the owner's own conversation turns (app, iMessage, WhatsApp, Telegram)
+// and the delegate tasks they spawn run on WALDO_CHAT_MODEL; every call that is not an owner's conversation turn
+// (reaction choice, thread titles, memory extraction and consolidation, conversation compaction, reminder, day-card,
+// brief and heartbeat wording, background decisions) runs on WALDO_AUXILIARY_MODEL. Not ROSTER.auxiliary below, which is
+// the run loop's classifier role.
+// A model swap is a pin change here; a new model also needs its roster entry, PROVIDER_OF, MODEL_REASONING, a
 // context spec and a price in packages/runtime/src/llm/pricing.ts.
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_TERRA_MODEL;
 export const WALDO_AUXILIARY_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
-// The second provider's models, reached only when the OpenAI step above fails: the current Claude Sonnet for the owner's
-// own turns, the current Claude Haiku for everything else. Opus stays in the roster for a stronger tier, not as the
-// default fallback. Same pin discipline as the two models above.
+// The Claude models of the owner path, in the same two roles: the current Claude Sonnet and the current Claude Haiku.
+// Opus stays in the roster for a stronger tier. Same pin discipline as the two models above.
 export const WALDO_CHAT_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_SONNET_5_5_MODEL;
 export const WALDO_AUXILIARY_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL;
+
+// The providers that can run the owner path. The deploy picks one (WALDO_MODEL_PROVIDER); the other is every route's
+// fallback when its key is deployed.
+export const modelProviderSchema = z.enum([ANTHROPIC_PROVIDER, OPENAI_PROVIDER]);
+export type ModelProvider = z.infer<typeof modelProviderSchema>;
+export const DEFAULT_MODEL_PROVIDER: ModelProvider = ANTHROPIC_PROVIDER;
+export const OWNER_MODELS: Readonly<Record<ModelProvider, Readonly<{ chat: ModelName; auxiliary: ModelName }>>> = {
+  [ANTHROPIC_PROVIDER]: { chat: WALDO_CHAT_FALLBACK_MODEL, auxiliary: WALDO_AUXILIARY_FALLBACK_MODEL },
+  [OPENAI_PROVIDER]: { chat: WALDO_CHAT_MODEL, auxiliary: WALDO_AUXILIARY_MODEL },
+};
 
 // The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both.
 export const reasoningEffortSchema = z.enum(['low', 'medium']);
@@ -56,6 +66,18 @@ export const OPENAI_REASONING: Readonly<Partial<Record<ModelName, OpenAIReasonin
   [OPENAI_GPT_6_LUNA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'low' },
   [OPENAI_GPT_6_1_SOL_MODEL]: { accepts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium', outputTokens: 25_000 },
   [OPENAI_GPT_6_1_TERRA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium', outputTokens: 25_000 },
+};
+
+// What a call asks of the model it runs on, whichever provider that is. On Claude the effort is output_config.effort under
+// adaptive thinking, which these models always run; Anthropic's Sonnet 5.5 guide starts multistep tool use at medium and
+// classification or extraction at low, and thinking counts against the output cap, so the chat tiers carry room for it.
+// Effort and cap are measured starting points: an effort sweep on the eval can move them.
+export type ModelReasoning = Readonly<{ effort: ReasoningEffort; outputTokens?: number }>;
+export const MODEL_REASONING: Readonly<Partial<Record<ModelName, ModelReasoning>>> = {
+  ...Object.fromEntries(Object.entries(OPENAI_REASONING).map(([model, { effort, outputTokens }]) => [model, { effort, ...(outputTokens ? { outputTokens } : {}) }])),
+  [ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]: { effort: 'medium', outputTokens: 32_000 },
+  [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]: { effort: 'medium', outputTokens: 32_000 },
+  [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: { effort: 'low', outputTokens: 16_000 },
 };
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(9);
+select plan(11);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -44,6 +44,15 @@ select ok(not (pg_temp.samsung() ? '53'),'a reading with no origin is not marked
 select ok(not (pg_temp.samsung() ? '54'),'and one whose origin names no package is not marked either');
 select is((select count(*)::int from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where s ? 'origin' or s ? 'origin_package' or s ? 'source_package_name'),0,'no origin, and no package name, is returned for any reading');
 select ok(position('com.example.ringapp' in pg_temp.read()::text)=0 and position('com.sec.android' in pg_temp.read()::text)=0,'a package name appears nowhere in the read');
+
+-- An hourly heart-rate window is marked the same way, so a Health Connect night with no resting reading can be accepted.
+create function pg_temp.hour(id text,val numeric,origin jsonb) returns jsonb language sql as $$
+  select jsonb_build_object('sample_id',id,'revision',1,'signal','heart_rate_window','unit','beats_per_minute','value',val,'min',val-5,'max',val+8,'n_samples',40,
+    'day',((date_trunc('hour',now())-interval '5 hours') at time zone 'UTC')::date,'start_at',pg_temp.iso(date_trunc('hour',now())-interval '5 hours'),'end_at',pg_temp.iso(date_trunc('hour',now())-interval '4 hours'),'utc_offset_minutes',0,'origin',origin) $$;
+select is(pg_temp.h('ingest','origin-owner',pg_temp.batch('origin-0002','oa1','oa2',jsonb_build_array(pg_temp.hour('w-shealth',61,pg_temp.origin('com.sec.android.app.shealth')),pg_temp.hour('w-other',62,pg_temp.origin('com.example.ringapp')))))->>'accepted',
+  '2','hourly heart-rate windows with a recorded writer are accepted');
+select is((select jsonb_object_agg(s->>'value', coalesce(s->'samsung_writer','false'::jsonb)) from jsonb_array_elements(pg_temp.h('series_read','origin-owner',jsonb_build_object('from',pg_temp.today()-2,'to',pg_temp.today(),'signals',jsonb_build_array('heart_rate_window')))->'sources'->0->'samples') s),
+  '{"61":true,"62":false}'::jsonb,'and the window Samsung Health wrote is marked, the other app''s is not');
 
 select * from finish();
 rollback;

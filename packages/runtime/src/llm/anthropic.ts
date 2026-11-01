@@ -2,7 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { validModelCredential } from './credential-shape';
 import { ANTHROPIC_PROVIDER, PROVIDER_OF, type LLMAttachment, type LLMRequest, type LLMToolCall, type LLMToolTurn, type ModelName } from '@waldo/contracts';
 import { OUTPUT_ITEM_PROVIDER, outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
-import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
+import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type AnthropicMessagesClient = Pick<Anthropic, 'messages'>;
 
@@ -11,6 +12,7 @@ export type AnthropicAdapterOptions = Readonly<{
   timeoutMs?: number;
   client?: AnthropicMessagesClient;
   onResponseMetadata?: (metadata: AnthropicResponseMetadata) => void;
+  firstTokenTimeoutMs?: number;
 }>;
 
 export type AnthropicResponseMetadata = Readonly<{
@@ -22,7 +24,7 @@ export type AnthropicResponseMetadata = Readonly<{
   stop_reason: string | null;
 }>;
 
-// The second provider at the LLMGatewayAdapter seam (Messages API). Sampling parameters stay off the wire: current Claude
+// Claude at the LLMGatewayAdapter seam (Messages API), primary or fallback as WALDO_MODEL_PROVIDER decides. Sampling parameters stay off the wire: current Claude
 // models reject them. Thinking runs at the model's default and is never replayed: a replayed thinking block is bound to
 // an unchanged prefix, and a turn changes its prefix when it withdraws the tools for the closing round, so the adapter
 // replays only text and tool calls (the documented always-valid shape) and the next round reasons afresh.
@@ -31,9 +33,11 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: AnthropicResponseMetadata) => void) | undefined;
+  private readonly firstTokenTimeoutMs: number;
 
   constructor(options: AnthropicAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     // The provider's attempt plan is the one retry owner; see OpenAIResponsesAdapter.
@@ -52,8 +56,9 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
       return { ok: false, code: 'auth_failed', error: 'ANTHROPIC_API_KEY is unavailable' };
     }
     const rendered = messagesInput(input.request);
+    // Not a bad request: another provider may have a wire for the file, so the route can move on to it.
     if (rendered === null) {
-      return { ok: false, code: 'invalid_args', error: 'Anthropic adapter received an attachment type it cannot send' };
+      return { ok: false, code: 'invalid_args', error: 'Anthropic adapter received an attachment type it cannot send', unsendable: true };
     }
     const cached = input.step.cache === 'anthropic_native';
     const messages = cached ? withMessageBreakpoints(rendered) : rendered;
@@ -76,7 +81,17 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         ...toolsParams(input.request),
         ...outputConfig(input.request),
       };
-      let response = await this.client.messages.create(body, { signal: controller.signal });
+      const client = this.client;
+      let ttftMs: number | undefined;
+      const send = async (params: Anthropic.MessageCreateParamsNonStreaming) => {
+        if (!input.stream) return client.messages.create(params, { signal: controller.signal });
+        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+        // without one the call keeps its whole limit, as an unstreamed call does.
+        const streamed = await streamedMessage(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
+        ttftMs ??= streamed.ttftMs;
+        return streamed.message;
+      };
+      let response = await send(body);
       // A response that only searched for tools (the server paused its turn) has not answered yet. The tool search guide
       // continues it by sending its content back as the assistant's turn; the searched blocks lead the answer's own, so a
       // later round replays the whole turn.
@@ -86,7 +101,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         searchSpent.output_tokens += response.usage.output_tokens;
         searchSpent.cache_read_input_tokens += response.usage.cache_read_input_tokens ?? 0;
         searchSpent.cache_write_input_tokens += response.usage.cache_creation_input_tokens ?? 0;
-        response = await this.client.messages.create({ ...body, messages: [...messages, { role: 'assistant', content: searched as Anthropic.ContentBlockParam[] }] }, { signal: controller.signal });
+        response = await send({ ...body, messages: [...messages, { role: 'assistant', content: searched as Anthropic.ContentBlockParam[] }] });
       }
       const text = response.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n').trim();
       const toolCalls: LLMToolCall[] = response.content.flatMap((block) => block.type === 'tool_use'
@@ -101,10 +116,11 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         ...(written > 0 ? { cache_write_input_tokens: written } : {}),
       };
       const truncated = response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded';
+      // A refusal fails whatever it wrote before declining, so the route moves on. Only the policy category crosses into
+      // the trace; the explanation can quote the request.
+      if (response.stop_reason === 'refusal') return { ok: false, code: 'rejected', error: `Anthropic refused the request (${response.stop_details?.category ?? 'uncategorised'})`, spent };
       if (text.length === 0 && toolCalls.length === 0) {
         if (truncated) return { ok: false, code: 'oversize', error: `Anthropic output incomplete: ${response.stop_reason}`, spent };
-        // Only the policy category crosses into the trace; the explanation can quote the request.
-        if (response.stop_reason === 'refusal') return { ok: false, code: 'rejected', error: `Anthropic refused the request (${response.stop_details?.category ?? 'uncategorised'})`, spent };
         return { ok: false, code: 'transient', error: 'Anthropic returned empty output', spent };
       }
       const parsed = {
@@ -115,6 +131,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         output_items: [...searched, ...response.content].map((block) => ({ type: block.type, [OUTPUT_ITEM_PROVIDER]: ANTHROPIC_PROVIDER, block: block as unknown as Record<string, unknown> })),
         latency_ms: Date.now() - startedAt,
         ...(truncated ? { truncated: true } : {}),
+        ...(ttftMs === undefined ? {} : { ttft_ms: ttftMs }),
       };
       this.onResponseMetadata?.({
         response_id: response.id,
@@ -126,16 +143,61 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'Anthropic first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, the API's error type); the provider's message can quote the request.
       const detail = error instanceof Anthropic.APIError
         ? ` (${[error.status, error.type].filter((part) => part !== undefined && part !== null).join(' ')})`
         : '';
       const retry = error instanceof Anthropic.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      const wireRejected = error instanceof Anthropic.APIError && error.status === 400;
+      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
     }
+  }
+}
+
+class FirstTokenTimeout extends Error {}
+
+// One request, streamed. Text blocks stream to the reply as they are written, a later text block after a line break so the
+// shown text stays a prefix of the reply's joined text; thinking and tool blocks never do, and a tool call after streamed
+// text takes it back. The final message is the one the unstreamed call returns, so everything after this reads one shape.
+// With `firstTokenMs`, a model that has opened no content block by then (a thinking block counts) is abandoned; `ttftMs`
+// is the time to that first block.
+async function streamedMessage(client: AnthropicMessagesClient, body: Anthropic.MessageCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number): Promise<Readonly<{ message: Anthropic.Message; ttftMs?: number }>> {
+  const sentAt = Date.now();
+  let ttftMs: number | undefined, late = false;
+  const watchdog = firstTokenMs === undefined ? undefined : setTimeout(() => { late = true; controller.abort(); }, firstTokenMs);
+  try {
+    const stream = client.messages.stream(body, { signal: controller.signal });
+    let textBlock: number | null = null, streamed = false;
+    for await (const event of stream) {
+      if (event.type === 'content_block_start') {
+        if (ttftMs === undefined) {
+          ttftMs = Date.now() - sentAt;
+          clearTimeout(watchdog);
+        }
+        if (event.content_block.type === 'text') {
+          if (streamed) sink.delta('\n');
+          textBlock = event.index;
+        } else {
+          textBlock = null;
+          if (event.content_block.type === 'tool_use' && streamed) {
+            streamed = false;
+            sink.retract();
+          }
+        }
+      } else if (event.type === 'content_block_delta' && event.index === textBlock && event.delta.type === 'text_delta') {
+        streamed = true;
+        sink.delta(event.delta.text);
+      }
+    }
+    return { message: await stream.finalMessage(), ...(ttftMs === undefined ? {} : { ttftMs }) };
+  } catch (error) {
+    throw late ? new FirstTokenTimeout() : error;
+  } finally {
+    clearTimeout(watchdog);
   }
 }
 
@@ -171,6 +233,9 @@ function withMessageBreakpoints(messages: readonly Anthropic.MessageParam[]): An
 }
 
 const IMAGE_TYPES = new Set<Anthropic.Base64ImageSource['media_type']>(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+// Files whose bytes are text go as plain-text documents; the Messages API has no block for office formats.
+const TEXT_FILE_TYPES = new Set(['application/json', 'application/xml']);
+const utf8 = (base64: string): string => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
 
 function attachmentBlock(file: LLMAttachment): Anthropic.ContentBlockParam | null {
   if (file.kind === 'image' && IMAGE_TYPES.has(file.mime_type as Anthropic.Base64ImageSource['media_type'])) {
@@ -179,6 +244,9 @@ function attachmentBlock(file: LLMAttachment): Anthropic.ContentBlockParam | nul
   if (file.kind === 'file' && file.mime_type === 'application/pdf') {
     return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data_base64 }, title: file.filename };
   }
+  if (file.kind === 'file' && (file.mime_type.startsWith('text/') || TEXT_FILE_TYPES.has(file.mime_type))) {
+    return { type: 'document', source: { type: 'text', media_type: 'text/plain', data: utf8(file.data_base64) }, title: file.filename };
+  }
   return null;
 }
 
@@ -186,6 +254,8 @@ function attachmentBlock(file: LLMAttachment): Anthropic.ContentBlockParam | nul
 function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
   const history: Array<{ role: 'user' | 'assistant'; content: Anthropic.ContentBlockParam[] }> = [];
   for (const message of request.messages) {
+    // The Messages API refuses an empty text block, so an empty entry is left out rather than sent (or cache-marked).
+    if (message.content.trim().length === 0) continue;
     const last = history[history.length - 1];
     const block: Anthropic.TextBlockParam = { type: 'text', text: message.content };
     // Roles alternate on the wire: consecutive same-role entries join one message as separate blocks.
@@ -296,10 +366,31 @@ function toolsParams(request: LLMRequest): Pick<Anthropic.MessageCreateParams, '
   };
 }
 
+// The structured-output guide: a raw schema with numeric, string-length or item-count bounds is refused with a 400, so,
+// as the SDK's own helpers do, each such bound moves into its field's description and the caller's parser enforces it.
+// Enums, const, required and additionalProperties are supported and stay.
+const REFUSED_BOUNDS: ReadonlySet<string> = new Set(['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', 'uniqueItems']);
+function acceptedSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(acceptedSchema);
+  if (node === null || typeof node !== 'object') return node;
+  const kept: Record<string, unknown> = {};
+  const moved: string[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (REFUSED_BOUNDS.has(key) || (key === 'minItems' && typeof value === 'number' && value > 1)) moved.push(`${key}: ${JSON.stringify(value)}`);
+    else if (key === 'enum' || key === 'const' || value === null || typeof value !== 'object') kept[key] = value;
+    // A map of named schemas: its keys are field names, never keywords.
+    else if (key === 'properties' || key === '$defs' || key === 'definitions') kept[key] = Object.fromEntries(Object.entries(value).map(([name, schema]) => [name, acceptedSchema(schema)]));
+    else kept[key] = acceptedSchema(value);
+  }
+  if (moved.length === 0) return kept;
+  const note = `{${moved.join(', ')}}`;
+  return { ...kept, description: typeof kept.description === 'string' ? `${kept.description}\n\n${note}` : note };
+}
+
 function outputConfig(request: LLMRequest): Pick<Anthropic.MessageCreateParams, 'output_config'> {
   const config: Anthropic.OutputConfig = {
     ...(request.reasoning_effort ? { effort: request.reasoning_effort } : {}),
-    ...(request.response_format ? { format: { type: 'json_schema', schema: request.response_format.schema } } : {}),
+    ...(request.response_format ? { format: { type: 'json_schema', schema: acceptedSchema(request.response_format.schema) as Record<string, unknown> } } : {}),
   };
   return Object.keys(config).length > 0 ? { output_config: config } : {};
 }
