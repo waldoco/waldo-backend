@@ -31,7 +31,7 @@ describe('messagingSystemPrompt', () => {
   // The model's function list names the callable tools each round, and narrows when a round withholds some; a copy here
   // would only go stale. A turn with no tools says so, because an empty function list says nothing.
   it('leaves tool names to the function list and says so only when there are none', () => {
-    const prompt = messagingSystemPrompt(['get_context', 'calendar_read']);
+    const prompt = messagingSystemPrompt(['get_context', 'calendar_read', 'web_search']);
     expect(prompt).not.toContain('Tools available in this chat');
     expect(prompt).not.toMatch(/\bcalendar_read\b/);
     expect(prompt.endsWith(MESSAGING_BEHAVIOR)).toBe(true);
@@ -211,9 +211,10 @@ describe('the rules that pulled against each other are gone', () => {
   // boundary, to about 19,320. A greeting that keeps the conversation going, from the turn context, adds about 130 bytes
   // to the greeting rule, to about 19,470. The sleep-need memory rule adds about 90 bytes to Remembering, to about 19,560:
   // remember's description is at its cap, and every owner turn must read that memory keeps no figure for the stated need.
+  // The tracked-medicine memory rule adds about 100 bytes beside it, to about 19,655, for the same reason.
   // Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 19,600 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_600);
+  it('keeps every delivered behaviour text under 19,700 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_700);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -222,7 +223,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_600 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_700 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
@@ -362,4 +363,17 @@ describe('ownerClockLine', () => {
 it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
   expect(MESSAGING_BEHAVIOR).toContain('a bare "today" usually means the day that just ended');
   expect(MESSAGING_BEHAVIOR).toContain('"tomorrow" means exactly that day');
+});
+
+// A turn with no web search on offer (Claude with no search key deployed) is not pointed at one.
+describe('the tool ladder', () => {
+  const ladder = (prompt: string) => prompt.split('\n').find((line) => line.startsWith('- Use the cheapest way')) ?? '';
+  it('names web_search only when the turn offers it', () => {
+    for (const shown of SURFACES) {
+      expect(ladder(messagingSystemPrompt(['get_context', 'web_search', 'browse_page'], shown)), shown.surface).toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).not.toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).toContain('browse_page');
+    }
+    expect(ladder(messagingSystemPrompt(['get_context', 'browse_page']))).not.toContain('web_search');
+  });
 });

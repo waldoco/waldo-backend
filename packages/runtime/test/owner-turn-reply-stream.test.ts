@@ -1,9 +1,10 @@
 import { expect, it } from 'vitest';
-import { ANTHROPIC_PROVIDER, OPENAI_PROVIDER, type ErrorCode, type Provider } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_PROVIDER, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_PROVIDER, type ErrorCode, type Provider } from '@waldo/contracts';
+import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { createReplyStream, type ReplyDraftSurface } from '../src/conversation/reply-stream';
 import { ARTIFACT_LINK_REMOVED_NOTICE } from '../src/conversation/artifact-link-guard';
-import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { routedGateway, type LLMGatewayAdapter, type LLMGatewayRequest } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { ownerTyped } from './helpers/owner-typed';
@@ -38,7 +39,7 @@ const scripted = (scripts: Partial<Record<Provider, readonly Step[]>>) => {
 };
 
 const responder = (gateway: LLMGatewayAdapter, log: (entry: TurnLogEntry) => void = () => undefined) => {
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }];
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' }];
   args[3] = log; args[4] = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') }; args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway; args[18] = ['👌'];
   return createOwnerResponder(...args);
 };
@@ -123,4 +124,39 @@ it('records the answering call\'s time to first token on its reply hop', async (
   await responder(gateway, (entry) => hops.push(entry)).respond(turn('stream-6', { replyStream: stream }), time);
   await responder(gateway, (entry) => hops.push(entry)).respond(turn('stream-7'), time);
   expect(hops.filter((entry) => entry.hop === 'llm_reply').map((entry) => entry.ttft_ms)).toEqual([420, undefined]);
+});
+
+// Claude as the owner path's provider, through the real adapter: Sonnet streams part of an answer and then refuses. What
+// it showed is withdrawn, the refusal goes straight to OpenAI (no second Sonnet call), and Terra's answer is the reply.
+it('with Claude chosen, a refusal after streamed text is withdrawn and the OpenAI answer replaces it', async () => {
+  const partial = `Sure, here is the start ${words(60, 'part')}`;
+  const anthropicCalls: unknown[] = [];
+  const events = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    ...(partial.match(/.{1,12}/gs) ?? []).map((text) => ({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })),
+  ];
+  const refusal = { id: 'msg_r', type: 'message', role: 'assistant', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, content: [{ type: 'text', text: partial }], stop_reason: 'refusal',
+    stop_details: { type: 'refusal', category: 'general_harms', explanation: 'not shown' }, usage: { input_tokens: 40, output_tokens: 60, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+  const client = { messages: {
+    create: async () => { throw new Error('the unstreamed call ran'); },
+    stream: (body: unknown) => {
+      anthropicCalls.push(body);
+      const run = (async function* () { for (const event of events) { yield event; await tick(); } })();
+      return { [Symbol.asyncIterator]: () => run, finalMessage: async () => { for await (const _event of run) { /* drain */ } return refusal; } };
+    },
+  } };
+  const { gateway: openai, requests } = scripted({ [OPENAI_PROVIDER]: [{ text: `Terra's answer, whole. ${words(40)}` }] });
+  const gateway = routedGateway({ [ANTHROPIC_PROVIDER]: new AnthropicMessagesAdapter({ apiKey: 'fixture-anthropic', client: client as never }), [OPENAI_PROVIDER]: openai });
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }];
+  args[4] = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') }; args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway; args[18] = ['👌'];
+  const { shown, stream } = drafts();
+  const reply = await createOwnerResponder(...args).respond(turn('stream-claude-refusal', { replyStream: stream }), time);
+  const outcome = await stream.settle(reply);
+  expect(reply).toBe(`Terra's answer, whole. ${words(40)}`);
+  expect(anthropicCalls).toHaveLength(1);
+  expect(requests.map((request) => request.request.model)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
+  expect(shown.some((text) => text.startsWith('Sure, here is the start'))).toBe(true);
+  expect(shown.filter((text) => text.startsWith('Sure')).every((text) => !reply.startsWith(text))).toBe(true);
+  for (const text of shown.slice(shown.lastIndexOf('') + 1)) expect(reply.startsWith(text)).toBe(true);
+  expect(outcome).toMatchObject({ outcome: 'matched', withdrawals: 1 });
 });

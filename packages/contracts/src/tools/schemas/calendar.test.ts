@@ -48,3 +48,20 @@ describe('propose_calendar_change: the kind of protected time a new block is', (
     expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
   });
 });
+
+describe('propose_calendar_change: swapping an event for another in its slot', () => {
+  const move = { action: 'move', event_id: 'e1', start: create.start, end: create.end, reason: 'short night' } as const;
+  it('accepts a move that renames the event and keeps its times', () => {
+    const parsed = proposeCalendarChangeArgsSchema.safeParse({ ...move, title: 'Intervals', rename_to: 'Easy run' });
+    expect(parsed.success && parsed.data.rename_to).toBe('Easy run');
+  });
+
+  it.each([
+    ['a rename on a create', { ...create, rename_to: 'Easy run' }],
+    ['a rename on a cancel', { action: 'cancel', event_id: 'e1', rename_to: 'Easy run', reason: 'x' }],
+    ['an empty new title', { ...move, rename_to: '' }],
+    ['a new title over 200 characters', { ...move, rename_to: 'x'.repeat(201) }],
+  ])('refuses %s', (_name, args) => {
+    expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
+  });
+});

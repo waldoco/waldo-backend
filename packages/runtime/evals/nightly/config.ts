@@ -106,6 +106,8 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
       ...(profile ? { fallbackKey: RECORDED_FALLBACK_KEY } : {}),
     };
   }
+  // The live judge is Claude, so a candidate in its family would be judged by its own kind.
+  if (profile && PROVIDER_OF[profile.model] !== OPENAI_PROVIDER) throw new Error('staging runs Claude and the live judge is Claude; the eval has no independent live staging run for it');
   const model = modelNameSchema.parse(env.WALDO_EVAL_MODEL ?? WALDO_CHAT_MODEL);
   if (PROVIDER_OF[model] !== OPENAI_PROVIDER) throw new Error('WALDO_EVAL_MODEL must be an OpenAI roster model');
   if (profile && model !== profile.model) throw new Error('WALDO_EVAL_PROFILE=staging runs the staging chat model; leave WALDO_EVAL_MODEL unset');

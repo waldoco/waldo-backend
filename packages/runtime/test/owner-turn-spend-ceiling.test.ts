@@ -46,7 +46,7 @@ const scripted = (steps: readonly Step[], options: Readonly<{ onCall?: () => voi
 
 type Args = Parameters<typeof createOwnerResponder>;
 const responder = (gateway: LLMGatewayAdapter, spend?: () => OwnerSpend, tools: Args[5] = [], log?: Args[3]) => {
-  const args: Args = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply: true }];
+  const args: Args = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai', floorReply: true }];
   if (log) args[3] = log;
   args[4] = clock;
   args[5] = [getContextHandler(clock), ...tools]; args[10] = gateway; args[16] = ['example.com']; args[18] = ['👌'];
