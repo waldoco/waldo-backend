@@ -7,6 +7,7 @@ import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
 import { persistInboxWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { jobBook, type JobRow } from '../src/tasks/jobs';
 import { TASK_ALARM_SLICE_MS, taskWorkerName } from '../src/tasks/worker-do';
+import { OPEN_OWNER_MARK_KEY } from '../src/identity/open-owner-hold';
 
 // The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
 // worker's alarm runs the attempt and reports over RPC, and the owner's next alarm tells the owner once. The model and
@@ -103,6 +104,28 @@ it('an owner turn starts a task; the worker runs with no authority and the resul
     // Applied rows keep no result (only the apply turn reads it), and the duplicate wrote none back.
     expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'applied', result_json: null });
   });
+}, 30_000);
+
+it('a task queued for an owner who joined openly and is held runs no worker model call', async () => {
+  const name = 'task-held-open-owner';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  seen.outputs.push(fn('start_task', BRIEF), []);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '43', do_name: name, origin: 'https://fixture.invalid' });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '43', doName: name }, 1,
+      JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 43, is_bot: false }, chat: { id: 43, type: 'private' }, date: 1, text: 'Go through my inbox since Monday and tell me who is waiting on me' } }));
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ kind: 'task', status: 'queued' });
+    // The Worker's mark for an owner who joined openly and has not accepted the agreements.
+    state.storage.kv.put(OPEN_OWNER_MARK_KEY, 'held');
+  });
+  seen.outputs.push(fn('finish_task', RESULT), []);
+  const before = seen.bodies.length;
+  await runDurableObjectAlarm(stub);
+  const asked = await until(async () => seen.bodies.slice(before).some(body => body.includes(BRIEF.goal)), ran => ran);
+  expect(asked).toBe(false);
+  await runInDurableObject(stub, (_instance, state) => { expect(jobs(state.storage.sql)[0]!.status).not.toBe('applied'); });
 }, 30_000);
 
 it('cancel_task in an owner turn ends the task and withdraws the card its errand raised', async () => {
