@@ -37,10 +37,12 @@ export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_TERRA_MODEL;
 // context spec and a price in packages/runtime/src/llm/pricing.ts.
 export const WALDO_AUXILIARY_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
 // The second provider's models, reached only when the OpenAI step above fails: the current Claude Sonnet for the owner's
-// own turns, the current Claude Haiku for everything else. Opus stays in the roster for a stronger tier, not as the
-// default fallback. Same pin discipline as the two models above.
+// own turns, the current Claude Haiku for everything else. Same pin discipline as the two models above.
 export const WALDO_CHAT_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_SONNET_5_5_MODEL;
 export const WALDO_AUXILIARY_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL;
+// The stronger tier an owner turn can be routed to for demanding reasoning, and its second-provider fallback.
+export const WALDO_REASONING_MODEL: ModelName = OPENAI_GPT_6_1_SOL_MODEL;
+export const WALDO_REASONING_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_OPUS_5_5_MODEL;
 
 // The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both.
 export const reasoningEffortSchema = z.enum(['low', 'medium']);
