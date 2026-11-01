@@ -21,6 +21,8 @@ Instrumentation follows [OpenTelemetry](https://opentelemetry.io/) for traces an
 
 `packages/runtime/src/observability/otlp-turns.ts` exports each owner turn as one OTLP trace, following Langfuse's [attribute mapping](https://langfuse.com/integrations/native/opentelemetry#property-mapping). It turns on when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are Worker secrets. A failed export logs an `otlp_export` hop and never affects the reply. Message text is off by default and exported only when `LANGFUSE_CAPTURE_TEXT=true` (see Text capture below). Worker logs never carry text.
 
+The cost, latency and cache charts for the Langfuse project are specified in [LANGFUSE_DASHBOARDS.md](LANGFUSE_DASHBOARDS.md), applied by hand.
+
 ### Trace schema (version 1)
 
 Dashboards and evals depend on these names. Change them only by bumping `TRACE_SCHEMA_VERSION` and noting it here.
