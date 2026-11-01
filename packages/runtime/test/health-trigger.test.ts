@@ -10,7 +10,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import {
   calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
-  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
+  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, healthTriggerFormat, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
 // Distinctive synthetic values: if any of them shows up in a prompt, a ledger row, a log line or a proposal, a reading leaked.
@@ -580,6 +580,50 @@ describe('proposal checks', () => {
     expect(healthTriggerDueAt(NOW, NOW - 600_000)).toBe(NOW - 600_000 + HEALTH_TRIGGER_FLOOR_MS);
     expect(healthTriggerDueAt(NOW, NOW - 2 * HEALTH_TRIGGER_FLOOR_MS)).toBe(NOW);
   });
+});
+
+describe('easing a workout', () => {
+  const RUN: ComingItem = { kind: 'event', id: 'gcal-run-3', title: 'Track intervals', start: '2026-10-21T12:30:00Z', end: '2026-10-21T13:30:00Z' };
+  const swap = (rename: unknown) => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: '2026-10-21T18:00', end: '2026-10-21T19:00', title: null, block: null, notify_guests: null, rename_to: rename, reason: 'Keep tonight easy.' });
+  const view = () => healthTriggerView(ROW, NOW, TZ)!;
+
+  it('offers a swap in the prompt and the answer format only while it is on', () => {
+    const on = healthTriggerPrompt({ view: view(), items: [RUN], now: NOW, timezone: TZ, feedback: {}, easeWorkout: true });
+    const off = healthTriggerPrompt({ view: view(), items: [RUN], now: NOW, timezone: TZ, feedback: {} });
+    expect(on).toContain('swap a hard session for an easier one in the same slot');
+    expect(on).toContain('rename_to');
+    expect(off).not.toContain('rename_to');
+    expect(healthTriggerFormat(true).schema.required).toContain('rename_to');
+    expect((healthTriggerFormat(true).schema.properties as Record<string, unknown>).rename_to).toEqual({ type: ['string', 'null'] });
+    expect(healthTriggerFormat(false)).toBe(HEALTH_TRIGGER_FORMAT);
+  });
+
+  it('turns a rename into a move that keeps the slot and names the event as it is now', () => {
+    expect(parseHealthDecision(swap('Easy run'), [RUN], NOW, TZ, undefined, true)).toEqual({ kind: 'propose', args: {
+      action: 'move', event_id: 'gcal-run-3', title: 'Track intervals', rename_to: 'Easy run', start: '2026-10-21T12:30:00.000Z', end: '2026-10-21T13:30:00.000Z', reason: 'Keep tonight easy.',
+    } });
+    expect(parseHealthDecision(swap(null), [RUN], NOW, TZ, undefined, true)).toMatchObject({ args: { action: 'move' } });
+    expect(parseHealthDecision(swap(null), [RUN], NOW, TZ, undefined, true)).not.toHaveProperty('args.rename_to');
+  });
+
+  it('refuses a rename while it is off, an empty or overlong one, and one on a cancel', () => {
+    expect(() => parseHealthDecision(swap('Easy run'), [RUN], NOW, TZ)).toThrow('invalid health decision rename');
+    expect(() => parseHealthDecision(swap('  '), [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+    expect(() => parseHealthDecision(swap('x'.repeat(201)), [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+    const cancel = JSON.stringify({ kind: 'propose', action: 'cancel', item: 'e1', start: null, end: null, title: null, block: null, notify_guests: null, rename_to: 'Easy run', reason: 'x' });
+    expect(() => parseHealthDecision(cancel, [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+  });
+
+  it('keeps health words out of the new name, which reaches Google', () => {
+    expect(calendarEgressClear({ title: 'Track intervals', rename_to: 'Easy run' }, ['recovery', 'low'])).toBe(true);
+    expect(calendarEgressClear({ title: 'Track intervals', rename_to: 'Recovery jog' }, ['recovery', 'low'])).toBe(false);
+  });
+
+  it('puts the swap up as one card when the run has it on', () => withTrigger(async ({ deps, proposals }) => {
+    deps().book.mark('2026-10-21', NOW - 60_000);
+    expect(await runHealthTrigger(deps({ comingItems: async () => [RUN], easeWorkout: () => true, decide: async () => swap('Easy run') }))).toBe('proposed');
+    expect(proposals).toEqual([expect.objectContaining({ action: 'move', event_id: 'gcal-run-3', rename_to: 'Easy run' })]);
+  }));
 });
 
 describe('coming decisions', () => {

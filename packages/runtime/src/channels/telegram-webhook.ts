@@ -46,6 +46,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
   HEALTH_COACHING?: string;
+  // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
+  // renaming it; the connector-proxy function must be deployed with the rename first.
+  HEALTH_EASE_WORKOUT?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

@@ -21,7 +21,8 @@ import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
-type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
+// A move that renamed the event keeps the old title, so undo gives it back.
+type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string; title?: string; name_kept?: true }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
 // card_waits_on: the surface whose card for this request waits for the owner's next message there.
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null; card_waits_on?: string | null };
 // running: approved, and its frozen call waits for or runs on the jobs lane.
@@ -447,6 +448,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Whether this desk's surface lets Waldo write first now (WhatsApp, only within 24 hours of the owner's last message). A card
   // it refuses while it does not waits for the owner's next message there; without this, a refused card is a failed presentation.
   writesFirstNow?: () => boolean;
+  // Whether a move may also rename the event (rename_to), to swap one thing for another in its slot.
+  renames?: boolean;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -498,7 +501,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // A block's kind decides whether it counts toward the owner's load, so the card names it for them to correct.
     const kind = p.block === 'rest' ? " (rest: it won't add to your day's load)" : p.block === 'deep_work' ? " (deep work: it adds to your day's load)" : '';
     if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${where}${kind}${tail}`;
-    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${where}${tail}`;
+    if (p.action === 'move' && p.rename_to && p.seen_start && p.seen_end && sameInstant(p.seen_start, p.start!) && sameInstant(p.seen_end, p.end!))
+      return `Change ${name} to "${p.rename_to}", ${span(p.start!, p.end!)}${where}${tail}`;
+    const renamed = p.rename_to ? ` and call it "${p.rename_to}"` : '';
+    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${renamed}${where}${tail}`;
     return `Cancel ${name}${where}${tail}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
@@ -681,8 +687,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (p.seen_etag && before.etag !== p.seen_etag) return 'stale';
     try {
       if (p.action === 'move') {
-        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker, target);
-        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag, ...undoTarget } : null;
+        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker, p.rename_to ? { ...target, title: p.rename_to } : target);
+        // The connector may predate renames and keep the old title: the receipt says so instead of claiming the swap.
+        if (p.rename_to && applied.title !== p.rename_to) return { op: 'move', id: p.event_id!, start: before.start, end: before.end, name_kept: true, ...(applied.etag ? { applied_etag: applied.etag } : {}), ...undoTarget };
+        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, ...(p.rename_to ? { title: before.title } : {}), applied_etag: applied.etag, ...undoTarget } : null;
       }
       await client.cancelEvent(p.event_id!, before.etag, marker, target);
     } catch (error) {
@@ -700,7 +708,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
       if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker, target);
-      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker, target);
+      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker, undo.title ? { ...target, title: undo.title } : target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -1095,7 +1103,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               const current = await client.event(eventId, proposal.calendar_id);
               if (current.operation_marker !== marker) return {status:'unknown'};
-              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
+              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && (!proposal.rename_to || current.title === proposal.rename_to) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
                 // A marker can survive a later owner edit. Recovery proves the effect, but
                 // cannot establish the exact applied ETag needed for safe Undo.
@@ -1111,6 +1119,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (undo === 'stale') {
             setStatus(id, 'stale');
             out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
+          } else if (undo?.op === 'move' && undo.name_kept) {
+            const moved = !sameInstant(undo.start, proposal.start!) || !sameInstant(undo.end, proposal.end!);
+            setStatus(id, 'done', moved ? undo : null);
+            const name = proposal.title ? `"${proposal.title}"` : 'its old name';
+            out = { toast: 'Not renamed', message: `Not renamed: the calendar kept the name ${name}, so ${moved ? `it only moved to ${span(proposal.start!, proposal.end!)}. Undo is available for 10 minutes.` : 'nothing changed.'}` };
           } else {
             setStatus(id, 'done', undo);
             out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
@@ -1122,7 +1135,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             async () => ({ provider_id: undo.id, result: await revert(client, undo, marker) }), async () => {
               try {
                 const current = await client.event(undo.id, undo.calendar_id);
-                if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end))
+                if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end && (!undo.title || current.title === undo.title)))
                   return {status:'done',receipt:{provider_id:undo.id,result:'undone'}};
               } catch (error) { deps.log({trace,hop:'calendar_undo_readback',ms:0,ok:false,error:String(error)}); }
               return {status:'unknown'};
@@ -1365,6 +1378,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         .map(entry => ({ approval_id: entry.id, args: (JSON.parse(entry.payload_json) as TaintedActionProposal).args }));
     },
     async propose(p, turnKey, operationRef) {
+      if (p.rename_to && !deps.renames) throw new Error('Renaming an event is not available yet: propose a move or a cancel instead.');
       const originRunRef = deps.currentRunRef?.();
       if (proposalTurn !== turnKey) { calendarProposals.clear(); proposalTurn = turnKey; }
       const digest = turnKey === undefined ? undefined : await sha256Hex(JSON.stringify(

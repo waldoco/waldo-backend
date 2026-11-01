@@ -50,6 +50,14 @@ describe('calendar writes carry the calendar, guests, place, notes, Meet link an
     expect(calls.map(({ url }) => url.searchParams.get('sendUpdates'))).toEqual([null, 'none', 'all']);
   });
 
+  it('a move that renames sends the new summary with the times, and a plain move sends no summary', async () => {
+    const { calls, client } = recorder();
+    await client.moveEvent('evt-1', start, end, '"v1"', 'm2', { title: 'Easy run' });
+    await client.moveEvent('evt-1', start, end, '"v2"', 'm3');
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ summary: 'Easy run', start: { dateTime: start }, end: { dateTime: end } });
+    expect(JSON.parse(String(calls[1]!.init.body))).not.toHaveProperty('summary');
+  });
+
   it.each([{ calendarId: '' }, { calendarId: 'x'.repeat(255) }])('an invalid calendar id %j is refused before any call', async (options) => {
     const { calls, client } = recorder();
     await expect(client.moveEvent('evt-1', start, end, '"v1"', 'm', options)).rejects.toThrow();

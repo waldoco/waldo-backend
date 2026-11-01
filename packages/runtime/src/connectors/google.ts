@@ -195,6 +195,8 @@ export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
 export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?: CalendarSendUpdates }>;
+// A move can also rename the event in its slot.
+export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: string }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
@@ -431,7 +433,7 @@ export type GoogleClient = Readonly<{
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarMoveOptions): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
@@ -895,7 +897,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
-    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
+    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...(options?.title ? { summary: options.title } : {}), ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
     async cancelEvent(id, etag, operationMarker, options) {
       const url = events(options?.calendarId, id, { sendUpdates: options?.sendUpdates });
       // Put cancellation and its marker in one version-fenced mutation. A missing tombstone

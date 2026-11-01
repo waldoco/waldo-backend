@@ -44,3 +44,10 @@ describe('HEALTH_COACHING in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('0');
   });
 });
+
+describe('HEALTH_EASE_WORKOUT in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+    expect(parsed.vars.HEALTH_EASE_WORKOUT).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('0');
+  });
+});
