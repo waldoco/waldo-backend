@@ -1,0 +1,113 @@
+{
+  "settings_off": {
+    "version": 1,
+    "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "paused": null,
+    "classes": [
+      { "class": "calendar.move_own_block", "availability": "available", "step_up": false, "grants": [] },
+      { "class": "followup.close_on_reply", "availability": "not_yet", "step_up": false, "grants": [] },
+      { "class": "backlog.add_inferred", "availability": "not_yet", "step_up": false, "grants": [] },
+      { "class": "message.send_to_named", "availability": "available", "step_up": true, "grants": [] },
+      { "class": "errand.run_on_site", "availability": "available", "step_up": true, "grants": [] }
+    ]
+  },
+  "settings_on": {
+    "version": 1,
+    "revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "paused": null,
+    "classes": [
+      {
+        "class": "calendar.move_own_block", "availability": "available", "step_up": false,
+        "grants": [{
+          "grant_id": "g_focus_01", "revision": 1, "created_at": 1793091600000, "created_via": "app", "uses_today": 1,
+          "terms": {
+            "scope": { "class": "calendar.move_own_block", "account": "sam@example.com", "window": { "from": "08:00", "to": "19:00" }, "weekdays": [1, 2, 3, 4, 5], "min_lead_minutes": 30 },
+            "limits": { "max_per_day": 3, "timezone": "Asia/Kolkata" },
+            "valid_from": 1793091600000, "expires_at": 1795683600000
+          }
+        }]
+      },
+      {
+        "class": "message.send_to_named", "availability": "available", "step_up": true,
+        "grants": [{
+          "grant_id": "g_update_01", "revision": 2, "created_at": 1793091600000, "created_via": "console", "uses_today": 0,
+          "terms": {
+            "scope": { "class": "message.send_to_named", "channel": "slack", "account": "Acme workspace", "recipients": ["#team-updates"], "purpose": "My Friday status update to the team" },
+            "limits": { "max_per_day": 1, "timezone": "Asia/Kolkata" },
+            "valid_from": 1793091600000, "expires_at": 1795683600000
+          }
+        }]
+      },
+      {
+        "class": "errand.run_on_site", "availability": "available", "step_up": true,
+        "grants": [{
+          "grant_id": "g_checkin_01", "revision": 1, "created_at": 1793091600000, "created_via": "app", "uses_today": 0,
+          "terms": {
+            "scope": { "class": "errand.run_on_site", "sites": ["https://www.goindigo.in"], "purpose": "Online check-in for flights I have booked", "spend": null },
+            "limits": { "max_per_day": 2, "timezone": "Asia/Kolkata" },
+            "valid_from": 1793091600000, "expires_at": 1798851600000
+          }
+        }]
+      }
+    ]
+  },
+  "settings_paused": {
+    "version": 1,
+    "revision": "3333333333333333333333333333333333333333333333333333333333333333",
+    "paused": { "at": 1793178000000, "via": "imessage" },
+    "classes": [
+      { "class": "calendar.move_own_block", "availability": "available", "step_up": false, "grants": [] }
+    ]
+  },
+  "changes": [
+    { "request_id": "autonomy-0001", "change": { "op": "pause" } },
+    { "request_id": "autonomy-0002", "change": { "op": "revoke", "grant_id": "g_update_01" } },
+    { "request_id": "autonomy-0003", "expected_revision": "3333333333333333333333333333333333333333333333333333333333333333", "change": { "op": "resume" } },
+    {
+      "request_id": "autonomy-0004", "expected_revision": "1111111111111111111111111111111111111111111111111111111111111111",
+      "change": { "op": "grant", "terms": {
+        "scope": { "class": "errand.run_on_site", "sites": ["https://www.opentable.com"], "purpose": "Book dinner tables I ask for", "spend": { "currency": "INR", "per_action_minor": 200000, "per_30_days_minor": 800000 } },
+        "limits": { "max_per_day": 2, "timezone": "Asia/Kolkata" },
+        "valid_from": 1793091600000, "expires_at": 1795683600000
+      } }
+    }
+  ],
+  "change_result": {
+    "request_id": "autonomy-0001", "receipt": { "state": "recorded", "message": "Paused. Waldo will ask before doing anything until you resume." },
+    "duplicate": false, "revision": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "receipts_page": {
+    "receipts": [
+      {
+        "receipt_id": "tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "at": 1793178000000, "state": "sending",
+        "summary": "Posting your Friday update in #team-updates.",
+        "authority": { "kind": "standing_grant", "class": "message.send_to_named", "grant_id": "g_update_01", "grant_revision": 2 },
+        "evidence": "none", "undo_until": 1793178060000
+      },
+      {
+        "receipt_id": "tool:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "at": 1793170800000, "state": "done",
+        "summary": "Moved your focus block to 15:00 to 16:30 today.",
+        "authority": { "kind": "standing_grant", "class": "calendar.move_own_block", "grant_id": "g_focus_01", "grant_revision": 1 },
+        "evidence": "provider_receipt", "undo_until": 1793257200000
+      },
+      {
+        "receipt_id": "tool:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "at": 1793167200000, "state": "outcome_unknown",
+        "summary": "Tried to check you in for 6E 512 on Thursday. The airline did not confirm; Waldo is checking.",
+        "authority": { "kind": "standing_grant", "class": "errand.run_on_site", "grant_id": "g_checkin_01", "grant_revision": 1 },
+        "evidence": "none", "undo_until": null
+      },
+      {
+        "receipt_id": "tool:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "at": 1793163600000, "state": "undone",
+        "summary": "Sent the email to priya@example.com you approved, then undid it.",
+        "authority": { "kind": "your_yes", "approval_id": "p0001" },
+        "evidence": "provider_receipt", "undo_until": null
+      }
+    ],
+    "next_cursor": "c_1793163600000_d"
+  },
+  "undo": { "request_id": "undo-000001", "receipt_id": "tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "undo_result": {
+    "request_id": "undo-000001", "receipt": { "state": "recorded", "message": "Cancelled before it was posted." },
+    "duplicate": false, "receipt_state": "undone"
+  }
+}
