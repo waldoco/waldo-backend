@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { appWelcomeBuildV1Schema, type AppNodeSourceV1 } from '../../contracts/src/app/controls';
+import { appWelcomeBuildV1Schema, type AppNodeSourceV14 } from '../../contracts/src/app/controls';
 import { applyPromotion, claimStore, textFingerprint, turnMemoryPrompt, type ClaimStore } from '../src/memory/claims';
 import { nodeConfirmation, nodeSources } from '../src/memory/node-sources';
 import { readMemoryGraph } from '../src/channels/memory-graph';
@@ -12,7 +12,7 @@ import {
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 import { setupStage } from '../src/onboarding/welcome-sources';
-import { WELCOME_LATE_HEALTH_MS, WELCOME_RECHECK_MS } from '../src/onboarding/welcome';
+import { WELCOME_LATE_HEALTH_MS, WELCOME_PARTIAL_HEALTH_MS, WELCOME_RECHECK_MS, WELCOME_WEB_WAIT_MS } from '../src/onboarding/welcome';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => Promise<T> | T) =>
@@ -25,7 +25,7 @@ const healthNode = (over: Partial<Node> = {}): Node => ({ domain: 'health', labe
 const calendarNode = (over: Partial<Node> = {}): Node => ({ domain: 'work', label: 'Monday planning ritual', summary: 'Blocks Monday mornings to plan the week.', observation: 'A weekly Monday planning block recurs.', source: 'calendar', pointers: ['evt_a'], ...over });
 const mailNode = (over: Partial<Node> = {}): Node => ({ domain: 'people', label: 'Close with the design team', summary: 'Writes most often with the design team.', observation: 'Many threads with the design team domain.', source: 'gmail', pointers: ['thr_1'], ...over });
 
-const input = (sources: readonly AppNodeSourceV1[], pointers: readonly string[]): StageInput =>
+const input = (sources: readonly AppNodeSourceV14[], pointers: readonly string[]): StageInput =>
   ({ kind: 'input', text: `data for ${sources.join(',')}`, sources, pointers: new Set(pointers) });
 
 const deps = (sql: SqlStorage, transaction: <R>(work: () => R) => R, over: Partial<WelcomeDeps> & { answers?: Partial<Record<WelcomeStage, string>> } = {}) => {
@@ -456,7 +456,7 @@ describe('welcome build: the owner\'s own setup answers', () => {
       expect(build.view()).toMatchObject({ state: 'done', nodes: 1, stages: { health: 'skipped', calendar: 'skipped', mail: 'skipped', web: 'skipped', setup: 'done' } });
       const node = claims.nodes().find((row) => row.label === 'Guards deep work mornings')!;
       expect(JSON.parse(node.supporting_spots)).toContain(protect);
-      expect(nodeSources(claims.allClaims(), node)).toEqual([]);
+      expect(nodeSources(claims.allClaims(), node)).toEqual(['setup']);
       expect(nodeConfirmation(claims.allClaims(), node)).toBe('waldos_read');
       expect(turnMemoryPrompt(claims, 'hi')).toContain('Guards deep work mornings');
       // The owner's yes grounds Waldo's read; their own answer is left as they wrote it.
@@ -741,6 +741,163 @@ describe('welcome build: what the model is told it may cite', () => {
       for (const [stage, sources] of Object.entries(given) as [WelcomeStage, readonly string[]][]) {
         for (const source of sources) expect(inputs[stage], `${stage}: ${source}`).toMatch(new RegExp(`Sources to name[^\\n]*\\b${source}\\b`));
       }
+    });
+  });
+});
+
+describe('welcome build v2: one source after another, no copies, late sources once', () => {
+  const setupNode = (over: Partial<Node> = {}): Node => ({ domain: 'routines', label: 'Guards early mornings', summary: 'Keeps mornings before work for themselves.', observation: 'Says mornings are theirs.', source: 'setup', pointers: ['c1'], ...over });
+  const webNode = (over: Partial<Node> = {}): Node => ({ domain: 'work', label: 'Speaks on product design', summary: 'Gives public talks on product design.', observation: 'A talk page names them as speaker.', source: 'web', pointers: ['fnd_a'], ...over });
+  const extend = (node: Node, id: number | null) => ({ ...node, extends: id });
+  const v2 = (sql: SqlStorage, transaction: <R>(work: () => R) => R, clock: { at: number }, over: Partial<WelcomeDeps> & { answers?: Partial<Record<WelcomeStage, string>>; lookup?: { open: boolean } } = {}) => {
+    const claims = claimStore(sql, transaction), build = welcomeBuild(sql, () => clock.at);
+    const asked: WelcomeStage[] = [], inputs: Partial<Record<WelcomeStage, string>> = {}, versions: (number | undefined)[] = [];
+    const lookup = over.lookup ?? { open: false };
+    const d: WelcomeDeps = {
+      build, claims, transaction, now: () => clock.at,
+      read: {
+        health: async () => ({ ...input(['apple_health'], ['sleep_midpoint']), days: 30 }),
+        calendar: async () => input(['calendar'], ['evt_a', 'evt_b']),
+        mail: async () => input(['gmail'], ['thr_1']),
+        web: async () => input(['web'], ['fnd_a']),
+        setup: async () => ({ kind: 'input', text: '[c1] mornings are mine', sources: ['setup'], pointers: new Set(['c1']) }),
+      },
+      ask: async (stage, text, version) => { asked.push(stage); inputs[stage] = text; versions.push(version); return over.answers?.[stage] ?? answer(); },
+      v2: { lookupOpen: () => lookup.open }, ...over,
+    };
+    return { claims, build, asked, inputs, versions, lookup, deps: d };
+  };
+  const active = (claims: ClaimStore) => claims.nodes().filter((node) => node.status === 'active');
+
+  it('asks health, setup, calendar, mail, then web, each over the nodes already written, with the second schema', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { build, asked, inputs, versions, deps: d } = v2(sql, transaction, clock, { answers: { health: answer(healthNode()), setup: answer(setupNode()) } });
+      build.start();
+      await runWelcome(d);
+      expect(asked).toEqual(['health', 'setup', 'calendar', 'mail', 'web']);
+      expect(versions.every((version) => version === 2)).toBe(true);
+      expect(inputs.health).toContain('The constellation is empty so far.');
+      expect(inputs.setup).toContain('[1] Late weekend sleeper');
+      expect(inputs.calendar).toContain('[1] Late weekend sleeper');
+      expect(inputs.calendar).toContain('Guards early mornings');
+      expect(build.view()).toMatchObject({ state: 'done', nodes: 2 });
+    });
+  });
+
+  it('adds a later source\'s evidence to the node it names, or to one with the same label, instead of writing a copy', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, build, deps: d } = v2(sql, transaction, clock, { answers: {
+        setup: answer(setupNode()),
+        calendar: answer(extend(calendarNode({ label: 'Protects morning hours', observation: 'No meetings before ten on most days.' }), 1)),
+        mail: answer(extend(mailNode({ domain: 'routines', label: 'guards  EARLY mornings', observation: 'Declines early calls by mail.' }), null)),
+      } });
+      build.start();
+      await runWelcome(d);
+      const nodes = active(claims);
+      expect(nodes.map((node) => node.label)).toEqual(['Guards early mornings']);
+      expect(nodeSources(claims.allClaims(), nodes[0]!).sort()).toEqual(['calendar', 'gmail', 'setup']);
+      expect(build.view()).toMatchObject({ nodes: 1, stages: { calendar: 'done', mail: 'done' } });
+    });
+  });
+
+  it('keeps the owner\'s yes to a node that a later source adds evidence to', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const first = v2(sql, transaction, clock, { answers: { setup: answer(setupNode()) }, read: { health: async () => ({ kind: 'settled', state: 'skipped' }), calendar: async () => ({ kind: 'settled', state: 'skipped' }), mail: async () => ({ kind: 'settled', state: 'skipped' }), web: async () => ({ kind: 'settled', state: 'skipped' }), setup: async () => ({ kind: 'input', text: '[c1] mornings', sources: ['setup'], pointers: new Set(['c1']) }) } });
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(confirmWelcomeNode(first.claims, 1, new Date(T0).toISOString())).toBe(true);
+      clock.at += 60_000;
+      transaction(() => first.build.googleConnected());
+      const again = v2(sql, transaction, clock, { answers: { calendar: answer(extend(calendarNode({ observation: 'Mornings stay clear of meetings.' }), 1)) } });
+      await runWelcome(again.deps);
+      expect(nodeConfirmation(again.claims.allClaims(), active(again.claims)[0]!)).toBe('confirmed');
+      expect(active(again.claims)).toHaveLength(1);
+    });
+  });
+
+  it('a source read again writes no copy and no second support', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, build, deps: d } = v2(sql, transaction, clock, { answers: { calendar: answer(calendarNode()) } });
+      build.start();
+      await runWelcome(d);
+      const supports = claims.allClaims().length;
+      clock.at += 60_000;
+      expect(transaction(() => build.googleConnected())).toBe(true);
+      await runWelcome(d);
+      expect(active(claims).map((node) => node.label)).toEqual(['Monday planning ritual']);
+      expect(claims.allClaims()).toHaveLength(supports);
+      expect(transaction(() => build.googleConnected())).toBe(false);
+    });
+  });
+
+  it('writes at most twenty new nodes, five a source, and an addition to a node takes no room', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const many = (make: (over: Partial<Node>) => Node, stage: string) => answer(...['one', 'two', 'three', 'four', 'five', 'six'].map((word) => make({ label: `${stage} pattern ${word}` })));
+      const { claims, build, deps: d } = v2(sql, transaction, clock, { answers: {
+        health: many(healthNode, 'health'), setup: many(setupNode, 'setup'), calendar: many(calendarNode, 'calendar'), mail: many(mailNode, 'mail'),
+        web: answer(webNode(), extend(webNode({ label: 'anything', observation: 'Their talk page.' }), 1)),
+      } });
+      build.start();
+      await runWelcome(d);
+      expect(active(claims)).toHaveLength(20);
+      expect(build.view().nodes).toBe(20);
+      expect(build.view().stages.web).toBe('done');
+      expect(nodeSources(claims.allClaims(), active(claims)[0]!)).toContain('web');
+    });
+  });
+
+  it('waits for a running look-up inside the tour\'s watch, then lets the gift finish, and reads the findings once when it ends', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, build, asked, lookup, deps: d } = v2(sql, transaction, clock, { lookup: { open: true }, answers: { web: answer(webNode()) } });
+      build.start();
+      await runWelcome(d);
+      expect(asked).not.toContain('web');
+      expect(build.view()).toMatchObject({ state: 'building', stages: { web: 'pending' } });
+      clock.at = T0 + WELCOME_WEB_WAIT_MS;
+      await runWelcome(d);
+      expect(build.view()).toMatchObject({ state: 'done', stages: { web: 'empty' } });
+      expect(transaction(() => build.lateWeb())).toBe(true);
+      lookup.open = false;
+      await runWelcome(d);
+      expect(asked.filter((stage) => stage === 'web')).toHaveLength(1);
+      expect(active(claims).map((node) => node.label)).toContain('Speaks on product design');
+      expect(transaction(() => build.lateWeb())).toBe(false);
+    });
+  });
+
+  it('reads a health stage that saw only part of the window once more, once the backfill has had time, never twice', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { build, deps: d } = v2(sql, transaction, clock, { read: { health: async () => ({ ...input(['apple_health'], ['sleep_midpoint']), days: 3 }), calendar: async () => ({ kind: 'settled', state: 'skipped' }), mail: async () => ({ kind: 'settled', state: 'skipped' }), web: async () => ({ kind: 'settled', state: 'skipped' }), setup: async () => ({ kind: 'settled', state: 'skipped' }) }, answers: { health: answer(healthNode()) } });
+      build.start();
+      await runWelcome(d);
+      expect(transaction(() => build.lateHealth(true))).toBe(false);
+      clock.at += WELCOME_PARTIAL_HEALTH_MS;
+      expect(transaction(() => build.lateHealth(false))).toBe(false);
+      expect(transaction(() => build.lateHealth(true))).toBe(true);
+      await runWelcome(d);
+      expect(transaction(() => build.lateHealth(true))).toBe(false);
+    });
+  });
+
+  it('never keeps a digit or a health value, in a new node or in evidence added to one', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, deps: d, build } = v2(sql, transaction, clock, { answers: {
+        health: answer(healthNode(), healthNode({ label: 'Sleeps 6 hours', summary: 'Short nights.', observation: 'Short nights.' })),
+        calendar: answer(extend(calendarNode({ observation: 'HRV 42 on Mondays.' }), 1), extend(calendarNode({ observation: 'Ten meetings a day' }), 1)),
+      } });
+      build.start();
+      await runWelcome(d);
+      const texts = [...claims.allClaims().map((claim) => claim.text), ...claims.nodes().flatMap((node) => [node.label, node.summary])];
+      expect(texts.some((text) => /\p{Nd}/u.test(text))).toBe(false);
+      expect(nodeSources(claims.allClaims(), active(claims)[0]!)).toEqual(['apple_health', 'calendar']);
     });
   });
 });

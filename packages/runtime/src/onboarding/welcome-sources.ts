@@ -1,4 +1,4 @@
-import type { AppNodeSourceV1 } from '../../../contracts/src/app/controls';
+import type { AppNodeSourceV14 } from '../../../contracts/src/app/controls';
 import type { HealthReadSignal } from '@waldo/contracts';
 import { GoogleError, type CalendarItem, type GoogleClient, type MailItem, type TaskItem } from '../connectors/google';
 import { parseSeries, type Reading } from '../health/producer';
@@ -10,10 +10,10 @@ import type { ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { isSetupRef } from './first-run';
-import { runWelcome, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
+import { runWelcome, WELCOME_HEALTH_DAYS, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
 // What each source gives the welcome build: bounded reads, as pointers to the items, never their contents.
-export const WELCOME_HEALTH_DAYS = 30;
+export { WELCOME_HEALTH_DAYS };
 const CALENDAR_PAST_DAYS = 60, CALENDAR_AHEAD_DAYS = 14, CALENDAR_PAGES = 3, CALENDAR_PAGE = 100, TASKS_PAGE = 100;
 const MAIL_DAYS = 90, MAIL_PAGES = 4, MAIL_PAGE = 50;
 // Mail Waldo was sent in bulk says little about the owner's life.
@@ -21,12 +21,12 @@ const MAIL_QUERY = `newer_than:${MAIL_DAYS}d -category:promotions -category:soci
 const DAY_MS = 86_400_000;
 
 const settled = (state: Extract<StageInput, { kind: 'settled' }>['state']): StageInput => ({ kind: 'settled', state });
-const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV1>, pointers: Iterable<string>): StageInput =>
+const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV14>, pointers: Iterable<string>): StageInput =>
   lines.length ? { kind: 'input', text: lines.join('\n'), sources: [...new Set(sources)], pointers: new Set(pointers) } : settled('empty');
 
 // Device readings come from Apple Health or Health Connect (Samsung's watch writes through Health Connect). WHOOP and Oura are
 // not welcome sources.
-const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV1>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
+const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV14>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
 
 // Readings go to the model only inside its untainted welcome call; nothing here is stored. An owner who keeps health out of
 // memory gets no health nodes, so the stage reads nothing.
@@ -41,7 +41,7 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   const parsed = parseSeries(await book.series({ from, to, signals: signals.map((signal) => SIGNALS[signal].stored) }));
   if (parsed.kind === 'no_consent') return settled('skipped');
   if (parsed.kind === 'failed') return settled('unavailable');
-  const lines: string[] = [], sources: AppNodeSourceV1[] = [], pointers: string[] = [];
+  const lines: string[] = [], sources: AppNodeSourceV14[] = [], pointers: string[] = [], readDays = new Set<string>();
   // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
   // method per signal, so methods never blend.
   const live = parsed.series.sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
@@ -50,29 +50,34 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
     if (!group) continue;
     const tag = HEALTH_SOURCES[group.source]!;
     const byDay = new Map<string, Reading[]>();
-    for (const reading of group.readings) byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]);
+    for (const reading of group.readings) { byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]); readDays.add(reading.day); }
     const days = [...byDay.keys()].sort().map((day) => `${day} ${foldDay(SIGNALS[signal].fold, byDay.get(day)!, zone)}`);
     lines.push(`${signal} (${tag}, ${SIGNALS[signal].unit}${group.method ? `, ${group.method}` : ''}): ${days.join('; ')}`);
     sources.push(tag); pointers.push(signal);
   }
-  return input(lines, sources, pointers);
+  const read = input(lines, sources, pointers);
+  return read.kind === 'input' ? { ...read, days: readDays.size } : read;
 };
 
 type Account = Readonly<{ email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
 // A dead grant or a missing scope is the owner's revoked access; anything else is a failed read.
 const revokedAccess = (error: unknown) => error instanceof GoogleError && (error.status === 401 || (error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'));
 
-// Every connected Google account, each named on its own reads, until the shared multi-account read lands.
+// Every connected Google account, each named on its own reads, until the shared multi-account read lands. One account whose
+// read fails leaves the others standing; the stage fails only when every account it could read failed.
 const perAccount = async (google: GoogleAccess, wants: (account: Account) => boolean,
   read: (account: Account) => Promise<readonly string[] | 'revoked'>): Promise<Readonly<{ lines: string[]; revoked: boolean; any: boolean }>> => {
   const accounts = ((await google.state?.()) ?? []).filter(wants);
   const lines: string[] = [];
-  let revoked = false;
+  let revoked = false, answered = 0, failure: unknown = null;
   for (const account of accounts) {
     if (account.error !== null) { revoked = true; continue; }
-    const got = await read(account);
+    let got: readonly string[] | 'revoked';
+    try { got = await read(account); } catch (error) { failure = error; continue; }
+    answered += 1;
     if (got === 'revoked') revoked = true; else lines.push(...got);
   }
+  if (failure !== null && answered === 0) throw failure;
   return { lines, revoked, any: accounts.length > 0 };
 };
 const guarded = async (work: () => Promise<readonly string[]>): Promise<readonly string[] | 'revoked'> => {
@@ -85,7 +90,7 @@ const taskLine = (task: TaskItem) => `[${task.id}] task: ${task.title} · ${task
 // Titles, times, repeats and how many people: no descriptions, no attendee names or addresses.
 export const calendarStage = (google: GoogleAccess, now: () => number) => async (): Promise<StageInput> => {
   const from = new Date(now() - CALENDAR_PAST_DAYS * DAY_MS).toISOString(), to = new Date(now() + CALENDAR_AHEAD_DAYS * DAY_MS).toISOString();
-  const sources = new Set<AppNodeSourceV1>(), pointers = new Set<string>();
+  const sources = new Set<AppNodeSourceV14>(), pointers = new Set<string>();
   const events = async (client: GoogleClient): Promise<readonly CalendarItem[]> => {
     if (!client.calendarPage) return client.events(from, to, CALENDAR_PAGE, false);
     const all: CalendarItem[] = [];
@@ -165,11 +170,17 @@ export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => a
   };
 };
 
-// The public web reaches the gift only as look-up findings, which the app reads on their own route with their own keep,
-// correct and forget. This stage writes no node: it says whether the look-up is live and found anything.
-export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'page'>) => async (): Promise<StageInput> => {
+// The public web reaches the gift only as look-up findings. In the first build this stage writes no node: it says whether
+// the look-up is live and found anything. In the second (v2) it reads the findings, kept and not yet decided, as outside text
+// the model may build Waldo's read on; a finding the owner forgets or corrects, or that expires, takes that read with it.
+export const WELCOME_WEB_FINDINGS = 50;
+const domainOf = (url: string) => { try { return new URL(url).hostname; } catch { return ''; } };
+export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'page'>, v2 = false) => async (): Promise<StageInput> => {
   if (!findings.offered() || findings.lookup() !== 'granted') return settled('skipped');
-  return settled(findings.page(1).total > 0 ? 'done' : 'empty');
+  if (!v2) return settled(findings.page(1).total > 0 ? 'done' : 'empty');
+  const found = findings.page(WELCOME_WEB_FINDINGS).items;
+  return input(found.map((item) => `[${item.finding_id}] ${item.category}: ${item.text} · from ${item.source.title || domainOf(item.source.url)} (${domainOf(item.source.url)}) · ${item.state === 'unconfirmed' ? 'not yet seen by the owner' : 'kept by the owner'}`),
+    found.length ? ['web'] : [], found.map((item) => item.finding_id));
 };
 
 // Whether a stage's source is there now, for a stage that settled skipped: a cheap check, no read of the source itself.
@@ -187,19 +198,26 @@ export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; heal
 
 // The owner object's welcome run: the readers over its own connections, and one model call per stage, which the owner object
 // runs as an owner job on its queue.
+// v2: the second build (WELCOME_V2), with lookupOpen saying whether the owner look-up is still running.
 export const ownerWelcome = (deps: Readonly<{
   sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string; healthMemory(): boolean;
   healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
-  ask(stage: WelcomeStage, input: string): Promise<string>;
+  ask(stage: WelcomeStage, input: string, version?: 2): Promise<string>;
+  v2?: Readonly<{ lookupOpen(): boolean }>;
 }>) => ({
   build: () => welcomeBuild(deps.sql, deps.now),
   // Something to do: a stage due, or a skipped stage to check for its source.
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
   // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
-  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth()),
+  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth(deps.v2 !== undefined)),
+  // The look-up ended: a web stage that settled without it reads the findings once (second build only).
+  lateWeb: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb()),
+  // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
+  googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
   run: () => runWelcome({
     build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
-    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())(), setup: setupStage(deps.claims, deps.healthMemory) },
+    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory) },
+    ...(deps.v2 ? { v2: deps.v2 } : {}),
   }),
 });
 export type OwnerWelcome = ReturnType<typeof ownerWelcome>;

@@ -156,3 +156,37 @@ describe('welcome web stage', () => {
     expect(await webStage(findings(true, 'granted', 0))()).toEqual({ kind: 'settled', state: 'empty' });
   });
 });
+
+describe('welcome web stage, second build', () => {
+  const item = (id: string, state: 'unconfirmed' | 'kept') => ({ finding_id: id, category: 'work' as const, text: 'Design lead at Studio North', source: { url: 'https://studionorth.example/team', title: 'Team' }, state, found_at: NOW, decided_at: null });
+  const findings = (lookup: 'granted' | 'not_granted', items: ReturnType<typeof item>[]) => ({ offered: () => true, lookup: () => lookup, page: () => ({ items, total: items.length, next_cursor: null }) });
+  it('reads the findings as web data the model may cite by finding id, kept or not yet seen, and nothing without the yes', async () => {
+    const read = await webStage(findings('granted', [item('fnd_a', 'unconfirmed'), item('fnd_b', 'kept')]), true)();
+    expect(read.kind).toBe('input');
+    if (read.kind !== 'input') return;
+    expect(read.sources).toEqual(['web']);
+    expect([...read.pointers]).toEqual(['fnd_a', 'fnd_b']);
+    expect(read.text.split('\n')).toEqual([
+      '[fnd_a] work: Design lead at Studio North · from Team (studionorth.example) · not yet seen by the owner',
+      '[fnd_b] work: Design lead at Studio North · from Team (studionorth.example) · kept by the owner',
+    ]);
+    expect(await webStage(findings('granted', []), true)()).toEqual({ kind: 'settled', state: 'empty' });
+    expect(await webStage(findings('not_granted', [item('fnd_a', 'kept')]), true)()).toEqual({ kind: 'settled', state: 'skipped' });
+  });
+});
+
+describe('welcome Google stages across accounts', () => {
+  it('reads the account that answers when another fails, and fails only when none answers', async () => {
+    const g = google([account('a@x.com'), account('b@y.com')], {
+      'a@x.com': new GoogleError(500, 'down'),
+      'b@y.com': { calendarPage: async () => ({ events: [event('evt_b')], next_page_token: null, fetched_count: 1, account: { connection_id: null, email: 'b@y.com' }, observed_at: '' }) },
+    });
+    const read = await calendarStage(g, () => NOW)();
+    expect(read.kind === 'input' && [...read.pointers]).toEqual(['evt_b']);
+  });
+
+  it('counts the days of readings the health stage read, never a reading', async () => {
+    const read = await health(book(granted('apple'), series([{ source: 'apple', readings: [reading('sleep_midpoint', '2026-10-23', 240), reading('sleep_midpoint', '2026-10-24', 250), reading('resting_heart_rate', '2026-10-24', 52)] }])));
+    expect(read.kind === 'input' && read.days).toBe(2);
+  });
+});
