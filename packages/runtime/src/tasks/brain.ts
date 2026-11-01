@@ -179,6 +179,7 @@ export const taskHost = (deps: TaskHostDeps) => {
     if (!deps.lapsed?.(row)) return false;
     deps.book.cancel(row.id, 'owner');
     fence(row.id);
+    deps.endGrant?.(`task:${row.id}`);
     hop(row, 'task_cancelled', { ok: false, code: 'lapsed' });
     return true;
   };

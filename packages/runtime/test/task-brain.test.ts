@@ -710,6 +710,18 @@ describe('the task brain host', () => {
       expect(book.get(fresh.jobId)).toMatchObject({ status: 'cancelled' });
     });
   });
+
+  it('a lapsed job ends its site grant on both paths, so the record of what it submitted reaches the owner', async () => {
+    await withHost(async ({ host, ticket, ended, lapse }) => {
+      const t = ticket('reader');
+      await host.claim(t);
+      lapse.now = true;
+      expect(await host.tool(t, call('browse_page'), CANARIES)).toBe('fenced');
+      expect(ended).toEqual([`task:${t.jobId}`]);
+      const fresh = ticket('reader');
+      expect(await host.claim(fresh)).toBe('fenced');
+      expect(ended).toEqual([`task:${t.jobId}`, `task:${fresh.jobId}`]);
+    });
   });
 
   it('a worker call for an owner the directory no longer admits runs nothing; the job waits in the queue, not counted as a crash', async () => {
