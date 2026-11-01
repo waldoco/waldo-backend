@@ -83,6 +83,25 @@ select is((select sum(admitted)::int from waldo.open_signup_days), 2, 'and the c
 select is(pg_temp.open('00000000-0000-0000-0000-0000000000d1', 'dan@test.invalid', '', '', 2, 2), '{"refused": "cap"}'::jsonb, 'so a new join is still refused');
 select is(pg_temp.open('00000000-0000-0000-0000-0000000000d1', 'dan@test.invalid', '', '', 2, 3) ->> 'created', 'true', 'a raised lifetime cap admits the next join');
 
+-- An invite addressed to the confirmed email is spent without its code: an invited person, not an open owner, and no place taken.
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-0000-0000-000000000021', 'ivy@test.invalid', now()),
+  ('00000000-0000-0000-0000-000000000022', 'jay@test.invalid', now()),
+  ('00000000-0000-0000-0000-000000000023', 'kim@test.invalid', now());
+insert into waldo.invites (code_hash, email, issued_by, expires_at) values
+  (repeat('1', 64), 'ivy@test.invalid', (select id from waldo.owners where do_name = 'do-hal'), now() + interval '1 day'),
+  (repeat('2', 64), 'jay@test.invalid', (select id from waldo.owners where do_name = 'do-hal'), now() - interval '1 day'),
+  (repeat('3', 64), 'kim@test.invalid', (select id from waldo.owners where do_name = 'do-hal'), now() + interval '1 day');
+update waldo.invites set revoked_at = now() where code_hash = repeat('3', 64);
+select ok(not pg_temp.room(2, 3), 'every open place is taken');
+select is(pg_temp.open('00000000-0000-0000-0000-000000000021', 'ivy@test.invalid', '', '', 2, 3) ->> 'created', 'true', 'an invited person joins without the code, even with no open place left');
+select ok((select admitted_via is null from waldo.owners where email = 'ivy@test.invalid'), 'as an invited owner, never held');
+select is((select used_by from waldo.invites where code_hash = repeat('1', 64)), (select id from waldo.owners where email = 'ivy@test.invalid'), 'spending their invite, which names the one who sent it');
+select is((select sum(admitted)::int from waldo.open_signup_days where day > current_date - 5), 3, 'and taking no open place');
+select is(pg_temp.open('00000000-0000-0000-0000-000000000022', 'jay@test.invalid', '', '', 2, 3), '{"refused": "cap"}'::jsonb, 'an expired invite admits no one past the cap');
+select is(pg_temp.open('00000000-0000-0000-0000-000000000023', 'kim@test.invalid', '', '', 2, 3), '{"refused": "cap"}'::jsonb, 'nor a revoked one');
+select ok((select used_at is null from waldo.invites where code_hash in (repeat('2', 64), repeat('3', 64)) group by used_at is null), 'and neither is spent');
+
 -- Holding and releasing.
 select is(pg_temp.state(pg_temp.do_of('ann@test.invalid')), 'held', 'a new open owner is held');
 select is(pg_temp.state('do-hal'), 'member', 'an invited owner is a member');

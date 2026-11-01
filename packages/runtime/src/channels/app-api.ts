@@ -1,6 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
@@ -17,7 +17,7 @@ import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { APP_RATING_SUFFIX } from './app-rating';
-import { openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
+import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -160,6 +160,13 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
   const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
+
+  if (url.pathname === `${APP_PATH}/auth/options`) {
+    if (request.method !== 'GET') return fail(405);
+    if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-options-ip:${request.headers.get('cf-connecting-ip') ?? 'unknown'}` })).success) return fail(429); } catch { return fail(503); }
+    return ok(appAuthOptionsV1Schema.parse({ open_signup: openSignupCaps(env) !== null }));
+  }
 
   if (url.pathname === `${APP_PATH}/auth/code`) {
     if (request.method !== 'POST') return fail(405);

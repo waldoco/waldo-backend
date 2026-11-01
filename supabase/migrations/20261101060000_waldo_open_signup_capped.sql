@@ -1,5 +1,6 @@
--- Open sign-up behind the Worker's OPEN_SIGNUP: a person with a confirmed Auth email becomes an owner without an invite,
--- under a server-wide daily cap and a lifetime cap the router signs into each call. The invite functions and their
+-- Open sign-up behind the Worker's OPEN_SIGNUP: a person with a confirmed Auth email becomes an owner without an invite code,
+-- under a server-wide daily cap and a lifetime cap the router signs into each call. Someone holding a live invite addressed
+-- to that email joins as invited, without typing its code. The invite functions and their
 -- signatures are untouched, so with the flag off nothing here is reached and joining still takes an invite.
 --
 -- An owner who joined this way is held until the owner object has seen the terms, the privacy notice and the 18+
@@ -48,7 +49,7 @@ revoke all on function waldo.open_signup_fits(integer, integer) from public, ano
 create function waldo.signup_owner_open(p_auth_user uuid, p_email text, p_provider text, p_subject text, p_phone text,
   p_daily_cap integer, p_total_cap integer, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare v_phone text := nullif(p_phone, ''); v_owner uuid; v_do text; v_day date := (now() at time zone 'utc')::date;
+declare v_phone text := nullif(p_phone, ''); v_owner uuid; v_do text; v_invite text; v_day date := (now() at time zone 'utc')::date;
 begin
   if waldo.router_signed('signup.open.' || p_auth_user::text || '.' || lower(p_email) || '.' || p_provider || '.' || p_subject
       || '.' || coalesce(v_phone, '') || '.' || p_daily_cap::text || '.' || p_total_cap::text, p_at, p_sig) is distinct from true then
@@ -69,11 +70,18 @@ begin
   select o.do_name into v_do from waldo.owners o where o.auth_user_id = p_auth_user and lower(o.email) = lower(p_email) and o.state = 'active';
   if v_do is not null then return jsonb_build_object('do_name', v_do, 'created', false); end if;
 
-  -- One open join at a time across the server, so two joins can never both take the last place.
-  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('waldo.open_signup', 0));
-  if not waldo.open_signup_fits(p_daily_cap, p_total_cap) then return jsonb_build_object('refused', 'cap'); end if;
+  -- A live invite addressed to this confirmed email admits its holder without the code: they join as invited, take no open
+  -- place and are not held, and the invite records who joined. The confirmed email is the addressee proof the code stood for.
+  select code_hash into v_invite from waldo.invites
+    where lower(email) = lower(p_email) and used_at is null and revoked_at is null and expires_at > now()
+    order by created_at limit 1 for update;
+  if v_invite is null then
+    -- One open join at a time across the server, so two joins can never both take the last place.
+    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('waldo.open_signup', 0));
+    if not waldo.open_signup_fits(p_daily_cap, p_total_cap) then return jsonb_build_object('refused', 'cap'); end if;
+  end if;
   insert into waldo.owners (auth_user_id, do_name, email, phone, admitted_via)
-    values (p_auth_user, 'owner-' || gen_random_uuid()::text, lower(p_email), v_phone, 'open')
+    values (p_auth_user, 'owner-' || gen_random_uuid()::text, lower(p_email), v_phone, case when v_invite is null then 'open' end)
     on conflict do nothing returning id, do_name into v_owner, v_do;
   -- Another owner row for this person (suspended, seeded and unbound, or bound under another email) holds the email or
   -- the Auth user. It is never rebound or duplicated; the answer is a refusal the app shows, not an error it retries.
@@ -83,8 +91,12 @@ begin
       select 1 from auth.identities where user_id = p_auth_user and provider = p_provider and provider_id = p_subject) then
     insert into waldo.owner_signin_identities (owner_id, provider, subject) values (v_owner, p_provider, p_subject);
   end if;
-  insert into waldo.open_signup_days (day, admitted) values (v_day, 1)
-    on conflict (day) do update set admitted = waldo.open_signup_days.admitted + 1;
+  if v_invite is not null then
+    update waldo.invites set used_at = now(), used_by = v_owner where code_hash = v_invite;
+  else
+    insert into waldo.open_signup_days (day, admitted) values (v_day, 1)
+      on conflict (day) do update set admitted = waldo.open_signup_days.admitted + 1;
+  end if;
   return jsonb_build_object('do_name', v_do, 'created', true);
 end $$;
 revoke all on function waldo.signup_owner_open(uuid, text, text, text, text, integer, integer, bigint, text) from public, anon, authenticated, service_role;

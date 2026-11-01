@@ -89,7 +89,7 @@ describe('a held owner reaches no model', () => {
     requests.length = 0;
     const responder = createTelegramResponder({ openaiApiKey: 'test-key', held: async () => true });
     await expect(responder.respond(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hello' }), (_name, run) => run())).rejects.toBeInstanceOf(OwnerHeldError);
-    await expect(responder.prompt('held-job-1', 'telegram-7', 'Write the morning card from these facts: two meetings.', async (_hop, work) => work(), 'telegram'))
+    await expect(responder.prompt('held-job-1', 7, 'Write the morning card from these facts: two meetings.', async (_hop, work) => work()))
       .rejects.toBeInstanceOf(OwnerHeldError);
     expect(requests).toEqual([]);
   });

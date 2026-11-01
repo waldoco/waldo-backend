@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { appIdTokenResultV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
+import { appAuthOptionsV1Schema, appIdTokenResultV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
 import { consoleAuth } from '../src/identity/console-auth';
 import { OPEN_SIGNUP_EMAIL_DAILY_LIMIT, OPEN_SIGNUP_FALLBACK_CEILING_USD, OPEN_SIGNUP_IP_DAILY_LIMIT, openOwnerCeilingUsd, openSignupCaps } from '../src/identity/open-signup';
@@ -208,6 +208,23 @@ describe('open sign-up in the app', () => {
     expect([...state.attempts.keys()]).toContain(`email.${await sha('taken@example.test')}`);
     expect([...state.attempts.keys()].join(',')).not.toContain('taken@example.test');
     expect([...state.attempts.keys()].join(',')).not.toContain(IP);
+  });
+});
+
+describe('the sign-up screen asks the server first', () => {
+  it('says open only while open sign-up is on with its preconditions, and asks no directory', async () => {
+    const { state } = await directory();
+    const options = async (overrides: Record<string, string>) => {
+      const response = await handleApp(new Request('https://app.fixture.invalid/app/v1/auth/options', { headers: { 'cf-connecting-ip': IP } }),
+        { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, ...overrides } as never);
+      return { status: response!.status, body: appAuthOptionsV1Schema.parse(await response!.json()) };
+    };
+    expect(await options(OPEN)).toEqual({ status: 200, body: { open_signup: true } });
+    expect(await options({})).toEqual({ status: 200, body: { open_signup: false } });
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try { expect(await options({ ...OPEN, WALDO_COST_LEDGER_SYNC: 'off' })).toEqual({ status: 200, body: { open_signup: false } }); }
+    finally { quiet.mockRestore(); }
+    expect(state.calls).toEqual([]);
   });
 });
 
