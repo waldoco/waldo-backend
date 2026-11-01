@@ -8,6 +8,7 @@ import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupPen
 import { jobBook, taskBrief, type JobBook } from '../src/tasks/jobs';
 import { applyMachineJob } from '../src/tasks/machine';
 import { fenced } from '../src/prompt/turn-prompt';
+import { taskBriefText } from '../src/tasks/worker-loop';
 import { jobTools, LOOKUP_READER, MACHINE_READER } from '../src/tasks/profiles';
 
 // The owner look-up the owner's yes starts, over the real job book and consent ledger on Durable Object SQLite.
@@ -20,7 +21,7 @@ const withOwner = <T,>(work: (h: Harness) => Promise<T> | T): Promise<T> =>
     let n = 0, started: number | null = null;
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const deps = ({ lookupOffered = true, ...over }: Partial<LookupDeps> & { lookupOffered?: boolean } = {}): LookupDeps => ({
-      book, consent: consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered }), now: () => clock.at, timezone: 'Europe/London', surface: 'app',
+      book, consent: consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered }), now: () => clock.at, surface: 'app',
       started: () => started, markStarted: (at) => { started = at; }, held: [], ...over,
     });
     return work({ book, clock, sql: state.storage.sql, deps });
@@ -44,6 +45,17 @@ describe('starting the owner look-up', () => {
     expect(brief.machine).toMatchObject({ job: 'owner_lookup', refs: ['name', 'email'], max_rounds: LOOKUP_MAX_ROUNDS });
     expect(brief.context).toBe(fenced('Data fetched for this job', '- [name] Asha Rao\n- [email] asha@studio.example').trim());
     expect([row.due_at, row.deadline_at]).toEqual([T0 + LOOKUP_START_DELAY_MS, T0 + LOOKUP_START_DELAY_MS + LOOKUP_DEADLINE_MS]);
+  }));
+
+  it('shows the worker model no owner data beyond the name and address: no time zone, no conversation', () => withOwner(({ book, deps }) => {
+    const d = deps();
+    agree(d.consent, T0);
+    startLookup(d, identity);
+    const brief = taskBrief(openLookup(book)!);
+    expect(Object.keys(brief).sort()).toEqual(['context', 'done_when', 'effort', 'goal', 'machine', 'started_at', 'title']);
+    const text = taskBriefText(brief, 0);
+    expect(text).not.toContain('time zone');
+    expect(text.split(brief.context).join('')).not.toMatch(/Asha|asha@|studio\.example/);
   }));
 
   it('gives the worker exactly the look-up tools, and no other machine job any egress read', () => withOwner(({ book, deps }) => {

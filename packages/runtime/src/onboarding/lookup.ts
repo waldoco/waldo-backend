@@ -24,7 +24,7 @@ export type LookupIdentity = Readonly<{ name: string; email: string | null }>;
 export type LookupStart = MachineEnqueued | Readonly<{ code: 'not_offered' | 'not_granted' | 'no_name' | 'started' }>;
 
 export type LookupDeps = Readonly<{
-  book: JobBook; consent: ConsentLedger; now(): number; timezone: string; surface: string;
+  book: JobBook; consent: ConsentLedger; now(): number; surface: string;
   // The grant time a look-up was last started for. Kept apart from the job row, which is trimmed once settled.
   started(): number | null; markStarted(grantedAt: number): void;
   // Topics the owner is forgetting whose purge has not settled.
@@ -45,7 +45,7 @@ export const startLookup = (deps: LookupDeps, identity: LookupIdentity | null): 
     job: 'owner_lookup', scope: 'owner', key: `machine:owner_lookup:${grant.granted_at}`, surface: deps.surface,
     text: { title: 'Owner look-up', goal: GOAL, done_when: DONE },
     items: [{ ref: 'name', detail: name }, ...(identity.email ? [{ ref: 'email', detail: identity.email }] : [])],
-    timezone: deps.timezone, now, dueAt: now + LOOKUP_START_DELAY_MS, deadlineAt: now + LOOKUP_START_DELAY_MS + LOOKUP_DEADLINE_MS, maxRounds: LOOKUP_MAX_ROUNDS,
+    now, dueAt: now + LOOKUP_START_DELAY_MS, deadlineAt: now + LOOKUP_START_DELAY_MS + LOOKUP_DEADLINE_MS, maxRounds: LOOKUP_MAX_ROUNDS,
   };
   const made = enqueueMachine(deps.book, spec, deps.held);
   if (made.code === 'enqueued' || made.code === 'existing') deps.markStarted(grant.granted_at);

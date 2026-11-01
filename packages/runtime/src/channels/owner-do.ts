@@ -5448,7 +5448,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!lookupOn || lookupStarted() === consent.state('owner_lookup').granted_at) return;
         const name = ownerName(memory), doName = identity.get<string>('do_name');
         const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
-        const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, timezone: clock.timezone, surface: 'app',
+        const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, surface: 'app',
           started: lookupStarted, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
         if (made.code !== 'enqueued') return;
         log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });

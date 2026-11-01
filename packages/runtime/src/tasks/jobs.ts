@@ -42,7 +42,7 @@ export type MachineBrief = Readonly<{
 // A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true; conversation_ref?: string; machine?: MachineBrief;
+  effort: 'standard' | 'deep'; timezone?: string; started_at: number; outside_text?: true; conversation_ref?: string; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.

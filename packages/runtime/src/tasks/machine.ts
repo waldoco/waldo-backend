@@ -23,7 +23,7 @@ const keptItem = (item: MachineItem): MachineItem => numericHealthIn(item.detail
 export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;
   text: Readonly<{ title: string; goal: string; done_when: string }>;
-  items: readonly MachineItem[]; timezone: string; now: number; deadlineAt: number;
+  items: readonly MachineItem[]; timezone?: string; now: number; deadlineAt: number;
   source?: MachineBrief['source']; runId?: string; recordId?: number;
   // The job's own digest of its inputs, where it already has one its apply compares against (meeting prep's event digest).
   inputDigest?: string;
@@ -45,7 +45,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly 
   const brief: TaskBrief = {
     ...spec.text,
     context: fenced('Data fetched for this job', items.map(({ ref, detail }) => `- [${ref}] ${detail}`).join('\n')).trim(),
-    effort: 'standard', timezone: spec.timezone, started_at: spec.now,
+    effort: 'standard', ...(spec.timezone === undefined ? {} : { timezone: spec.timezone }), started_at: spec.now,
     // A change detector over the data the job was started on, not a guard against an adversary, so MD5 is enough.
     machine: {
       job: spec.job, input_digest: spec.inputDigest ?? md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
