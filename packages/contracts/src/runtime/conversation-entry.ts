@@ -39,7 +39,11 @@ export type ConversationEntry = Readonly<{
   // The turn's effect receipts, typed. `line` is the text form appended to appPayload, so a surface that shows
   // only text still shows it.
   receipt?: ConversationReceipt;
+  // Files the turn produced for the owner (today an exported PDF), from typed tool output, never from the reply's words.
+  files?: readonly ConversationFile[];
 }>;
+
+export type ConversationFile = Readonly<{ ref: string; name: string; mime: string; bytes: number; sha256: string }>;
 
 export type ConversationReceipt = Readonly<{
   line: string;
@@ -178,6 +182,7 @@ export const redactConversationEntry = (entry: ConversationEntry, redact: (value
     ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
   ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
     items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
+  ...(entry.files ? { files: entry.files.map(file => ({ ...file, name: redact(file.name) })) } : {}),
 });
 
 export class ConversationTree {

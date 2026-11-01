@@ -56,6 +56,11 @@ export const artifactExportDownload = async (request: Request, deps: ArtifactExp
   if (request.method !== 'GET') return fail(405, 'method not allowed');
   let id: string;
   try { id = decodeURIComponent(url.pathname.slice(ARTIFACT_EXPORT_PATH.length + 1)); } catch { return fail(404, 'not found'); }
+  return exportFileResponse(id, deps);
+};
+
+// One stored export's bytes, for a host that already authenticated the owner and parsed the id from its own path.
+export const exportFileResponse = async (id: string, deps: ArtifactExportDownloadDeps): Promise<Response> => {
   if (!EXPORT_ID.test(id)) return fail(404, 'not found');
   // Admission runs before any store access. Absent limiter is 503, denied is 429 (artifactReadAdmission).
   const denied = await artifactReadAdmission(deps.limiter, deps.ownerScope);

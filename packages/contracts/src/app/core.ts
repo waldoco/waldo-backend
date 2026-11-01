@@ -99,6 +99,10 @@ export const APP_CHAT_DRAFT_REVISION = 2;
 // the turn ends. Revision 2 receipts never carry it. A closed vocabulary the client words itself; a new kind is a contract
 // change the app lane hears of first.
 export const APP_CHAT_ACTIVITY_REVISION = 3;
+// Chat revision 4 (`chat=4`): a reply may carry `file` parts, one per file its turn produced for the owner (today an exported
+// PDF). The app opens one at GET /app/v1/files/<encodeURIComponent(file_ref)> with its own session; file_ref stays opaque.
+// A part comes before the receipt part, which stays last, and `text` is unchanged. Revision 3 readers never receive one.
+export const APP_CHAT_FILES_REVISION = 4;
 export const APP_CHAT_ACTIVITY_KINDS = ['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working'] as const;
 export type AppChatActivityKind = typeof APP_CHAT_ACTIVITY_KINDS[number];
 export const appChatActivityV1Schema = z.strictObject({ kind: z.enum(APP_CHAT_ACTIVITY_KINDS), since: z.int().nonnegative() });
