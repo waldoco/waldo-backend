@@ -43,8 +43,6 @@ export const statedNeedOf = (raw: unknown): StatedNeed | null => {
   const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
   return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
 };
-// The row is on the current need when the need read again is the figure it was computed on, even if the owner saved it again.
-const sameNeed = (read: StatedNeed, again: StatedNeed | null): boolean => again !== null && again.minutes === read.minutes;
 // A row compiled before the need last changed, or at that instant, may move zone only because the need moved, not the body,
 // so its move is not told to the health trigger. The next compile is on the new need on both sides.
 const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
@@ -518,11 +516,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const before = await storedBefore(deps.readScores, targetDay);
       // A need saved since this run read it would leave today's row on the old need but stamped after the change, out of
-      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days.
-      if (targetDay === today && deps.readSettings && !sameNeed(stated, statedNeedOf(await deps.readSettings().catch(() => null)))) {
-        outcomes.push('stale');
-        needMoved = true;
-        continue;
+      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days; a need saved
+      // again with the same figure is the same need. A read that fails asks for nothing, so the run fails and is retried.
+      if (targetDay === today && deps.readSettings) {
+        const again = statedNeedOf(await deps.readSettings().catch(() => null));
+        if (again === null || again.minutes !== stated.minutes) {
+          outcomes.push(again === null ? 'failed' : 'stale');
+          needMoved = true;
+          continue;
+        }
       }
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
