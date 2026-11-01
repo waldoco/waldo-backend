@@ -10,7 +10,7 @@ import { ensureSchema } from '../src/tracer/schema';
 
 // GET /app/v1/calendar/day through the owner's real Durable Object: the session check, the owner's own Google accounts
 // and zone, and the owner's own health answer. Google and the database are fixtures with synthetic content.
-const fixture = vi.hoisted(() => ({ events: [] as unknown[], pages: null as unknown[][] | null, failure: null as Error | null, reads: [] as Array<{ from: string; to: string; account: unknown; token?: string }> }));
+const fixture = vi.hoisted(() => ({ events: [] as unknown[], pages: null as unknown[][] | null, failure: null as Error | null, onRead: null as (() => void) | null, reads: [] as Array<{ from: string; to: string; account: unknown; token?: string }> }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -19,6 +19,7 @@ vi.mock('../src/connectors/google', async load => {
     // The real connector refuses a page larger than 50.
     calendarPage: async (_calendar: string, from: string, to: string, limit: number, _declined: boolean, token?: string) => {
       fixture.reads.push({ from, to, account, ...(token ? { token } : {}) });
+      fixture.onRead?.();
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('invalid Calendar page request');
       if (fixture.failure) throw fixture.failure;
       const pages = fixture.pages ?? [fixture.events], at = token ? Number(token) : 0;
@@ -37,7 +38,7 @@ const wire = { session: true, scores: {} as unknown, asked: [] as Array<{ fn: st
 const SCORES = { scores: { day: '2026-10-03', timezone: 'UTC', compiled_at: '2026-10-03T08:00:00Z', form: { score: 71, zone: 'good', algorithm_version: 'form.v9', activation: 'accepted', confidence: 0.8 } } };
 
 beforeEach(() => {
-  fixture.events = []; fixture.pages = null; fixture.failure = null; fixture.reads = [];
+  fixture.events = []; fixture.pages = null; fixture.failure = null; fixture.onRead = null; fixture.reads = [];
   wire.session = true; wire.scores = SCORES; wire.asked = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -220,6 +221,19 @@ describe('GET /app/v1/calendar/day', () => {
       expect(response.status).toBe(403);
       expect(fixture.reads).toEqual([]);
       expect(wire.asked.some(call => call.fn === 'health_scores_read')).toBe(false);
+    });
+  });
+
+  it('a session signed out while Google is read gets the generic 503 its sibling reads give, with no events', async () => {
+    fixture.events = [FOCUS, ONE_ON_ONE];
+    fixture.onRead = () => { wire.session = false; };
+    const logs: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(' ')); });
+    await withOwner('owner-calendar-revoked-mid-read', [account('owner@example.test')], async owner => {
+      const response = await ask(owner, 'owner-calendar-revoked-mid-read');
+      expect(fixture.reads).toHaveLength(1);
+      expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
+      expect(logs.map(line => JSON.parse(line))).toContainEqual({ hop: 'app_calendar_day', ok: false, code: 'session' });
     });
   });
 

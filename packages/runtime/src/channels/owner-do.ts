@@ -1783,7 +1783,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     }
     if(path===APP_CALENDAR_DAY_PATH){
-      try{return await this.setup('app').calendarDay(request);}catch(error){logAppReadFailure('app_calendar_day','read',error);return fail(503);}
+      let step='read';
+      try{const answer=await this.setup('app').calendarDay(request);step='session';await this.appAuthority(name,hash);return answer;}catch(error){logAppReadFailure('app_calendar_day',step,error);return fail(503);}
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       this.recoverApp();
