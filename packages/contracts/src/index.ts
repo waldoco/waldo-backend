@@ -46,6 +46,7 @@ export * from './tools/schemas/delegate';
 export * from './tools/schemas/tasks';
 export * from './tools/schemas/reminders';
 export * from './tools/schemas/health';
+export * from './tools/schemas/medications';
 export * from './tools/schemas/responsibilities';
 export * from './tools/schemas/standing-orders';
 export * from './tools/schemas/loops';

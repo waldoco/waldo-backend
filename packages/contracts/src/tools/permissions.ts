@@ -84,6 +84,11 @@ export const toolNameSchema = z.enum([
   'log_workout',
   'list_health_logs',
   'set_sleep_need',
+  // track/log/list/stop_medication: the owner's medicines, on the health plane; owner turns only, offered while MEDICATIONS is on.
+  'track_medication',
+  'log_medication',
+  'list_medications',
+  'stop_medication',
   // set/list/cancel_standing_order 47-49 (A7): typed standing orders, owner-confirmed turns
   // only; every-turn injection is read-only context, scheduled runs fire machine turns.
   'set_standing_order',
@@ -286,6 +291,10 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'log_workout',
     'list_health_logs',
     'set_sleep_need',
+    'track_medication',
+    'log_medication',
+    'list_medications',
+    'stop_medication',
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',

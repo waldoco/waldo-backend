@@ -46,6 +46,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
   HEALTH_COACHING?: string;
+  // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
+  // read. Off unless "1".
+  MEDICATIONS?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
