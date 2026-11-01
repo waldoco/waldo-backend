@@ -1149,7 +1149,8 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
-  ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
+  // The other people in the meeting, like attendee_emails: the owner's own entry (self) is never one of them.
+  ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
   ...(details ? detailsOf(event) : {}),
   ...(ownerStatus ? ownerStatusOf(event) : {}),
 });
