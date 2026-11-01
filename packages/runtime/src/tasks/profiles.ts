@@ -20,10 +20,12 @@ const READER: readonly ToolName[] = [
 export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'browse_page', 'read_mcp_tool'];
 export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
 // The owner look-up's worker: the one machine job with egress reads. It holds no private read (no mail, calendar, memory or
-// health), so the only owner data it can carry out in a query is its brief, the name and address the owner agreed to be
-// searched by. It writes nothing but unconfirmed findings, each grounded in a page this attempt read.
+// health), and its brief holds no time zone, so the only owner data it can carry out in a query is the name and address the
+// owner agreed to be searched by. Its web search is the owner's without a location (lookupToolHandlers in the owner object),
+// so the search provider is sent no country either. It writes nothing but unconfirmed findings, each grounded in a page this
+// attempt read.
 export const LOOKUP_READER: readonly ToolName[] = ['list_owner_findings', 'web_search', 'browse_page', 'record_owner_finding', 'read_tool_output'];
-const LOOKUP_ORIGIN = `${MACHINE_ORIGIN}owner_lookup`;
+export const LOOKUP_ORIGIN = `${MACHINE_ORIGIN}owner_lookup`;
 // The browser host serves one active run scope per owner, so these run in the brain's serial lane under the job's scope.
 export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'browse_act']);
 

@@ -93,7 +93,7 @@ it('the setup stage reaches only a build that reads controls revision 5', async 
   });
 });
 
-it('names web and setup node sources from controls revision 14, and leaves them out below it', async () => {
+it('names web and setup node sources from controls revision 13, and leaves them out below it', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`welcome-controls-${crypto.randomUUID()}`)), async (_instance, state) => {
     const claims = claimStore(state.storage.sql), at = '2026-10-25T13:00:00Z';
     claims.add({ kind: 'observation', text: 'A public talk on product design.', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:web:fnd_a' }, at);
@@ -106,7 +106,7 @@ it('names web and setup node sources from controls revision 14, and leaves them 
       const body = appControlProjectionV1Schema.parse(await response.json());
       return body.view === 'constellation' && body.data.memory_view === 'interpretations' ? body.data.items[0]!.sources : null;
     };
-    expect((await sourcesAt(14))?.slice().sort()).toEqual(['calendar', 'setup', 'web']);
-    expect(await sourcesAt(11)).toEqual(['calendar']);
+    expect((await sourcesAt(13))?.slice().sort()).toEqual(['calendar', 'setup', 'web']);
+    expect(await sourcesAt(12)).toEqual(['calendar']);
   });
 });

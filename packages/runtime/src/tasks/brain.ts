@@ -25,7 +25,8 @@ export type TaskHostDeps = Readonly<{
   book: JobBook;
   now(): number;
   // The owner's tool handlers on the surface the job started from, and the dispatch context they run under.
-  handlers(surface: string): Handlers;
+  // The tool set a job's calls run against, by its surface; the job is passed for the few that run a narrower variant.
+  handlers(surface: string, row: JobRow): Handlers;
   context(surface: string): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
   // Browser calls run in the brain's serial lane with the job's scope as the active run, because the owner's browser host
   // serves one active scope at a time.
@@ -167,7 +168,7 @@ export const taskHost = (deps: TaskHostDeps) => {
   // The owner's handlers, with read_tool_output bound to the attempt's own store in place of any the owner holds.
   const profileHandlers = async (row: JobRow, outputs: ToolOutputStore) => {
     const tools = jobTools(row);
-    const allowed = deps.handlers(row.surface).filter((handler) => tools.includes(handler.name as never) && handler.name !== 'read_tool_output');
+    const allowed = deps.handlers(row.surface, row).filter((handler) => tools.includes(handler.name as never) && handler.name !== 'read_tool_output');
     const own: Handlers = tools.includes('read_tool_output') ? [...allowed, readToolOutputHandler(outputs)] : allowed;
     return (await eligibleHandlers(own)).handlers;
   };

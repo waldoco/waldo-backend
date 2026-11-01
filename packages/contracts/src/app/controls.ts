@@ -285,15 +285,15 @@ const memoryClaim = z.strictObject({
 // said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote
 // or confirmed the notes under it.
 export const appNodeSourceV1Schema = z.enum(['apple_health', 'health_connect', 'calendar', 'tasks', 'gmail']);
-// Controls revision 14 (`controls=14`) names two more node sources: web, a node Waldo drew from what the owner look-up found,
+// Controls revision 13 (`controls=13`) names two more node sources: web, a node Waldo drew from what the owner look-up found,
 // and setup, one drawn from the owner's own setup answers. Revisions below it never receive either.
-export const APP_CONTROLS_WELCOME_WEB_REVISION = 14;
-export const appNodeSourceV14Schema = z.enum([...appNodeSourceV1Schema.options, 'web', 'setup']);
+export const APP_CONTROLS_WELCOME_WEB_REVISION = 13;
+export const appNodeSourceV13Schema = z.enum([...appNodeSourceV1Schema.options, 'web', 'setup']);
 const memoryNode = z.strictObject({
   id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
   estimate, estimate_kind: z.literal('uncalibrated_model_estimate'),
   support: z.strictObject({ state: z.enum(['stored_links', 'incomplete', 'invalid']), claim_ids: z.array(memoryId), unavailable_count: count, distinct_source_refs: count, independent_observations: z.literal('unverified') }),
-  sources: z.array(appNodeSourceV14Schema).max(appNodeSourceV14Schema.options.length).optional(),
+  sources: z.array(appNodeSourceV13Schema).max(appNodeSourceV13Schema.options.length).optional(),
   confirmation: z.enum(['waldos_read', 'confirmed']).optional(),
 });
 // The one-time welcome build that starts when setup ends. Each source's stage settles: done with nodes, empty when the
@@ -460,4 +460,4 @@ export type AppControlResultV1 = z.infer<typeof appControlResultV1Schema>;
 export type AppChannelStatusV1 = z.infer<typeof appChannelStatusV1Schema>;
 export type AppWelcomeBuildV1 = z.infer<typeof appWelcomeBuildV1Schema>;
 export type AppNodeSourceV1 = z.infer<typeof appNodeSourceV1Schema>;
-export type AppNodeSourceV14 = z.infer<typeof appNodeSourceV14Schema>;
+export type AppNodeSourceV13 = z.infer<typeof appNodeSourceV13Schema>;

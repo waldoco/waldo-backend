@@ -1,4 +1,4 @@
-import type { AppNodeSourceV14 } from '../../../contracts/src/app/controls';
+import type { AppNodeSourceV13 } from '../../../contracts/src/app/controls';
 import type { HealthReadSignal } from '@waldo/contracts';
 import { GoogleError, type CalendarItem, type GoogleClient, type MailItem, type TaskItem } from '../connectors/google';
 import { parseSeries, type Reading } from '../health/producer';
@@ -22,12 +22,12 @@ const MAIL_QUERY = `newer_than:${MAIL_DAYS}d -category:promotions -category:soci
 const DAY_MS = 86_400_000;
 
 const settled = (state: Extract<StageInput, { kind: 'settled' }>['state']): StageInput => ({ kind: 'settled', state });
-const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV14>, pointers: Iterable<string>): StageInput =>
+const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV13>, pointers: Iterable<string>): StageInput =>
   lines.length ? { kind: 'input', text: lines.join('\n'), sources: [...new Set(sources)], pointers: new Set(pointers) } : settled('empty');
 
 // Device readings come from Apple Health or Health Connect (Samsung's watch writes through Health Connect). WHOOP and Oura are
 // not welcome sources.
-const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV14>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
+const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV13>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
 
 // Readings go to the model only inside its untainted welcome call; nothing here is stored. An owner who keeps health out of
 // memory gets no health nodes, so the stage reads nothing.
@@ -42,7 +42,7 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   const parsed = parseSeries(await book.series({ from, to, signals: signals.map((signal) => SIGNALS[signal].stored) }));
   if (parsed.kind === 'no_consent') return settled('skipped');
   if (parsed.kind === 'failed') return settled('unavailable');
-  const lines: string[] = [], sources: AppNodeSourceV14[] = [], pointers: string[] = [], readDays = new Set<string>();
+  const lines: string[] = [], sources: AppNodeSourceV13[] = [], pointers: string[] = [], readDays = new Set<string>();
   // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
   // method per signal, so methods never blend.
   const live = parsed.series.sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
@@ -91,7 +91,7 @@ const taskLine = (task: TaskItem) => `[${task.id}] task: ${task.title} · ${task
 // Titles, times, repeats and how many people: no descriptions, no attendee names or addresses.
 export const calendarStage = (google: GoogleAccess, now: () => number) => async (): Promise<StageInput> => {
   const from = new Date(now() - CALENDAR_PAST_DAYS * DAY_MS).toISOString(), to = new Date(now() + CALENDAR_AHEAD_DAYS * DAY_MS).toISOString();
-  const sources = new Set<AppNodeSourceV14>(), pointers = new Set<string>();
+  const sources = new Set<AppNodeSourceV13>(), pointers = new Set<string>();
   const events = async (client: GoogleClient): Promise<readonly CalendarItem[]> => {
     if (!client.calendarPage) return client.events(from, to, CALENDAR_PAGE, false);
     const all: CalendarItem[] = [];

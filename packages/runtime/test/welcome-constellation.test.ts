@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { appWelcomeBuildV1Schema, type AppNodeSourceV14 } from '../../contracts/src/app/controls';
+import { appWelcomeBuildV1Schema, type AppNodeSourceV13 } from '../../contracts/src/app/controls';
 import { applyPromotion, claimStore, textFingerprint, turnMemoryPrompt, type ClaimStore } from '../src/memory/claims';
 import { nodeConfirmation, nodeSources } from '../src/memory/node-sources';
 import { readMemoryGraph } from '../src/channels/memory-graph';
@@ -25,7 +25,7 @@ const healthNode = (over: Partial<Node> = {}): Node => ({ domain: 'health', labe
 const calendarNode = (over: Partial<Node> = {}): Node => ({ domain: 'work', label: 'Monday planning ritual', summary: 'Blocks Monday mornings to plan the week.', observation: 'A weekly Monday planning block recurs.', source: 'calendar', pointers: ['evt_a'], ...over });
 const mailNode = (over: Partial<Node> = {}): Node => ({ domain: 'people', label: 'Close with the design team', summary: 'Writes most often with the design team.', observation: 'Many threads with the design team domain.', source: 'gmail', pointers: ['thr_1'], ...over });
 
-const input = (sources: readonly AppNodeSourceV14[], pointers: readonly string[]): StageInput =>
+const input = (sources: readonly AppNodeSourceV13[], pointers: readonly string[]): StageInput =>
   ({ kind: 'input', text: `data for ${sources.join(',')}`, sources, pointers: new Set(pointers) });
 
 const deps = (sql: SqlStorage, transaction: <R>(work: () => R) => R, over: Partial<WelcomeDeps> & { answers?: Partial<Record<WelcomeStage, string>> } = {}) => {

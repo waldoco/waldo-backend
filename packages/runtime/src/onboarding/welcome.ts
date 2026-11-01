@@ -1,4 +1,4 @@
-import { APP_WELCOME_STAGES_V5, type AppNodeSourceV14, type AppWelcomeBuildV1 } from '../../../contracts/src/app/controls';
+import { APP_WELCOME_STAGES_V5, type AppNodeSourceV13, type AppWelcomeBuildV1 } from '../../../contracts/src/app/controls';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
 import { carriesTopic } from '../memory/forget-guard';
 import { isWelcomeRef, nodeSources, nodeSupports, sourceRef, supportIds, writtenOn, type WelcomeSource } from '../memory/node-sources';
@@ -305,7 +305,7 @@ const WELCOME_STAGE_HEADER: Readonly<Record<WelcomeStage, string>> = {
   setup: 'Source: what the owner told Waldo when they set it up, in their own words. Pointers are the claim ids in brackets. These are the owner\'s own answers about their days, what matters to them and what they want protected: build what they show about the owner, not a restatement of each answer.',
 };
 
-const HEALTH_SOURCES: readonly AppNodeSourceV14[] = ['apple_health', 'health_connect'];
+const HEALTH_SOURCES: readonly AppNodeSourceV13[] = ['apple_health', 'health_connect'];
 export const WELCOME_HEALTH_NOT_SHARED = 'Health: the owner shares none with Waldo, or it showed nothing yet. Say nothing of their body, sleep, energy, fitness or readiness.';
 // The centre the later sources build around: the health nodes already written, as their words. They carry no readings.
 const healthCentre = (claims: ClaimStore): string => {

@@ -255,7 +255,7 @@ import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
-import { BROWSER_TOOLS } from '../tasks/profiles';
+import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
@@ -344,6 +344,8 @@ type OwnerRuntime = Readonly<{
   compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>;
   // The owner-turn tool set and the dispatch context a background task's tool calls run under.
   toolHandlers(): DispatchToolOptions<ToolDispatcherContext>['handlers'];
+  // The owner look-up worker's set: the same, except its web search sends no location, so all that leaves is the name and address.
+  lookupToolHandlers(): DispatchToolOptions<ToolDispatcherContext>['handlers'];
   taskContext(): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
   // The month's spend against the owner's ceiling, while the cost ledger counts the month.
   monthSpend(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
@@ -613,7 +615,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return taskHost({
       get book() { return self.jobs(); },
       now: Date.now,
-      handlers: surface => self.setup(surface as ChannelKind).toolHandlers(),
+      handlers: (surface, row) => row.origin === LOOKUP_ORIGIN ? self.setup(surface as ChannelKind).lookupToolHandlers() : self.setup(surface as ChannelKind).toolHandlers(),
       context: surface => self.setup(surface as ChannelKind).taskContext(),
       // The owner's browser serves one active run, so a job's browser step takes the serial lane with its own scope.
       serialBrowser: (scope, work) => self.serial(async () => {
@@ -629,7 +631,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
-      lapsed: row => row.origin === 'machine:owner_lookup' && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
+      lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
     });
@@ -5446,7 +5448,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
     // The owner look-up (ONBOARDING_LOOKUP): written once the owner's yes and their name are both here, at most once a grant, and
     // stopped and fenced when the yes no longer counts. Its worker's page reads take the owner's serial lane, so it starts once
-    // the owner's first reply is out (afterReply), or a minute after the yes.
+    // the owner's first reply is out (afterReply), or five minutes after it was written.
     const lookupOn = this.env.ONBOARDING_LOOKUP === '1';
     const lookupConsent = () => consentLedger(storage.sql, consentSwitches(this.env));
     const lookupStarted = () => identity.get<number>(LOOKUP_STARTED_KEY) ?? null;
@@ -5481,6 +5483,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
     const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
+      lookupToolHandlers: () => {
+        const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
+        return replayHandlers.map(handler => handler.name === 'web_search' && unlocated ? unlocated : handler);
+      },
       monthSpend: () => spend?.(),
       replayApproval: approvalJobReplay({ current: (id, digest) => desk.replayCurrent(id, digest), handlers: () => replayHandlers,
         context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) }),

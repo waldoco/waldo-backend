@@ -48,7 +48,7 @@ const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
 const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
-// A build below controls revision 14 knows five node sources: a web or setup source is left out of what it reads.
+// A build below controls revision 13 knows five node sources: a web or setup source is left out of what it reads.
 const V1_SOURCES:ReadonlySet<unknown>=new Set(appNodeSourceV1Schema.options);
 const withoutLocalId=(webSources:boolean)=>({local_id:_local,...item}:Item)=>webSources||!Array.isArray(item.sources)?item:{...item,sources:item.sources.filter(source=>V1_SOURCES.has(source))};
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
