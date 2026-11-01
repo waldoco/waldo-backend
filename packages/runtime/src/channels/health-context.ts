@@ -136,7 +136,11 @@ const energyWindows = (value: unknown): DerivedHealthDestinationView['energy_win
 };
 
 // The candidate training load as one sentence, from the closed vocabulary only; anything else is absence, never passed on.
-const LOAD_METHOD_WORDS: Readonly<Record<string, string>> = { hr_zones: 'time in heart-rate zones', effort: 'session effort', minutes: 'workout minutes' };
+const LOAD_METHOD_WORDS: Readonly<Record<string, string>> = {
+  hr_zones: 'time in heart-rate zones',
+  hr_zones_observed_peak: 'time in approximate heart-rate zones, set from the highest heart rate seen in a workout rather than a measured maximum',
+  effort: 'session effort', minutes: 'workout minutes',
+};
 const LOAD_UNAVAILABLE_WORDS: Readonly<Record<string, string>> = { baseline_immature: 'not enough days yet', no_readings: 'no workouts in the last four weeks' };
 const trainingLoadWords = (value: unknown): string | null => {
   if (!isRecord(value)) return null;

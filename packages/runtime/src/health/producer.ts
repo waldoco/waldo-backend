@@ -76,7 +76,7 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal.
 export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
-export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
+export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -91,10 +91,11 @@ const stagesOf = (raw: unknown): SleepStages | null => {
 // A workout's zones and effort, each dropped on its own when it is not the shape the contract admits.
 const workoutDetailOf = (activity: unknown, raw: unknown): WorkoutDetail => {
   const r = asRecord(raw);
-  const seconds = asRecord(r?.hr_zones)?.seconds;
+  const zones = asRecord(r?.hr_zones), seconds = zones?.seconds;
   const effort = asRecord(r?.effort);
   return {
     zoneSeconds: Array.isArray(seconds) && seconds.length === 5 && seconds.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) ? seconds as number[] : null,
+    zonesFromObservedPeak: zones?.basis === 'observed_workout_peak',
     effort: effort && typeof effort.score === 'number' && effort.score >= 1 && effort.score <= 10 && (effort.method === 'rated' || effort.method === 'estimated')
       ? { score: effort.score, method: effort.method } : null,
     activity: typeof activity === 'string' ? activity : null,
@@ -367,7 +368,7 @@ const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overni
 const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
   throughDay: yesterday,
   observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
-  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, effort: r.workout?.effort ?? null })),
+  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
 });
 
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
