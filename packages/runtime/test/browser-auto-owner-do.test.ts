@@ -10,7 +10,7 @@ import { OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
 // The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
 // Remove this pin, and the test that asserts it, once the trial meter prices the chat model.
-vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
+vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL, OWNER_MODELS: { ...contracts.OWNER_MODELS, [contracts.OPENAI_PROVIDER]: { ...contracts.OWNER_MODELS[contracts.OPENAI_PROVIDER], chat: contracts.OPENAI_GPT_6_LUNA_MODEL } } }; });
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   proof.inputs.push({ subject: proof.subject, input: structuredClone(input) });
   const format = input.text?.format?.name;

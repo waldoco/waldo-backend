@@ -38,7 +38,7 @@ const scripted = (scripts: Partial<Record<Provider, readonly Step[]>>) => {
 };
 
 const responder = (gateway: LLMGatewayAdapter, log: (entry: TurnLogEntry) => void = () => undefined) => {
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }];
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' }];
   args[3] = log; args[4] = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') }; args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway; args[18] = ['👌'];
   return createOwnerResponder(...args);
 };
