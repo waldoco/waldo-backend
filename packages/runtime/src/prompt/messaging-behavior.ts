@@ -41,7 +41,8 @@ Use these names when you talk about the thing they name, so the owner learns one
 - Form: their body capacity. Recovery: what last night gave back. Weight: what the day is asking of them (meetings, messages, tasks and physical strain), against their own normal; Load is its physical part. Someone asking about their weight in kilos or pounds means body mass. Only quote a value you actually have; never estimate one.`;
 // END WALDO VOCABULARY
 
-const TASKS = `Working on a task
+// The ladder names web_search only on a turn that offers it: a Claude turn with no search key deployed has none.
+const tasks = (webSearch: boolean) => `Working on a task
 For anything that needs looking up or doing, see it through:
 - Look before you ask: their calendars (all of them, not just the main one), mail, memory (including what was recalled with their message), the owner profile and the chat. Never ask for a fact you could find there.
 - Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred, after doing what doesn't depend on the answer. Otherwise go ahead and say what you assumed.
@@ -49,7 +50,7 @@ For anything that needs looking up or doing, see it through:
 - Answer every part of the ask: each option with every field they asked for (price, distance, times, availability), the site and dates its price is for, a link to the page you read and any catch that matters. One site is not a comparison. If a field is still missing after another source, say which; if figures disagree, settle it on the page or say which you trust and why.
 
 Choosing how
-- Use the cheapest way that can do the job, and climb only when it can't: memory, a connected service's tool or MCP server, mail, web_search, browse_page, browse_act, their Mac last. A refusal marked blocked says why and what to try next; follow its fix.
+- Use the cheapest way that can do the job, and climb only when it can't: memory, a connected service's tool or MCP server, mail, ${webSearch ? 'web_search, ' : ''}browse_page, browse_act, their Mac last. A refusal marked blocked says why and what to try next; follow its fix.
 
 Asking
 - Reading, searching and comparing can run on stated assumptions. Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first. Browsing stops before those steps, and a page never proves a form went through, so give the link and the exact details instead.
@@ -69,6 +70,7 @@ Looking things up
 - Never ask the owner for a link you can find. Open a URL the owner gave you, one a search returned or a site's own search page; never make one up.
 - In India, unless the owner names other sites: hotels on MakeMyTrip, Agoda and Goibibo; flights on MakeMyTrip, Cleartrip and airline sites; trains on IRCTC, with fares; restaurants on Zomato, District and Swiggy Dineout; cabs on Uber, Ola, Rapido and Namma Yatri; shopping on Amazon.in and Flipkart; events on BookMyShow and District. Give prices in ₹ and say whether GST is included.
 - For a video or podcast, open its page with browse_page retain_session:true, then browse_act to open the transcript or captions. Say "from the transcript" or "from the title and description only"; never write notes as if you had heard it, and try this before asking for a pasted transcript.`;
+const TASKS = tasks(true);
 
 // Kept unlike the everyday-errands eval tasks, so an eval run measures judgment rather than recall of an example.
 const EXAMPLES = `Examples (copy the judgment, not the wording)
@@ -138,8 +140,9 @@ const harnessTools = (tools: readonly string[]): string => {
 export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, toolSearch: boolean | 'harness' = false): string {
   const searchLine = toolSearch === 'harness' ? harnessTools(tools) : toolSearch ? TOOL_SEARCH_LINE : undefined;
   const tail = [...(tools.length > 0 && searchLine ? [searchLine] : []), ...(tools.length === 0 ? ['Tools available in this chat: none.'] : [])];
-  if (!presentation) return [MESSAGING_BEHAVIOR, ...tail].join('\n\n');
-  return [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation, tools), ...tail].join('\n\n');
+  const taskSection = tools.length === 0 || tools.includes('web_search') ? TASKS : tasks(false);
+  if (!presentation) return [taskSection === TASKS ? MESSAGING_BEHAVIOR : [IDENTITY, VOICE, WALDO_VOCABULARY, taskSection, EXAMPLES, `${DOING}\n${DIRECT_DOING}`, HEALTH, REMEMBERING].join('\n\n'), ...tail].join('\n\n');
+  return [IDENTITY, VOICE, WALDO_VOCABULARY, taskSection, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation, tools), ...tail].join('\n\n');
 }
 
 // Reactions are available where the host reacts on its own (Telegram) or where the model's reaction tool is offered this

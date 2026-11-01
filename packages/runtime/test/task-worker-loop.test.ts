@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
 import { DROPPED_STEPS_NOTE, leadingNote, type LoopToolResult } from '../src/conversation/tool-loop';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome, type TaskSpend } from '../src/tasks/worker-loop';
 import { modelCost } from '../src/llm/pricing';
+import type { LLMGatewayRequest } from '../src/llm/provider';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -216,9 +217,21 @@ describe('the production task model step', () => {
     expect(await asked('standard')).toEqual([4_096]);
   });
 
+  it('with Claude chosen, a deep task runs on Sonnet and a standard one on Haiku, each with its own effort and output room', async () => {
+    const asked = async (effort: 'deep' | 'standard') => {
+      const { gateway, models } = faultInjectedProviders({ [ANTHROPIC_PROVIDER]: [{ text: 'Read it.' }] });
+      const sent: Array<Pick<LLMGatewayRequest['request'], 'max_tokens' | 'reasoning_effort'>> = [];
+      const spy: Parameters<typeof taskModel>[1] = { complete: request => { sent.push({ max_tokens: request.request.max_tokens, reasoning_effort: request.request.reasoning_effort }); return gateway.complete(request); } };
+      await taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }, spy)({ ...input, claim: { ...claim, brief: { ...brief, effort } } });
+      return { models: models(), sent };
+    };
+    expect(await asked('deep')).toEqual({ models: [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL], sent: [{ max_tokens: 32_000, reasoning_effort: 'medium' }] });
+    expect(await asked('standard')).toEqual({ models: [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL], sent: [{ max_tokens: 16_000, reasoning_effort: 'low' }] });
+  });
+
   it('every provider failing is unavailability, typed, with no usage', async () => {
     const { gateway } = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ fault: 'server_error', status: 503 }], [ANTHROPIC_PROVIDER]: [{ fault: 'server_error', status: 503 }] });
-    const failure = await taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }, gateway)(input).catch((error: unknown) => error);
+    const failure = await taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' }, gateway)(input).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(TaskProviderUnavailable);
     expect((failure as TaskProviderUnavailable).event).toMatchObject({ ok: false, cost_kind: 'worker' });
     expect((failure as TaskProviderUnavailable).event).not.toHaveProperty('usage');
@@ -226,7 +239,7 @@ describe('the production task model step', () => {
 });
 
 describe('the worker\'s provider breaker', () => {
-  const step = (health: TaskBreaker, gateway: Parameters<typeof taskModel>[1]) => taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', health }, gateway);
+  const step = (health: TaskBreaker, gateway: Parameters<typeof taskModel>[1]) => taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai', health }, gateway);
 
   it('the model step runs on the owner\'s breaker as the claim brought it, and each round\'s outcomes go back with that round', async () => {
     // The owner's breaker already holds two OpenAI misses, so the worker's first miss opens it.
@@ -313,7 +326,7 @@ describe('checkpoint trimming', () => {
 describe('failed attempts a provider billed', () => {
   const claim: TaskClaim = { jobId: ticket.jobId, profile: 'reader', brief: { ...brief, effort: 'deep' }, tools: [search], mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 60_000, roundsUsed: 0, ownerRef: 'owner-1' };
   const billed = { input_tokens: 40_000, output_tokens: 2_000, cache_read_input_tokens: 0 };
-  const access = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' };
+  const access = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', primary: 'openai' as const };
   const answered = (model: string) => ({ ok: true as const, data: { model, text: 'Nothing waits on you.', input_tokens: 900, output_tokens: 30, cache_read_input_tokens: 0, latency_ms: 1 } });
   const terraBilledThenSonnet = { complete: async (request: { request: { model: string } }) => request.request.model === OPENAI_GPT_6_1_TERRA_MODEL ? { ok: false as const, code: 'transient' as const, error: 'down', spent: billed } : answered(request.request.model) };
   const allBilledFailures = { complete: async () => ({ ok: false as const, code: 'transient' as const, error: 'down', spent: billed }) };

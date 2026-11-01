@@ -3,10 +3,11 @@
 // keep. Every variable in that block is classified here; a test goes red on one that is not, so a new flag that shapes
 // turns cannot reach staging without the eval's owner deciding what to do about it.
 import { readFileSync } from 'node:fs';
-import { WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
+import { OWNER_MODELS, type ModelName } from '@waldo/contracts';
 import { parseJsonc } from '../../../../scripts/jsonc.mjs';
 import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
+import { modelProviderSetting } from '../../src/llm/owner-routes';
 
 export type StagingVars = Readonly<Record<string, string>>;
 
@@ -25,6 +26,7 @@ const WHATSAPP = 'WhatsApp surface setup; the trial runs the app surface';
 const SYNTHETIC_TOOLS = 'the trial\'s tools are the synthetic handlers of world.ts, not the live registry';
 
 export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
+  WALDO_MODEL_PROVIDER: mapped("the profile's chat model is that provider's; a live run refuses a Claude staging, since its judge is Claude"),
   WALDO_TOOL_LOADER: mapped("'harness' loads core tools up front and the rest through find_tools and use_tool"),
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
@@ -107,11 +109,12 @@ export type StagingProfile = Readonly<{
   semantic: boolean;
 }>;
 
-// The owner object's own precedence: the harness loader wins over provider tool search.
+// The owner object's own precedence: the harness loader wins over provider tool search. The model is the chat model of the
+// provider staging runs.
 export const stagingProfile = (vars: StagingVars): StagingProfile => {
   const harness = vars.WALDO_TOOL_LOADER === 'harness';
   return {
-    label: 'staging', model: WALDO_CHAT_MODEL,
+    label: 'staging', model: OWNER_MODELS[modelProviderSetting(vars.WALDO_MODEL_PROVIDER)].chat,
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',

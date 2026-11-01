@@ -7,7 +7,8 @@ import { ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, ANTH
 // prompt cache, so its reads and writes bill as plain input; an embedding model bills its input tokens only.
 // cacheWrite is the rate for prompt tokens written to the cache, billed instead of input: OpenAI's default 30-minute write
 // (the adapter sets no longer lifetime) and Anthropic's 5-minute write (the adapter's ephemeral marks).
-// Not modelled: OpenAI bills >272K input tokens at 2x input / 1.5x output, and Haiku bills 5x above 100K prompt tokens.
+// Haiku 5.5 bills a whole call at its long-prompt card once the prompt, cache reads and writes included, passes 100K tokens.
+// Not modelled: OpenAI bills >272K input tokens at 2x input / 1.5x output.
 const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: number; cacheWrite: number; output: number }>>> = {
   [OPENAI_GPT_6_LUNA_MODEL]: { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
   [OPENAI_GPT_6_1_SOL_MODEL]: { input: 2, cachedInput: 0.1, cacheWrite: 2.5, output: 10 },
@@ -17,6 +18,10 @@ const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: num
   [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
   [WORKERS_AI_GEMMA_4_26B_MODEL]: { input: 0.1, cachedInput: 0.1, cacheWrite: 0.1, output: 0.3 },
   [WORKERS_AI_BGE_M3_EMBEDDING_MODEL]: { input: 0.012, cachedInput: 0.012, cacheWrite: 0.012, output: 0 },
+};
+
+const LONG_PROMPT_PRICES: Readonly<Record<string, Readonly<{ aboveTokens: number; input: number; cachedInput: number; cacheWrite: number; output: number }>>> = {
+  [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: { aboveTokens: 100_000, input: 0.5, cachedInput: 0.05, cacheWrite: 0.625, output: 2.5 },
 };
 
 // Hosted web search bills per call on top of tokens ("Web search (all models)" on the pricing page above). Its search
@@ -35,7 +40,8 @@ export const usageAnomalous = ({ input, cached, cache_write = 0 }: Pick<ModelUsa
 
 // usage.input is the whole prompt, cache reads and cache writes inside it.
 export const modelCost = ({ model, input, output, cached, cache_write = 0, web_searches = 0 }: ModelUsage): ModelCost | null => {
-  const price = PRICES[model];
+  const long = LONG_PROMPT_PRICES[model];
+  const price = long && input > long.aboveTokens ? long : PRICES[model];
   if (!price) return null;
   const inputUsd = (uncachedInput({ input, cached, cache_write }) * price.input + cached * price.cachedInput) / 1e6;
   const writeUsd = (cache_write * price.cacheWrite) / 1e6;

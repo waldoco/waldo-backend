@@ -1,8 +1,8 @@
-import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type TaskResult } from '@waldo/contracts';
+import type { TaskResult } from '@waldo/contracts';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { md5Hex } from '../channels/md5';
-import { ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
@@ -64,7 +64,8 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly 
 export const workerRouteDown = (access: OwnerModelAccess): boolean => {
   const { health } = access;
   if (!health) return false;
-  const route = ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access).routes[0]!;
+  const { chat, auxiliary } = ownerModels(access);
+  const route = ownerRoutePolicy(auxiliary, chat, access).routes[0]!;
   return [route.primary, ...route.fallback].every((step) => health.isOpen(step.provider));
 };
 
