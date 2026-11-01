@@ -92,6 +92,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_WALDO_NUMBER?: string;
   // Milliseconds of owner quiet before a WhatsApp text turn starts, so a thought typed across messages is one turn. Unset: 3000.
   WHATSAPP_QUIET_MS?: string;
+  // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
+  WHATSAPP_REPLY_MERGE?: string;
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;

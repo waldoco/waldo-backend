@@ -32,12 +32,12 @@ type GraphCall = Record<string, unknown> & { type?: string; status?: string; con
 beforeEach(() => { model.requests = []; model.react = null; model.gate = null; model.entered = () => {}; });
 
 type Admit = (...messages: Record<string, unknown>[]) => Promise<void>;
-const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[]) => Promise<void>, quietMs = '0') =>
+const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[]) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
     const mapping = { owner_id: OWNER, environment: 'fixture', namespace: 'fixture-owner-namespace', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 };
-    const fixtureEnv = { ...env, WHATSAPP_QUIET_MS: quietMs, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+    const fixtureEnv = { ...env, WHATSAPP_QUIET_MS: quietMs, WHATSAPP_REPLY_MERGE: merge ?? undefined, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
       WALDO_ENVIRONMENT: mapping.environment, WALDO_OWNER_DO_NAMESPACE: mapping.namespace,
       SUPABASE_PROJECT_URL: 'https://signed-metadata.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router-secret',
       ARTIFACTS: {
@@ -155,4 +155,33 @@ it('texts sent a moment apart within the quiet window are one turn', async () =>
     expect(lastMessage()).toContain('Hey Waldo\\nI have lost my axis bank debit card');
     expect(replies(graph)).toHaveLength(1);
   }, '300');
+}, 60_000);
+
+// WHATSAPP_REPLY_MERGE unset, '' or '0' is WhatsApp as it was: no quiet window, no joining, no dropped reply.
+for (const merge of [null, '', '0']) {
+  it(`with the merge switch ${merge === null ? 'unset' : `'${merge}'`}, close-together texts are two turns and two replies, with no wait`, async () => {
+    await whatsappOwner(`wa-merge-off-${merge ?? 'unset'}`, async (admit, drain, graph) => {
+      await admit(text('Hey Waldo', 'wamid.hey'));
+      await admit(text('I have lost my axis bank debit card', 'wamid.card'));
+      await drain();
+      expect(turns()).toHaveLength(2);
+      expect(lastMessage()).not.toContain('Hey Waldo');
+      expect(replies(graph)).toHaveLength(2);
+    }, '300', merge);
+  }, 60_000);
+}
+
+it('with the merge switch off, a reply the owner\'s newer text arrives behind is still sent', async () => {
+  await whatsappOwner('wa-merge-off-overtaken', async (admit, drain, graph) => {
+    const hold = holdReply();
+    await admit(text('Hey Waldo', 'wamid.hey'));
+    const draining = drain();
+    await hold.entered;
+    await admit(text('I have lost my axis bank debit card', 'wamid.card'));
+    hold.release();
+    await draining;
+    await drain();
+    expect(turns()).toHaveLength(2);
+    expect(replies(graph)).toHaveLength(2);
+  }, '0', '0');
 }, 60_000);

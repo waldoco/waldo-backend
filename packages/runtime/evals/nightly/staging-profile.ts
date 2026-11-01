@@ -81,6 +81,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WHATSAPP_ONBOARDING_URL: inert(WHATSAPP),
   WHATSAPP_WALDO_NUMBER: inert(WHATSAPP),
   WHATSAPP_DEBUG_LOG: inert(WHATSAPP),
+  WHATSAPP_REPLY_MERGE: inert(WHATSAPP),
+  WHATSAPP_QUIET_MS: inert(WHATSAPP),
   WALDO_COST_LEDGER_SYNC: inert('cost ledger sync after a turn'),
   AGENT_MAIL_INBOUND: inert('inbound agent mail ingress'),
   AGENT_MAIL_DOMAIN: inert('inbound agent mail ingress'),

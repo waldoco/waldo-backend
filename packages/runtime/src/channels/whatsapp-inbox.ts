@@ -59,7 +59,8 @@ const redacted = (update: WaSyntheticUpdate, redact: (text: string) => string): 
 
 export class WhatsAppOwnerInbox {
   // quietMs: how long text waits for the owner to go quiet before its turn starts; 0 starts it at once.
-  constructor(private readonly storage: DurableObjectStorage, private readonly now: () => number = () => Date.now(), private readonly quietMs = 0) {}
+  // merge: false keeps every message its own turn, claimed at once and never overtaken, whatever quietMs says.
+  constructor(private readonly storage: DurableObjectStorage, private readonly now: () => number = () => Date.now(), private readonly quietMs = 0, private readonly merge = true) {}
 
   records(): WhatsAppInboxRecord[] {
     return [...this.storage.kv.list<WhatsAppInboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.updateId - b.updateId);
@@ -138,7 +139,7 @@ export class WhatsAppOwnerInbox {
   /** Whether newer plain text from the same sender waits behind this running plain-text row, so its reply may be dropped for one turn that answers both. */
   overtaken(id: string): boolean {
     const r = this.get(id), next = this.next();
-    return !!r && r.state === 'running' && plainOwnerText(r.update) && !!next && next.subject === r.subject && plainOwnerText(next.update);
+    return this.merge && !!r && r.state === 'running' && plainOwnerText(r.update) && !!next && next.subject === r.subject && plainOwnerText(next.update);
   }
 
   /** A running row whose reply was dropped because newer text overtook it waits again, to join that text at the next claim. True when it did. */
@@ -213,14 +214,14 @@ export class WhatsAppOwnerInbox {
     const waiting = this.records().filter(r => r.state === 'admitted');
     const first = waiting[0];
     if (!first) return [];
-    if (!plainOwnerText(first.update)) return [first];
+    if (!this.merge || !plainOwnerText(first.update)) return [first];
     const run = [first];
     for (const r of waiting.slice(1)) { if (r.subject !== first.subject || !plainOwnerText(r.update)) break; run.push(r); }
     return run;
   }
   // When a run of text may start: the quiet window after its newest message, never past the cap after its oldest.
   private readyAt(run: readonly WhatsAppInboxRecord[]): number {
-    if (!this.quietMs || !run.length || !plainOwnerText(run[0]!.update)) return 0;
+    if (!this.merge || !this.quietMs || !run.length || !plainOwnerText(run[0]!.update)) return 0;
     return Math.min(run.at(-1)!.admittedAt + this.quietMs, run[0]!.admittedAt + WHATSAPP_QUIET_MAX_MS);
   }
   private refreshDue(): void {

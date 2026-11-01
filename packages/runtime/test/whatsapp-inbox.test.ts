@@ -149,10 +149,10 @@ it('deferWake moves the wake of open rows later, waiting or running, and does no
 // Text the owner types in a row is one thought, so it is one turn: the claim takes the plain owner texts waiting behind the
 // oldest one and joins them under the newest message. A command, an approval reply, a forward, a quoted reply or media stays
 // its own turn.
-const withQuiet = (quietMs: number, work: (inbox: WhatsAppOwnerInbox, storage: DurableObjectStorage, clock: { now: number }) => void | Promise<void>) =>
+const withQuiet = (quietMs: number, work: (inbox: WhatsAppOwnerInbox, storage: DurableObjectStorage, clock: { now: number }) => void | Promise<void>, merge = true) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`whatsapp-inbox-${crypto.randomUUID()}`)), async (_instance, state) => {
     const clock = { now: 1_000_000 };
-    try { await work(new WhatsAppOwnerInbox(state.storage, () => clock.now, quietMs), state.storage, clock); } finally { await state.storage.deleteAlarm(); }
+    try { await work(new WhatsAppOwnerInbox(state.storage, () => clock.now, quietMs, merge), state.storage, clock); } finally { await state.storage.deleteAlarm(); }
   });
 const admitUpdates = (inbox: WhatsAppOwnerInbox, storage: DurableObjectStorage, rows: readonly { wamid: string; update: (seq: number) => Record<string, unknown> }[]) =>
   storage.transactionSync(() => inbox.admit(rows.map((row, index) => ({ update: row.update(inbox.seq() + 1 + index), wamid: row.wamid })), SUBJECT));
@@ -214,3 +214,12 @@ it('a running text that newer text overtook goes back to wait, and the next clai
   expect(textOf(merged)).toBe('Hey Waldo\nI have lost my card');
   expect(inbox.settle(running, false)).toBe(false);
 }));
+
+it('with merging off, plain texts in a row are separate turns, claimed at once, and none is overtaken', () => withQuiet(0, (inbox, storage, clock) => {
+  admit(inbox, storage, [{ wamid: 'wamid.hey', body: 'Hey Waldo' }, { wamid: 'wamid.card', body: 'I have lost my card' }]);
+  const first = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(textOf(first)).toBe('Hey Waldo');
+  expect(inbox.overtaken(first.id)).toBe(false);
+  inbox.settle(first, true);
+  expect(textOf(inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS))).toBe('I have lost my card');
+}, false));

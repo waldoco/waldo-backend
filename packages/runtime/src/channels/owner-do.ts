@@ -2124,8 +2124,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!overtaken && inbox.settle(record, completed)) await this.whatsappNotice(record);
     }
   }
-  // The owner's WhatsApp inbox, with the quiet window text waits for before its turn (WHATSAPP_QUIET_MS; unset is 3000 ms).
-  private whatsappInbox(): WhatsAppOwnerInbox { return new WhatsAppOwnerInbox(this.ctx.storage, undefined, whatsappQuietMs(this.env.WHATSAPP_QUIET_MS)); }
+  // The owner's WhatsApp inbox. WHATSAPP_REPLY_MERGE=1 turns on the quiet window text waits for (WHATSAPP_QUIET_MS; unset is 3000 ms),
+  // joining close texts into one turn, and dropping a reply newer text overtook; any other value is one turn per message.
+  private whatsappInbox(): WhatsAppOwnerInbox { const merge = this.env.WHATSAPP_REPLY_MERGE === '1'; return new WhatsAppOwnerInbox(this.ctx.storage, undefined, merge ? whatsappQuietMs(this.env.WHATSAPP_QUIET_MS) : 0, merge); }
   // Only the exact turn WhatsApp is running is ever told it was overtaken; any other surface's turn asks with a scope that never matches.
   private whatsappOvertaken(scope: RunEffectScope | undefined): boolean {
     return scope !== undefined && this.activeWhatsApp?.scope === scope && this.whatsappInbox().overtaken(scope.runId);
