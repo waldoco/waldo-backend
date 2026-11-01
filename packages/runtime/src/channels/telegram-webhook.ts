@@ -107,6 +107,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
   OWNER_LOOKUP?: string;
+  // "1" starts the owner look-up as a background job once the owner's yes and their name are both in (onboarding/lookup.ts);
+  // anything else leaves the look-up to the owner's own turns. It also needs OWNER_LOOKUP.
+  ONBOARDING_LOOKUP?: string;
+  // "1" runs the second welcome build: sources in order over the constellation so far, look-up findings as Waldo's read, and
+  // late sources read once; anything else keeps the first build.
+  WELCOME_V2?: string;
   // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
   OWNER_PROFILE?: string;
   MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
