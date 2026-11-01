@@ -275,14 +275,20 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
 };
 
 // Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
-// already holds is not counted twice. Known only on a day with a movement reading or a workout: heart-rate or daylight
-// hours alone say nothing about load.
+// already holds is not counted twice. Workout time is the union of the day's workout spans: two apps' copies of one
+// session, or two sessions that overlap, are each minute once. Known only on a day with a movement reading or a workout:
+// heart-rate or daylight hours alone say nothing about load.
+const unionOf = (spans: readonly Span[]): [number, number][] => spans
+  .map(s => [Date.parse(s.startAt), Date.parse(s.endAt)] as [number, number]).filter(([from, to]) => from < to).sort((a, b) => a[0] - b[0])
+  .reduce<[number, number][]>((merged, [from, to]) => {
+    const last = merged.at(-1);
+    if (last && from < last[1]) last[1] = Math.max(last[1], to); else merged.push([from, to]);
+    return merged;
+  }, []);
 const physicalLoadOf = (day: DayRecord): number | null => {
   const moving = day.hourly.filter(bucket => bucket.movementMinutes !== null);
   if (!moving.length && !day.workouts.length) return null;
-  const workoutMs = day.workouts.reduce((sum, workout) => {
-    const from = Date.parse(workout.startAt), to = Date.parse(workout.endAt);
-    if (!(from < to)) return sum;
+  const workoutMs = unionOf(day.workouts).reduce((sum, [from, to]) => {
     const counted = moving.reduce((inside, bucket) => { const start = Date.parse(bucket.startAt); return inside + Math.max(0, Math.min(to, start + HOUR_MS) - Math.max(from, start)); }, 0);
     return sum + to - from - counted;
   }, 0);
@@ -363,12 +369,28 @@ const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): ob
 // Signals only a body-worn sensor makes. A day the phone alone saw (movement, daylight) shows the phone was about, not that
 // a session would have been recorded, so it is not an observed day.
 const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
+// A phone's store holds every app's copy of a session: the watch's, and the one Strava or Garmin wrote back. Two workouts
+// that share more than half of the shorter one's span are one session, and the copy with the most detail stands for it
+// (zones, then effort). On a tie the first in the read's order stands: day, start, then sample id. Each workout is matched
+// against the copies kept so far, not every one seen. A workout without a span is kept as it is.
+const detailOf = (r: Reading): number => (r.workout?.zoneSeconds ? 2 : r.workout?.effort ? 1 : 0);
+const sameSession = (a: Reading, b: Reading): boolean => {
+  const [aFrom, aTo, bFrom, bTo] = [a.startAt, a.endAt, b.startAt, b.endAt].map(at => Date.parse(at!));
+  return 2 * (Math.min(aTo!, bTo!) - Math.max(aFrom!, bFrom!)) > Math.min(aTo! - aFrom!, bTo! - bFrom!);
+};
+const sessionsOf = (workouts: readonly Reading[]): Reading[] => workouts.reduce<Reading[]>((kept, r) => {
+  const same = span(r) ? kept.findIndex(k => span(k) && sameSession(k, r)) : -1;
+  if (same < 0) return [...kept, r];
+  if (detailOf(r) > detailOf(kept[same]!)) kept[same] = r;
+  return kept;
+}, []);
+
 // The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
 // Another source's workouts never mix in.
 const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
   throughDay: yesterday,
   observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
-  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
+  workouts: sessionsOf(source.readings.filter(r => r.signal === 'workout')).map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
 });
 
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {

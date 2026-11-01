@@ -103,6 +103,50 @@ describe('producer: candidate training load', () => {
     for (const row of writes) expect(row.training_load, String(row.day)).toMatchObject({ state: 'available', phrase: 'about usual' });
   });
 
+  it('counts a session two apps wrote to the store once', async () => {
+    // The same 60-minute run each day, recorded by the watch with zones and mirrored by another app a minute later without
+    // them. This week the mirror is on; before it, off. One run a day throughout, so the week is about usual, in zones.
+    const mirrored = (day: string): Sample => ({ ...workout(day, 60), start_at: `${day}T06:01:00.000Z`, end_at: `${day}T07:01:00.000Z` });
+    const samples = Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), workout(day, 60, zones([600, 1200, 1200, 600, 0])), ...(i < 8 ? [mirrored(day)] : []),
+    ]);
+    const writes = await run(seriesOf(samples), { trainingLoad: true });
+    expect(writes.map(row => row.day)).toEqual([addDays(TODAY, -1), TODAY]);
+    for (const row of writes) expect(row.training_load, String(row.day)).toMatchObject({ state: 'available', phrase: 'about usual', method: 'hr_zones' });
+  });
+
+  it('keeps sessions that only touch or barely overlap apart, and folds a short copy inside a long one', async () => {
+    const zoned = zones([600, 1200, 1200, 600, 0]);
+    const session = (day: string, from: string, to: string, detail?: Sample): Sample => ({ ...workout(day, (Date.parse(`${day}T${to}Z`) - Date.parse(`${day}T${from}Z`)) / 60_000, detail), start_at: `${day}T${from}Z`, end_at: `${day}T${to}Z` });
+    // One zoned hour a day; this week each day also carries `extra`.
+    const loadWith = async (extra: (day: string) => Sample) => (await run(seriesOf(Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), session(day, '06:00:00.000', '07:00:00.000', zoned), ...(i < 8 ? [extra(day)] : []),
+    ])), { trainingLoad: true })).at(-1)?.training_load;
+    expect(await loadWith(day => session(day, '18:00:00.000', '19:00:00.000', zoned)), 'an evening session').toMatchObject({ phrase: 'much heavier than usual', method: 'hr_zones' });
+    expect(await loadWith(day => session(day, '07:00:00.000', '08:00:00.000', zoned)), 'back to back').toMatchObject({ phrase: 'much heavier than usual', method: 'hr_zones' });
+    expect(await loadWith(day => session(day, '06:45:00.000', '07:45:00.000', zoned)), 'a quarter shared').toMatchObject({ phrase: 'much heavier than usual', method: 'hr_zones' });
+    expect(await loadWith(day => session(day, '06:20:00.000', '06:40:00.000')), 'a copy inside').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    expect(await loadWith(day => session(day, '06:00:00.000', '07:00:00.000', zoned)), 'one app recording twice').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    // Apps name sports differently (one's run is another's "other"), so the sport never decides; the shared span does.
+    const cycling = (day: string, from: string, to: string): Sample => ({ ...session(day, from, to, zoned), activity: 'cycling' });
+    expect(await loadWith(day => cycling(day, '06:50:00.000', '07:50:00.000')), 'another sport, a sixth shared').toMatchObject({ phrase: 'much heavier than usual' });
+    expect(await loadWith(day => cycling(day, '06:05:00.000', '07:05:00.000')), 'another sport, nearly all shared').toMatchObject({ phrase: 'about usual' });
+    // The line is half of the shorter span: 29 of 60 minutes shared is two sessions, 31 is one.
+    expect(await loadWith(day => session(day, '06:31:00.000', '07:31:00.000', zoned)), '29 minutes shared').toMatchObject({ phrase: 'much heavier than usual' });
+    expect(await loadWith(day => session(day, '06:29:00.000', '07:29:00.000', zoned)), '31 minutes shared').toMatchObject({ phrase: 'about usual' });
+  });
+
+  it('keeps the copy with the most detail, whichever started first', async () => {
+    const session = (day: string, from: string, detail?: Sample): Sample => ({ ...workout(day, 60, detail), start_at: `${day}T${from}Z`, end_at: `${day}T${from.replace(/^06/, '07').replace(/^05/, '06')}Z` });
+    // The session itself every day; this week another app's bare copy, which starts a minute earlier, is in the store too.
+    // It comes first, as the series read orders a day's readings by start.
+    const loadOf = async (detail: Sample) => (await run(seriesOf(Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), ...(i < 8 ? [session(day, '05:59:00.000')] : []), session(day, '06:00:00.000', detail),
+    ])), { trainingLoad: true })).at(-1)?.training_load;
+    expect.soft(await loadOf(zones([600, 1200, 1200, 600, 0])), 'zones').toMatchObject({ phrase: 'about usual', method: 'hr_zones' });
+    expect.soft(await loadOf({ effort: { score: 6, method: 'rated' } }), 'effort').toMatchObject({ phrase: 'about usual', method: 'effort' });
+  });
+
   it('says why when the window cannot carry a load', async () => {
     const fewDays = await run(seriesOf(month(() => undefined).filter(s => String(s.day) >= addDays(TODAY, -9))), { trainingLoad: true });
     expect(fewDays.at(-1)?.training_load).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
