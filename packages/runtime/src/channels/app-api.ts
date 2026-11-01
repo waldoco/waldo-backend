@@ -18,6 +18,7 @@ import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LI
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { APP_RATING_SUFFIX } from './app-rating';
 import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
+import { markOpenOwner } from '../identity/open-owner-hold';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -141,8 +142,10 @@ const devicesRequest = async (request: Request, path: string, who: { doName: str
   return parsed.success ? ok(parsed.data) : fail(503);
 };
 
-// The answer to a sign-in that resolved an owner: the same session whichever way the owner proved their email.
-const appSignIn = async (auth: ConsoleAuth, doName: string): Promise<Response> => {
+// The answer to a sign-in that resolved an owner: the same session whichever way the owner proved their email. An owner who
+// joined openly has their object marked first, so no credential reaches them before their hold does.
+const appSignIn = async (env: AppEnv, auth: ConsoleAuth, doName: string): Promise<Response> => {
+  try { if (!(await markOpenOwner(env, auth.openOwnerState, env.OWNER_DO, doName))) return fail(503); } catch { return fail(503); }
   let credential: string | null;
   try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
   if (!credential) return fail(503);
@@ -194,7 +197,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let doName: string | null;
     try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : '', openSignupFor(env, request)); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
-    return appSignIn(auth, doName);
+    return appSignIn(env, auth, doName);
   }
 
   if (url.pathname === `${APP_PATH}/auth/id_token`) {
@@ -221,7 +224,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       try { if (!(await auth.sendCode(signedIn.email))) return fail(503); } catch { return fail(503); }
       return ok({ state: 'confirm_with_email_code', email: signedIn.email, link: signedIn.link });
     }
-    return appSignIn(auth, signedIn.doName);
+    return appSignIn(env, auth, signedIn.doName);
   }
 
   const who = await authenticate(request, auth);

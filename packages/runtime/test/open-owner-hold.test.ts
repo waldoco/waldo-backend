@@ -1,6 +1,6 @@
 import { ownerTyped } from './helpers/owner-typed';
 import { describe, expect, it, vi } from 'vitest';
-import { OPEN_OWNER_STATE_KEY, OwnerHeldError, openOwnerHold } from '../src/identity/open-owner-hold';
+import { markOpenOwner, OPEN_OWNER_MARK_KEY, OwnerHeldError, openOwnerHold, verifiedOpenOwnerMark } from '../src/identity/open-owner-hold';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 
 const requests: unknown[] = [];
@@ -17,70 +17,94 @@ vi.mock('openai', () => ({
 const { createTelegramResponder } = await import('../src/channels/telegram-turn');
 
 const kv = () => { const map = new Map<string, unknown>(); return { map, get: <T,>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); } }; };
-const directory = (state: unknown, release = true) => {
+const directory = (release: unknown = true) => {
   const calls: string[] = [];
   const call = async (fn: string, message: string, args: Record<string, string>) => {
     calls.push(fn);
-    expect(message).toBe(`${fn === 'open_owner_state' ? 'openowner.state' : 'openowner.release'}.${args.p_do_name}`);
-    if (state instanceof Error) throw state;
-    return fn === 'open_owner_state' ? state : release;
+    expect(message).toBe(`openowner.release.${args.p_do_name}`);
+    if (release instanceof Error) throw release;
+    return release;
   };
   return { calls, call };
 };
 
 describe('holding an owner who joined openly', () => {
-  it('a member is asked about once and never held', async () => {
-    const store = kv(), { calls, call } = directory('member');
-    const hold = openOwnerHold({ kv: store, doName: () => 'owner-a', call, agreed: () => false });
+  it('an owner object without the mark is a member: never held, and never asks the directory', async () => {
+    const { calls, call } = directory();
+    const hold = openOwnerHold({ kv: kv(), doName: () => 'owner-a', call, agreed: () => false });
     expect(await hold.held()).toBe(false);
-    expect(await hold.held()).toBe(false);
-    expect(calls).toEqual(['open_owner_state']);
     expect(hold.open()).toBe(false);
+    expect(calls).toEqual([]);
   });
 
-  it('an open owner stays held, with no release asked, until the agreements are accepted; then is released once', async () => {
-    const store = kv(), { calls, call } = directory('held');
+  it('a marked owner stays held, asking nothing, until the agreements are accepted; then is released once', async () => {
+    const store = kv(), { calls, call } = directory();
     let agreed = false;
     const hold = openOwnerHold({ kv: store, doName: () => 'owner-b', call, agreed: () => agreed });
+    hold.mark();
     expect(await hold.held()).toBe(true);
-    expect(await hold.held()).toBe(true);
-    expect(calls).toEqual(['open_owner_state']);
+    expect(calls).toEqual([]);
     expect(hold.open()).toBe(true);
     agreed = true;
     expect(await hold.held()).toBe(false);
     expect(await hold.held()).toBe(false);
-    expect(calls).toEqual(['open_owner_state', 'release_open_owner']);
-    expect(store.map.get(OPEN_OWNER_STATE_KEY)).toBe('released');
+    expect(calls).toEqual(['release_open_owner']);
+    expect(store.map.get(OPEN_OWNER_MARK_KEY)).toBe('released');
+    hold.mark();
+    expect(store.map.get(OPEN_OWNER_MARK_KEY)).toBe('released');
     expect(hold.open()).toBe(true);
   });
 
-  it('a release the directory does not record keeps the owner held and asks again next time', async () => {
-    const store = kv(), { calls, call } = directory('held', false);
-    const hold = openOwnerHold({ kv: store, doName: () => 'owner-c', call, agreed: () => true });
-    expect(await hold.held()).toBe(true);
-    expect(await hold.held()).toBe(true);
-    expect(calls).toEqual(['open_owner_state', 'release_open_owner', 'release_open_owner']);
-  });
-
-  it('holds when the directory cannot answer, or answers that no active owner has this name, and remembers nothing', async () => {
-    for (const answer of [new Error('directory down'), null, 'unknown']) {
-      const store = kv(), { call } = directory(answer);
+  it('stays held when the release is not recorded, the directory is down, or the object has no owner name yet', async () => {
+    for (const [release, name] of [[false, 'owner-c'], [new Error('directory down'), 'owner-c'], [true, undefined]] as const) {
+      const store = kv(), { call } = directory(release);
+      const hold = openOwnerHold({ kv: store, doName: () => name, call, agreed: () => true });
+      hold.mark();
       const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      try { expect(await openOwnerHold({ kv: store, doName: () => 'owner-d', call, agreed: () => true }).held()).toBe(true); }
-      finally { quiet.mockRestore(); }
-      expect(store.map.has(OPEN_OWNER_STATE_KEY)).toBe(false);
+      try { expect(await hold.held()).toBe(true); } finally { quiet.mockRestore(); }
+      expect(store.map.get(OPEN_OWNER_MARK_KEY)).toBe('held');
     }
-  });
-
-  it('an object with no directory, or not yet bound to an owner, cannot hold an open owner', async () => {
-    const { calls, call } = directory('held');
-    expect(await openOwnerHold({ kv: kv(), doName: () => 'owner-e', call: null, agreed: () => false }).held()).toBe(false);
-    expect(await openOwnerHold({ kv: kv(), doName: () => undefined, call, agreed: () => false }).held()).toBe(false);
-    expect(calls).toEqual([]);
   });
 
   it('a held refusal is a closed run, so it ends work without a retry or a reply', () => {
     expect(new OwnerHeldError()).toBeInstanceOf(ClosedRunError);
+  });
+});
+
+describe('marking at sign-in', () => {
+  const SECRET = 'fictional-mark-secret';
+  const namespace = (status = 204) => {
+    const sent: Request[] = [];
+    return { sent, owners: { idFromName: (name: string) => name as unknown as DurableObjectId, get: () => ({ fetch: async (request: Request) => { sent.push(request); return new Response(null, { status }); } }) } };
+  };
+  it('with the flag off, asks nothing and marks nothing', async () => {
+    const { sent, owners } = namespace(), state = vi.fn();
+    expect(await markOpenOwner({ OPEN_SIGNUP: '0', WALDO_ROUTER_HMAC_SECRET: SECRET }, state, owners, 'owner-a')).toBe(true);
+    expect(state).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+  it('marks an owner the directory says joined openly, held or released, and no member', async () => {
+    for (const [answer, marks] of [['held', 1], ['released', 1], ['member', 0]] as const) {
+      const { sent, owners } = namespace();
+      expect(await markOpenOwner({ OPEN_SIGNUP: '1', WALDO_ROUTER_HMAC_SECRET: SECRET }, async () => answer, owners, 'owner-a')).toBe(true);
+      expect(sent).toHaveLength(marks);
+    }
+  });
+  it('fails the sign-in when the directory has no owner, the object refuses the mark, or nothing can send it', async () => {
+    expect(await markOpenOwner({ OPEN_SIGNUP: '1', WALDO_ROUTER_HMAC_SECRET: SECRET }, async () => null, namespace().owners, 'owner-a')).toBe(false);
+    expect(await markOpenOwner({ OPEN_SIGNUP: '1', WALDO_ROUTER_HMAC_SECRET: SECRET }, async () => 'held', namespace(500).owners, 'owner-a')).toBe(false);
+    expect(await markOpenOwner({ OPEN_SIGNUP: '1' }, async () => 'held', namespace().owners, 'owner-a')).toBe(false);
+    expect(await markOpenOwner({ OPEN_SIGNUP: '1', WALDO_ROUTER_HMAC_SECRET: SECRET }, undefined, namespace().owners, 'owner-a')).toBe(false);
+  });
+  it('the owner object takes the mark only signed by the router, for itself', async () => {
+    const { sent, owners } = namespace();
+    await markOpenOwner({ OPEN_SIGNUP: '1', WALDO_ROUTER_HMAC_SECRET: SECRET }, async () => 'held', owners, 'owner-a');
+    const mine = (name: string) => name === 'owner-a';
+    expect(await verifiedOpenOwnerMark(sent[0]!.clone(), SECRET, mine)).toBe(true);
+    expect(await verifiedOpenOwnerMark(sent[0]!.clone(), 'another-secret', mine)).toBe(false);
+    expect(await verifiedOpenOwnerMark(sent[0]!.clone(), SECRET, name => name === 'owner-b')).toBe(false);
+    const forged = new Request(sent[0]!.url, { method: 'POST', headers: { 'x-waldo-do-name': 'owner-a', 'x-waldo-open-owner-sig': '0'.repeat(64) } });
+    expect(await verifiedOpenOwnerMark(forged, SECRET, mine)).toBe(false);
   });
 });
 

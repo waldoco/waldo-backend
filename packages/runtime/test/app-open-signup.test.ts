@@ -5,6 +5,7 @@ import { handleApp } from '../src/channels/app-api';
 import { consoleAuth } from '../src/identity/console-auth';
 import { OPEN_SIGNUP_EMAIL_DAILY_LIMIT, OPEN_SIGNUP_FALLBACK_CEILING_USD, OPEN_SIGNUP_IP_DAILY_LIMIT, openOwnerCeilingUsd, openSignupCaps } from '../src/identity/open-signup';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
+import { verifiedOpenOwnerMark } from '../src/identity/open-owner-hold';
 
 const SECRET = 'fictional-open-signup-router-secret-0000000000', DIRECTORY = 'https://open-signup.fixture.invalid', KEY = 'fictional-public-key';
 const NEWCOMER = 'newcomer@example.test', MEMBER = 'member@example.test', INVITED = 'invited@example.test', INVITE = 'ABCDEFGHJKLMNPQRSTUV';
@@ -21,7 +22,7 @@ const directory = async () => {
   const state = {
     users: new Map<string, string>(), owners: new Map<string, { auth: string; doName: string; open: boolean }>(), held: new Set<string>(),
     trusted: new Set<string>(), joinsToday: 0, joinsEver: 0, attempts: new Map<string, number>(), otp: [] as string[], calls: [] as string[],
-    inviteLive: true, live: new Set<string>(),
+    inviteLive: true, live: new Set<string>(), invitedByEmail: new Set<string>(), marks: [] as string[], markStatus: 204,
   };
   const userFor = (email: string) => { if (!state.users.has(email)) state.users.set(email, crypto.randomUUID()); return state.users.get(email)!; };
   const token = (provider: 'apple' | 'google', email: string) => `fixture.${base64url(new TextEncoder().encode(JSON.stringify({ sub: `${provider}-${email}`, email })))}.signature`;
@@ -48,7 +49,7 @@ const directory = async () => {
       signup_owner_open: `signup.open.${a.p_auth_user}.${a.p_email}.${a.p_provider}.${a.p_subject}.${a.p_phone}.${a.p_daily_cap}.${a.p_total_cap}`,
       open_signup_room: `signup.open.room.${a.p_daily_cap}.${a.p_total_cap}`, open_signup_throttle: `signup.open.throttle.${a.p_key}.${a.p_limit}`,
       console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`,
-      console_session_inventory: `consolesess.inventory.${a.p_do_name}`, app_session_rotate: `appsess.rotate.${a.p_do_name}.${a.p_session_hash}.${a.p_new_session_hash}`,
+      open_owner_state: `openowner.state.${a.p_do_name}`, console_session_inventory: `consolesess.inventory.${a.p_do_name}`, app_session_rotate: `appsess.rotate.${a.p_do_name}.${a.p_session_hash}.${a.p_new_session_hash}`,
     };
     expect(signed[fn], `unlisted fixture RPC ${fn}`).toBeDefined();
     expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, signed[fn]!));
@@ -69,9 +70,18 @@ const directory = async () => {
       state.attempts.set(a.p_key, used);
       return Response.json(used <= a.p_limit);
     }
+    if (fn === 'open_owner_state') {
+      const found = [...state.owners.values()].find(row => row.doName === a.p_do_name);
+      return Response.json(found ? found.open ? 'held' : 'member' : null);
+    }
     if (fn === 'open_signup_room') return Response.json(state.joinsToday < a.p_daily_cap && state.joinsEver < a.p_total_cap);
     if (fn === 'signup_owner_open') {
       if (owner) return Response.json(owner.auth === a.p_auth_user ? { do_name: owner.doName, created: false } : { refused: 'taken' });
+      if (state.invitedByEmail.delete(a.p_email)) {
+        const doName = `owner-${crypto.randomUUID()}`;
+        state.owners.set(a.p_email, { auth: a.p_auth_user, doName, open: false });
+        return Response.json({ do_name: doName, created: true });
+      }
       if (!(state.joinsToday < a.p_daily_cap && state.joinsEver < a.p_total_cap)) return Response.json({ refused: 'cap' });
       const doName = `owner-${crypto.randomUUID()}`;
       state.owners.set(a.p_email, { auth: a.p_auth_user, doName, open: true });
@@ -89,9 +99,16 @@ const directory = async () => {
   const settings = { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, APP_ID_TOKEN_SIGNIN: '1',
     RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } };
   const auth = consoleAuth(settings, fetcher as typeof fetch)!;
+  // The owner objects, as far as a sign-in reaches them: the Worker's mark, checked against the router secret.
+  const owners = { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (request: Request) => {
+    expect(await verifiedOpenOwnerMark(request, SECRET, value => value === name)).toBe(true);
+    state.calls.push('mark');
+    state.marks.push(name);
+    return new Response(null, { status: state.markStatus });
+  } }) };
   const app = async (path: string, body: unknown, overrides: Record<string, string> = {}, ip = IP) => {
     const response = await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify(body) }),
-      { ...settings, OWNER_DO: env.OWNER_DO, ...overrides } as never, auth);
+      { ...settings, OWNER_DO: owners, ...overrides } as never, auth);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   };
   return { app, state, member, token };
@@ -112,7 +129,7 @@ describe('open sign-up in the app', () => {
     expect((await app('/auth/verify', { email: NEWCOMER, code: CODE })).body).toEqual({ state: 'needs_invite' });
     expect((await app('/auth/id_token', google(token('google', NEWCOMER)))).body).toEqual({ state: 'needs_invite' });
     expect(state.owners.has(NEWCOMER)).toBe(false);
-    expect(state.calls.filter(fn => fn.startsWith('open_signup') || fn === 'signup_owner_open')).toEqual([]);
+    expect(state.calls.filter(fn => fn.startsWith('open_') || fn === 'signup_owner_open' || fn === 'mark')).toEqual([]);
   });
 
   it('stays off, and says so without an address, while the agreements or the spend ledger are off or a cap is malformed', async () => {
@@ -137,6 +154,9 @@ describe('open sign-up in the app', () => {
     const owner = state.owners.get(NEWCOMER)!;
     expect(owner.open).toBe(true);
     expect(state.trusted.has(`${owner.doName}|google|google-${NEWCOMER}`)).toBe(true);
+    // The owner object is marked before the session is opened, so no credential reaches the owner ahead of their hold.
+    expect(state.marks).toEqual([owner.doName]);
+    expect(state.calls.indexOf('mark')).toBeLessThan(state.calls.indexOf('console_session_open'));
     const again = await app('/auth/id_token', google(token('google', NEWCOMER)), OPEN);
     expect(again.body).toMatchObject({ state: 'active' });
     expect(state.joinsEver).toBe(1);
@@ -150,6 +170,26 @@ describe('open sign-up in the app', () => {
     expect(appVerifyResultV1Schema.safeParse(verified.body).success).toBe(true);
     expect(verified.body).toMatchObject({ state: 'active' });
     expect(state.owners.get(NEWCOMER)?.open).toBe(true);
+  });
+
+  it('a person whose invite is addressed to their email joins as invited without its code, and is not marked as open', async () => {
+    const { app, state, token } = await directory();
+    state.invitedByEmail.add(NEWCOMER);
+    expect((await app('/auth/id_token', google(token('google', NEWCOMER)), OPEN)).body).toMatchObject({ state: 'active' });
+    expect(state.owners.get(NEWCOMER)).toMatchObject({ open: false });
+    expect(state.marks).toEqual([]);
+  });
+
+  it('a sign-in whose owner object cannot be marked opens no session', async () => {
+    const { app, state, token } = await directory();
+    state.markStatus = 503;
+    expect(await app('/auth/id_token', google(token('google', NEWCOMER)), OPEN)).toEqual({ status: 503, body: { error: 'unavailable' } });
+    expect(state.calls).not.toContain('console_session_open');
+    // The join committed; the retry finds the owner, marks it, and only then opens the session.
+    state.markStatus = 204;
+    expect((await app('/auth/id_token', google(token('google', NEWCOMER)), OPEN)).body).toMatchObject({ state: 'active' });
+    expect(state.marks).toHaveLength(2);
+    expect(state.joinsEver).toBe(1);
   });
 
   it('spends an invite first when one is sent, so the one who sent it stays named', async () => {
@@ -167,6 +207,7 @@ describe('open sign-up in the app', () => {
     expect((await app('/auth/verify', { email: MEMBER, code: CODE }, OPEN)).body).toMatchObject({ state: 'active' });
     expect(state.calls).not.toContain('signup_owner_open');
     expect(state.calls).not.toContain('open_signup_throttle');
+    expect(state.marks).toEqual([]);
   });
 
   it('once the day is full: no code goes out, and a join answers needs_invite, logged by code alone', async () => {

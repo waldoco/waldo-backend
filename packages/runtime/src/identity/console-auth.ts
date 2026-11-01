@@ -86,6 +86,8 @@ export type ConsoleAuth = Readonly<{
   // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
   signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
   issueLinkCode(doName: string): Promise<string | null>;
+  // Whether the active owner joined without an invite: held until released after their agreements, released, or a member.
+  openOwnerState?(doName: string): Promise<'member' | 'held' | 'released' | null>;
   /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
@@ -374,6 +376,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const sub = await googleSubject(grant.providerToken);
       return sub && grant.identities.some(identity => identity.provider === 'google' && identity.id === sub) ? sub : null;
     }, '', false),
+    async openOwnerState(doName) {
+      const state = await rpc('open_owner_state', `openowner.state.${doName}`, { p_do_name: doName });
+      if (state !== null && state !== 'member' && state !== 'held' && state !== 'released') throw new Error('open owner state unavailable');
+      return state;
+    },
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);

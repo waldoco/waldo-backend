@@ -9,7 +9,7 @@ import type { IMessageProof } from './dashboard-phone';
 import { enrollAtTap, iMessageNumberView } from './imessage/enrollment';
 import { photonConfig } from './imessage/photon';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
-import { openOwnerHold, type OpenOwnerHold } from '../identity/open-owner-hold';
+import { OPEN_OWNER_PATH, openOwnerHold, verifiedOpenOwnerMark, type OpenOwnerHold } from '../identity/open-owner-hold';
 import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
@@ -1892,6 +1892,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
     if(path===HEALTH_ZONE_CHANGE_PATH)return this.healthZoneChange(request);
+    if(path===OPEN_OWNER_PATH){
+      if(!(await verifiedOpenOwnerMark(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString())))return new Response('forbidden',{status:403});
+      this.openHold().mark();
+      return new Response(null,{status:204});
+    }
     if(path===HEALTH_SAMPLES_PATH)return this.healthSamples(request);
     if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
