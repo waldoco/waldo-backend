@@ -4,8 +4,9 @@ import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
-export type TelegramWebhookEnv = Readonly<{
+export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
@@ -40,6 +41,11 @@ export type TelegramWebhookEnv = Readonly<{
   // "1" scores from the owner's first day against the shared baseline and writes the provisional versions; anything else keeps
   // the earlier engine. Apply the derived-row migration that admits the new keys before turning it on.
   HEALTH_PROVISIONAL_SCORES?: string;
+  // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
+  // it worth it; anything else keeps such a day silent.
+  HEALTH_SOLO_NOTICE?: string;
+  HEALTH_TRAINING_LOAD?: string;
+  HEALTH_COACHING?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -57,6 +63,8 @@ export type TelegramWebhookEnv = Readonly<{
   EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
+  // The domain of each owner's Waldo address (<handle>@AGENT_MAIL_DOMAIN); agent mail is off without it.
+  AGENT_MAIL_DOMAIN?: string;
   // '0' turns off progress notes on long iMessage turns.
   WALDO_IMESSAGE_PROGRESS?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -68,6 +76,8 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // Waldo's WhatsApp number as E.164 digits without the plus, for the one-tap wa.me link; unset or malformed links by code alone.
+  WHATSAPP_WALDO_NUMBER?: string;
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
@@ -78,6 +88,8 @@ export type TelegramWebhookEnv = Readonly<{
   DRIVE_READS?: string;
   // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
   MEMORY_SEMANTIC_RECALL?: string;
+  // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.
+  MEMORY_SELECTION?: string;
   AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
@@ -85,10 +97,20 @@ export type TelegramWebhookEnv = Readonly<{
   OWNER_LOOKUP?: string;
   // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
   OWNER_PROFILE?: string;
+  MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
+  // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
+  MEMORY_DAYTIME_CONSOLIDATOR?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
+  // '1' lets a prep note's app push name the meeting and its start; anything else sends the fixed line.
+  PREP_PUSH_NAMES?: string;
+  // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
+  // revise a delivered day card or push. Anything else keeps the update card as it was.
+  WALDO_DAY_STATE?: string;
+  // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
+  UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & PhoneSmsEnv;
 
@@ -141,7 +163,7 @@ const handle = async (
   const subject = sender(update);
   if (!subject) return outcome('no_sender', new Response('ok'));
   const owners = env.OWNER_DO;
-  const origin = new URL(request.url).origin;
+  const origin = publicOrigin(env, request.url);
   const coded = parseCodedSetup(update);
   if (coded) {
     const bot = env.TELEGRAM_BOT_TOKEN?.split(':')[0];

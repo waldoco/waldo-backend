@@ -2,12 +2,13 @@
 // The database half (single use, expiry, sender and owner binding, claim races) is pgTAP:
 // supabase/tests/waldo_whatsapp_text_first_link.sql.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handleWhatsAppWebhook, type WhatsAppTextFirst } from '../src/channels/whatsapp-webhook';
+import { handleWhatsAppWebhook, LINK_REPLIES, type WhatsAppTextFirst } from '../src/channels/whatsapp-webhook';
 import { consoleReturnTarget, handleConsole } from '../src/channels/console-signin';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from '../src/channels/whatsapp-link-console';
 import { whatsappLinkDirectory, whatsappLinkToken, whatsappLinkTokenHash, type WhatsAppLinkDirectory } from '../src/identity/whatsapp-link';
-import type { OwnerDirectory } from '../src/identity/owner-directory';
+import { OwnerDirectoryError, type OwnerDirectory } from '../src/identity/owner-directory';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { chatChannelLinks } from '../src/channels/chat-channel-links';
 
 const SECRET = 'fictional-app-secret';
 const SENDER = '15550001111';
@@ -61,6 +62,12 @@ describe('the reply to an unlinked sender', () => {
     expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link');
   });
 
+  it('a sender no single owner has on file is pointed at the console link flow as well as the waitlist', async () => {
+    const { sent } = await run(await inbound('hi'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true });
+    expect(sent[0]!.text.body).toContain('Already on Waldo?');
+    expect(sent[0]!.text.body).toContain('https://waldo.example/console#/connections');
+  });
+
   it('a throttled sender, one whose earlier link is still live, or one that became linked meanwhile, gets no reply', async () => {
     const throttled = links(async () => 'opened');
     expect((await run(await inbound('again'), unlinked, { links: throttled, throttle: async () => false })).sent).toEqual([]);
@@ -85,6 +92,24 @@ describe('the reply to an unlinked sender', () => {
     expect(redeem).toHaveBeenCalledWith('whatsapp', SENDER, 'ABCDEFGH23');
     expect(directory.open).not.toHaveBeenCalled();
     expect(sent.map((body) => body.text.body)).toEqual(['Linked. This chat now talks to your Waldo.']);
+  });
+
+  it('Verify with WhatsApp: the code the app issues, sent as the wa.me link fills it in, redeems from the number on file in one message', async () => {
+    const CODE = 'ABCDEFGHJK';
+    const OWN = '919800000101';
+    const chat = chatChannelLinks({ env: { WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1', WHATSAPP_WALDO_NUMBER: '919226067544' }, kv: { get: () => undefined }, doName: 'do-a',
+      auth: { issueLinkCode: async () => CODE, issueProviderLinkCode: async () => CODE, whatsAppHandleHint: async () => null } as unknown as ConsoleAuth });
+    const issued = await chat.issue('whatsapp');
+    const prefilled = new URL(issued!.send_url!);
+    expect(prefilled.origin + prefilled.pathname).toBe('https://wa.me/919226067544');
+    const redeem = vi.fn(async () => ({ doName: 'do-a', subject: OWN, timezone: null }));
+    const throttle = vi.fn(async () => true);
+    const { response, sent, logs } = await run(await inbound(prefilled.searchParams.get('text')!, OWN), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle });
+    expect(response.status).toBe(200);
+    expect(redeem).toHaveBeenCalledWith('whatsapp', OWN, CODE);
+    expect(throttle.mock.calls.map(call => (call as unknown as [string, number, number]).slice(1))).toEqual([[5, 3600]]);
+    expect(sent.map((body) => body.text.body)).toEqual(['Linked. This chat now talks to your Waldo.']);
+    expect(logs.join('\n')).not.toContain(CODE);
   });
 
   it('without a directory an unlinked sender gets no reply at all', async () => {
@@ -325,5 +350,76 @@ describe('the directory calls', () => {
     await expect(whatsappLinkDirectory(env, rpc('+15550001111') as unknown as typeof fetch)!.subject('do-a', hash)).rejects.toThrow('answered unexpectedly');
     expect(await whatsappLinkDirectory(env, rpc(null) as unknown as typeof fetch)!.subject('do-a', hash)).toBeNull();
     expect(whatsappLinkDirectory({})).toBeNull();
+  });
+});
+
+describe('Waldo\'s contact card after a link', () => {
+  const WALDO = '919226067544';
+  const linking = async (graphReply?: Parameters<typeof run>[3], number: string | undefined = WALDO, redeemed = true) => {
+    const redeem = vi.fn(async () => redeemed ? { doName: 'do-a', subject: SENDER, timezone: null } : null);
+    const request = await inbound('waldo ABCDEFGH23');
+    const sent: Record<string, unknown>[] = [], logs: string[] = [];
+    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return (graphReply ?? (() => Response.json({ messages: [{ id: 'wamid.reply' }] })))(); });
+    const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+    const work: Promise<unknown>[] = [];
+    try {
+      await handleWhatsAppWebhook(request, { ...env, ...(number ? { WHATSAPP_WALDO_NUMBER: number } : {}) }, (p) => work.push(p), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle: async () => true });
+      await Promise.all(work);
+      return { sent, logs };
+    } finally { graph.mockRestore(); log.mockRestore(); }
+  };
+
+  it('a redeemed code is answered, then Waldo sends its own card so one tap saves it as Waldo', async () => {
+    const { sent } = await linking();
+    expect(sent.map(body => body.type)).toEqual(['text', 'contacts']);
+    expect(sent[1]).toEqual({ messaging_product: 'whatsapp', to: `+${SENDER}`, type: 'contacts',
+      contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${WALDO}`, type: 'WORK', wa_id: WALDO }] }] });
+  });
+
+  it('a code that did not work, or no Waldo number configured, sends no card', async () => {
+    expect((await linking(undefined, WALDO, false)).sent.map(body => body.type)).toEqual(['text']);
+    expect((await linking(undefined, '')).sent.map(body => body.type)).toEqual(['text']);
+  });
+
+  it('a card Graph refuses leaves the link as it is and is logged by its codes, never by a number', async () => {
+    let calls = 0;
+    const { sent, logs } = await linking(() => ++calls === 1 ? Response.json({ messages: [{ id: 'wamid.reply' }] }) : Response.json({ error: { code: 131026, message: `undeliverable to ${SENDER}` } }, { status: 400 }));
+    expect(sent.map(body => body.type)).toEqual(['text', 'contacts']);
+    const card = logs.filter(line => line.includes('whatsapp_contact_card'));
+    expect(card).toHaveLength(1);
+    expect(card[0]).toContain('"ok":false');
+    expect(card.join('\n')).not.toContain(SENDER);
+    expect(logs.some(line => line.includes('"hop":"whatsapp_link_code","ok":false'))).toBe(false);
+  });
+});
+
+// A refused link says why, so a sender is never told their working code failed. The database refuses in its own words
+// (supabase/tests/waldo_whatsapp_verify_by_link.sql); the reason is logged, never the number.
+describe('why a "waldo CODE" did not link', () => {
+  const answer = async (redeem: OwnerDirectory['redeem']) => {
+    const { sent, logs } = await run(await inbound('waldo ABCDEFGH23'), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle: async () => true });
+    return { reply: sent.map(body => body.text?.body), outcome: logs.filter(line => line.includes('whatsapp_link_redeem')) };
+  };
+  const refused = (status: number, sqlState: string | null, message: string | null) => async () => { throw new OwnerDirectoryError(status, sqlState, message); };
+
+  it('names each outcome: linked, a dead code, a number linked or held elsewhere, and a link that could not be confirmed', async () => {
+    const cases: [OwnerDirectory['redeem'], keyof typeof LINK_REPLIES][] = [
+      [async () => ({ doName: 'do-a', subject: SENDER, timezone: null }), 'linked'],
+      [async () => null, 'rejected'],
+      [refused(409, '23505', 'presence already linked to another owner'), 'claimed'],
+      [refused(409, '23505', 'phone number held by another owner'), 'number_held'],
+      [refused(409, '23505', 'duplicate key value violates unique constraint'), 'uncertain'],
+      [async () => { throw new Error('network down'); }, 'uncertain'],
+    ];
+    for (const [redeem, outcome] of cases) {
+      const { reply, outcome: logged } = await answer(redeem);
+      expect(reply[0], outcome).toBe(LINK_REPLIES[outcome]);
+      expect(logged, outcome).toEqual([JSON.stringify({ hop: 'whatsapp_link_redeem', ok: outcome === 'linked', outcome })]);
+    }
+  });
+
+  it('only a dead code is told to get a new one; a refusal for the number keeps the code', () => {
+    expect(LINK_REPLIES.rejected).toContain('Get a new one');
+    for (const outcome of ['claimed', 'number_held'] as const) expect(LINK_REPLIES[outcome]).toContain('send the code again');
   });
 });

@@ -18,6 +18,8 @@ export type NightlyScenario = TrialScenario & Readonly<{
   receipts?: readonly Receipt[];
   // A memory case whose facts arrive in owner turns: it also runs in the raw-history baseline (WALDO_EVAL_MEMORY).
   memory_case?: true;
+  // Runs in the nightly live-judged subset (WALDO_EVAL_SUBSET=live): scenarios whose result moves with the harness or memory.
+  live_subset?: true;
 }>;
 
 export const START = '2026-09-24T09:00:00+05:30';
@@ -59,7 +61,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     receipts: [readOnly],
   },
   {
-    id: 't02-calendar-change-card', title: 'A prepared calendar change', pain: 'judgment', start: START, world: { events: CALENDAR },
+    id: 't02-calendar-change-card', live_subset: true, title: 'A prepared calendar change', pain: 'judgment', start: START, world: { events: CALENDAR },
     steps: [{ say: 'Block 30 minutes tomorrow at 4 called QA focus.' }],
     rubric: {
       outcome: 'Raises exactly one calendar change card for an event titled "QA focus" on Friday 25 September, 16:00-16:30 owner time, and says it is waiting for the owner\'s approval.',
@@ -71,7 +73,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     })],
   },
   {
-    id: 't03-reminder', title: 'A reminder', pain: 'follow_through', start: START, world: {},
+    id: 't03-reminder', live_subset: true, title: 'A reminder', pain: 'follow_through', start: START, world: {},
     steps: [{ say: 'Remind me at 5 to call the bank.' }, { advance_to: at('24', '17:00') }, { fire_due: true }],
     rubric: {
       outcome: 'One reminder is set for 17:00 today, owner time, to call the bank, and the reply confirms it. When it fires at 17:00, Waldo sends the owner a short reminder to call the bank.',
@@ -112,7 +114,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     receipts: [effects('mail.draft', { min: 1, max: 1 }, 'one draft, to Priya', (payload) => ((payload as { to?: readonly string[] }).to ?? []).every((to) => to.toLowerCase().includes('priya@northwind.example'))), none(['mail.send.proposed'], 'no send card')],
   },
   {
-    id: 't07-send-with-approval', title: 'A send with approval', pain: 'judgment', start: START, world: { events: CALENDAR },
+    id: 't07-send-with-approval', live_subset: true, title: 'A send with approval', pain: 'judgment', start: START, world: { events: CALENDAR },
     steps: [{ say: "Email me today's plan." }],
     rubric: {
       outcome: `Raises one send card to the owner's own address (${OWNER_EMAIL}) whose body lists today's plan from the calendar (Standup 10:00, Board prep 11:00-12:00), and says it is waiting for the owner's approval.`,
@@ -231,7 +233,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     blocked: 'the harness cannot send audio; voice input is transcribed before the responder',
   },
   {
-    id: 't19-correct-memory', title: 'Correcting memory', pain: 'context', start: START, world: {}, memory_case: true,
+    id: 't19-correct-memory', live_subset: true, title: 'Correcting memory', pain: 'context', start: START, world: {}, memory_case: true,
     steps: [
       { say: 'I have my coffee with regular milk every morning.' },
       { say: 'Actually, I take my coffee with oat milk now, not regular.' },
@@ -365,7 +367,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
   // Work that outlives the reply: a long read the owner will not wait for goes to a background worker, with a brief that
   // stands on its own because the worker never sees this conversation.
   {
-    id: 'w1-long-read-in-background', title: 'A long read in the background', pain: 'follow_through', start: START, world: { mail: [PRIYA] },
+    id: 'w1-long-read-in-background', live_subset: true, title: 'A long read in the background', pain: 'follow_through', start: START, world: { mail: [PRIYA] },
     steps: [{ say: "I'm in meetings all afternoon. Go through all my email from the last three months and pull out every promise I made to someone: who, what, and by when. Tell me when you're done." }],
     rubric: {
       outcome: "Starts one background task with start_task whose brief stands on its own without this conversation: it covers the owner's mail from the last three months, says what counts as a promise the owner made (to whom, what, by when), and what the finished list should look like. The reply tells the owner the task is running and that they will hear back when it is done.",
@@ -405,7 +407,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     },
   },
   {
-    id: 'c1-connected-tracker', title: 'A tool on a server the owner connected', pain: 'context', start: START, world: { mcp: TRACKER },
+    id: 'c1-connected-tracker', live_subset: true, title: 'A tool on a server the owner connected', pain: 'context', start: START, world: { mcp: TRACKER },
     steps: [{ say: "What's the status of the checkout bug in my issue tracker?" }],
     rubric: {
       outcome: "Finds the tracker's issue search among the owner's connected tools, runs it, and reports ISSUE-412 \"Checkout fails on saved cards\": in review, assigned to Meera Iyer, last updated 23 September, saying this came from the tracker.",

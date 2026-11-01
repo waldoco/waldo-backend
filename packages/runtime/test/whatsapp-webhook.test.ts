@@ -91,6 +91,13 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('forwards the configured public origin, not the host the webhook reached', async () => {
+    const { fetch, ns } = namespace();
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
+    await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' }, directory);
+    expect(new Headers(fetch.mock.calls[0]![1]!.headers).get('x-waldo-origin')).toBe('https://staging.fixture.invalid');
+  });
+
   it('admission: a definite refusal (400, 403 such as a sender the owner has not bound, 404) is acknowledged; anything else answers 503', async () => {
     const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -202,7 +209,9 @@ describe('handleWhatsAppWebhook', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network unreachable for 15550003333'); }));
     await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, directory);
     expect(logs.map(line => JSON.parse(line))).toEqual([
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'Error', status: 400, code: 131030 },
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'TypeError' },
     ]);
     for (const leak of ['15550003333', 'wamid.', 'FICTIONAL-DETAIL', 'allowed list', 'unreachable']) expect(logs.join('\n')).not.toContain(leak);

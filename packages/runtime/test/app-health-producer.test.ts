@@ -12,10 +12,10 @@ const auth = { readAppCredential: async (credential: string) => (credential === 
 // notice, so the Worker recomputes on its own, as it does when the object is away.
 const toOwner: Request[] = [];
 let ownerAnswer = (): Response => Response.json({ error: 'unavailable' }, { status: 503 });
-const env = () => ({
+const env = (over: Record<string, string> = {}) => ({
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { toOwner.push(request); return ownerAnswer(); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
+  SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, ...over,
 }) as never;
 
 const today = new Date().toISOString().slice(0, 10);
@@ -50,9 +50,9 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) => void) => handleApp(new Request('https://w.test/app/v1/health/ingest', {
+const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) => void, over: Record<string, string> = {}) => handleApp(new Request('https://w.test/app/v1/health/ingest', {
   method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-}), env(), auth, defer) as Promise<Response>;
+}), env(over), auth, defer) as Promise<Response>;
 const deferrals = () => { const work: Promise<unknown>[] = []; return { work, defer: (p: Promise<unknown>) => { work.push(p); } }; };
 
 describe('a committed ingest asks the owner\'s object to recompute', () => {
@@ -65,7 +65,7 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
     expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
     expect(await toOwner[0]!.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe(true);
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('readings');
   });
 
   it('asks nothing for a replayed, empty or refused batch', async () => {
@@ -108,6 +108,42 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toMatchObject({ from: day(30), to: today });
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('sleep_duration');
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).not.toContain('steps_window');
+  });
+
+  it('with provisional scores, asks which days hold a row once, signed, as ninety days in a number', async () => {
+    answers.health_scores_history = { unavailable: 'no_readings' };
+    const d = deferrals();
+    await ingest(batch, d.defer, { HEALTH_PROVISIONAL_SCORES: '1' });
+    await Promise.all(d.work);
+    const history = rpcs.filter(r => r.fn === 'health_scores_history');
+    expect(history.map(r => r.body.p_payload)).toEqual(['{"days":90}']);
+    expect(history[0]!.body.p_sig).toBe(await routerSignature(SECRET, history[0]!.body.p_at as number, `health.scores_history.owner-1.${md5Hex('{"days":90}')}`));
+    expect(rpcs.filter(r => r.fn === 'health_scores_read')).toHaveLength(2);
+    expect(rpcs.filter(r => r.fn === 'health_context_write').length).toBeGreaterThan(2);
+  });
+
+  it('reads the owner\'s health settings only with the coaching switch on, signed, and computes on the need they stated', async () => {
+    const run = async (over: Record<string, string>) => {
+      rpcs.length = 0;
+      const d = deferrals();
+      await ingest(batch, d.defer, over);
+      await Promise.all(d.work);
+      return { settings: rpcs.filter(r => r.fn === 'health_settings_read'), writes: rpcs.filter(r => r.fn === 'health_context_write').map(r => JSON.parse(String(r.body.p_payload))) };
+    };
+    const off = await run({ HEALTH_PROVISIONAL_SCORES: '1' });
+    expect(off.settings).toEqual([]);
+    expect(off.writes.length).toBeGreaterThan(0);
+    for (const row of off.writes) expect(row.sleep_debt?.need_basis ?? 'blended_average').not.toBe('owner_confirmed');
+    answers.health_settings_read = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
+    const on = await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    // Once to compute on, and once more before today's row, so a need saved mid-run never lands on a row of the old need.
+    expect(on.settings).toHaveLength(2);
+    for (const read of on.settings) expect(read.body.p_sig).toBe(await routerSignature(SECRET, read.body.p_at as number, `health.settings_read.owner-1.${md5Hex('{}')}`));
+    const live = on.writes.filter(row => row.sleep_debt?.state === 'available');
+    expect(live.length).toBeGreaterThan(0);
+    for (const row of live) expect(row.sleep_debt.need_basis).toBe('owner_confirmed');
+    answers.health_settings_read = new Error('down');
+    expect((await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' })).writes).toEqual([]);
   });
 
   it('writes the read instant and the consent epoch it read, so the database can fence on both', async () => {
@@ -165,5 +201,37 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     await ingest(batch, d.defer);
     await Promise.all(d.work);
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read', 'health_series_read']);
+  });
+});
+
+describe('a saved sleep need asks the owner\'s object to recompute', () => {
+  const put = (body: unknown, defer?: (work: Promise<unknown>) => void) => handleApp(new Request('https://w.test/app/v1/health/settings', {
+    method: 'PUT', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }), env({ HEALTH_COACHING: '1' }), auth, defer) as Promise<Response>;
+
+  it('after the answer, with the signed settings notice that spends no welcome retry, and never fails the save', async () => {
+    answers.health_settings_write = { sleep_need_minutes: 480, updated_at: '2026-10-11T08:00:00.000Z' };
+    for (const owner of [() => Response.json({ ok: true }), () => Response.json({ error: 'unavailable' }, { status: 503 })]) {
+      ownerAnswer = owner; toOwner.length = 0;
+      const d = deferrals();
+      const response = await put({ sleep_need_minutes: 480 }, d.defer);
+      expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 480 }]);
+      await expect(Promise.all(d.work)).resolves.toBeDefined();
+      expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
+      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('settings');
+    }
+  });
+
+  it('asks nothing when the need was not saved', async () => {
+    for (const answer of [{ error: 'not_linked' }, { sleep_need_minutes: 9000 }, new Error('down')]) {
+      answers.health_settings_write = answer as never; toOwner.length = 0;
+      const d = deferrals();
+      expect((await put({ sleep_need_minutes: 480 }, d.defer)).status, JSON.stringify(answer)).not.toBe(200);
+      expect(d.work).toEqual([]);
+    }
+    const d = deferrals();
+    expect((await put({ sleep_need_minutes: 900 }, d.defer)).status).toBe(400);
+    expect(d.work).toEqual([]);
+    expect(toOwner).toEqual([]);
   });
 });

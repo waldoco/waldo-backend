@@ -56,11 +56,11 @@ it.each(['telegram','app'] as const)('a reader task worker started on %s reads a
   const offered=(claim.tools as {name:string}[]).map(tool=>tool.name);
   expect(offered).toEqual(expect.arrayContaining(['browse_page','read_tool_output']));
   const read=await host.taskTool(ticket,browse,CANARIES);
-  expect(read).toMatchObject({ok:true,source_taint:'external',data:{stored_output:expect.any(String),read_with:'read_tool_output'}});
-  expect(read.data.head).toContain('HTTP is an application layer protocol.');
+  expect(read).toMatchObject({ok:true,source_taint:'external',data:{data:{stored_output:expect.any(String),read_with:'read_tool_output',next_offset:7_000}}});
+  expect(read.data.data.text).toContain('HTTP is an application layer protocol.');
   expect(proof.calls).toEqual(['acquire','close']);
-  const page=await host.taskTool(ticket,call('read_tool_output',{id:read.data.stored_output,offset:4_000,length:8_000}),CANARIES);
-  expect(page).toMatchObject({ok:true,source_taint:'external',data:{next_offset:12_000}});
+  const page=await host.taskTool(ticket,call('read_tool_output',{id:read.data.data.stored_output,offset:read.data.data.next_offset,length:8_000}),CANARIES);
+  expect(page).toMatchObject({ok:true,source_taint:'external',data:{next_offset:15_000}});
   expect(page.data.text).toContain('It carries requests and responses');
  });
 },20000);
@@ -82,7 +82,7 @@ it('a worker cannot read a stored output it did not create in the same job and a
  await withOwner('telegram',async(host,state,job)=>{
   const first=job('own-1'),second=job('own-2');
   await host.taskClaim(first);await host.taskClaim(second);
-  const stored=(await host.taskTool(first,browse,CANARIES)).data.stored_output as string;
+  const stored=(await host.taskTool(first,browse,CANARIES)).data.data.stored_output as string;
   expect((await host.taskTool(second,call('read_thread',{thread_id:'t-1'}),CANARIES)).ok).toBe(true);
   // An owner turn's output in the owner's own ledger, which no worker may read.
   await toolOutputLedger(state.storage).record({tool:'get_health',ok:true,at:Date.now(),taint:null,origin:'owner',summary:'OWNER-LEDGER-MARKER'} as never);
@@ -110,7 +110,7 @@ it('a job whose only outside read came back through read_tool_output is marked e
  await withOwner('telegram',async(host,state,job)=>{
   const ticket=job('taint-1');
   await host.taskClaim(ticket);
-  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.stored_output as string;
+  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.data.stored_output as string;
   expect(taintOf(state,ticket.jobId)).toBe('external');
   state.storage.sql.exec('UPDATE task_jobs SET taint = NULL WHERE id = ?',ticket.jobId);
   expect((await host.taskTool(ticket,call('read_tool_output',{id:stored}),CANARIES)).ok).toBe(true);
@@ -123,7 +123,7 @@ it('an owner forget empties a running worker\'s stored outputs',async()=>{
  await withOwner('telegram',async(host,_state,job)=>{
   const ticket=job('forget-1');
   await host.taskClaim(ticket);
-  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.stored_output as string;
+  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.data.stored_output as string;
   expect((await host.taskTool(ticket,call('read_tool_output',{id:stored},'before'),CANARIES)).ok).toBe(true);
   host.tasks.forgetOutputs();
   const after=await host.taskTool(ticket,call('read_tool_output',{id:stored},'after'),CANARIES);
@@ -137,7 +137,7 @@ it('a forget purge pass empties a running worker\'s stored outputs and leaves th
  await withOwner('app',async(host,state,job)=>{
   const ticket=job('forget-2');
   await host.taskClaim(ticket);
-  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.stored_output as string;
+  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.data.stored_output as string;
   state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')",textFingerprint('Lisbon trip'),'Lisbon trip',new Date().toISOString());
   await (host as unknown as {forgetPurgeJob():{run():Promise<unknown>}}).forgetPurgeJob().run();
   expect(state.storage.sql.exec<{status:string}>('SELECT status FROM task_jobs WHERE id = ?',ticket.jobId).one().status).toBe('running');

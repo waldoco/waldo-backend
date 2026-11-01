@@ -3,6 +3,7 @@ import { carriesTopic } from '../memory/forget-guard';
 import { rememberWhatsAppSubject, waitingForWhatsApp } from './proactive-surface';
 import { retireSurfaceRecords, type DeliveryReceipt, type FinalRecord, type TelegramFinalOutbox } from './telegram-final-outbox';
 import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
+import { clearWhatsAppContext } from './whatsapp-context';
 
 // WhatsApp's customer service window: a business may send free-form messages only within 24 hours
 // of the user's last message; outside it, only an approved template goes through
@@ -221,9 +222,9 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
   for (let pass = 0; pass < Math.max(1, pending); pass += 1) await outbox.drain(delivery);
 };
 
-// The window, the held text and the refusal and knock markers belong to one WhatsApp number. When the owner's number
-// changes or is unlinked they all go: text held for one number must never reach another, and a new number's window opens
-// only when that number writes. The outbox's records for that chat are retired too, since Meta's reports about them no
+// The window, the held text, the refusal and knock markers and what reactions and replies can name belong to one WhatsApp
+// number. When the owner's number changes or is unlinked they all go: text held for one number must never reach another,
+// and a new number's window opens only when that number writes. The outbox's records for that chat are retired too, since Meta's reports about them no
 // longer reach this owner: an unsent one is blocked and a sent one ends unconfirmed, and neither goes to the next number.
 // An owner with the app (`appFallback`) keeps the scheduled messages nothing went out for: they go to the app instead
 // (waitingForWhatsApp), so the old number is remembered for that. Storage only, so callers run it in the same transaction
@@ -236,6 +237,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
+  clearWhatsAppContext(kv);
   return retired;
 };
 

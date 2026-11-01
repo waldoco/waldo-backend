@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { buildModel, ROOT, visible } from './memory-map-graph';
 import type { Claim, Interpretation } from './memory-model';
 const spot = (id: string, source = 'inferred'): Claim => ({ id, kind: 'preference', text: `Spot ${id}`, source, origin: 'owner', status: 'active', evidence: { kind: 'writer_note', text: '' }, source_reference: { state: 'unverified', link: null }, recorded_at: '2026-10-01T00:00:00Z', writer_seen_count: 1 });
-const pattern = (id: string, ids: string[]): Interpretation => ({ id, type: 'interpretation', label: `Pattern ${id}`, summary: '', domain: 'day', stored_status: 'active', recorded_active_at: '2026-10-01T00:00:00Z', estimate: null, support: { claim_ids: ids, unavailable_count: 0, independent_observations: 'unverified' } });
+const pattern = (id: string, ids: string[]): Interpretation => ({ id, type: 'interpretation', label: `Pattern ${id}`, summary: '', domain: 'day', stored_status: 'active', recorded_active_at: '2026-10-01T00:00:00Z', estimate: null, support: { claim_ids: ids, unavailable_count: 0, independent_observations: 'unverified' }, sources: [], confirmation: 'waldos_read' });
 const model = buildModel([pattern('p1', ['a', 'b', 'c', 'missing']), pattern('p2', ['c'])], [spot('a', 'stated'), spot('b', 'confirmed'), spot('c'), spot('loose')]);
 
 it('links only saved support that this read returned', () => {

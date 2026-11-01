@@ -1,8 +1,9 @@
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName, type ScheduleEntry } from '@waldo/contracts';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
-import type { Scheduler } from '../scheduler/multiplexer';
+import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
+import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
@@ -10,7 +11,7 @@ const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
-export type CardState = 'pending' | 'held' | 'sent' | 'skipped';
+export type CardState = 'pending' | 'held' | 'waiting_on_model' | 'sent' | 'skipped';
 
 // The day_plan hop is whitelisted for the gated trace sinks, so its detail must stay
 // content-free: planned times reveal the owner's daily schedule, so the trace keeps the count.
@@ -26,7 +27,20 @@ export const dayPlanBook = (sql: Sql) => {
     PRIMARY KEY (day, card))`);
   sql.exec('CREATE TABLE IF NOT EXISTS card_pins (card TEXT PRIMARY KEY, time TEXT NOT NULL)');
   // Whether a finished card went out or was skipped. Cards finished before the column existed have none.
-  if (!sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().some(column => column.name === 'outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
+  const columns = new Set(sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().map(column => column.name));
+  if (!columns.has('outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
+  // The Main chat row the card was last delivered to, and when: ids and times only, so the day's history reads the words
+  // from the chat as it is now, and a forgotten or deleted row takes them with it.
+  if (!columns.has('delivered_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_message_id TEXT');
+  if (!columns.has('delivered_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_at INTEGER');
+  // Revisions of a delivered card, when the owner's day changed after it: how many reached the owner, the latest one's time and
+  // outbox record, and the Main chat row a revision became when that was the app, with that revision's record. The original
+  // delivery stays as it was.
+  if (!columns.has('revision')) sql.exec('ALTER TABLE day_plan ADD COLUMN revision INTEGER');
+  if (!columns.has('revised_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_at INTEGER');
+  if (!columns.has('revised_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_message_id TEXT');
+  if (!columns.has('revised_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_record TEXT');
+  if (!columns.has('revised_row_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_row_record TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -39,9 +53,42 @@ export const dayPlanBook = (sql: Sql) => {
       return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number; outcome: 'sent' | 'skipped' | null }>(
         'SELECT card, time, reason, sent, outcome FROM day_plan WHERE day = ? ORDER BY card', day,
       ).toArray().map(({ outcome, ...row }) => {
-        const state = row.sent === 1 ? outcome ?? undefined : row.sent === 2 ? 'held' : 'pending';
+        const state = row.sent === 1 ? outcome ?? undefined : row.sent === 2 ? 'held' : row.sent === 3 ? 'waiting_on_model' : 'pending';
         return { ...row, sent: row.sent === 1, ...(state ? { state } : {}) };
       });
+    },
+    // A card's delivery to the app, on the card's own day. It may come before the card is recorded sent, and a Try again's
+    // delivery replaces the earlier one.
+    delivered(day: string, card: CardId, messageId: string, at: number): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, delivered_message_id, delivered_at) VALUES (?, ?, NULL, 'sent', ?, ?)
+         ON CONFLICT (day, card) DO UPDATE SET delivered_message_id = excluded.delivered_message_id, delivered_at = excluded.delivered_at`,
+        day, card, messageId, at,
+      );
+    },
+    deliveries(day: string): ReadonlyMap<string, CardDelivery> {
+      return new Map(sql.exec<{ card: string; message_id: string; delivered_at: number }>(
+        'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
+      ).toArray().map(({ card, ...delivery }) => [card, delivery]));
+    },
+    // Whether the card reached the owner today, on any surface, so a change can revise it.
+    reached(day: string, card: string): boolean {
+      return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
+    },
+    revisedRow(day: string, card: CardId, messageId: string, record: string): void {
+      sql.exec('UPDATE day_plan SET revised_message_id = ?, revised_row_record = ? WHERE day = ? AND card = ?', messageId, record, day, card);
+    },
+    // Counted once per outbox record: a settle the outbox repeats after a restart does not count it again.
+    revised(day: string, card: CardId, at: number, record: string): void {
+      sql.exec(`UPDATE day_plan SET revision = COALESCE(revision, 0) + 1, revised_at = ?, revised_record = ?
+        WHERE day = ? AND card = ? AND revised_record IS NOT ?`, at, record, day, card, record);
+    },
+    // message_id: the newest revision's Main chat row, or null when it reached the owner outside the app.
+    revisions(day: string): ReadonlyMap<string, Readonly<{ revision: number; revised_at: number; message_id: string | null }>> {
+      return new Map(sql.exec<{ card: string; revision: number; revised_at: number; message_id: string | null }>(
+        `SELECT card, revision, revised_at, CASE WHEN revised_row_record = revised_record THEN revised_message_id END AS message_id
+         FROM day_plan WHERE day = ? AND revision IS NOT NULL AND revised_at IS NOT NULL`, day,
+      ).toArray().map(({ card, ...revision }) => [card, revision]));
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));
@@ -63,12 +110,25 @@ export const dayPlanBook = (sql: Sql) => {
     },
     // A card that came due and sent nothing finishes for the day as skipped. A card that already finished keeps what it
     // recorded, so a send is never turned into a skip and an unknown outcome is never turned into one.
-    skipped(day: string, card: CardId): void {
+    skipped(day: string, card: CardId, reason?: string): void {
       sql.exec(
-        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, 'skipped', 1, 'skipped')
-         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = CASE WHEN day_plan.sent = 1 THEN day_plan.outcome ELSE 'skipped' END`,
+        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, ?, 1, 'skipped')
+         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = CASE WHEN day_plan.sent = 1 THEN day_plan.outcome ELSE 'skipped' END,
+           reason = CASE WHEN day_plan.sent = 1 OR ? IS NULL THEN day_plan.reason ELSE ? END`,
+        day, card, reason ?? 'skipped', reason ?? null, reason ?? null,
+      );
+    },
+    // No model could write the card: it stays unsent (sent=3) and its schedule row probes again, until the model is back or
+    // the card is too late to send.
+    waitingOnModel(day: string, card: CardId): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, NULL, 'waiting on model', 3)
+         ON CONFLICT (day, card) DO UPDATE SET sent = 3 WHERE sent <> 1`,
         day, card,
       );
+    },
+    waitingForModel(day: string): readonly CardId[] {
+      return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 3 ORDER BY card', day).toArray().map((row) => row.card);
     },
     // Quiet-hours hold (H1b): sent=2 records "held", never "sent" - a held card stays truthfully
     // unsent until the heartbeat's release re-arms it and the real send marks sent=1. The
@@ -76,14 +136,14 @@ export const dayPlanBook = (sql: Sql) => {
     held(day: string, card: CardId): void {
       sql.exec(
         `INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, NULL, 'held: quiet hours', 2)
-         ON CONFLICT (day, card) DO UPDATE SET sent = 2 WHERE sent = 0`,
+         ON CONFLICT (day, card) DO UPDATE SET sent = 2 WHERE sent IN (0, 3)`,
         day, card,
       );
     },
     // A card written and waiting for its surface (WhatsApp outside its window) is no longer held for quiet hours: it stays unsent
     // until it is delivered, and the heartbeat's release does not fire it again.
     waiting(day: string, card: CardId): void {
-      sql.exec('UPDATE day_plan SET sent = 0 WHERE day = ? AND card = ? AND sent = 2', day, card);
+      sql.exec('UPDATE day_plan SET sent = 0 WHERE day = ? AND card = ? AND sent IN (2, 3)', day, card);
     },
     heldToday(day: string): readonly CardId[] {
       return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
@@ -95,17 +155,18 @@ export type DayPlanBook = ReturnType<typeof dayPlanBook>;
 export const defaultPlan = (cards: readonly DayCard[]): readonly CardPlan[] =>
   cards.map((card) => ({ card: card.id, time: card.defaultTime, reason: 'default time' }));
 
-export const parseDayPlan = (raw: string, cards: readonly DayCard[]): readonly CardPlan[] => {
+// A card the reply leaves out or times badly falls back to its default; with `keep`, a re-plan's, it is left as it is.
+export const parseDayPlan = (raw: string, cards: readonly DayCard[], keep = false): readonly CardPlan[] => {
   const { cards: planned } = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { cards?: unknown };
   if (!Array.isArray(planned)) throw new Error('day plan has no cards');
   const byId = new Map(planned.map((entry: { id?: unknown; time?: unknown; reason?: unknown }) => [entry?.id, entry]));
-  return cards.map((card) => {
+  return cards.flatMap((card): CardPlan[] => {
     const entry = byId.get(card.id);
     const time = typeof entry?.time === 'string' ? entry.time.trim() : '';
     const reason = typeof entry?.reason === 'string' && entry.reason ? entry.reason : 'no reason given';
-    if (time === 'skip') return { card: card.id, time: null, reason };
-    if (isClock(time)) return { card: card.id, time, reason };
-    return { card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` };
+    if (time === 'skip') return [{ card: card.id, time: null, reason }];
+    if (isClock(time)) return [{ card: card.id, time, reason }];
+    return keep ? [] : [{ card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` }];
   });
 };
 
@@ -132,6 +193,49 @@ export const applyDayPlan = async (
   return applied;
 };
 
+// The reason a card's time carries when the owner set it for today: a re-plan keeps it, as it keeps a pin.
+export const SET_FOR_TODAY = 'set by you for today';
+// What a re-plan after today's calendar changed may move: a card the planner timed (or skipped) that is still pending and not
+// yet due, with its current time. One the owner set for today or pinned keeps its time, as does a card held for quiet hours,
+// waiting on the model, or already sent; a card with no plan yet waits for the day's own plan.
+export type MovableCard = Readonly<{ card: DayCard; time: string | null }>;
+export const movableCards = (book: DayPlanBook, timezone: string, now: number): readonly MovableCard[] => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const pins = book.pins();
+  const rows = new Map(book.read(day).map(row => [row.card, row]));
+  return DAY_CARDS.flatMap((card): MovableCard[] => {
+    const row = rows.get(card.id);
+    if (!row || row.state !== 'pending' || pins[card.id] || row.reason === SET_FOR_TODAY) return [];
+    const at = row.time === null ? null : localToEpoch(`${day}T${row.time}`, timezone);
+    return row.time === null || (at !== null && at > now) ? [{ card, time: row.time }] : [];
+  });
+};
+// A re-plan applies only to the cards it may move. A time already past keeps the card where it was: a re-plan moves a card or,
+// when the model says so, skips it; it never sends one early by accident or cancels it for being late.
+export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[],
+  movable: readonly MovableCard[], enabled = true): Promise<readonly CardPlan[]> => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const ids = new Set(movable.map(entry => entry.card.id));
+  const ahead = plan.filter(entry => {
+    if (!ids.has(entry.card)) return false;
+    if (entry.time === null) return true;
+    const at = localToEpoch(`${day}T${entry.time}`, timezone);
+    return at !== null && at > now;
+  });
+  return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
+};
+
+// One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
+// change is always planned on and a burst costs at most two model calls.
+export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {
+  let queued = false;
+  return (arg: A): void => {
+    if (queued) return;
+    queued = true;
+    enqueue(() => { queued = false; return work(arg); });
+  };
+};
+
 export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<boolean> => {
   const day = localIso(now, timezone).slice(0, 10);
   if (book.read(day).length > 0) return false;
@@ -149,6 +253,150 @@ export const dayWindow = (now: number, timezone: string): Readonly<{ from: numbe
 // brings no burst of old cards.
 export const cardExpiry = (occurrenceAt: number, timezone: string, laterDue: readonly number[]): number =>
   Math.min(dayWindow(occurrenceAt, timezone).to, ...laterDue.filter(due => due > occurrenceAt));
+
+// How late a card that waited for the model may still go out: the Brief until local midday, the Check-in until the Close is
+// due, the Close until quiet hours start. Never past the card's own day.
+export type CardFreshness = Readonly<{ closeDue: number | null; quietStart: string | null }>;
+export const cardFreshUntil = (card: DayCard, occurrenceAt: number, timezone: string, freshness: CardFreshness): number => {
+  const day = localIso(occurrenceAt, timezone).slice(0, 10);
+  const end = dayWindow(occurrenceAt, timezone).to;
+  const after = (at: number | null) => (at !== null && at > occurrenceAt ? Math.min(at, end) : end);
+  if (card.id === 'card:brief') return after(localToEpoch(`${day}T12:00`, timezone));
+  if (card.id === 'card:midday') return after(freshness.closeDue);
+  return after(freshness.quietStart && isClock(freshness.quietStart) ? localToEpoch(`${day}T${freshness.quietStart}`, timezone) : null);
+};
+
+const MODEL_OUTAGE_SKIP: Readonly<Record<CardId, string>> = {
+  'card:brief': "Waldo couldn't reach its model this morning",
+  'card:midday': "Waldo couldn't reach its model this afternoon",
+  'card:close': "Waldo couldn't reach its model this evening",
+};
+
+// One scheduled run of a day card. A card that waited for the model and is now too late is skipped with the reason, never
+// sent stale. A run no model could answer leaves the card waiting, and the scheduler probes again without counting it.
+export const runDayCard = async (input: Readonly<{
+  entry: ScheduleEntry; book: DayPlanBook; timezone: string; now: number; freshness: CardFreshness;
+  generate: (card: DayCard, day: string) => Promise<void>;
+}>): Promise<void | 'waiting_on_model'> => {
+  const card = cardFor(input.entry.id);
+  if (card === null) return;
+  const day = localIso(input.entry.occurrence_at, input.timezone).slice(0, 10);
+  const waited = input.book.read(day).some((row) => row.card === card.id && row.state === 'waiting_on_model');
+  // A Try again is the owner asking for the card now, so its own run goes ahead whatever the hour. A try that met the outage
+  // was parked to a later probe (due after its occurrence) and is judged like any waiting card.
+  const asked = input.entry.payload_refs.retry_id !== undefined && input.entry.due_at === input.entry.occurrence_at;
+  if (waited && !asked && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
+    input.book.skipped(day, card.id, MODEL_OUTAGE_SKIP[card.id]);
+    return;
+  }
+  try {
+    await input.generate(card, day);
+  } catch (error) {
+    if (!(error instanceof ModelUnavailableError)) throw error;
+    input.book.waitingOnModel(day, card.id);
+    return 'waiting_on_model';
+  }
+};
+
+// The model is back: today's cards still waiting run now. A card past its freshness is skipped when it runs. A row left
+// waiting on an earlier day is not resumed, so its id's next occurrence is never pulled forward in its place.
+export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<readonly CardId[]> => {
+  const resumed: CardId[] = [];
+  for (const card of book.waitingForModel(localIso(now, timezone).slice(0, 10))) if (await scheduler.pullForward(card, now)) resumed.push(card);
+  return resumed;
+};
+
+export const CARD_RETRIES_PER_DAY = 3;
+const RETRIES_KEY = 'day_card_retries_v1';
+export type CardRetry = 'started' | 'running' | 'sent' | 'not_needed' | 'limit' | 'unknown_card' | 'unreadable';
+
+// Try again on one of today's cards, as the owner. The card's own schedule row is armed to run now, so the scheduled card
+// job writes it and an upsert lifts a quarantine on the row. Each try carries its own retry_id, which keys the card's
+// delivery apart from the day's earlier attempt. Only a stuck card is tried (cardStatus gives it tries left); one being made
+// now is left alone, so a double tap makes one card. Three tries a day per owner.
+export const retryDayCard = async (deps: CardDeps, id: string): Promise<CardRetry> => {
+  const card = cardFor(id);
+  if (card === null) return 'unknown_card';
+  if (deps.scheduler.lookup(card.id).state === 'unreadable') return 'unreadable';
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find((planned) => planned.card === card.id);
+  // A finished card whose outcome predates recording one is taken as sent: it may have gone out.
+  if (row?.sent && row.state !== 'skipped') return 'sent';
+  const status = cardStatus(deps, card);
+  if (status.state === 'generating') return 'running';
+  if (status.retriesLeft === undefined) return 'not_needed';
+  if (status.retriesLeft === 0) return 'limit';
+  const count = triesUsed(deps.kv, day);
+  deps.kv.put(RETRIES_KEY, { day, count: count + 1 });
+  await deps.scheduler.schedule({ id: card.id, kind: 'brief', payloadRefs: { id: card.id, retry_id: `${day}.${count + 1}` },
+    occurrenceAt: deps.now, dueAt: deps.now, recurrence: null });
+  return 'started';
+};
+
+// A card is being made when its run is in flight, or a Try again is due now. A try parked to wait for the model is not, so
+// the owner may try again.
+const inFlight = (scheduler: Scheduler, entry: ScheduleEntry, now: number): boolean =>
+  scheduler.runningRunId(entry.id, entry.occurrence_at) !== null
+  || (entry.status === 'armed' && entry.payload_refs.retry_id !== undefined && entry.due_at <= now);
+
+const triesUsed = (kv: Kv, day: string): number => {
+  const tries = kv.get<{ day: string; count: number }>(RETRIES_KEY);
+  return tries?.day === day ? tries.count : 0;
+};
+
+const OUTAGE_REASONS: ReadonlySet<string> = new Set(Object.values(MODEL_OUTAGE_SKIP));
+export type CardViewState = Exclude<CardState, 'waiting_on_model'> | 'generating' | 'failed' | 'paused';
+// `retriesLeft` is present only while the card is stuck, so that is where Try again is offered and accepted.
+export type CardStatus = Readonly<{ state?: CardViewState; reason?: string; retriesLeft?: number }>;
+export type CardDeps = Readonly<{
+  scheduler: Scheduler; book: DayPlanBook; kv: Kv; timezone: string; now: number;
+  // Whether the day's card has a delivery that may still go out, or may already have.
+  queued(day: string, card: CardId): boolean;
+}>;
+
+// Where one of today's cards stands, as the console and the app show it. The plan book says how a card finished or that it
+// waits for the model; its schedule row says whether it is paused or being made now. A state the owner can act on carries a
+// short fixed reason, never error text. A card is stuck, and may be tried again, only while it waits for the model or is
+// paused and nothing for it is on its way: one that went out, is queued, is finished for the day or has not come due is not.
+export const cardStatus = (deps: CardDeps, card: DayCard): CardStatus => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find((planned) => planned.card === card.id);
+  const found = deps.scheduler.lookup(card.id);
+  const entry = found.state === 'entry' ? found.entry : null;
+  if (row?.state === 'skipped') return { state: 'skipped', ...(OUTAGE_REASONS.has(row.reason) ? { reason: row.reason } : {}) };
+  if (row?.sent) return row.state === 'sent' ? { state: 'sent' } : {};
+  if (row?.state === 'held') return { state: 'held' };
+  if (entry !== null && inFlight(deps.scheduler, entry, deps.now)) return { state: 'generating', reason: 'Waldo is making it now' };
+  const tries = deps.queued(day, card.id) ? {} : { retriesLeft: Math.max(0, CARD_RETRIES_PER_DAY - triesUsed(deps.kv, day)) };
+  if (entry?.status === 'quarantined') return { state: 'paused', reason: `Paused after ${QUARANTINE_AFTER_ATTEMPTS} failed tries in a row`, ...tries };
+  if (row?.state === 'waiting_on_model') return { state: 'failed', reason: MODEL_OUTAGE_SKIP[card.id], ...tries };
+  return row === undefined || row.state === 'pending' ? { state: 'pending' } : {};
+};
+
+// Where today's cards stand, as one host fact for the owner's own turns, so a turn on any surface knows whether the Brief
+// reached them, and where, before it decides what to offer. States and times only: a card's words stay in the chat it went to.
+export const dayCardsLine = (deps: CardDeps): string => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const rows = new Map(deps.book.read(day).map((row) => [row.card, row]));
+  const delivered = deps.book.deliveries(day);
+  const clockOf = (at: number) => localIso(at, deps.timezone).slice(11, 16);
+  const said = DAY_CARDS.flatMap((card) => {
+    const status = cardStatus(deps, card);
+    const found = deps.scheduler.lookup(card.id);
+    const due = rows.get(card.id)?.time ?? (found.state === 'entry' && localIso(found.entry.due_at, deps.timezone).startsWith(day) ? clockOf(found.entry.due_at) : null);
+    const app = delivered.get(card.id);
+    if (app) return [`${card.name} reached them in the app at ${clockOf(app.delivered_at)}`];
+    switch (rows.get(card.id)?.sent && status.state !== 'skipped' ? 'sent' : status.state) {
+      case 'sent': return [`${card.name} was sent`];
+      case 'skipped': return [status.reason ? `${card.name} was not sent (${status.reason})` : `${card.name} was skipped: nothing worth sending`];
+      case 'held': return [`${card.name} is held for quiet hours`];
+      case 'generating': return [`${card.name} is being written now`];
+      case 'failed': case 'paused': return [`${card.name} could not be written (${status.reason})`];
+      default: return deps.queued(day, card.id) ? [`${card.name} is on its way`] : due ? [`${card.name} is due at ${due}`] : [];
+    }
+  });
+  return said.length ? `Today's cards: ${said.join('; ')}.` : '';
+};
 
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
   const { from: midnight } = dayWindow(now, timezone);
@@ -229,22 +477,17 @@ export const composeDayCard = async (
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
 
-// The Main chat row each of today's cards was delivered to in the app, and when. Only ids and times are kept, for one
-// day: the excerpt is cut from the row when it is read, so a forgotten or deleted row takes its text with it.
-const CARD_DELIVERY_KEY = 'day_card_delivery_v1';
+// The Main chat row each card was delivered to is kept on its day_plan row. A build before that kept today's in one KV
+// entry, which is still read for its own day, so the day it deploys keeps the cards delivered before it.
+const LEGACY_CARD_DELIVERY_KEY = 'day_card_delivery_v1';
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type CardDelivery = Readonly<{ message_id: string; delivered_at: number }>;
-type CardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
+type LegacyCardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
 export type CardLatest = CardDelivery & Readonly<{ excerpt: string }>;
 
-export const recordCardDelivery = (kv: Kv, day: string, card: string, messageId: string, at: number): void => {
-  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
-  kv.put(CARD_DELIVERY_KEY, { day, cards: { ...(kept?.day === day ? kept.cards : {}), [card]: { message_id: messageId, delivered_at: at } } });
-};
-
-export const cardDeliveries = (kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
-  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
-  return new Map(kept?.day === day ? Object.entries(kept.cards) : []);
+export const cardDeliveries = (book: DayPlanBook, kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
+  const legacy = kv.get<LegacyCardDeliveries>(LEGACY_CARD_DELIVERY_KEY);
+  return new Map([...(legacy?.day === day ? Object.entries(legacy.cards) : []), ...book.deliveries(day)]);
 };
 
 // The card's latest delivery as the app shows it: a prefix of the row's text, never splitting a surrogate pair. A row

@@ -2,7 +2,7 @@ import {buildMemoryDestination,isMemoryItemId,isMemoryCursor,type MemoryListDest
 import { SignInRequired } from './model';
 export type MemoryStatus = { version: 1; state: 'available'|'partial'|'unavailable'; complete: boolean; unavailable_claim_count: number };
 export type Claim = { id:string; kind:string; text:string; source:string; origin:string; status:string; evidence:{kind:'writer_note';text:string}; source_reference:{state:'unavailable'|'unverified';link:null}; recorded_at:string; writer_seen_count:number|null };
-export type Interpretation = { id:string; type:'interpretation';label:string;summary:string;domain:string;stored_status:string;recorded_active_at:string;estimate:number|null;support:{claim_ids:string[];unavailable_count:number;independent_observations:'unverified'} };
+export type Interpretation = { id:string; type:'interpretation';label:string;summary:string;domain:string;stored_status:string;recorded_active_at:string;estimate:number|null;support:{claim_ids:string[];unavailable_count:number;independent_observations:'unverified';incomplete?:true};sources:string[];confirmation:'confirmed'|'waldos_read' };
 export type Association = {from:string;to:string;relation:string;state:'unverified_association';estimate:number|null};
 export type MemoryPage = MemoryStatus & { view:'claims'|'interpretations';items:(Claim|Interpretation)[];page:{limit:number;returned:number;total:number;next_cursor:string|null} };
 export type MemoryDetail = MemoryStatus & ({view:'detail';kind:'claim';item:Claim;linked_interpretation_ids:string[]}|{view:'detail';kind:'interpretation';item:Interpretation;support_claim_ids:string[];support_unavailable_count:number});
@@ -25,8 +25,8 @@ function claim(v:unknown):Claim {
  return {id:v.id,kind:v.kind,text:v.text,source:v.source,origin:v.origin,status:v.status,recorded_at:v.recorded_at,writer_seen_count:v.writer_seen_count as number|null,evidence:{kind:'writer_note',text:v.evidence.text},source_reference:{state:v.source_reference.state as Claim['source_reference']['state'],link:null}};
 }
 function interpretation(v:unknown):Interpretation {
- if(!obj(v)||!itemId(v.id)||v.type!=='interpretation'||!str(v.label)||!str(v.summary)||!str(v.domain)||!str(v.stored_status)||!str(v.recorded_active_at)||!estimate(v.estimate)||v.estimate_kind!=='uncalibrated_model_estimate'||!obj(v.support)||!refs(v.support.claim_ids)||!num(v.support.unavailable_count)||v.support.independent_observations!=='unverified') return unsupported();
- return {id:v.id,type:'interpretation',label:v.label,summary:v.summary,domain:v.domain,stored_status:v.stored_status,recorded_active_at:v.recorded_active_at,estimate:v.estimate,support:{claim_ids:v.support.claim_ids,unavailable_count:v.support.unavailable_count,independent_observations:'unverified'}};
+ if(!obj(v)||!itemId(v.id)||v.type!=='interpretation'||!str(v.label)||!str(v.summary)||!str(v.domain)||!str(v.stored_status)||!str(v.recorded_active_at)||!estimate(v.estimate)||v.estimate_kind!=='uncalibrated_model_estimate'||!obj(v.support)||!refs(v.support.claim_ids)||!num(v.support.unavailable_count)||v.support.independent_observations!=='unverified'||(v.support.state!=='stored_links'&&v.support.state!=='incomplete')||!Array.isArray(v.sources)||!v.sources.every(str)||(v.confirmation!=='confirmed'&&v.confirmation!=='waldos_read')) return unsupported();
+ return {id:v.id,type:'interpretation',label:v.label,summary:v.summary,domain:v.domain,stored_status:v.stored_status,recorded_active_at:v.recorded_active_at,estimate:v.estimate,support:{claim_ids:v.support.claim_ids,unavailable_count:v.support.unavailable_count,independent_observations:'unverified',...(v.support.state==='incomplete'?{incomplete:true as const}:{})},sources:v.sources,confirmation:v.confirmation};
 }
 export function readMemory(v:unknown):MemoryPage|MemoryDetail|MemoryPattern {
  if(!obj(v))return unsupported();const common=status(v);

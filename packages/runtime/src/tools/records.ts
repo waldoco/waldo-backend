@@ -13,7 +13,7 @@ export const BRAIN_NAMESPACES = {
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
-  skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
+  skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
   artifacts: 'Documents Waldo makes: create, revise, export, list or read an artifact, a drafted document or a sheet cell.',
   actions: "Actions that reach beyond this chat: send_message for a message to someone else, a progress note, a file attachment, an approval card, the owner's Mac, a delegated research task, todos and code.",
@@ -58,10 +58,11 @@ export type ToolReplayRow = { readonly replay: ToolReplayClass; readonly basis: 
 //  replay  what a crash between its effect and the turn's persisted completion means, and why (`basis`).
 //  tainted why a tool with a claim needs no owner card in a turn that has read outside text. Absent, it needs one: the
 //          owner ruled that such a turn sends every change to their card (hooks/registry.ts taintedCallNeedsOwnerApproval),
-//          so a new write tool is carded until its record names a reason here.
+//          so a new write tool is carded until its record names a reason here. A record may instead name a refusal: such a
+//          turn never runs or cards the call, because a card keeps its arguments in the owner's ledger.
 export type ToolRecord = Readonly<{
   brain: BrainPlacement; scope: 'deny' | 'allow'; concurrent: boolean; probe: 'strip' | 'keep'; paid: boolean; ownerTurnOnly: boolean;
-  claim: string | null; replay: ToolReplayRow; tainted?: TaintedWriteExemption;
+  claim: string | null; replay: ToolReplayRow; tainted?: TaintedWriteExemption | TaintedWriteRefusal;
 }>;
 // The kinds of reason, each with the record's own words for it:
 //  draft          it sends and commits nothing; the owner reviews the result before anything leaves.
@@ -72,7 +73,10 @@ export type ToolRecord = Readonly<{
 //  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
 //                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
 //                 Any other operation, or a call with no typed command, is carded.
-export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card'; reason: string }>;
+// owner_statement  the tool takes only what the owner says to Waldo directly, and its arguments are a figure no card may hold
+//                 (the owner's stated sleep need, a health value): a turn that has read outside text is refused the call.
+export type TaintedWriteRefusal = Readonly<{ refused: 'owner_statement'; reason: string }>;
+export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
 const unknown = (basis: string): ToolReplayRow => ({ replay: 'non_replayable_uncertain', basis });
@@ -129,7 +133,8 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim: loading selects ephemeral catalog metadata; it does not certify instruction admission.
   skills_install: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_enabled', replay: unknown(NOT_INSPECTED) },
   skills_disable: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_disabled', replay: unknown(NOT_INSPECTED) },
-  skills_load: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', replay: unknown(NOT_INSPECTED) },
+  // core: a skill fits a turn the owner never shaped for it, so the model must be able to load one without a search first.
+  skills_load: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', tainted: { exempt: 'instructions_only', reason: 'it selects reviewed instructions for this turn and grants no tool; each effect those instructions describe still meets its own gate' }, replay: unknown(NOT_INSPECTED) },
   // claim: verified against each handler (mutates_state, and the result says what happened). Proposals are labelled as
   // proposals: the owner-channel handlers only request an approval card.
   send_message: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'message_send_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('proposal only, but each call inserts a fresh ledger row and card; the model-supplied idempotency_key collapses only at approval after status done (approvals.ts). A crash after the send and before done can resend. No lookup reconciles it') },
@@ -156,6 +161,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   set_schedule_preference: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
   log_meal: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
   log_workout: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
+  set_sleep_need: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
@@ -194,16 +200,22 @@ export const toolsWhere = (fact: (record: ToolRecord) => boolean): ReadonlySet<T
 export const toolRecordColumn = <K extends keyof ToolRecord>(column: K): Readonly<Record<ToolName, ToolRecord[K]>> =>
   Object.fromEntries(Object.entries(TOOL_RECORDS).map(([name, record]) => [name, record[column]])) as Record<ToolName, ToolRecord[K]>;
 
+// Tools in name order: the list leads the provider's cached prefix, so the same admitted set gives the same bytes
+// whatever order the host assembled its handlers in.
+export const byToolName = (a: Readonly<{ name: string }>, b: Readonly<{ name: string }>): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
 // The brain's tool list with each tool's place on the surface: core tools as they are, the rest named into their
 // namespace and deferred, and the routing line of each namespace in use. A name outside the record (a test double) stays
-// core. Off, the list goes as it is, every tool up front.
+// core. Off, every tool goes up front. Either way the list is in name order and namespaces in BRAIN_NAMESPACES order.
 export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick<LLMRequest, 'tools' | 'tool_search'> => {
-  if (!toolSearch) return { tools: [...tools] };
-  const placed = tools.map((tool) => {
+  const ordered = [...tools].sort(byToolName);
+  if (!toolSearch) return { tools: ordered };
+  const placed = ordered.map((tool) => {
     const placement = (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[tool.name]?.brain ?? 'core';
     return placement === 'core' ? tool : { ...tool, namespace: placement, defer_loading: true };
   });
-  const used = [...new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []))];
+  const inUse = new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []));
+  const used = (Object.keys(BRAIN_NAMESPACES) as BrainNamespace[]).filter((name) => inUse.has(name));
   return { tools: placed, tool_search: { namespaces: Object.fromEntries(used.map((name) => [name, BRAIN_NAMESPACES[name]])) } };
 };
 
@@ -217,7 +229,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.
   read_mcp_tool: 'working', search_mcp_tools: 'working', call_mcp_tool: 'working', search_connector: 'working',
   read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files',
-  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health',
+  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health', set_sleep_need: 'health',
   read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',

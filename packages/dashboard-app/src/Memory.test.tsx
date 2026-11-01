@@ -13,9 +13,23 @@ describe('modern Memory presentation',()=>{
   const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:node:1')) as MemoryDetail} returnTo={origin}/>);
   expect(detail).toContain('#/memory/spots?cursor=saved-page');
   expect(detail).toContain('Back to Spots');
+  expect(detail).toContain('Waldo’s read · from Gmail, Calendar');
+  expect(detail).toContain('until you confirm it below');
+  const patterns=renderToStaticMarkup(<MemoryList initialView="list" data={readMemory(response('view=interpretations&limit=25')) as MemoryPage} onNext={()=>{}} onRestart={()=>{}}/>);
+  expect(patterns).toContain('Waldo’s read · from Gmail, Calendar · built from 1 Spot');
+  expect(patterns).toContain('Confirmed by you · built from 1 Spot');
   const spot=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail} returnTo={{view:'constellation'}}/>);
   expect(spot).toContain('Back to patterns');
   expect(detail).toContain('explore=1&amp;returnView=spots&amp;returnCursor=saved-page');
+ });
+ it('shows a pattern resting on a replaced or dismissed note as incomplete, to correct or forget, never to confirm',()=>{
+  const raw=response('view=detail&id=synthetic-owner:node:1') as {item:{support:Record<string,unknown>}};
+  const incomplete={...raw,item:{...raw.item,support:{...raw.item.support,state:'incomplete',unavailable_count:1}},support_unavailable_count:1};
+  const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(incomplete) as MemoryDetail}/>);
+  expect(detail).toContain('Incomplete · Waldo’s read · from Gmail, Calendar');
+  expect(detail).toContain('Correct it in your words or forget it below.');
+  expect(detail).not.toContain('until you confirm it below');
+  expect(()=>readMemory({...raw,item:{...raw.item,support:{...raw.item.support,state:'invalid'}}})).toThrow();
  });
  it('renders invalid Memory selectors as recovery without action controls or network requests',()=>{
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);vi.stubGlobal('window',{location:{hash:'#/memory/spots?id=1&owner=other'}});

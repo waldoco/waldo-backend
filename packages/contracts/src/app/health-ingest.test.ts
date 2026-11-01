@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
-  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
+  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
+  HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -431,11 +432,22 @@ describe('health scores history (revision 4)', () => {
   });
 });
 
+describe('health settings', () => {
+  it('holds the owner\'s stated sleep need in whole minutes, in the range the score engine trusts, or none', () => {
+    expect([HEALTH_SLEEP_NEED_MIN_MINUTES_V1, HEALTH_SLEEP_NEED_MAX_MINUTES_V1]).toEqual([360, 600]);
+    for (const value of [{ sleep_need_minutes: 480 }, { sleep_need_minutes: 360 }, { sleep_need_minutes: 600 }, { sleep_need_minutes: null }]) {
+      expect(healthSettingsV1Schema.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+    rejected(healthSettingsV1Schema, [{}, { sleep_need_minutes: 359 }, { sleep_need_minutes: 601 }, { sleep_need_minutes: 480.5 }, { sleep_need_minutes: '480' },
+      { sleep_need_minutes: 480, owner_id: 'x' }, { sleep_need_hours: 8 }]);
+  });
+});
+
 describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
-      'GET /app/v1/health/scores/history',
+      'GET /app/v1/health/scores/history', 'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);
@@ -510,5 +522,92 @@ describe('health revision 4: baseline label, drivers and energy windows', () => 
     const window = { start: '09:30', end: '11:45', kind: 'peak' };
     expect(healthScoresV1Schema.safeParse({ ...scores, windows: [window, { start: '14:00', end: '15:00', kind: 'dip' }] }).success).toBe(true);
     rejected(healthScoresV1Schema, [{ ...scores, windows: [window, window, window, window, window] }, { ...scores, windows: [{ start: 'noon', end: '13:00', kind: 'peak' }] }, { ...scores, windows: null }]);
+  });
+  // The installed build's schema is strict at every level, so what the backend keeps on its own row beside these (the sleep
+  // debt's trend, the windows' version) is never part of the response.
+  it('has no sleep debt trend and no windows version: a strict response refuses both', () => {
+    const debt = { state: 'available', debt_minutes: 95, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    expect(healthScoresV1Schema.safeParse({ ...scores, sleep_debt: debt }).success).toBe(true);
+    rejected(healthScoresV1Schema, [{ ...scores, sleep_debt: { ...debt, trend: 'building' } }, { ...scores, windows: [], windows_version: 'energy-windows.v1' }]);
+  });
+});
+
+// Health revision 5: what a coach needs from a workout, body composition and stand hours. Values are synthetic.
+describe('health revision 5: workouts, body composition and stand hours', () => {
+  const origin = { read_api: 'healthkit', source_bundle_id: 'com.apple.health.00000000-0000-0000-0000-000000000000', source_package_name: null, source_version: '11.1', source_revision: null, device_ref: null, recording_method: 'active', manufacturer: 'Apple Inc.', product_type: 'Watch7,5', client_record_version: null, sync_version: null };
+  const session = { ...common, sample_id: 'HK:1F0E7C9A-0000-4000-8000-000000000001', start_at: '2026-10-10T06:00:00+05:30', end_at: '2026-10-10T07:00:00+05:30' };
+  const workout = { ...session, signal: 'workout', unit: 'minutes', activity: 'running', value: 58 };
+  const zones = { basis: 'heart_rate_reserve', lower_bounds_bpm: [120, 136, 151, 166], seconds: [300, 900, 1500, 600, 180] };
+  const full = {
+    ...workout, origin, energy_kcal: 640, distance_m: 12_400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181, hr_zones: zones,
+    running: { power_w: 285, cadence_spm: 176, stride_length_m: 1.21, vertical_oscillation_cm: 8.4, ground_contact_ms: 238 }, effort: { score: 7, method: 'rated' },
+  };
+  const ride = { ...workout, activity: 'cycling', distance_m: 41_000, cycling: { power_w: 212, cadence_rpm: 88 }, effort: { score: 6.4, method: 'estimated' } };
+  const swim = { ...workout, activity: 'swimming', distance_m: 2_000, swimming: { strokes: 1_480 } };
+
+  it('is health revision 5, after the baseline label', () => {
+    expect(HEALTH_COACH_REVISION_V1).toBe(HEALTH_BASELINE_REVISION_V1 + 1);
+  });
+  it('keeps the old workout reading valid, so a build that sends type, minutes and energy only is unchanged', () => {
+    expect(healthSampleV1Schema.safeParse(workout).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...workout, energy_kcal: 410 }).success).toBe(true);
+  });
+  it('takes a workout with distance, climb, heart rate, five zones and the effort score, and running, cycling or swimming metrics', () => {
+    for (const sample of [full, ride, swim, { ...workout, hr_zones: { ...zones, basis: 'provider', lower_bounds_bpm: null } }, { ...workout, hr_zones: { ...zones, basis: 'max_heart_rate' } }]) {
+      expect(healthSampleV1Schema.safeParse(sample).success, JSON.stringify(sample)).toBe(true);
+    }
+  });
+  it('refuses a workout whose heart rate, zones or effort cannot be one session', () => {
+    rejected(healthSampleV1Schema, [
+      { ...workout, avg_hr_bpm: 170, max_hr_bpm: 160 }, { ...workout, max_hr_bpm: 301 }, { ...workout, avg_hr_bpm: 0 },
+      // The zones are five, with four rising lower bounds; their time fits inside the session (a minute's slack for clock edges).
+      { ...workout, hr_zones: { ...zones, seconds: [300, 900, 1500, 600] } }, { ...workout, hr_zones: { ...zones, seconds: [300, 900, 1500, 600, 180, 60] } },
+      { ...workout, hr_zones: { ...zones, lower_bounds_bpm: [120, 151, 136, 166] } }, { ...workout, hr_zones: { ...zones, seconds: [3600, 0, 0, 0, 61] } },
+      { ...workout, hr_zones: { ...zones, seconds: [-1, 0, 0, 0, 0] } }, { ...workout, hr_zones: { ...zones, basis: 'apple_magic' } },
+      { ...workout, hr_zones: { ...zones, lower_bounds_bpm: null } }, { ...workout, hr_zones: { ...zones, extra: 1 } },
+      { ...workout, effort: { score: 0, method: 'rated' } }, { ...workout, effort: { score: 11, method: 'rated' } }, { ...workout, effort: { score: 5, method: 'felt' } },
+      { ...workout, distance_m: -1 }, { ...workout, distance_m: 1_000_001 }, { ...workout, elevation_gain_m: 20_001 },
+      { ...workout, running: { power_w: 2_001 } }, { ...workout, running: { cadence_spm: 301 } }, { ...workout, running: { stride_length_m: 5 } },
+      { ...workout, running: { vertical_oscillation_cm: 31 } }, { ...workout, running: { ground_contact_ms: 2_001 } }, { ...workout, running: { pace: 4.5 } },
+      { ...workout, cycling: { cadence_rpm: 251 } }, { ...workout, swimming: { strokes: -1 } }, { ...workout, swimming: { distance_m: 2_000 } },
+      { ...workout, duration_minutes: 58 }, { ...workout, type: 'running' },
+    ]);
+  });
+  it('takes body mass, body fat and lean mass as point readings, bounded as unit-mistake catches', () => {
+    const mass = { ...common, signal: 'body_mass', unit: 'kilograms', value: 72.4 };
+    const fat = { ...common, signal: 'body_fat_percentage', unit: 'percent', value: 14.2 };
+    const lean = { ...common, signal: 'lean_body_mass', unit: 'kilograms', value: 61.9 };
+    for (const sample of [mass, fat, lean]) expect(healthSampleV1Schema.safeParse(sample).success, sample.signal).toBe(true);
+    rejected(healthSampleV1Schema, [
+      { ...mass, value: 19 }, { ...mass, value: 401 }, { ...mass, unit: 'pounds' }, { ...fat, value: 1 }, { ...fat, value: 76 }, { ...fat, unit: 'ratio', value: 0.14 },
+      { ...lean, value: 9 }, { ...lean, value: 251 },
+    ]);
+  });
+  it('takes a stand hour as one local-hour bucket that stood or did not', () => {
+    const stood = { ...hour, signal: 'stand_hour', unit: 'count', value: 1 };
+    expect(healthSampleV1Schema.safeParse(stood).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...stood, value: 0 }).success).toBe(true);
+    rejected(healthSampleV1Schema, [{ ...stood, value: 2 }, { ...stood, value: 0.5 }, { ...stood, ...common }, { ...stood, unit: 'minutes' }]);
+  });
+  it('lets a deletion name every new signal and checks each new reading on its own', () => {
+    const deletions = ['body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour'].map((signal, index) => ({ sample_id: `HK:gone-${index}`, signal, revision: 2 }));
+    expect(healthIngestV1Schema.safeParse({ ...batch, samples: [], deletions }).success).toBe(true);
+    expect(checkHealthChangeV1('sample', 2, { ...full, avg_hr_bpm: 190 })).toEqual({ ok: false, rejection: { change: 'sample', index: 2, signal: 'workout', reason: 'invalid_sample' } });
+  });
+  it('parses the pinned fixture the app lane builds against', async () => {
+    const fixture = (await import('./fixtures/health-ingest-coach.v5.json')).default;
+    expect(healthIngestV1Schema.safeParse(fixture.request).success).toBe(true);
+    for (const [index, sample] of fixture.request.samples.entries()) expect(checkHealthChangeV1('sample', index, sample).ok, sample.sample_id).toBe(true);
+  });
+  it('fits a request of fully described workouts under the byte bound, so the app splits uploads by bytes and not only by count', () => {
+    // Every character here is ASCII, so a string's length is its byte count.
+    const bytes = (value: unknown) => JSON.stringify(value).length;
+    const perWorkout = bytes(full);
+    const fits = Math.floor((HEALTH_INGEST_MAX_REQUEST_BYTES_V1 - bytes({ ...batch, samples: [] })) / (perWorkout + 1));
+    expect(perWorkout).toBeLessThan(1_024);
+    expect(fits).toBeGreaterThanOrEqual(96);
+    const request = { ...batch, samples: Array.from({ length: fits }, (_, i) => ({ ...full, sample_id: `HK:1F0E7C9A-0000-4000-8000-${String(i).padStart(12, '0')}` })) };
+    expect(healthIngestV1Schema.safeParse(request).success).toBe(true);
+    expect(bytes(request)).toBeLessThanOrEqual(HEALTH_INGEST_MAX_REQUEST_BYTES_V1);
   });
 });

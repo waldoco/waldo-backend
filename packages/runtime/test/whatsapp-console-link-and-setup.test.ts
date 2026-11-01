@@ -6,6 +6,7 @@ import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const model = vi.hoisted(() => ({ requests: [] as string[], all: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -38,7 +39,7 @@ const deliver = async (instance: InstanceType<typeof OwnerDO>, id: string, text:
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: NAME, subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
   expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  await drainWhatsAppTurns(instance);
 };
 
 it('a WhatsApp turn that asks for the console link sends it as its own message now, and keeps it out of history, search and every model request', async () => {
@@ -79,7 +80,7 @@ it('setup answers saved from the app reach a WhatsApp turn as owner facts in its
     // The writer POST /app/v1/onboarding/answers uses (its app route is tested end to end in setup-answers-app.test.ts).
     const host = ownerOnboardingHost({ storage: state.storage, doName: NAME, now: Date.now, agreementsOffered: false, lookupOffered: false } as unknown as OwnerOnboardingDeps);
     expect(host.transaction(() => host.firstRun.saveAnswers({ request_id: 'setup-answers-wa-1', name: 'Asha', day: { shape: 'meetings', own_words: '' }, wearable: 'apple' })))
-      .toEqual({ name: true, day: true, slips: false, wearable: true });
+      .toEqual({ name: true, day: true, slips: false, wearable: true, matters: false, spots: false, protect: false, rope: false, season: false, low: false });
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messaging_product: 'whatsapp', contacts: [{ wa_id: SUBJECT }], messages: [{ id: 'wamid.out' }] }));
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {

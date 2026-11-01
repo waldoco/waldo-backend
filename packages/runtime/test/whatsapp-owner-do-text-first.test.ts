@@ -4,6 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -54,7 +55,7 @@ it('a confirmed text-first link rebinds the WhatsApp subject; GET and a forged c
       expect(state.storage.kv.get('whatsapp_subject')).toBe(NEW);
       expect((await admit(OLD)).status).toBe(403);
       expect((await admit(NEW)).status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 });
@@ -104,7 +105,7 @@ it('confirming a new number clears what was held for the old one, so nothing hel
         method: 'POST', headers: { 'x-waldo-whatsapp-subject': NEW },
         body: JSON.stringify({ messages: [{ from: NEW, id: 'wamid.new', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
       }));
-      const inflight = () => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      const inflight = () => drainWhatsAppTurns(instance);
       expect((await admitB()).status).toBe(200);
       await inflight();
       const turns = turn.mock.calls.length;
@@ -169,10 +170,48 @@ const reconcileHarness = async (name: string, presence: (subject: string) => Pro
     };
     try {
       await work({ instance, kv, sent, turn: turn as never, admit, confirm });
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); net.mockRestore(); log.mockRestore(); }
   });
 };
+
+it('a confirmed link sends Waldo\'s contact card to the new number; a refused card leaves the link standing', async () => {
+  for (const refuse of [false, true]) {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`whatsapp-text-first-card-${refuse}`)), async (_instance, state) => {
+      state.storage.kv.put('do_name', 'do-text-first-card');
+      state.storage.kv.put('whatsapp_subject', OLD);
+      const access = consoleAccess(state.storage);
+      const token = await access.grant();
+      const { csrf } = (await access.session(token))!;
+      const sent: Record<string, unknown>[] = [];
+      const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.includes('graph.facebook.com')) {
+          sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return refuse ? Response.json({ error: { code: 131047 } }, { status: 400 }) : Response.json({ messages: [{ id: 'wamid.card' }], contacts: [{ wa_id: NEW }] });
+        }
+        const fn = url.split('/rpc/')[1] ?? '';
+        return Response.json(fn === 'consume_presence_link_request' ? 'linked' : true);
+      });
+      const instance = new OwnerDO(state, {
+        ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_WALDO_NUMBER: '15550009999',
+        WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+        SUPABASE_PROJECT_URL: 'https://db.example', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router',
+      });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        const confirmed = await instance.fetch(new Request('https://w.test/console/action', {
+          method: 'POST', headers: { cookie: `${CONSOLE_COOKIE}=${token}` }, body: new URLSearchParams({ csrf, action: 'whatsapp.confirm', token: TOKEN, subject: NEW }),
+        }));
+        expect(confirmed.status).toBe(200);
+        expect(state.storage.kv.get('whatsapp_subject')).toBe(NEW);
+        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: `+${NEW}`, type: 'contacts',
+          contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: '+15550009999', type: 'WORK', wa_id: '15550009999' }] }] }]);
+        if (refuse) expect(log.mock.calls.map(([line]) => String(line))).toContain(JSON.stringify({ hop: 'whatsapp_contact_card', ok: false }));
+      } finally { await state.storage.deleteAlarm(); graph.mockRestore(); log.mockRestore(); }
+    });
+  }
+});
 
 it('link A text-first, then redeem a console code from B: B is admitted, A\'s held state is gone, and A is refused', async () => {
   // The directory's answer for this owner's number: A after the text-first link, B once the code from B is redeemed
@@ -182,7 +221,7 @@ it('link A text-first, then redeem a console code from B: B is admitted, A\'s he
     expect((await confirm(OLD)).status).toBe(200);
     expect(kv.get('whatsapp_subject')).toBe(OLD);
     expect((await admit(OLD, 'wamid.a0')).status).toBe(200);
-    await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    await drainWhatsAppTurns(instance);
     // Waldo then holds text for A and knocks, as it does once A's window closes.
     kv.put('wa_held:000000000001', { heldAt: Date.now(), body: { chat_id: Number(OLD), text: 'held for A only' } });
     kv.put('wa_knocked_for', kv.get<number>('wa_last_inbound_ms'));
@@ -192,7 +231,7 @@ it('link A text-first, then redeem a console code from B: B is admitted, A\'s he
     expect(kv.get('whatsapp_subject')).toBe(NEW);
     expect([...kv.list({ prefix: 'wa_held:' })]).toEqual([]);
     expect(kv.get('wa_knocked_for')).toBeUndefined();
-    await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    await drainWhatsAppTurns(instance);
     expect(turn.mock.calls.length).toBe(turns + 1);
     expect(sent.filter(body => body.includes('for A only'))).toEqual([]);
     expect((await admit(OLD, 'wamid.a1')).status).toBe(403);
@@ -243,7 +282,7 @@ it('a concurrent redelivery from the new number does not wipe the window the fir
       expect(reads).toBe(2);
       expect(kv.get('whatsapp_subject')).toBe(NEW);
       expect(kv.get('wa_last_inbound_ms')).toBeGreaterThan(Date.now() - 60_000);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
       expect(turn).toHaveBeenCalledTimes(1);
     });
 });

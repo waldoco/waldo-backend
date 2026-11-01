@@ -33,9 +33,16 @@ export type TelegramOwnerListenerOptions = Readonly<{
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
+  // True where the queued reply's outbox settles no hop, so the turn's trace closes once the reply is queued.
+  closesTraceOnQueue?: boolean;
   clearTurnReceipts?(trace: string): void;
   // Sends the files the turn queued, after its reply is out. Only for surfaces whose reply is a direct send.
   deliverAttachments?(trace: string, runScope?: RunEffectScope): Promise<void>;
+  // Surface fields on the reply (WhatsApp: the message it quotes, and the mark that it is the turn's own reply). Only for
+  // surfaces whose reply is a direct send.
+  replyFields?(turn: TelegramInboundTurn): Readonly<Pick<TelegramFinalPayload, 'quote_message_id' | 'turn_reply'>>;
+  // Sends the reaction the turn chose, after its reply and files. Best effort: a failed reaction never fails the turn.
+  deliverReaction?(turn: TelegramInboundTurn): Promise<void>;
   // Where this turn's reply is shown while it is written. Absent (the default), the reply arrives whole.
   streamReply?(turn: TelegramInboundTurn): ReplyDraftSurface | undefined;
   turnTimeoutMs?: number;
@@ -172,12 +179,14 @@ export class TelegramOwnerListener {
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
         await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
         this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        if (this.options.closesTraceOnQueue) this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, detail: 'reply_frozen', text: { input: turn.text, output: text } });
         return 'queued';
       }
       // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
-      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
+      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich), ...this.options.replyFields?.(turn) }));
       if (delivered === undefined) throw new Error('telegram send blocked');
       if (this.options.deliverAttachments) await time('attachments', () => this.options.deliverAttachments!(trace, turn.runScope));
+      if (this.options.deliverReaction) await time('reaction', () => this.options.deliverReaction!(turn)).catch(() => undefined);
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
@@ -185,8 +194,8 @@ export class TelegramOwnerListener {
     } catch (error) {
       await settle(null);
       const failure = error instanceof TurnTimeout
-        ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
-        : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
+        ? 'That took too long, and anything I had started may still finish. Try again, or split it into smaller asks.'
+        : this.options.failureText ?? 'I hit a problem answering that. Try again in a moment.';
       // WhatsApp's outer admission owns the fixed check-first notice. Do not
       // turn an uncertain post-effect send into retry wording or a second send.
       if (turn.runScope || this.options.surface === 'whatsapp') {

@@ -95,6 +95,17 @@ const expectedMigrations = [
   '20261027130000_health_reads_drivers_sleep_debt.sql',
   '20261027140000_health_scores_history.sql',
   '20261027150000_health_provisional_row.sql',
+  '20261027160000_health_energy_windows.sql',
+  '20261027170000_health_backfilled_rows.sql',
+  '20261028120000_waldo_owner_account_email.sql',
+  '20261029160000_waldo_agent_mail_handles.sql',
+  '20261030140000_waldo_cost_ledger_cache_write.sql',
+  '20261031120000_health_coach_signals.sql',
+  '20261031140000_waldo_agent_mail_rules.sql',
+  '20261031160000_waldo_link_adopts_verified_phone.sql',
+  '20261031170000_health_training_load.sql',
+  '20261101000000_health_owner_settings.sql',
+  '20261101010000_health_settings_write_integer.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

@@ -1,4 +1,6 @@
 import {greeting} from './greeting';
+import { DayCards } from './DayCards';
+import { DayHistory } from './DayHistory';
 import {Icon,WaldoMark} from './icons';
 import {clockLabel,DayRail,localMinutes,sameLocalDay,stagger,type RailMark} from './Infographics';
 import {Drawer,Riffle} from '@lucasmarkes/hairline/react';
@@ -23,7 +25,7 @@ import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'health' | 'admin/health' | 'connections' | 'connections/imessage' | 'connections/devices' | 'connections/phone' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'vault' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'health' | 'admin/health' | 'connections' | 'connections/imessage' | 'connections/devices' | 'connections/phone' | 'connections/agent_mail' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'vault' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -34,7 +36,7 @@ export const resolveRoute = (raw: string): Route => {
   if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
   const value = raw.split('?')[0] ?? '';
   if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
-  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices','connections/phone'].includes(value))return value as Route;
+  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices','connections/phone','connections/agent_mail'].includes(value))return value as Route;
   if (value === 'admin' || value === 'admin/health' || value === 'health' || value === 'vault' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
   if(isThreadRoute(value))return value as Route;
@@ -55,7 +57,7 @@ const ownerActivity = (data: OverviewV1) => data.latest_activity?.kind === 'hear
 // The time-of-day word carries the one serif accent on the page.
 const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(\.)$/.exec(text); return match ? <>{match[1]}<em>{match[2]}</em>{match[3]}</> : <>{text}</>; };
 
-export const isSettingsRoute = (route: Route) => route === 'admin' || route === 'admin/health' || route === 'health' || route === 'vault' || ['connections', 'connections/imessage', 'connections/devices', 'connections/phone', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
+export const isSettingsRoute = (route: Route) => route === 'admin' || route === 'admin/health' || route === 'health' || route === 'vault' || ['connections', 'connections/imessage', 'connections/devices', 'connections/phone', 'connections/agent_mail', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
 const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
@@ -84,7 +86,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='not-found')return <section className="tile notice" role="status"><h1>Page not found</h1><p>This console page doesn’t exist.</p><a className="button-link" href="#/today">Back to Today</a></section>;
   if(route==='settings/not-found')return <><SettingsHead selected="day" isAdmin={isAdmin}/><section className="tile notice" role="status"><h2>Settings page not found</h2><p>This settings page doesn’t exist.</p><a className="button-link" href="#/settings">Open Settings</a></section></>;
   if(route==='connections')return <><SettingsHead selected="connections" isAdmin={isAdmin}/><ControlsPanel key={route} view="connections" section="connections" embedded/></>;
-  if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
+  if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'||route==='connections/agent_mail'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':route==='connections/agent_mail'?'agent_mail':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':view==='agent_mail'?'Your Waldo address':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting')return <ControlsPanel key={route} view="waiting"/>;
   if(route==='patrol')return <><ControlsPanel key={route} view="activity"/><AccessLogPanel/></>;
@@ -99,7 +101,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
     ? { title: 'Sent, as recorded.', body: 'Waldo logged a send. That doesn’t confirm delivery or show the message; check your chat.' }
     : data.brief.status === 'sent_unconfirmed' ? { title: 'Waiting to hear it arrived.', body: 'Waldo queued the Brief for delivery and hasn’t yet heard that it reached you. It records it as arrived once it does.' }
     : data.brief.status === 'not_scheduled' ? { title: 'No Brief scheduled.', body: 'There’s nothing to send yet.' }
-      : { title: 'Not sent yet.', body: 'No Brief content is shown here.' };
+      : { title: 'Not sent yet.', body: 'It shows at the top of Today, with Check-in and the Close, once it goes out.' };
   const zone = data.timezone, next = data.next_card;
   const nextDue = !!next && Date.parse(next.scheduled_at) <= now.getTime();
   const marks: RailMark[] = [];
@@ -109,8 +111,9 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   const railSummary = [`Now ${clockLabel(now, zone)}.`, ...marks.map(mark => `${mark.label} ${mark.kind === 'done' ? 'sent, as recorded,' : mark.kind === 'next' ? 'next,' : 'on your plan,'} at ${mark.time}.`)].join(' ');
   return <div className="flow" key="today">
     <div className="page-heading reveal" style={stagger(0)}>{dayLabel(zone, now) && <span className="label">{dayLabel(zone, now)}</span>}<h1><Greeting text={greeting(zone, now)}/></h1><p>{waiting ? `${waiting} ${waiting===1?'decision is':'decisions are'} waiting for you.` : 'No decisions are waiting.'} {next ? `${next.label} is ${nextDue?'on':'next on'} your recorded plan.` : 'No next card is recorded.'}</p></div>
-    <section className="tile rail-tile reveal" style={stagger(1)} aria-label="Your day"><DayRail marks={marks} now={nowAt} summary={railSummary}/></section>
-    <section className={`tile focus reveal${waiting > 0 ? ' today-action' : ''}`} style={stagger(2)}>
+    <div className="reveal" style={stagger(1)}><DayCards/></div>
+    <section className="tile rail-tile reveal" style={stagger(2)} aria-label="Your day"><DayRail marks={marks} now={nowAt} summary={railSummary}/></section>
+    <section className={`tile focus reveal${waiting > 0 ? ' today-action' : ''}`} style={stagger(3)}>
       <div className="focus-copy">
         <span className="label">{waiting > 0 ? 'Waiting on you' : 'Waiting'}</span>
         <h2>{waiting === 0 ? 'Nothing needs you.' : waiting === 1 ? 'One decision needs you.' : `${waiting} decisions need you.`}</h2>
@@ -119,7 +122,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
       </div>
       {waiting > 0 ? <Riffle className="figure" label="A tray of cards, an interactive illustration. Decorative."/> : <Drawer className="figure" label="An empty cabinet drawer, an interactive illustration. Decorative."/>}
     </section>
-    <div className="tile disclosures reveal" style={stagger(3)}>
+    <div className="tile disclosures reveal" style={stagger(4)}>
       <details name="today" className="disclosure"><summary><Icon name="calendarClock"/><span className="label key">{nextDue ? 'On your plan' : 'Next'}</span><span className="value">{next ? `${next.label} · ${clockLabel(next.scheduled_at, zone)}` : 'Nothing scheduled ahead.'}</span></summary>
         <div className="disclosure-body"><p>{next ? date(next.scheduled_at, zone) : 'No later card is recorded in your plan.'}</p><a className="quiet-link" href="#/settings/day">Adjust timing</a></div></details>
       <details name="today" className="disclosure"><summary><Icon name="brief"/><span className="label key">The Brief</span><span className="value">{brief.title}</span></summary>
@@ -128,7 +131,8 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
         <div className="disclosure-body"><p>{activity ? (activity.summary?.trim() ? activity.summary : missingOutcome) : 'No owner-facing activity in the latest record.'}</p>
           {activity && <p className="meta">Recorded status: {activity.status} · {date(activity.at, zone)}</p>}<a className="quiet-link" href="#/patrol">Open Patrol</a></div></details>
     </div>
-    <p className="caption reveal" style={stagger(4)}>The Brief, Check-in and evening Close run in chat. Their content and results aren’t shown here.</p>
+    <div className="reveal" style={stagger(5)}><DayHistory/></div>
+    <p className="caption reveal" style={stagger(6)}>The Brief, Check-in and the Close show above as they go out, and in Chat.</p>
   </div>;
 }
 

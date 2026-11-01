@@ -65,7 +65,7 @@ describe('TelegramOwnerListener', () => {
 
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async () => { throw new Error('model down'); }, saveOffset: async () => undefined });
     await expect(failing.handle(ownerTyped({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' }))).resolves.toBe('failed');
-    expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'Sorry - I hit a problem answering that. Please try again in a moment.' });
+    expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'I hit a problem answering that. Try again in a moment.' });
   });
 
   it('moves the receipt to a final reaction from the Telegram allowlist when the turn resolves', async () => {
@@ -179,7 +179,7 @@ describe('TelegramOwnerListener', () => {
     finish('late');
     await vi.advanceTimersByTimeAsync(10);
     const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
-    expect(sends).toEqual(['That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.']);
+    expect(sends).toEqual(['That took too long, and anything I had started may still finish. Try again, or split it into smaller asks.']);
   });
 });
 
@@ -231,6 +231,18 @@ it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML
     await listener.handle(ownerTyped({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'}));
     const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
     expect(payload).toEqual({chat_id:OWNER,text});
+  }
+});
+it('a queued turn closes its own trace with one turn root only where the surface declares its outbox settles no hop', async () => {
+  for (const [surface, closes, roots] of [['imessage', true, 1], ['whatsapp', false, 0], ['telegram', false, 0]] as const) {
+    const entries: { trace: string; hop: string; ok: boolean; text?: { input: string; output?: string } }[] = [];
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface, api: recorder().api, respond: async () => 'the reply', saveOffset: async () => undefined,
+      queueFinal: async () => undefined, closesTraceOnQueue: closes, log: entry => entries.push(entry) });
+    expect(await listener.handle(ownerTyped({ updateId: 5, senderId: OWNER, chatId: OWNER, messageId: null, sentAt: null, text: 'the question' }))).toBe('queued');
+    const turns = entries.filter(entry => entry.hop === 'turn');
+    expect(turns, surface).toHaveLength(roots);
+    if (roots) expect(turns[0]).toMatchObject({ trace: `${surface}-5`, ok: true, text: { input: 'the question', output: 'the reply' } });
+    if (roots) expect(entries.map(entry => entry.hop).indexOf('turn')).toBeGreaterThan(entries.map(entry => entry.hop).indexOf('delivery_pending'));
   }
 });
 it('WhatsApp actual listener propagates uncertain final send without retry wording or second send',async()=>{

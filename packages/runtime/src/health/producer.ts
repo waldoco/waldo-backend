@@ -1,5 +1,8 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
+import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
 
@@ -20,7 +23,37 @@ export type ProducerDeps = Readonly<{
   // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
   // zone is the score's own band.
   readScores?: (day: string) => Promise<unknown>;
+  // Which days in the last `days` local days hold a row (waldo.health_scores_history). The backfill asks it once a run.
+  readHistory?: (days: number) => Promise<unknown>;
+  // How many past days one run may backfill; the rest wait for the next run.
+  backfillLimit?: number;
+  // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
+  trainingLoad?: boolean;
+  // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
+  // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
+  readSettings?: () => Promise<unknown>;
 }>;
+
+// The stated need and when it last changed, or null for an answer that is not the settings shape.
+export type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
+export const statedNeedOf = (raw: unknown): StatedNeed | null => {
+  const answer = asRecord(raw);
+  const minutes = answer?.sleep_need_minutes === null ? { success: true as const, data: null } : healthSleepNeedMinutesV1Schema.safeParse(answer?.sleep_need_minutes);
+  if (!answer || !minutes.success) return null;
+  const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
+  return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
+};
+// The row is on the current need when the need read again is the figure it was computed on, even if the owner saved it again.
+const sameNeed = (read: StatedNeed, again: StatedNeed | null): boolean => again !== null && again.minutes === read.minutes;
+// A row compiled before the need last changed, or at that instant, may move zone only because the need moved, not the body,
+// so its move is not told to the health trigger. The next compile is on the new need on both sides.
+const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
+  const compiledAt = typeof before?.compiled_at === 'string' ? Date.parse(before.compiled_at) : NaN;
+  return stated.changedAt !== null && Number.isFinite(compiledAt) && compiledAt <= stated.changedAt;
+};
+
+// Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.
+export const BACKFILL_DAYS_PER_RUN = 30;
 
 const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
@@ -42,7 +75,10 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean }>;
+// A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
+// for a reader that checks it. Null for any other signal.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
+export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -54,6 +90,19 @@ const stagesOf = (raw: unknown): SleepStages | null => {
   const r = asRecord(raw);
   return r && STAGES.every(stage => typeof r[stage] === 'number' && Number.isFinite(r[stage]) && r[stage] >= 0) ? Object.fromEntries(STAGES.map(stage => [stage, r[stage]])) as SleepStages : null;
 };
+// A workout's zones and effort, each dropped on its own when it is not the shape the contract admits.
+const workoutDetailOf = (activity: unknown, raw: unknown): WorkoutDetail => {
+  const r = asRecord(raw);
+  const seconds = asRecord(r?.hr_zones)?.seconds;
+  const effort = asRecord(r?.effort);
+  return {
+    zoneSeconds: Array.isArray(seconds) && seconds.length === 5 && seconds.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) ? seconds as number[] : null,
+    effort: effort && typeof effort.score === 'number' && effort.score >= 1 && effort.score <= 10 && (effort.method === 'rated' || effort.method === 'estimated')
+      ? { score: effort.score, method: effort.method } : null,
+    activity: typeof activity === 'string' ? activity : null,
+    detail: r ?? {},
+  };
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -63,6 +112,7 @@ const reading = (raw: unknown): Reading | null => {
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
     samsungWriter: r.samsung_writer === true,
+    workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
   };
 };
 
@@ -136,9 +186,12 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
-    else if (r.signal === 'hrv_window' && hrvMethod(r.method)) { bucket.hrv = r.value; bucket.hrvMethod = hrvMethod(r.method); }
+    else if (r.signal === 'hrv_window' && hrvMethod(r.method)) {
+      const method = hrvMethod(r.method)!;
+      bucket.hrvReadings = [...bucket.hrvReadings.filter(reading => reading.method !== method), { value: r.value, method }];
+    }
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
     else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
@@ -264,7 +317,8 @@ const localDay = (at: number, timeZone: string): string =>
 const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted: boolean }>): object => {
   if (debt.state === 'unavailable') return { state: 'unavailable', reason: debt.reason };
   const version = { algorithm_version: debt.algorithm_version, activation: basis.accepted ? debt.activation : 'candidate_unaccepted' };
-  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
+  const trend = debt.trend ? { trend: debt.trend } : {};
+  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version, ...trend } : { state: 'partial', confidence: debt.coverage, ...version, ...trend };
 };
 
 // The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
@@ -288,11 +342,13 @@ type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_ver
 type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
 // A pillar computed provisionally carries its baseline label, the signals and days it used, and, from an acceptable source,
 // a confidence that is its coverage times the source's confidence. From any other it is a candidate, and it is never more
-// confident than the lowest source would be: its coverage times the lowest factor. A coverage that is not a number is an
-// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+// confident than the lowest source would be: its coverage times the lowest factor. In such a pillar a coverage that is not a number is an
+// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence, a non-finite
+// one written as the null it always was.
 const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number => {
+  if (!pillar.baseline) return pillar.coverage;
   if (!Number.isFinite(pillar.coverage)) throw new Error('coverage is not a number');
-  return pillar.baseline ? round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage;
+  return round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE));
 };
 const activationOf = (activation: string, basis: RowSource): string => (basis.accepted ? activation : 'candidate_unaccepted');
 const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): object => ({
@@ -300,7 +356,23 @@ const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): obj
   activation: activationOf(result.activation, basis), hrv_method: result.hrv_method, ...(result.baseline ? { baseline: result.baseline, used: result.used } : {}),
 });
 
-const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[]): object => {
+// Today's windows ride only an accepted row: they come from the same provisional engine, so a row from a source nothing has
+// validated carries none, and a day other than today never does.
+const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): object =>
+  forToday && basis.accepted && scores.windows && scores.windows.length > 0 ? { windows: scores.windows, windows_version: ENERGY_WINDOWS_VERSION } : {};
+
+// Signals only a body-worn sensor makes. A day the phone alone saw (movement, daylight) shows the phone was about, not that
+// a session would have been recorded, so it is not an observed day.
+const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
+// The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
+// Another source's workouts never mix in.
+const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
+  throughDay: yesterday,
+  observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
+  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, effort: r.workout?.effort ?? null })),
+});
+
+const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
@@ -310,7 +382,7 @@ const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason) : pillarRow(toRowZone('weight', weight.zone), weight, basis),
     ...(recovery.state === 'available' ? { confidence: confidenceOf(recovery, basis) } : {}),
     sleep_debt: sleepDebtOf(scores.sleep_debt, basis), drivers: scores.drivers,
-    freshness: 'fresh', tags,
+    freshness: 'fresh', tags, ...windowsOf(scores, basis, forToday),
   };
 };
 
@@ -320,6 +392,20 @@ const storedBefore = async (read: ProducerDeps['readScores'], day: string): Prom
   try {
     const same = asRecord(asRecord(await read?.(day))?.scores);
     return same?.day === day ? same : null;
+  } catch { return null; }
+};
+// The days that already hold a row. The window is anchored on the database's today in the owner's latest zone, so ninety
+// days covers the thirty-day series with room at a zone edge. Nothing stored (no_readings) is an empty set. Any other answer,
+// a consent refusal included, or a read that fails, is unknown, and the run backfills nothing rather than write blind.
+const HISTORY_WINDOW_DAYS = 90;
+const heldDays = async (read: NonNullable<ProducerDeps['readHistory']>): Promise<ReadonlySet<string> | null> => {
+  try {
+    const answer = asRecord(await read(HISTORY_WINDOW_DAYS));
+    if (answer?.unavailable === 'no_readings') return new Set();
+    const days = asRecord(answer?.history)?.days;
+    if (!Array.isArray(days)) return null;
+    const held = days.map(day => asRecord(day)?.day);
+    return held.every((day): day is string => typeof day === 'string' && DAY.test(day)) ? new Set(held) : null;
   } catch { return null; }
 };
 // Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
@@ -342,6 +428,12 @@ const steadied = (scores: DailyScores, before: Record<string, unknown> | null): 
 // The writer names the pillars whose zone word changed; only whether any did leaves this function.
 const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
 
+// The only trace of a written row: that it was written, and whether a pillar of it was provisional. No owner, day or value.
+const logWritten = (row: object): void => {
+  const provisional = (['recovery', 'form', 'weight'] as const).some(pillar => asRecord(asRecord((row as Record<string, unknown>)[pillar])?.baseline)?.state === 'provisional');
+  console.log(JSON.stringify({ hop: 'health_scores', code: 'written', provisional }));
+};
+
 const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'failed' => {
   const a = asRecord(answer);
   if (a?.written === true) return 'written';
@@ -360,6 +452,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
     const parsed = parseSeries(await scoresRead);
     if (parsed.kind !== 'series') return parsed.kind;
+    const stated = deps.readSettings ? statedNeedOf(await deps.readSettings().catch(() => null)) : { minutes: null, changedAt: null };
+    if (!stated) return 'failed';
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
@@ -384,19 +478,64 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       }
       return { readingDays, travelled, days };
     };
+    // Recovery and sleep debt for each past day with no row, labelled backfilled: no Form or Weight (they are not reconstructed
+    // for past days), no windows, and no zone notice, since a late row is not a change the owner lived through. A day that
+    // already holds a row of any kind is left alone, and the database refuses a backfilled row over a live one regardless.
+    const recordsBySource = new Map<string, ReturnType<typeof recordsOf>>();
+    const backfill = async (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<void> => {
+      const newestBackfilled = shiftDay(today, -2);
+      const candidates = [...new Set(present.flatMap(s => s.readings.filter(r => r.signal === 'sleep_duration' && r.day <= newestBackfilled).map(r => r.day)))].sort();
+      if (!candidates.length) return;
+      const held = await heldDays(readHistory);
+      if (!held) return;
+      const missing = candidates.filter(day => !held.has(day)).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
+      for (const day of missing) {
+        const chosen = chooseFor(day);
+        const records = recordsBySource.get(chosen.source) ?? recordsOf(chosen);
+        recordsBySource.set(chosen.source, records);
+        const scores = deps.compute({ access: 'granted', targetDay: day, days: records.days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
+        if (scores.recovery.state === 'unavailable' && scores.sleep_debt.state === 'unavailable') continue;
+        const unavailable = (reason: 'intraday_inputs_unavailable' | 'calendar_demand_unavailable') => ({ state: 'unavailable' as const, reason });
+        const late = { ...scores, form: unavailable('intraday_inputs_unavailable'), weight: unavailable('calendar_demand_unavailable') };
+        const row = { ...rowOf(day, late, { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, [], false), backfilled: true };
+        const outcome = writeOutcome(await deps.writeContext(JSON.stringify(row)));
+        if (outcome === 'written') logWritten(row);
+        // A consent or epoch the database refuses is refused for every later day too.
+        if (outcome === 'refused') break;
+      }
+    };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
+    // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
+    let provisional = false, needMoved = false;
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
+      provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags);
+      const before = await storedBefore(deps.readScores, targetDay);
+      // A need saved since this run read it would leave today's row on the old need but stamped after the change, out of
+      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days.
+      if (targetDay === today && deps.readSettings && !sameNeed(stated, statedNeedOf(await deps.readSettings().catch(() => null)))) {
+        outcomes.push('stale');
+        needMoved = true;
+        continue;
+      }
+      const row = {
+        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+      };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
-      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+      if (writeOutcome(answer) === 'written') logWritten(row);
+      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+    }
+    if (provisional && deps.readHistory && !needMoved) {
+      // Late days never decide the outcome of the live rows, and a failure here is only a tag.
+      try { await backfill(deps.readHistory); } catch { console.error('health backfill failed'); }
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
     return 'no_readings';

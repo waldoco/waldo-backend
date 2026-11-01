@@ -1,3 +1,5 @@
+import type { IMessageStandardReaction } from '@waldo/contracts';
+
 export const TELEGRAM_REACTIONS: readonly string[] = [
   '❤', '👍', '👎', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😱', '🤬', '😢', '🎉', '🤩', '🤮', '💩', '🙏', '👌', '🕊', '🤡', '🥱', '🥴', '😍', '🐳', '❤‍🔥', '🌚', '🌭', '💯', '🤣', '⚡', '🍌', '🏆', '💔', '🤨', '😐', '🍓', '🍾', '💋', '🖕', '😈', '😴', '😭', '🤓', '👻', '👨‍💻', '👀', '🎃', '🙈', '😇', '😨', '🤝', '✍', '🤗', '🫡', '🎅', '🎄', '☃', '💅', '🤪', '🗿', '🆒', '💘', '🙉', '🦄', '😘', '💊', '🙊', '😎', '👾', '🤷‍♂', '🤷', '🤷‍♀', '😡',
 ];
@@ -21,3 +23,7 @@ export const reactionInstruction = (choices: readonly string[]): string => [
   'Stress, worry or a rough day is not sad news: meet it with ❤️ or 🤗, never 😢. Save 😢 for genuinely sad news (a loss, bad health news). Save 🤷 for a genuine "no idea / can\'t help" - never for a success or a completed task.',
   `Reply with JSON {"reaction":"<emoji>"}, the emoji taken from this list: ${choices.join(' ')}`,
 ].join('\n');
+
+// The six standard reactions react_to_message offers, as the emoji they show. iMessage sends the tapback by name; WhatsApp
+// sends the emoji itself.
+export const STANDARD_REACTION_EMOJI: Readonly<Record<IMessageStandardReaction, string>> = { love: '❤️', like: '👍', dislike: '👎', laugh: '😂', emphasis: '‼️', question: '❓' };

@@ -174,6 +174,15 @@ describe('revision-bound owner control actions', () => {
     expect(() => readActionResult({ receipt: { state: 'unconfirmed', message: 'Unknown', navigation: ticket }, duplicate: false }, 'google.connect', 'https://w.test')).toThrow();
   });
 
+  // The server's own receipt: googleConnectReceipt returns CONSOLE_GOOGLE_START_PATH (runtime channels/console.ts, `/console/google/start/`)
+  // followed by a 43-character nonce. This literal is pinned to that constant; change both together.
+  it('lets a console Google connect continue on this console\'s own start link, and nothing near it', () => {
+    const start = `/console/google/start/${'A'.repeat(43)}`;
+    expect(readActionResult({ receipt: { state: 'recorded', message: 'Google connect is ready to begin. Access has not been granted or tested.', navigation: start }, duplicate: false }, 'google.connect', 'https://w.test').receipt.navigation).toBe(`https://w.test${start}`);
+    for (const target of [`https://foreign.test${start}`, `http://w.test${start}`, '/console/google/start/short', `/console/google/start/${'A'.repeat(44)}`, `${start}?next=https://evil.test`, `${start}#x`, `/console/google/other/${'A'.repeat(43)}`, `/console/google/start/${'A'.repeat(42)}!`]) expect(() => allowedControlNavigation(target, 'https://w.test')).toThrow();
+    expect(() => readActionResult({ receipt: { state: 'recorded', message: 'Saved', navigation: start }, duplicate: false }, 'google.disconnect', 'https://w.test')).toThrow('navigation receipt');
+  });
+
   it('allows an MCP connect to continue only on this console\'s own start link', () => {
     const start = `/console/mcp/start/${'A'.repeat(43)}`;
     expect(readActionResult({ receipt: { state: 'recorded', message: 'Sign in', navigation: start }, duplicate: false }, 'mcp.connect', 'https://w.test').receipt.navigation).toBe(`https://w.test${start}`);
@@ -227,6 +236,9 @@ describe('one-time values in receipts', () => {
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair', 'https://x.test').reveal).toEqual({ kind: 'host_code', value: host });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, extra: 'never-retain' } }, 'device.pair', 'https://x.test').reveal).toEqual({ kind: 'pairing_code', value: pairing });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: 'woof@heywaldo.in' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100', app: 'whatsapp' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100' });
     for (const [value, action] of [
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'device.pair'],
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'challenge', value: host } }, 'imessage.pair'],

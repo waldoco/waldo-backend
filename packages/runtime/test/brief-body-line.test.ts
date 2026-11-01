@@ -6,7 +6,7 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
-import { DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
+import { CLASH_LINE, DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -106,6 +106,9 @@ describe('the body in a day card', () => {
     }
     expect(prompt('card:close')).toContain('at most one line');
     expect(prompt('card:close')).not.toContain('what to protect');
+    // A demanding calendar on a low day is the read of the day, and it gets one offer; which day that is stays the model's call.
+    for (const id of ['card:brief', 'card:midday']) expect(prompt(id)).toContain(CLASH_LINE);
+    expect(prompt('card:close')).not.toContain(CLASH_LINE);
     for (const card of DAY_CARDS) expect(prompt(card.id)).toContain('say nothing about sleep, recovery or energy, and never guess or make up a score');
   });
 
@@ -137,11 +140,13 @@ describe('the body in a day card', () => {
     });
   });
 
-  it('with health not shared, the Brief request carries the rule and no health', async () => {
+  // Revoked sharing reads the same as never shared: the consented read answers with no context.
+  it('with health not shared or revoked, the Brief request carries the rule, says no health is available, and carries no health', async () => {
     consent.shared = false;
     await briefFor('brief-body-withheld', state => {
       const request = briefRequest();
       expect(request).toContain(BODY_RULE);
+      expect(request).toContain('No derived health context is available for this invocation.');
       for (const word of HEALTH_WORDS) expect(request).not.toContain(word);
       expect(storedText(state)).toContain(CARD_TEXT);
     });

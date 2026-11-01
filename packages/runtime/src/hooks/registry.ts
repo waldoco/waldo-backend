@@ -87,6 +87,7 @@ import {
   trackResponsibilityArgsSchema,
   updateTodoArgsSchema,
   listHealthLogsArgsSchema,
+  setSleepNeedArgsSchema,
   listRemindersArgsSchema,
   listStandingOrdersArgsSchema,
   logMealArgsSchema,
@@ -246,6 +247,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   log_meal: logMealArgsSchema,
   log_workout: logWorkoutArgsSchema,
   list_health_logs: listHealthLogsArgsSchema,
+  set_sleep_need: setSleepNeedArgsSchema,
   set_standing_order: setStandingOrderArgsSchema,
   list_standing_orders: listStandingOrdersArgsSchema,
   cancel_standing_order: cancelStandingOrderArgsSchema,
@@ -390,22 +392,32 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
 
     const parsed = schema.safeParse(payload.args);
     if (!parsed.success) {
-      // Model-authored args are safe to echo: the message is the model's recovery path, so name
-      // the failing fields and the format the schema expects instead of an opaque halt.
-      const rawIssues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues;
-      const issues = rawIssues
-        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-        .join('; ');
-      // The datetime hint only when a datetime actually failed validation: appended blindly it
-      // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
-      // UTC offset that was never the problem).
-      const datetimeFailed = rawIssues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
-      const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
-      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly${hint}`, 'invalid_args');
+      return halt(invalidArgumentsCause((parsed as { success: false; error: { issues: readonly ArgumentIssue[] } }).error.issues), 'invalid_args');
     }
 
     return ok();
   },
+};
+
+export type ArgumentIssue = Readonly<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+export const MAX_ARGUMENT_ISSUES = 6;
+const MAX_ISSUE_PATH_CHARS = 80;
+const MAX_ISSUE_MESSAGE_CHARS = 200;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+// The model's recovery path when its arguments miss a schema: the failing fields and what the schema expected there.
+// Model-authored args are safe to echo, and zod's messages name types and bounds, not the values sent. A call with many
+// bad fields names the first few and counts the rest, so the cause stays well inside the tool error cap.
+export const invalidArgumentsCause = (issues: readonly ArgumentIssue[]): string => {
+  const named = issues.slice(0, MAX_ARGUMENT_ISSUES)
+    .map((issue) => `${clip(issue.path.map(String).join('.'), MAX_ISSUE_PATH_CHARS) || '(root)'}: ${clip(issue.message, MAX_ISSUE_MESSAGE_CHARS)}`);
+  const more = issues.length > MAX_ARGUMENT_ISSUES ? [`and ${issues.length - MAX_ARGUMENT_ISSUES} more`] : [];
+  // The datetime hint only when a datetime actually failed validation: appended blindly it
+  // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
+  // UTC offset that was never the problem).
+  const datetimeFailed = issues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
+  const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
+  return `invalid tool arguments: ${[...named, ...more].join('; ')}; match the tool schema exactly${hint}`;
 };
 
 export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
@@ -448,6 +460,15 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
 // tool outside its handler set, a handler bound to the live turn), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
 
+// A tool that takes only what the owner says directly is refused in a turn that has read outside text: it is neither run
+// nor carded, so its arguments never reach the owner's ledger. The model is told to ask the owner instead.
+export const TAINT_REFUSED_REASON = 'external-tainted call to an owner-statement tool';
+export const TAINT_REFUSED_CAUSE = 'This is saved only from what the owner tells you directly, and this turn read an email, web page or other outside content, so nothing was saved and no card was made. Ask the owner to tell you it in a message of their own.';
+export const taintedCallRefused = (tool: ToolName, taint: SourceTaint): boolean => {
+  const tainted = TOOL_RECORDS[tool].tainted;
+  return isExternalSourceTaint(taint) && tainted !== undefined && 'refused' in tainted;
+};
+
 // The owner's ruling for a turn that has read outside text: every tool that changes something sends its change to the
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
@@ -461,9 +482,10 @@ export const taintedCallNeedsOwnerApproval = async (
 export const recordNeedsOwnerCard = async (
   tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
 ): Promise<boolean> => {
-  if (record.claim === null) return false;
-  switch (record.tainted?.exempt) {
-    case 'draft': case 'honest_origin': return false;
+  const tainted = record.tainted;
+  if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
+  switch (tainted?.exempt) {
+    case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
     default: return true;
@@ -522,6 +544,8 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
     if (!sourceTaint.success) {
       return halt('tool argument taint invalid', 'invalid_args');
     }
+
+    if (taintedCallRefused(tool.data, sourceTaint.data)) return halt(TAINT_REFUSED_REASON, 'forbidden');
 
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
@@ -651,6 +675,7 @@ export type RunHooksOptions<Ctx> = {
 // sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
 const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
   if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === TAINT_REFUSED_REASON) return toolError('hook_denied', TAINT_REFUSED_CAUSE);
   if (reason === 'privileged action lacks approval') return toolError('approval_denied');
   if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
   if (reason === 'unknown tool') return toolError('unknown_tool');

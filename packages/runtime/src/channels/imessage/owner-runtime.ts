@@ -11,6 +11,7 @@ import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttac
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
 import type { TapbackPort } from '../../tools/live/react-to-message';
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
+import { STANDARD_REACTION_EMOJI } from '../reactions';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -54,12 +55,13 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
     bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
+    ...(input.envelope.replyTo || ref?.threadOriginatorId ? { ownerThreaded: true as const } : {}),
     ...(input.replyQuote !== undefined ? { replyNote: `[Replying to your message: ${JSON.stringify(redactNumericHealth(input.replyQuote, HEALTH_SPAN_MARKER))}]` } : {}),
   });
   return result.kind;
 };
 
-const TAPBACK: Readonly<Record<IMessageStandardReaction, string>> = { love: '❤️', like: '👍', dislike: '👎', laugh: '😂', emphasis: '‼️', question: '❓' };
+const TAPBACK = STANDARD_REACTION_EMOJI;
 
 /**
  * Bridge -> owner: the owner's tapback on a message Waldo sent them, kept as one line for their next turn on that chat. Fresh
@@ -172,6 +174,8 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
       outcome = await handOff(host, row);
       for (let polls = 0; outcome.kind === 'busy' && polls < BUSY_POLLS; polls++) {
         await wait(BUSY_POLL_MS);
+        // An earlier reply that became due on this bridge while this one waited (a refused thread's plain resend) goes first.
+        if (outbox.due().find((due) => due.bridgeDoName === row.bridgeDoName)?.replyRef !== row.replyRef) break;
         outcome = await handOff(host, row);
       }
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }

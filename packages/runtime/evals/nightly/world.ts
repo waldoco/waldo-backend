@@ -12,13 +12,16 @@ import { loopBook, loopHandlers } from '../../src/channels/loops';
 import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
-import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
+import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
+import { composeDayCard } from '../../src/channels/day-cards';
+import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore, FORGOTTEN } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
+import { semanticRecall, workersAiEmbedder, type EmbeddingRunner } from '../../src/memory/semantic-recall';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
@@ -40,7 +43,8 @@ export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; t
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
-export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts' }>;
+// forgotten: the owner asked to forget this topic, so the claim is gone and the barrier that keeps it from being relearned stays.
+export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts'; forgotten?: string }>;
 // claims: the production memory store and tools. raw_history: no claim store and no memory tools, so the model has only
 // the conversation and search_episodes; the baseline a memory change is compared against.
 export type MemoryMode = 'claims' | 'raw_history';
@@ -61,6 +65,8 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Topics the owner asked to forget whose purge has not settled: claims that carry them stay out of every turn meanwhile.
+  held_topics?: readonly string[];
   // Loops the owner already gave Waldo to stay on, as the loop store holds them.
   loops?: readonly Readonly<{ title: string; due: string | null }>[];
   // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
@@ -81,16 +87,18 @@ const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestIn
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 // node:sqlite behind the Durable Object's SqlStorage shape, with the same rowsWritten count and a transactionSync that
-// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO.
+// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO. A BLOB
+// goes in and comes back as an ArrayBuffer, as the DO's does.
 const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => T) => T }> => {
   const db = new DatabaseSync(':memory:');
   const sql = {
     exec(query: string, ...bindings: unknown[]) {
       const statement = db.prepare(query);
-      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[];
+      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value)) as never[];
       const writes = /^\s*(insert|update|delete|replace)\b/i.test(query) && !/\breturning\b/i.test(query);
       const changed = writes ? Number(statement.run(...values).changes) : 0;
-      const rows = writes ? [] : statement.all(...values) as Record<string, unknown>[];
+      const blobs = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value instanceof Uint8Array ? value.slice().buffer : value]));
+      const rows = writes ? [] : (statement.all(...values) as Record<string, unknown>[]).map(blobs);
       return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: writes ? changed : rows.length, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
@@ -162,7 +170,8 @@ const consentRows = (status: string) => ['storage_compute', 'model_processing'].
 const item = (mail: SeedMail): MailItem => ({ id: mail.id, thread_id: mail.thread_id, from: mail.from, subject: mail.subject, snippet: mail.body.slice(0, 160), at: mail.at });
 const message = (mail: SeedMail): ThreadMessage => ({ id: mail.id, from: mail.from, subject: mail.subject, at: mail.at, body: mail.body });
 
-export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims') => {
+// embeddings: semantic recall on, over this runner, built as the owner object builds it.
+export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims', embeddings?: EmbeddingRunner) => {
   const events = (seed.events ?? []).map((event) => ({ owner_id: OWNER, ...event, all_day: event.all_day ?? false }));
   const mail = [...(seed.mail ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Health sharing: null before any step shares it; 'withdrawn' after one withdraws it.
@@ -266,8 +275,11 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   for (const seeded of seed.memory ?? []) {
     claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
+    if (seeded.forgotten !== undefined) { claims.forget(seeded.id); claims.barrier(seeded.forgotten, start); }
   }
+  for (const topic of seed.held_topics ?? []) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, start);
   const memory = memoryMode === 'claims' ? claims : undefined;
+  const semantic = memory && embeddings ? semanticRecall({ sql, transaction: transactionSync, embedder: workersAiEmbedder(embeddings) }) : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
@@ -318,7 +330,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const handlers = [
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -356,9 +368,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
-  const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
+  const healthChange = async (decide: (id: string, prompt: string, format: HealthDecisionFormat) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null; notice: string | null }>> => {
     healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now());
     let proposal: ProposeCalendarChangeArgs | null = null;
+    let notice: string | null = null;
     const outcome = await runHealthTrigger({
       book: healthBook, now, newId: () => nextId('health'), timezone: TIMEZONE, enabled: () => true, proactivity: () => ({ quiet_start: null, quiet_end: null, volume: 'normal' }), modeSetting: () => 'auto',
       readHealth: async () => (sharing === 'shared' ? triggerRow() : null),
@@ -367,14 +380,19 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       }, from, to, TIMEZONE),
       admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
+      // HEALTH_SOLO_NOTICE on, as the switch would have it, with an update card free to go out.
+      soloNotice: { enabled: () => true, held: () => null, deliver: async (id, text, commit) => { notice = text; effect('health.notice', { id }); commit(); } },
       reschedule: async () => undefined, log: () => undefined,
     });
-    return { outcome, proposal };
+    return { outcome, proposal, notice };
   };
 
   return {
-    clock, conversation, memory, handlers, healthChange,
-    ready: Promise.all([mcpReady, chat.seed(conversation)]),
+    clock, conversation, memory, handlers, healthChange, sql, semantic,
+    // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
+    dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
+    // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
+    ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync()]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.

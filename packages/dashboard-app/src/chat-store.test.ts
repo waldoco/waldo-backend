@@ -17,7 +17,7 @@ function harness() {
     page: async () => { state.pageCalls += 1; const queued = state.pages.shift() ?? state.history; if (queued instanceof Error) throw queued; return queued; },
     send: async (id, text) => { state.sends.push([id, text]); const result = state.sendResult ?? { message_id: 'app-1', state: 'admitted', closed_reason: null, effects_unconfirmed: false }; if (result instanceof Error) throw result; return result; },
     receipt: async () => { const result = state.receipts.shift() ?? { message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }; if (result instanceof Error) throw result; return result; },
-    cancel: async id => { state.cancels.push(id); return { message_id: 'app-1', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: false }; },
+    cancel: async id => { state.cancels.push(id); return { message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: false }; },
     id: () => `console-client-${++ids}`,
     now: () => now,
     setTimer: (run, ms) => { const id = next++; timers.set(id, { at: now + ms, run }); return id; },
@@ -155,7 +155,7 @@ describe('console chat store', () => {
     store.send('Book it'); await settle();
     await store.stop('console-client-1');
     expect(state.cancels).toEqual(['console-client-1']);
-    expect(store.get().local[0]).toMatchObject({ state: 'revoked', closedReason: 'cancelled' });
+    expect(store.get().local[0]).toMatchObject({ state: 'interrupted', closedReason: 'cancelled' });
     expect(store.working()).toBe(false);
   });
 
@@ -192,5 +192,65 @@ describe('console chat store', () => {
     await advance(20_000);
     expect(store.get().messages.map(m => m.id)).toEqual(['a']);
     expect(store.get().notice).toContain('Retrying');
+  });
+  describe('a reply streamed while it was written', () => {
+    const reply = (id: string, text: string): ChatMessage => ({ ...msg(id, 'assistant', text), parent_id: 'app-1' });
+    const running = (draft?: string): ChatReceipt => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, ...(draft ? { draft } : {}) });
+
+    it('drops a withdrawn draft, so words that are no longer the answer stop showing', async () => {
+      const { store, state, advance } = harness();
+      store.open(); await settle();
+      store.send('Plan my afternoon'); await settle();
+      state.receipts.push(running('Let me look'));
+      await advance(700);
+      state.receipts.push({ ...running(), activity: { kind: 'mail', since: 1 } });
+      await advance(1000);
+      expect(store.get().local[0]!.draft).toBeUndefined();
+      expect(store.get().local[0]!.activity?.kind).toBe('mail');
+    });
+
+    it('holds the last words through a closed receipt until the reply lands, then records which reply they became, with no arrival', async () => {
+      const { store, state, advance } = harness();
+      store.open(); await settle();
+      store.send('Plan my afternoon'); await settle();
+      state.receipts.push(running('Here is the plan'));
+      await advance(700);
+      // Closed, but the reply row is not readable yet: the words stay.
+      state.history = { messages: [msg('app-1', 'user', 'Plan my afternoon')], next_cursor: null };
+      state.receipts.push({ message_id: 'app-1', state: 'completed', closed_reason: null, effects_unconfirmed: false });
+      await advance(1000);
+      expect(store.get().local[0]!.draft).toBe('Here is the plan');
+      expect(store.get().local[0]!.activity).toBeUndefined();
+      state.history = { messages: [msg('app-1', 'user', 'Plan my afternoon'), reply('r1', 'Here is the plan for today.')], next_cursor: null };
+      await advance(2000);
+      expect(store.get().local).toEqual([]);
+      expect(store.get().streamed.get('r1')).toBe('Here is the plan');
+      expect(store.get().arrived.has('r1')).toBe(false);
+    });
+
+    it('lets go of held words when the reply never shows', async () => {
+      const { store, state, advance } = harness();
+      store.open(); await settle();
+      store.send('Plan my afternoon'); await settle();
+      state.receipts.push(running('Here is'));
+      await advance(700);
+      state.history = { messages: [msg('app-1', 'user', 'Plan my afternoon')], next_cursor: null };
+      state.receipts.push({ message_id: 'app-1', state: 'completed', closed_reason: null, effects_unconfirmed: false });
+      await advance(1000);
+      await advance(20_000);
+      expect(store.get().local).toEqual([]);
+    });
+
+    it('keeps the words an interrupted turn had shown beside its closure', async () => {
+      const { store, state, advance } = harness();
+      store.open(); await settle();
+      store.send('Plan my afternoon'); await settle();
+      state.receipts.push(running('Here is'));
+      await advance(700);
+      state.history = { messages: [msg('app-1', 'user', 'Plan my afternoon')], next_cursor: null };
+      state.receipts.push({ message_id: 'app-1', state: 'interrupted', closed_reason: 'interrupted', effects_unconfirmed: false });
+      await advance(1000);
+      expect(store.get().local[0]).toMatchObject({ state: 'interrupted', draft: 'Here is' });
+    });
   });
 });

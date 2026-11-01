@@ -135,7 +135,7 @@ export type TrustedGatewayExecution =
       execution_witness: TrustedRunV2ProviderExecutionWitness;
     }>;
 
-export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens'>>;
+export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens'>>;
 
 // Replayed output items are provider-specific: OpenAI's reasoning items and Anthropic's content blocks mean nothing to the
 // other provider. OpenAI Responses items carry no mark; every other adapter stamps its items with this key, and each adapter
@@ -231,7 +231,7 @@ export type TrustedRuntimeLLMRequest = RuntimeLLMRequest & {
 
 export type LLMUsage = Pick<
   LLMResponse,
-  'model' | 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'latency_ms'
+  'model' | 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens' | 'latency_ms'
 >;
 
 export type LLMAttempt =
@@ -250,6 +250,10 @@ export type LLMAttempt =
       context: LLMContextMode;
       fallback_step: GatewayAttemptFallbackStep;
       code: ErrorCode;
+      // What the provider still billed for this attempt, priced at this attempt's own model, or at billed_model when the
+      // reply came from a different model than the one asked for.
+      spent?: SpentTokens;
+      billed_model?: string;
     }
   | {
       outcome: 'skipped';
@@ -476,7 +480,14 @@ export class RuntimeLLMProvider {
     const attempts: LLMAttempt[] = [];
     const settledModels = new Set<string>();
     const resendWaits = new Map<string, number>();
-    let spent: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+    // Tokens billed by failed attempts, per model. The model that answers owns its own failed tries (a retried step is metered
+    // whole); every other model's tokens stay on its failed attempts, so each is priced at its own rates.
+    const spentByModel = new Map<string, SpentTokens>();
+    const failure = (plan: ReturnType<typeof attemptPlan>[number], code: ErrorCode, spent?: SpentTokens, billedModel?: string): LLMAttempt => {
+      const elsewhere = billedModel !== undefined && billedModel !== plan.step.model;
+      if (spent && !elsewhere) spentByModel.set(modelKey(plan.step), addTokens(spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS, spent));
+      return { outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code, ...(spent ? { spent } : {}), ...(spent && elsewhere ? { billed_model: billedModel } : {}) };
+    };
     let lastDetail: string | undefined;
 
     const plans = attemptPlan(effectiveRoute, spendCapped);
@@ -561,8 +572,7 @@ export class RuntimeLLMProvider {
         // Tool search is a request shape a routed model can refuse with a 400, the spend clamp's cheaper models among them.
         // The step degrades to every tool up front, as the switch-off request sends them, rather than failing the turn.
         if (!gatewayResult.ok && gatewayResult.code === 'invalid_args' && sanitisedRequest.request.tool_search !== undefined) {
-          attempts.push({ outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code: 'invalid_args' });
-          if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+          attempts.push(failure(plan, 'invalid_args', gatewayResult.spent));
           const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
           searchDegraded = true;
           searchRejection = gatewayResult.error.slice(0, 160);
@@ -586,17 +596,15 @@ export class RuntimeLLMProvider {
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
         if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
-        attempts.push({
-          outcome: 'failure',
-          model: plan.step.model,
-          provider: plan.step.provider,
-          context: plan.context,
-          fallback_step: plan.fallback_step,
-          code: gatewayResult.code,
-        });
-        if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+        attempts.push(failure(plan, gatewayResult.code, gatewayResult.spent));
         if (gatewayResult.code === 'invalid_args') {
-          return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          // A provider reached only because an earlier one was unhealthy may be unable to send this request at all (an attachment
+          // type it has no wire for). That says nothing about the request being bad, so the walk goes on to the floor.
+          const reachedByOutage = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
+            && PROVIDER_HEALTH_CODES.has(attempt.code) && attempt.provider !== plan.step.provider);
+          if (!reachedByOutage) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          settledModels.add(modelKey(plan.step));
+          continue;
         }
         const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
         // While another provider is still ahead in the route, a model gets its short backoff resend but no longer wait:
@@ -610,19 +618,14 @@ export class RuntimeLLMProvider {
       const parsedResponse = llmResponseSchema.safeParse(gatewayResult.data);
       if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.request.model) {
         this.circuitBreaker.recordFailure(plan.step.provider);
-        attempts.push({
-          outcome: 'failure',
-          model: plan.step.model,
-          provider: plan.step.provider,
-          context: plan.context,
-          fallback_step: plan.fallback_step,
-          code: 'invalid_args',
-        });
+        // A reply that parsed but came from another model was still billed; one that did not parse reports no tokens.
+        attempts.push(parsedResponse.success ? failure(plan, 'invalid_args', tokensOf(parsedResponse.data), parsedResponse.data.model) : failure(plan, 'invalid_args'));
         return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
       }
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
       if (!postHook.ok) {
+        attempts.push(failure(plan, postHook.error.code, tokensOf(parsedResponse.data)));
         return failFromHook(
           postHook.error,
           plan.fallback_step,
@@ -655,8 +658,12 @@ export class RuntimeLLMProvider {
           plan.context !== 'full_context' ||
           searchDegraded,
         ...(searchDegraded ? { tool_search_degraded: true as const, ...(searchRejection ? { tool_search_rejection: searchRejection } : {}) } : {}),
-        usage: { ...usage, ...addTokens(usage, spent) },
-        attempts,
+        usage: { ...usage, ...addTokens(usage, spentByModel.get(modelKey(plan.step)) ?? NO_TOKENS) },
+        attempts: attempts.map((attempt) => {
+          if (attempt.outcome !== 'failure' || !attempt.spent || attempt.billed_model !== undefined || attempt.model !== plan.step.model || attempt.provider !== plan.step.provider) return attempt;
+          const { spent: _counted, ...rest } = attempt;
+          return rest;
+        }),
         routing_logs: routingLogs,
       };
     }
@@ -1291,12 +1298,36 @@ function templateUnavailableFailure(
     ok: false,
     ...(detail ? { detail } : {}),
     error: route.floor === 'template' ? 'template fallback unavailable' : `route ${route.floor}`,
-    code: 'transient',
+    // A provider that refused the key keeps that code through the floor: read as transient, a dead key looks like a blip
+    // and nobody replaces it.
+    code: attempts.some((attempt) => attempt.outcome === 'failure' && attempt.code === 'auth_failed') ? 'auth_failed' : 'transient',
     reason: route.floor === 'template' ? 'template_unavailable' : 'gateway_exhausted',
     fallback_step: route.floor,
     attempts,
     routing_logs: routingLogs,
   };
+}
+
+// A job that failed because no model could answer (modelDownReason). It says nothing about the job, so a scheduled run that can
+// wait out the outage returns 'waiting_on_model' for it instead of counting a failure.
+export class ModelUnavailableError extends Error {
+  constructor(readonly reason: ModelDownReason, message = `model unavailable: ${reason}`) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+  }
+}
+
+// Why no model could answer, when the failure says nothing about this request: the provider refused the key, every provider on
+// the route was open-circuited, or every one failed for its own health. A turn out of time, a hook halt or a request a provider
+// refused (rejected, oversize, not found) is none of these: it would fail the same way on a healthy provider. A key without
+// model access (forbidden) is the key's outage, so it counts.
+export type ModelDownReason = 'auth_failed' | 'breaker_open' | 'template_unavailable' | 'gateway_exhausted';
+export function modelDownReason(failure: RuntimeLLMFailure): ModelDownReason | null {
+  if ((failure.reason !== 'template_unavailable' && failure.reason !== 'gateway_exhausted') || failure.detail === 'turn_deadline') return null;
+  if (failure.attempts.some((attempt) => attempt.outcome === 'failure' && !PROVIDER_HEALTH_CODES.has(attempt.code))) return null;
+  if (failure.code === 'auth_failed') return 'auth_failed';
+  if (failure.attempts.length > 0 && failure.attempts.every((attempt) => attempt.outcome === 'skipped')) return 'breaker_open';
+  return failure.reason;
 }
 
 function failFromHook(
@@ -1330,21 +1361,33 @@ function failFromHook(
   return failure;
 }
 
+const tokensOf = (response: LLMResponse): SpentTokens => ({
+  input_tokens: response.input_tokens,
+  output_tokens: response.output_tokens,
+  cache_read_input_tokens: response.cache_read_input_tokens,
+  ...(response.cache_write_input_tokens ? { cache_write_input_tokens: response.cache_write_input_tokens } : {}),
+});
+
 function usageFromResponse(response: LLMResponse): LLMUsage {
   return {
     model: response.model,
     input_tokens: response.input_tokens,
     output_tokens: response.output_tokens,
     cache_read_input_tokens: response.cache_read_input_tokens,
+    ...(response.cache_write_input_tokens ? { cache_write_input_tokens: response.cache_write_input_tokens } : {}),
     latency_ms: response.latency_ms,
   };
 }
 
+const NO_TOKENS: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+
 function addTokens(a: SpentTokens, b: SpentTokens): SpentTokens {
+  const written = (a.cache_write_input_tokens ?? 0) + (b.cache_write_input_tokens ?? 0);
   return {
     input_tokens: a.input_tokens + b.input_tokens,
     output_tokens: a.output_tokens + b.output_tokens,
     cache_read_input_tokens: a.cache_read_input_tokens + b.cache_read_input_tokens,
+    ...(written > 0 ? { cache_write_input_tokens: written } : {}),
   };
 }
 

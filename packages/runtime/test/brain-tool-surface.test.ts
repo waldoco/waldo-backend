@@ -19,6 +19,7 @@ import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { TOOL_DEFINITION_BUDGET_TOKENS } from './helpers/tool-budget';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
 // tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
@@ -109,7 +110,7 @@ describe('the brain tool surface', () => {
   it('places every tool once: about a dozen core tools, the rest in namespaces of fewer than ten', () => {
     expect(Object.keys(TOOL_RECORDS).sort()).toEqual([...toolNameSchema.options].sort());
     const core = Object.entries(TOOL_RECORDS).filter(([, record]) => record.brain === 'core').map(([name]) => name);
-    expect(core.length).toBeLessThanOrEqual(14);
+    expect(core.length).toBeLessThanOrEqual(15);
     // A background task the model cannot see is one it never starts: off the core for the budget, its namespace line names it.
     expect(BRAIN_NAMESPACES[TOOL_RECORDS.start_task.brain as keyof typeof BRAIN_NAMESPACES]).toContain('start_task');
     for (const namespace of Object.keys(BRAIN_NAMESPACES)) {
@@ -156,7 +157,7 @@ describe('the brain tool surface', () => {
     expect(request.tools!.some((tool) => tool.namespace !== undefined || tool.defer_loading !== undefined)).toBe(false);
   });
 
-  it('switch on: under 4k tokens of tool definitions per round for both providers, strict on OpenAI where it fits', async () => {
+  it('switch on: tool definitions per round within the budget for both providers, strict on OpenAI where it fits', async () => {
     const off = await ownerReply('tool-surface-before', 'off');
     const request = await ownerReply('tool-surface-on', 'on');
     expect(request.system).toContain(TOOL_SEARCH_LINE);
@@ -206,12 +207,12 @@ describe('the brain tool surface', () => {
       strict: strict.filter((tool) => tool.strict === true).length, non_strict: strict.filter((tool) => tool.strict !== true).map((tool) => tool.name),
     };
     console.log(`BRAIN_TOOL_SURFACE ${JSON.stringify(report)}`);
-    expect(report.openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.anthropic_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.browsing_openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
   });
 

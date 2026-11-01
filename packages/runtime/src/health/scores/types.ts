@@ -1,4 +1,4 @@
-import type { FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
+import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -18,8 +18,8 @@ export interface MethodReading<Method extends string> { readonly value: number; 
 export interface HourlyBucket {
   readonly startAt: string;
   readonly heartRate: number | null;
-  readonly hrv: number | null;
-  readonly hrvMethod: HrvMethod | null;
+  // At most one reading per method: an hour can hold SDNN and RMSSD side by side.
+  readonly hrvReadings: readonly MethodReading<HrvMethod>[];
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
   readonly activeEnergyKcal: number | null;
@@ -113,6 +113,8 @@ export interface SleepDebtResult {
   readonly sleep_need_minutes: number;
   // blended_average is the owner's own mean shrunk toward a prior, which is not their own average.
   readonly need_basis: 'owner_confirmed' | 'own_average' | 'blended_average';
+  // Which way the debt has been going over the last two steps. Only on a provisionally computed debt.
+  readonly trend?: DerivedSleepDebtTrend;
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
@@ -121,4 +123,6 @@ export interface DailyScores {
   readonly sleep_debt: SleepDebtResult | Unavailable;
   readonly form: FormResult;
   readonly weight: WeightResult;
+  // Today's energy windows, clock times in the target day's zone. Only on a provisional computation; empty when there are none.
+  readonly windows?: readonly { readonly start: string; readonly end: string; readonly kind: 'peak' | 'dip' }[];
 }

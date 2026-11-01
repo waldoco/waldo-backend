@@ -5,6 +5,7 @@ import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ownerCookies, ownerSessionHash } from './session-fence';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
 // Chat in the console is the app's main chat and its threads, reached with the console sign-in. The console's signed owner cookie
 // is a row in the same revocable session table the app bearer uses, and the owner object's app route accepts any live
@@ -14,7 +15,7 @@ export const CONSOLE_CHAT_PATH = '/console/dashboard/api/v1/chat';
 // request without a CORS preflight, which this route never answers.
 export const CONSOLE_CHAT_HEADER = 'x-waldo-console';
 
-type ChatEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
@@ -48,13 +49,19 @@ const messageRoute = (base: string, rest: readonly string[], method: string, sen
   if (action === undefined) return method === 'GET' ? { target: `${base}/${client}`, bucket: 'app-read', method: 'GET' } : null;
   return action === 'cancel' && method === 'POST' ? { target: `${base}/${client}/cancel`, bucket: 'app-read', method: 'POST' } : null;
 };
-// Each console chat path is one app.v1 chat route: main chat, or a thread beside it. Anything else, including the wrong
-// method on a known path, has no route.
+// Each console chat path is one app.v1 route: main chat, a thread beside it, today's cards with what each delivered to
+// main chat (the app's day view, which the console's Brief shows), or the day history the console's day pager reads. Anything else, including the wrong method on a known
+// path, has no route.
 const route = (url: URL, method: string): Route | null => {
   const segments = url.pathname === CONSOLE_CHAT_PATH ? [] : url.pathname.slice(CONSOLE_CHAT_PATH.length + 1).split('/');
   const [head, id, action, ...rest] = segments;
   if (head === undefined) return method === 'GET' ? { target: withQuery(APP_CHAT_PATH, url, ['cursor', 'limit']), bucket: 'app-read', method: 'GET' } : null;
   if (head === 'messages') return messageRoute(APP_CHAT_SEND_PATH, segments.slice(1), method, appSendRequestV1Schema);
+  if (head === 'day') return id === undefined && method === 'GET' ? { target: '/app/v1/controls?view=day', bucket: 'app-read', method: 'GET' } : null;
+  if (head === 'days') {
+    const date = url.searchParams.get('date');
+    return id === undefined && method === 'GET' ? { target: `/app/v1/controls?${new URLSearchParams({ view: 'days', ...(date === null ? {} : { date: date.slice(0, 600) }) })}`, bucket: 'app-read', method: 'GET' } : null;
+  }
   if (head !== 'threads') return null;
   if (id === undefined) return method === 'GET' ? { target: withQuery(APP_THREADS_PATH, url, ['state']), bucket: 'app-read', method: 'GET' }
     : method === 'POST' ? { target: APP_THREADS_PATH, bucket: 'app-chat-send', method: 'POST', body: appThreadCreateV1Schema } : null;
@@ -107,7 +114,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   const contract = request.headers.get(APP_CONTRACT_HEADER);
   const forwarded = new Request(`https://telegram-owner${chosen.target}`, {
     method: chosen.method,
-    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': url.origin, 'content-type': 'application/json',
+    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': publicOrigin(env, url), 'content-type': 'application/json',
       // The contract revisions the dashboard reads, as the app passes its own.
       ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) },
     ...(body ? { body } : {}),

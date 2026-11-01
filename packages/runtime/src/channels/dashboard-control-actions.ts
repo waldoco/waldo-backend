@@ -2,6 +2,7 @@ import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOG
 import {HANDOFF_PARAM} from './connect-confirm';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
+import {whatsAppWaldoNumber} from './whatsapp-send-url';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
 type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
 export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean;revocation?:'revoked'|'unsupported'|'failed'}>;
@@ -25,15 +26,15 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
- imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set','imessage.enroll']};
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','schedule.resume','card.retry','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+ imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set','imessage.enroll'],agent_mail:['agent_mail.claim','agent_mail.release']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code'],agent_mail:['notice']};
 // One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
 const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
 // targets (null: top level only). The fresh read's list is the eligibility check, so the console view is never built.
-const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null};
+const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null,agent_mail:null};
 const listedAction=(action:ConsoleAction,data:unknown,rows:string|null):boolean=>{
  const listing=data as Readonly<Record<string,unknown>>|null,has=(actions:unknown)=>Array.isArray(actions)&&actions.includes(action.action);
  if(action.id==='')return has(listing?.actions);
@@ -99,15 +100,19 @@ export const appDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>
  const receipt=mcpDisconnectReceipt(result);
  return result.ok&&(result.provider==='revoked'||result.provider==='unsupported'||result.provider==='failed')?{...receipt,revocation:result.provider}:receipt;
 };
-export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
- ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
- :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
+// to is the Waldo WhatsApp number, where configured, so the console can open WhatsApp with the code filled in.
+export const whatsappLinkReceipt=(code:string|null,number?:string):ControlReceipt|RevealingReceipt=>{
+ if(!code)return {state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
+ const digits=whatsAppWaldoNumber(number);
+ return {receipt:{state:'recorded',message:`Send this to ${digits?`Waldo on WhatsApp at +${digits}`:'the Waldo WhatsApp number'} within 10 minutes. The code works once.`},
+  reveal:{kind:'link_code',value:`waldo ${code}`,...(digits?{to:`+${digits}`}:{})}};
+};
 export const whatsappUnlinkReceipt=(done:boolean):ControlReceipt=>done
  ?{state:'recorded',message:'WhatsApp unlinked. New messages from that number no longer reach your Waldo, and Waldo will not message it.'}
  :{state:'rejected',message:'WhatsApp was not unlinked. Refresh the records and try again.'};
 export async function controlRevision(value:unknown):Promise<string>{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}
 function eligible(action:ConsoleAction,view:ConsoleView):boolean {
- if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:!card.sent);}
+ if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:action.action==='card.retry'?(card.retriesLeft??0)>0:!card.sent);}
  if(action.action==='google.connect')return view.google.connectAvailable;
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
  if(action.action==='granola.connect')return view.granola?.connectAvailable===true&&view.granola.connection?.status!=='active';

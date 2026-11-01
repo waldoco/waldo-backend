@@ -78,6 +78,12 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards the configured public origin, not the host the app called', async () => {
+    forwards.length = 0;
+    const configured = { ...(env() as object), WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' } as never;
+    await handleApp(post('/app/v1/chat/main/messages', { client_message_id: 'c1', text: 'hi' }, { authorization: `Bearer ${CREDENTIAL}` }), configured, fakeAuth().auth);
+    expect(forwards[0]!.headers.get('x-waldo-app-origin')).toBe('https://staging.fixture.invalid');
+  });
   it('forwards a stop to the owner DO and counts it as a read, not a send', async () => {
     forwards.length = 0;
     const keys: string[] = [];
@@ -87,6 +93,19 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.method).toBe('POST');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
     expect(keys).toEqual(['app-read:owner-1']);
+  });
+  it('forwards a rating PUT with its body to the owner DO as a read, and answers PUT anywhere else with 405', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const put = (path: string) => new Request(`https://w.test${path}`, { method: 'PUT', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify({ request_id: 'rating-0001', rating: 'up' }) });
+    const response = await handleApp(put('/app/v1/chat/main/messages/entry%3A42/rating'), counted, fakeAuth().auth);
+    expect(await response!.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.method, new URL(forwards[0]!.url).pathname, await forwards[0]!.json()]).toEqual(['PUT', '/app/v1/chat/main/messages/entry%3A42/rating', { request_id: 'rating-0001', rating: 'up' }]);
+    expect(keys).toEqual(['app-read:owner-1']);
+    for (const path of ['/app/v1/chat/main/messages', '/app/v1/chat/main', '/app/v1/chat/main/messages/client-msg-0001/cancel'])
+      expect((await handleApp(put(path), counted, fakeAuth().auth))!.status).toBe(405);
+    expect(forwards).toHaveLength(1);
   });
   it('forwards thread calls to the credential owner DO: a list as a read, a change as a send', async () => {
     forwards.length = 0;

@@ -23,3 +23,24 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
     expect(parsed.vars.WHATSAPP_DEBUG_LOG).toBe('false');
   });
 });
+
+describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
+  it('is on for staging and off for production', () => {
+    expect(parsed.vars.HEALTH_SOLO_NOTICE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('1');
+  });
+});
+
+describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
+  it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
+    expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('1');
+  });
+});
+
+describe('HEALTH_COACHING in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+    expect(parsed.vars.HEALTH_COACHING).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('0');
+  });
+});

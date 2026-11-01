@@ -5,7 +5,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -24,35 +24,50 @@ const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edi
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
 const nodeId = /^memory:node:[1-9][0-9]{0,15}$/;
 const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
+// What the owner typed for a handle. The backend trims and lower-cases it and answers invalid for anything but 3 to 32 of
+// a-z, 0-9, dot and hyphen, starting and ending with a letter or digit, with no two dots together.
+export const APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 = 64;
+const agentMailNoticeVersion = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
+// One of the owner's local days, as the days view names it.
+const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
 // id for detail and pattern, max_nodes and max_links for pattern. Ids and cursors are opaque.
 export const appControlQueryV1Schema = z.strictObject({
   view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional(),
   memory_view: memoryViews.optional(), cursor: memoryCursor.optional(), limit: memoryPageSize.optional(), id: memoryId.optional(),
-  max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(),
+  max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(), date: historyDay.optional(),
 }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
   if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
+  if (query.view !== 'days' && query.date !== undefined) ctx.addIssue({ code: 'custom', message: 'date requires the days view' });
 });
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
   // The six digits Twilio texted, for phone.sms_check only. The send and the check name no number: the backend texts the
   // number on file, which only phone.set changes.
   code: z.string().regex(/^\d{6}$/).optional(),
+  // The version of the agent mail notice the owner was shown, for agent_mail.claim only.
+  notice: agentMailNoticeVersion.optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
+  // Try again on one of today's cards: revision 3, the day view, the card's id and nothing else.
+  if (action.action === 'card.retry' && (action.view !== 'day' || !DAY_CARD_IDS.includes(action.id ?? '')
+    || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'card.retry starts from the day view and names one of today\'s cards in id, nothing else' });
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  // Disconnecting Google names the account's connections id and nothing else; the receipt is recorded once Waldo has dropped it.
+  if (action.action === 'google.disconnect' && (action.view !== 'connections' || !action.id
+    || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'google.disconnect starts from the connections view and names one Google account in id, nothing else' });
   // Granola is one fixed, reviewed server, so its actions name nothing. A connect receipt's navigation is the first-party
   // /c/<ticket>?handoff=<code> path; disconnect revokes at Granola where it can and says when it could not.
   const granola = action.action === 'granola.connect' || action.action === 'granola.disconnect';
@@ -95,6 +110,13 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'phone.set' && !APP_PHONE_E164.test(action.value ?? '')) ctx.addIssue({ code: 'custom', path: ['value'], message: 'phone.set carries the number in value, E.164 (+ and 7 to 15 digits)' });
   if (phone && (action.id ?? (action.action === 'phone.set' ? undefined : action.value) ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code, or for phone.set the number' });
   // imessage.enroll sets up the number on file for iMessage; it carries nothing, so no number travels with it.
+  // The owner's Waldo address: claim names the handle in value; release carries nothing.
+  const agentMail = action.action === 'agent_mail.claim' || action.action === 'agent_mail.release';
+  if (agentMail !== (action.view === 'agent_mail')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The agent_mail actions alone use the agent_mail view' });
+  if (action.action === 'agent_mail.claim' && !(action.value && action.value.trim().length >= 1 && action.value.length <= APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `agent_mail.claim names the handle in value, up to ${APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1} characters` });
+  // Claiming is the owner's opt-in: it names the version of the notice the owner was shown and accepted.
+  if ((action.notice !== undefined) !== (action.action === 'agent_mail.claim')) ctx.addIssue({ code: 'custom', path: ['notice'], message: 'agent_mail.claim alone carries notice, the version of the notice it showed, and always does' });
+  if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
 });
 
 // The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
@@ -106,7 +128,30 @@ export const APP_CARD_EXCERPT_MAX_V1 = 280;
 // Where today's card stands. sent keeps its meaning, finished for today; state says how: sent (handed to the owner's
 // channel), skipped (it came due and nothing went out), held (kept back in quiet hours) or pending (not fired yet).
 // Absent when the Worker cannot tell, as for a card finished before it kept the outcome.
-export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped']);
+// Controls revision 3 (`controls=3`) adds three unfinished states: generating (a run or a Try again is under way), failed
+// (no card was made and none is coming on its own; Try again is offered) and paused (the scheduler paused the card after
+// repeated failures). Revisions 1 and 2 read each of them as pending. Revision 3 may also carry state_reason, a short fixed
+// line saying why, and retries_left, today's remaining Try agains.
+export const APP_CONTROLS_CARD_STATE_REVISION = 3;
+// Controls revision 7 (`controls=7`): the day view and the account view name the owner (`name`, as they told Waldo at setup),
+// the account view carries the sign-in `email` and, once verified, the `phone`, and `google.disconnect` is an app action.
+// Each field is absent when Waldo does not hold it, and revisions below 7 never receive any of them.
+export const APP_CONTROLS_IDENTITY_REVISION = 7;
+// Controls revision 8 (`controls=8`): the day view carries memory_revision, a per-owner count that moves whenever the owner's
+// memory changes, from chat or not (the nightly pass, the welcome build, the console). Re-reading a claim does not move it.
+// It carries no content and is not part of the day view's revision, so it never makes a day action stale; an open screen
+// re-reads memory when it differs. Revisions below 8 never receive it.
+export const APP_CONTROLS_MEMORY_SIGNAL_REVISION = 8;
+// Controls revision 9 (`controls=9`): a day card Waldo revised after delivering it, because the owner's day changed, carries
+// revision (how many revisions reached the owner today) and revised_at (epoch ms, the latest one), together or not at all,
+// and its latest names the newest revision's Main chat row, or is null when that revision reached the owner outside the app.
+// The original row stays in the chat and in day history. Below 9 neither field is sent and latest stays the original delivery.
+export const APP_CONTROLS_DAY_CARD_REVISION = 9;
+const ownerName = text.min(1).max(80);
+export const APP_CARD_STATE_REASON_MAX_V1 = 120;
+export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
+export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused']);
+const DAY_CARD_IDS: readonly string[] = ['card:brief', 'card:midday', 'card:close'];
 const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(APP_CARD_EXCERPT_MAX_V1) });
 // The first page of open work the Home shows; total counts every open item, so the app can say how many more there are.
 export const APP_OVERVIEW_PAGE_MAX_V1 = 20;
@@ -130,14 +175,47 @@ const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW
   .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
-  timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
+  timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(), memory_revision: count.optional(),
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
-    state: appDayCardStateV1Schema.optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
+    state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
+    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional(), revision: z.int().min(1).optional(), revised_at: z.int().positive().optional() })
+    .refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })
+    .refine(card => (card.revision === undefined) === (card.revised_at === undefined), { error: 'revision and revised_at come together', path: ['revision'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),
   open_loops: firstPage(openLoop).optional(),
   updates: updates.optional(),
+});
+// Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
+// them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets
+// invalid_query. History starts the day Waldo began keeping it (history_since) and is never backfilled: a day that began
+// before it, or a night whose runs were partly trimmed, reads complete false.
+// A card's state: sent or skipped once finished, pending while today's card may still come, not_sent for an earlier day's
+// card that never went out, unknown for a card that finished before the outcome was kept. latest is as on the day view.
+// text is reserved for the card's full words and is not sent until the health-number question on card text is settled.
+export const APP_CONTROLS_DAY_HISTORY_REVISION = 6;
+export const APP_DAY_HISTORY_DAYS_V1 = 14;
+export const APP_NIGHT_RUNS_MAX_V1 = 50;
+export const appDayHistoryCardStateV1Schema = z.enum(['sent', 'skipped', 'pending', 'not_sent', 'unknown']);
+const historyCard = { id: text, name: text, state: appDayHistoryCardStateV1Schema, latest: latestDelivery.nullable().optional() };
+export const appControlDaysDataV1Schema = z.strictObject({
+  timezone: text, today: historyDay, history_since: historyDay.nullable(),
+  days: z.array(z.strictObject({ date: historyDay, complete: z.boolean(), cards: z.array(z.strictObject(historyCard)), updates_total: count })).max(APP_DAY_HISTORY_DAYS_V1),
+});
+// The night before the day: from the previous day's Close to this day's Brief (now, while the Brief is still to come), the
+// background runs started in it, oldest first. Times are epoch ms. A summary is the runner's fixed outcome line, plain text.
+const nightRun = z.strictObject({
+  id: text, kind: text, status: z.enum(['running', 'completed', 'failed', 'stopped']), summary: text.nullable(),
+  started_at: z.int().positive(), ended_at: z.int().positive().nullable(),
+});
+export const appControlDayHistoryDataV1Schema = z.strictObject({
+  timezone: text, date: historyDay, complete: z.boolean(),
+  cards: z.array(z.strictObject({ ...historyCard, text: text.min(1).optional() })),
+  updates: z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW_PAGE_MAX_V1), total: count })
+    .refine(page => page.total >= page.items.length, { error: 'total counts every update card delivered that day', path: ['total'] }),
+  night: z.strictObject({ from: z.int().positive(), to: z.int().positive(), complete: z.boolean(), runs: z.array(nightRun).max(APP_NIGHT_RUNS_MAX_V1), total: count })
+    .refine(night => night.total >= night.runs.length, { error: 'total counts every run in the night', path: ['total'] }),
 });
 // Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
 // binding keeps it: an unlinked or pending channel holds no peer identifier.
@@ -161,7 +239,7 @@ export const appControlConnectionsDataV1Schema = z.strictObject({
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
     .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });
-export const appControlAccountDataV1Schema = z.strictObject({ deletion_available: z.boolean() });
+export const appControlAccountDataV1Schema = z.strictObject({ deletion_available: z.boolean(), name: ownerName.optional(), email: z.email().max(254).optional(), phone: z.string().regex(APP_PHONE_E164).optional() });
 const hop = z.strictObject({ hop: text, ok: z.boolean(), ms: z.number(), note: text });
 export const appControlActivityDataV1Schema = z.strictObject({
   steps: z.array(z.strictObject({ step: text, state: z.enum(['ok', 'failed', 'unseen']), at: text.nullable(), note: text.nullable() })),
@@ -188,7 +266,8 @@ const memoryClaim = z.strictObject({
   pinned: z.enum(['profile', 'facts']).nullable().optional(),
 });
 // Where a node's support came from, when Waldo read it from a connected source; empty for a node resting on what the owner
-// said. confirmation is confirmed once every supporting claim is the owner's own word, and waldos_read until then.
+// said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote
+// or confirmed the notes under it.
 export const appNodeSourceV1Schema = z.enum(['apple_health', 'health_connect', 'calendar', 'tasks', 'gmail']);
 const memoryNode = z.strictObject({
   id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
@@ -197,15 +276,24 @@ const memoryNode = z.strictObject({
   sources: z.array(appNodeSourceV1Schema).max(appNodeSourceV1Schema.options.length).optional(),
   confirmation: z.enum(['waldos_read', 'confirmed']).optional(),
 });
-// The one-time welcome build that starts when setup ends. Each source's stage settles once: done with nodes, empty when the
+// The one-time welcome build that starts when setup ends. Each source's stage settles: done with nodes, empty when the
 // source had nothing, skipped when it is not connected or not offered, revoked when its consent or grant was withdrawn, and
 // unavailable when the read failed. nodes counts the nodes the build wrote. A build that has not started has no times.
 export const APP_WELCOME_STAGES_V1 = ['health', 'calendar', 'mail', 'web'] as const;
+// Controls revision 5 (`controls=5`) adds the setup stage: the first nodes Waldo draws from the owner's own setup answers, so an
+// owner who connected nothing still gets a constellation. Revisions 1 to 4 never receive the key. At every revision a stage that
+// settled skipped may go back to pending once, when its source is connected later, and the build reads building again until it
+// settles; a build reads building while the setup stage runs, even where the stage itself is not shown.
+export const APP_CONTROLS_WELCOME_SETUP_REVISION = 5;
+export const APP_WELCOME_STAGES_V5 = [...APP_WELCOME_STAGES_V1, 'setup'] as const;
 export const appWelcomeStageStateV1Schema = z.enum(['pending', 'reading', 'done', 'empty', 'skipped', 'revoked', 'unavailable']);
 export const appWelcomeBuildV1Schema = z.strictObject({
   state: z.enum(['not_started', 'building', 'done']),
   started_at: z.int().positive().nullable(), finished_at: z.int().positive().nullable(),
-  stages: z.strictObject(Object.fromEntries(APP_WELCOME_STAGES_V1.map(stage => [stage, appWelcomeStageStateV1Schema])) as Record<(typeof APP_WELCOME_STAGES_V1)[number], typeof appWelcomeStageStateV1Schema>),
+  stages: z.strictObject({
+    ...Object.fromEntries(APP_WELCOME_STAGES_V1.map(stage => [stage, appWelcomeStageStateV1Schema])) as Record<(typeof APP_WELCOME_STAGES_V1)[number], typeof appWelcomeStageStateV1Schema>,
+    setup: appWelcomeStageStateV1Schema.optional(),
+  }),
   nodes: count,
 }).superRefine((build, ctx) => {
   if ((build.state === 'not_started') !== (build.started_at === null)) ctx.addIssue({ code: 'custom', path: ['started_at'], message: 'only a build that has not started has no start time' });
@@ -268,6 +356,44 @@ export const APP_IMESSAGE_ENROLL_RECEIPTS_V1 = {
   unavailable: { state: 'rejected', message: 'iMessage could not be set up right now. Try again later.' },
   unknown: { state: 'unconfirmed', message: 'Setting up iMessage was not confirmed. Refresh to see where it stands.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
+// Controls revision 10 (`controls=10`): the agent_mail view and its two actions. A build below it never names them and is
+// refused them.
+export const APP_CONTROLS_AGENT_MAIL_REVISION = 10;
+// The owner's Waldo address. Agent mail is opt-in: claiming a handle is the switch, after the owner reads notice (shown
+// exactly as given; the claim names its version). enabled is false while agent mail is off, and then only display_name
+// and an empty actions list are sent. handle, address and rule are absent until a handle is held. rule says where the
+// address's routing stands: pending (being set up; mail may not arrive yet), live, failed (it could not be set up; claiming
+// the same handle again retries) or unknown (setting it up was not confirmed; claiming it again retries). rule_reason
+// not_configured: routing is not set up on this server yet, so a pending rule stays pending. display_name is the name
+// mail from Waldo carries. Claim is listed while enabled, release while a handle is held; a claim of a different handle
+// releases the one held.
+export const appControlAgentMailDataV1Schema = z.strictObject({
+  enabled: z.boolean(), domain: text.optional(), handle: text.optional(), address: text.optional(),
+  rule: z.enum(['pending', 'live', 'failed', 'unknown']).optional(), rule_reason: z.literal('not_configured').optional(),
+  notice: z.strictObject({ version: agentMailNoticeVersion, text: text.min(1).max(4000) }).optional(),
+  display_name: text.min(1).max(80), actions: z.array(z.enum(['agent_mail.claim', 'agent_mail.release'])),
+}).superRefine((data, ctx) => {
+  const held = data.handle !== undefined;
+  if (data.enabled ? data.domain === undefined || data.notice === undefined : data.domain !== undefined || data.notice !== undefined || held) ctx.addIssue({ code: 'custom', path: ['enabled'], message: 'domain and notice come exactly when agent mail is enabled, and a handle only then' });
+  if (held !== (data.address !== undefined) || held !== (data.rule !== undefined)) ctx.addIssue({ code: 'custom', path: ['handle'], message: 'handle, address and rule come together' });
+  if (data.rule_reason !== undefined && data.rule !== 'pending') ctx.addIssue({ code: 'custom', path: ['rule_reason'], message: 'rule_reason explains a pending rule only' });
+});
+// The receipt for each agent_mail outcome. The app tells them apart by these exact messages, so they are contract.
+export const APP_AGENT_MAIL_RECEIPTS_V1 = {
+  claimed: { state: 'recorded', message: 'Address saved. Waldo is setting it up; mail reaches it once that is done.' },
+  changed: { state: 'recorded', message: 'Address changed. Your old address no longer receives mail, and no one can claim it for 180 days.' },
+  unchanged: { state: 'recorded', message: 'That is already your Waldo address.' },
+  released: { state: 'recorded', message: 'Address released. It no longer receives mail, and no one, you included, can claim it for 180 days.' },
+  none: { state: 'recorded', message: 'You have no Waldo address to release.' },
+  taken: { state: 'rejected', message: 'That address is taken. Try another.' },
+  reserved: { state: 'rejected', message: 'That address is reserved. Try another.' },
+  invalid: { state: 'rejected', message: 'Use 3 to 32 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit.' },
+  unavailable: { state: 'rejected', message: 'That address cannot be claimed right now. Try another, or try again later.' },
+  full: { state: 'rejected', message: 'Waldo cannot set up new addresses right now. Try again later.' },
+  too_many_changes: { state: 'rejected', message: 'That is the limit on address changes for today. Try again tomorrow.' },
+  notice_stale: { state: 'rejected', message: 'The notice changed since you read it. Read the new one, then claim again.' },
+  unknown: { state: 'unconfirmed', message: 'The change was not confirmed. Refresh to see your address.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -276,6 +402,8 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
+  z.strictObject({ ...envelope, view: z.literal('agent_mail'), data: appControlAgentMailDataV1Schema }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({

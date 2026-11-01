@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
 import { DROPPED_STEPS_NOTE, leadingNote, type LoopToolResult } from '../src/conversation/tool-loop';
 import { FINISH_TASK } from '../src/tasks/profiles';
-import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome, type TaskSpend } from '../src/tasks/worker-loop';
+import { modelCost } from '../src/llm/pricing';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -16,7 +17,7 @@ const search = { name: 'search_communication', description: 'Search mail.', para
 
 type Script = Array<{ call: string; args?: unknown } | { text: string } | 'unavailable' | 'hang'>;
 const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: () => boolean = () => true) => {
-  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[]; outcomes?: readonly ProviderOutcome[] }>, reports: [] as TaskOutcome[], reportOutcomes: [] as Array<readonly ProviderOutcome[] | undefined>, events: [] as TurnLogEntry[] };
+  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[]; outcomes?: readonly ProviderOutcome[] }>, spends: [] as TaskSpend[], reports: [] as TaskOutcome[], reportOutcomes: [] as Array<readonly ProviderOutcome[] | undefined>, events: [] as TurnLogEntry[] };
   let saved: readonly LLMToolTurn[] = initial.turns ?? [];
   let seq = initial.seq ?? 0;
   const brain: TaskBrainPort = {
@@ -27,8 +28,8 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: (
       return { ok: true, data: { hits: [`hit for ${call.arguments}`] }, source_taint: 'external' } satisfies LoopToolResult;
     },
     // A copy, as the RPC to the owner's object sends one: the loop goes on editing its own turns.
-    checkpoint: async (_ticket, next, sent, events, _spend, outcomes) => { const turns = structuredClone(sent); log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
-    report: async (_ticket, outcome, events, _spend, outcomes) => { log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
+    checkpoint: async (_ticket, next, sent, events, spend, outcomes) => { log.spends.push(spend); const turns = structuredClone(sent); log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
+    report: async (_ticket, outcome, events, spend, outcomes) => { log.spends.push(spend); log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
     heartbeat: async () => { log.beats += 1; return held(); },
   };
   return { brain, log };
@@ -184,6 +185,12 @@ describe('the production task model step', () => {
     expect(event).toMatchObject({ hop: 'llm_task', ok: true, cost_kind: 'worker', job_id: ticket.jobId, job_profile: 'reader', provider: OPENAI_PROVIDER, usage: { model: OPENAI_GPT_6_LUNA_MODEL } });
   });
 
+  it('logs a task call\'s cache writes with its usage, so worker spend counts them', async () => {
+    const gateway = { complete: async (request: { request: { model: string } }) => ({ ok: true as const, data: { model: request.request.model, text: 'Read it.', input_tokens: 900, output_tokens: 3, cache_read_input_tokens: 100, cache_write_input_tokens: 700, latency_ms: 1 } }) };
+    const { event } = await taskModel({ openaiApiKey: 'fixture-openai' }, gateway as never)(input);
+    expect(event.usage).toEqual({ model: OPENAI_GPT_6_LUNA_MODEL, input: 900, output: 3, cached: 100, cache_write: 700, web_searches: 0 });
+  });
+
   it('a deep task runs on the chat model, and past the owner\'s spend ceiling it is clamped to the auxiliary route like a turn', async () => {
     const deep = { ...input, claim: { ...claim, brief: { ...brief, effort: 'deep' as const } } };
     const open = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
@@ -300,5 +307,46 @@ describe('checkpoint trimming', () => {
   it('leaves a checkpoint within the limit untouched', () => {
     const turns = Array.from({ length: 5 }, (_, i) => turn(i, 'browse_act'));
     expect(checkpointTurns(turns)).toBe(turns);
+  });
+});
+
+describe('failed attempts a provider billed', () => {
+  const claim: TaskClaim = { jobId: ticket.jobId, profile: 'reader', brief: { ...brief, effort: 'deep' }, tools: [search], mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 60_000, roundsUsed: 0, ownerRef: 'owner-1' };
+  const billed = { input_tokens: 40_000, output_tokens: 2_000, cache_read_input_tokens: 0 };
+  const access = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' };
+  const answered = (model: string) => ({ ok: true as const, data: { model, text: 'Nothing waits on you.', input_tokens: 900, output_tokens: 30, cache_read_input_tokens: 0, latency_ms: 1 } });
+  const terraBilledThenSonnet = { complete: async (request: { request: { model: string } }) => request.request.model === OPENAI_GPT_6_1_TERRA_MODEL ? { ok: false as const, code: 'transient' as const, error: 'down', spent: billed } : answered(request.request.model) };
+  const allBilledFailures = { complete: async () => ({ ok: false as const, code: 'transient' as const, error: 'down', spent: billed }) };
+  const total = (spends: readonly TaskSpend[]) => spends.reduce((sum, spend) => sum + spend.costUsd, 0);
+
+  it('reach the worker log as worker spend at the model that billed them, beside the answering model\'s own call', async () => {
+    const step = await taskModel(access, terraBilledThenSonnet as never)({ ticket, claim, system: 'system', content: 'brief', tools: undefined, turns: [], canaries: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'] });
+    expect(step.event.usage).toMatchObject({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 900, output: 30 });
+    expect(step.billed!.length).toBeGreaterThan(0);
+    for (const entry of step.billed!) {
+      expect(entry).toMatchObject({ hop: 'llm_task_attempt', ok: false, cost_kind: 'worker', job_id: ticket.jobId, job_profile: 'reader', usage: { model: OPENAI_GPT_6_1_TERRA_MODEL, input: 40_000, output: 2_000 } });
+    }
+  });
+
+  it('raise the spend the worker reports to the brain by their own cost, which is what the owner\'s ceiling counts', async () => {
+    const { brain, log } = fakeBrain({ brief: claim.brief });
+    const model = taskModel(access, terraBilledThenSonnet as never);
+    expect(await runTaskAttempt(ticket, { brain, model, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+    const attempts = log.events.filter((event) => event.hop === 'llm_task_attempt');
+    expect(attempts.length).toBeGreaterThan(0);
+    const terra = modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 40_000, output: 2_000, cached: 0 })!.total;
+    const sonnet = modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 900, output: 30, cached: 0 })!.total;
+    expect(total(log.spends)).toBeCloseTo(attempts.length * terra + sonnet, 10);
+    expect(log.spends.reduce((sum, spend) => sum + spend.rounds, 0)).toBe(1);
+  });
+
+  it('count when no provider answers: the attempt reports unavailable with the spend its billed calls cost', async () => {
+    const { brain, log } = fakeBrain({ brief: claim.brief });
+    expect(await runTaskAttempt(ticket, { brain, model: taskModel(access, allBilledFailures as never), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+    expect(log.reports).toEqual([{ kind: 'unavailable' }]);
+    const attempts = log.events.filter((event) => event.hop === 'llm_task_attempt');
+    expect(attempts.length).toBeGreaterThan(1);
+    expect(total(log.spends)).toBeGreaterThan(0);
+    expect(total(log.spends)).toBeCloseTo(attempts.reduce((sum, event) => sum + modelCost(event.usage!)!.total, 0), 10);
   });
 });

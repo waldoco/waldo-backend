@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
+import { WHATSAPP_CONNECT_GUIDANCE } from '../src/channels/surfaces/app';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -45,6 +46,7 @@ vi.mock('../src/connectors/google', async load => {
   }) };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
+const { drainWhatsAppTurns } = await import('./helpers/whatsapp-drain');
 
 const OWNER_ID = '6b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8';
 const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-webhook-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret' };
@@ -142,6 +144,63 @@ describe('connecting Google from a chat turn', () => {
         expect((state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.id.startsWith('google-reauth:'))).toHaveLength(1);
         expect(await state.storage.get('google:health')).toEqual({ 'local:owner@example.test': 'invalid_grant' });
       } finally { await state.storage.deleteAlarm(); }
+    });
+  });
+
+  // On WhatsApp the owner was told to tap a connect button that was never there: a reconnect notice already outstanding was
+  // answered as a sent button. WhatsApp now gets the app's and iMessage's guidance, and the notice is plain text with no link.
+  const WA_SUBJECT = '15550002222';
+  type WhatsAppGraph = { text?: { body?: string } }[];
+  const whatsappTurn = (name: string, text: string, setup: (state: DurableObjectState) => Promise<void>, check: (graph: WhatsAppGraph, state: DurableObjectState) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const graph: WhatsAppGraph = [];
+      claimStore(state.storage.sql); ensureSchema(state.storage);
+      state.storage.kv.put('do_name', name);
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      await setup(state);
+      const directoryFetch = globalThis.fetch;
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (!String(input instanceof Request ? input.url : input).startsWith('https://graph.facebook.com/')) return directoryFetch(input, init);
+        if (init?.body) graph.push(JSON.parse(String(init.body)) as { text?: { body?: string } });
+        return Response.json({ messages: [{ id: `wamid.out.${graph.length}` }] });
+      });
+      const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
+        WHATSAPP_ACCESS_TOKEN: 'synthetic-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'synthetic-phone-id' });
+      try {
+        const admitted = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': WA_SUBJECT },
+          body: JSON.stringify({ messages: [{ from: WA_SUBJECT, id: `wamid.${name}`, type: 'text', text: { body: text } }] }) }));
+        expect(admitted.status).toBe(200);
+        await drainWhatsAppTurns(owner);
+        await check(graph, state);
+      } finally { await state.storage.deleteAlarm(); }
+    });
+  const readResult = () => JSON.stringify(model.requests.find(request => JSON.stringify(request.tool_turns ?? []).includes('query_calendar'))?.tool_turns);
+
+  it('on WhatsApp, a dead grant whose notice is already outstanding is never answered with a button: the model hears where the owner reconnects', async () => {
+    await whatsappTurn('connect-whatsapp-outstanding', READ, async state => {
+      await state.storage.put('google:health', { 'local:owner@example.test': 'invalid_grant' });
+      await state.storage.put('google:reauth-noticed', { 'local:owner@example.test': Date.now() - 3_600_000 });
+    }, async (graph, state) => {
+      const result = readResult();
+      expect(result).toContain(JSON.stringify(WHATSAPP_CONNECT_GUIDANCE).slice(1, 60));
+      expect(result).not.toContain(SENT_CLAIM);
+      expect(JSON.stringify(graph)).not.toMatch(/https?:\/\//);
+      expect(traceHops(state).filter(hop => hop.startsWith('connect_offer') || hop.startsWith('oauth_link_sent'))).toEqual([]);
+      expect(rpcs).not.toContain('connect_session_issue');
+    });
+  });
+
+  it('on WhatsApp, a grant that stops working mints no link: a plain notice is queued, and the model is told where to reconnect', async () => {
+    await whatsappTurn('connect-whatsapp-reauth', READ, async () => undefined, async (graph, state) => {
+      await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice:1'), { timeout: 5_000, interval: 20 });
+      expect(readResult()).toContain(JSON.stringify(WHATSAPP_CONNECT_GUIDANCE).slice(1, 60));
+      expect(readResult()).not.toContain(SENT_CLAIM);
+      expect(rpcs).not.toContain('connect_session_issue');
+      expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
+      expect(JSON.stringify(graph)).not.toMatch(/https?:\/\//);
+      expect((state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.id.startsWith('google-reauth:')).map(record => record.payload.text))
+        .toEqual([reconnectNoticeText('console', 'owner@example.test')]);
     });
   });
 

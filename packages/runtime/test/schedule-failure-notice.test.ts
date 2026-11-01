@@ -17,7 +17,11 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
     if (method === 'sendMessage') sent.push(payload);
     return { message_id: sent.length, chat: { id: payload.chat_id } };
   } }));
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('model unavailable'); } }; } }));
+// A request the provider refuses (400) is a failure of the reminder itself: a model outage would send the owner's note instead.
+vi.mock('openai', () => {
+  class APIError extends Error { status = 400; code = 'invalid_request_error'; param = null; }
+  return { default: class { static APIError = APIError; responses = { create: async () => { throw new APIError('request refused'); } }; } };
+});
 
 const NOTE = 'call Sam about the contract renewal';
 const ZONE = 'America/New_York';
@@ -279,10 +283,10 @@ it('the overnight memory pass says so once, then stays quiet through later pause
     };
     pause(start);
     expect(notify(start)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 03:00."]);
-    expect(pausedJobs(sql, start, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
+    expect(pausedJobs(sql, start, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
     // Paused again on each of the next nights, past the daily cap and the two days the per-pause record keeps: silent.
     for (const night of [1, 2, 3]) { pause(start + night * DAY_MS); expect(notify(start + night * DAY_MS)).toEqual([null]); }
-    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
+    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
     // It runs well one night, then fails again: the owner hears once more.
     run(start + 4 * DAY_MS, 'ok', null);
     pause(start + 5 * DAY_MS);
@@ -316,6 +320,6 @@ it('a paused forget cleanup is named to the owner and listed, without the topic'
     sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES ('forget-purge:run', 'forget-purge', 'forget_purge', ?, 3, 'quarantined', 'run', ?, 0)", at, at);
     const [notice] = dueFailureNotices(sql, kv, at, ZONE);
     expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 10:00.");
-    expect(pausedJobs(sql, at, ZONE)).toEqual([{ name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
+    expect(pausedJobs(sql, at, ZONE)).toEqual([{ id: 'forget-purge', name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
   });
 });

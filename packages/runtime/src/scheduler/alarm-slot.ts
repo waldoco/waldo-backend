@@ -17,6 +17,7 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
 }
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
+export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';
 
 // The jobs lane's next work: a task attempt to start or restart, a report to apply, a retried turn or a progress note.
 export const TASK_JOBS_DUE_KEY = 'task_jobs_due_v1';
@@ -32,8 +33,8 @@ export const ALARM_FAILED_LANE_KEY = 'owner_alarm_failed_lane_v1';
 export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
-  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
-  'mac_results_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
+  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY,
+  'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
@@ -47,10 +48,16 @@ export const ALARM_LANES = {
   app: [APP_INBOX_DUE_KEY],
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
+  mail: ['agent_mail_due_v1', 'agent_mail_rule_due_v1'],
   whatsapp: [WHATSAPP_PENDING_DUE_KEY],
+  whatsapp_turns: [WHATSAPP_INBOX_DUE_KEY],
   jobs: [TASK_JOBS_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
 export type AlarmLane = keyof typeof ALARM_LANES | 'pass';
+// Lanes no hold delays: their work catches its own failures and defers its own wake, so no failure is ever recorded against
+// them, and a hold elsewhere (another lane, or the whole pass) never pushes their wake back to its retry. WhatsApp turns are
+// one: an owner waiting on a reply must not wait out another lane's backoff.
+const UNHELD_LANES: ReadonlySet<AlarmLane | null | undefined> = new Set<AlarmLane>(['whatsapp_turns']);
 const LANE_OF = new Map<string, AlarmLane>(Object.entries(ALARM_LANES).flatMap(([lane, keys]) => keys.map(key => [key, lane as AlarmLane])));
 
 // The lane a failed pass left waiting, while its retry is still ahead. The one test of it: the handler's, on whether a pass
@@ -60,8 +67,8 @@ export function heldLane(retryDue: number | null | undefined, lane: AlarmLane | 
 }
 
 // A lane a failed pass can name. The browser lane only hands its work to waitUntil, so it can't fail a pass; its wakes are
-// still its own.
-type FailingLane = Exclude<AlarmLane, 'pass' | 'browser'>;
+// still its own. WhatsApp turns catch their own failures (UNHELD_LANES).
+type FailingLane = Exclude<AlarmLane, 'pass' | 'browser' | 'whatsapp_turns'>;
 // What a lane of an alarm pass throws, so the handler holds that lane: keyed by the lane, never by the error's message.
 export class AlarmLaneFailure extends Error {
   constructor(readonly lane: FailingLane, cause: unknown) { super(`alarm lane ${lane} failed`, { cause }); }
@@ -144,7 +151,7 @@ async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | nu
   const bounds: number[] = [];
   let free = false;
   const add = (lane: AlarmLane | null | undefined, due: number) => {
-    if (held === 'pass' || (held !== null && lane === held)) bounds.push(Math.max(due, retryDue!));
+    if (!UNHELD_LANES.has(lane) && (held === 'pass' || (held !== null && lane === held))) bounds.push(Math.max(due, retryDue!));
     else { bounds.push(due); free = true; }
   };
   if (scheduleDue !== null) add('schedule', scheduleDue);

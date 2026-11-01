@@ -2,7 +2,8 @@
   "_notes": [
     "An action's revision is the revision of GET /app/v1/controls?view=constellation&memory_view=detail&id=<node id>. Another revision answers 409 stale_read.",
     "node.correct answers 403 step_up_required when the session signed in more than two hours ago; node.confirm and node.forget do not.",
-    "Poll memory_view=summary every 3 s while welcome.state is building, for up to 3 minutes."
+    "Poll memory_view=summary every 3 s while welcome.state is building, for up to 3 minutes.",
+    "summary_setup_v5 is what a build sending x-waldo-app-contract: controls=5 reads: welcome.stages also carries setup, the nodes Waldo drew from the owner's setup answers. Older revisions never receive the key, but read welcome.state building while the setup stage runs. At every revision a skipped stage may go back to pending once, when its source is connected later, and welcome.state reads building again until it settles."
   ],
   "summary_building": {
     "version": 1,
@@ -216,5 +217,36 @@
     "applies_to": [
       "node.correct"
     ]
+  },
+  "summary_setup_v5": {
+    "version": 1,
+    "state": "available",
+    "view": "constellation",
+    "revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "data": {
+      "version": 1,
+      "state": "available",
+      "complete": true,
+      "unavailable_claim_count": 0,
+      "memory_view": "summary",
+      "counts": {
+        "claims": 9,
+        "interpretations": 6,
+        "associations": 0
+      },
+      "welcome": {
+        "state": "done",
+        "started_at": 1761400000000,
+        "finished_at": 1761400095000,
+        "nodes": 6,
+        "stages": {
+          "health": "done",
+          "calendar": "done",
+          "mail": "done",
+          "web": "skipped",
+          "setup": "done"
+        }
+      }
+    }
   }
 }

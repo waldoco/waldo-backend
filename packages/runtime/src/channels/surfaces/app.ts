@@ -14,6 +14,9 @@ export const APP_CONNECT_GUIDANCE = 'No connect button was sent: the app chat ha
 // iMessage turns share the app's button-free caller, so a connect there is guidance too: the app's Connections screen, or the
 // console's for an owner without the app.
 export const IMESSAGE_CONNECT_GUIDANCE = 'No connect button was sent: iMessage carries none. Tell the owner to connect Google from Connections in the Waldo app, or from Connections in the Waldo console (send_console_link sends a console link here) - never quote or retype any link yourself.';
+// WhatsApp gets the same: a signed link in a chat message would be one more place to tap a link that expires, and a notice
+// already outstanding would be a button the owner cannot find.
+export const WHATSAPP_CONNECT_GUIDANCE = 'No connect button was sent: WhatsApp carries none. Tell the owner to connect Google from Connections in the Waldo app, or from Connections in the Waldo console (send_console_link sends a console link here) - never quote or retype any link yourself.';
 
 // A turn's reply reaches the app through the transcript its own turn writes, so a plain send during a
 // turn is accepted and goes nowhere else. Scheduled work has no turn: while the alarm holds a delivery,

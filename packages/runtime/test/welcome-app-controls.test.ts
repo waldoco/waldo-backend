@@ -52,7 +52,7 @@ it('node actions run as the console memory action on the node, against that node
     const confirmed = await act(h, { view: 'constellation', action: 'node.confirm', id: 'memory:node:1', revision: detail.revision, request_id: 'welcome-confirm-01' });
     expect(confirmed.status).toBe(200);
     expect(appControlResultV1Schema.parse(confirmed.body)).toMatchObject({ request_id: 'welcome-confirm-01', receipt: { state: 'recorded' }, duplicate: false });
-    expect(acted).toEqual([{ action: 'node.confirm', id: '1', value: '' }]);
+    expect(acted).toEqual([{ action: 'node.confirm', id: '1', value: '', made: 'app:node.confirm' }]);
     const replay = await act(h, { view: 'constellation', action: 'node.confirm', id: 'memory:node:1', revision: detail.revision, request_id: 'welcome-confirm-01' });
     expect(replay.body).toMatchObject({ duplicate: true });
     expect(acted).toHaveLength(1);
@@ -75,6 +75,20 @@ it('a correction is the owner\'s word, so it needs a recent sign-in; confirm and
     const fresh = host(storage, acted);
     const corrected = await act(fresh, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: '  Mondays are for the team ', revision: detail.revision, request_id: 'welcome-correct-02' });
     expect(corrected.status).toBe(200);
-    expect(acted).toEqual([{ action: 'node.forget', id: '1', value: '' }, { action: 'node.correct', id: '1', value: 'Mondays are for the team' }]);
+    expect(acted).toEqual([{ action: 'node.forget', id: '1', value: '', made: 'app:node.forget' }, { action: 'node.correct', id: '1', value: 'Mondays are for the team', made: 'app:node.correct' }]);
+  });
+});
+
+it('the setup stage reaches only a build that reads controls revision 5', async () => {
+  await owner(async (storage) => {
+    const withSetup: AppWelcomeBuildV1 = { ...building, stages: { ...building.stages, setup: 'done' } };
+    const h: AppControlsHost = { ...host(storage, []), welcome: () => withSetup };
+    const stagesAt = async (contract?: string) => {
+      const response = await appControlsRequest(new Request('https://app.fixture.invalid/app/v1/controls?view=constellation', contract ? { headers: { 'x-waldo-app-contract': contract } } : {}), h);
+      const summary = appControlProjectionV1Schema.parse(await response.json());
+      return summary.view === 'constellation' && summary.data.memory_view === 'summary' ? summary.data.welcome?.stages : undefined;
+    };
+    for (const older of [undefined, 'controls=2', 'controls=4']) expect(await stagesAt(older)).toEqual(building.stages);
+    expect(await stagesAt('controls=5')).toEqual(withSetup.stages);
   });
 });

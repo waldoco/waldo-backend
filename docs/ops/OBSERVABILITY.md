@@ -65,6 +65,59 @@ The owner turned this on for staging on 2026-09-23 to read model inputs, thinkin
 
 Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most specific type, add a row here. Model calls are hops named `llm_<purpose>`.
 
+### Like and Dislike as scores (built, on with the Langfuse keys)
+
+A Like or Dislike on one of Waldo's messages in the app's main chat becomes a Langfuse score on the trace the message came from: the owner turn that replied, or the scheduled job that wrote a day card.
+
+- **What the score carries.** `name: reply_rating`, a `BOOLEAN` value (Like is 1, Dislike is 0), the deployment's environment, and `metadata.source: app`. It carries no message text, owner name or health value. The owner object still keeps its own `reply_ratings` row.
+- **How a score finds its trace.**
+  - An owner turn's reply is saved as `<trace key>-reply`, so the reply's id names its turn. That holds for every listener turn, whose key comes from `ownerTurnTrace`: `app-<n>`, Telegram's `tg-<n>` and iMessage's `imessage-<n>`, whose `turn` root the listener logs once the reply is frozen.
+  - A day card sent to the app is a `scheduled-<uuid>` row. When it is delivered, `app_row_traces` links that row to its job's trace key (`<schedule id>:<occurrence ms>`) for 30 days, Langfuse's retention. A Brief sent straight to the app links at that send; a record that reaches the app through the outbox links at its receipt (`linkingAppRows`).
+  - A delivered row is linked only when its job's key can be scored, so the table holds only `<schedule id>:<time>` and `<surface>-<n>` keys.
+  - A key that names one turn or one occurrence maps to its Langfuse trace id through `md5(<owner salt>:<trace key>)`. The exporter uses the same rule.
+  - The salt is a random value kept in the owner object, and an account erase wipes it. Without it, every owner's `app-1` would share one trace.
+  - A key shared by unrelated work (`telegram-unlinked`) keeps a random trace id, or every such trace would become one. A retried turn or occurrence that reaches a new isolate now joins its earlier trace as a second root, where it used to start a new trace.
+- **What a change does.**
+  - Each change deletes the score it replaces, then creates a new score under a fresh id. Langfuse overwrites a score only within the day it was made.
+  - A clear only deletes.
+  - The calls for one owner run one at a time. Each is tried once, and a 207 is not retried.
+  - A failure logs `{"hop":"rating_score","ok":false,"code":"http_<status>"}` and nothing else.
+  - Score deletes spend from Langfuse's 50-a-day trace-data deletion bucket.
+- **What is not scored.** A rating on a row with no linked trace scores nothing (`unlinked`). That includes rows written before this link existed, rows older than 30 days, and a scheduled message that reaches the app chat by a direct send other than the day card's, which is not linked yet.
+- **Retention.** Deleting a trace deletes its scores.
+
+### Retention (built, off)
+
+The privacy notice promises that traces are deleted after 30 days, and the Langfuse Hobby plan has no retention setting. `packages/runtime/src/observability/langfuse-retention.ts` enforces it from the daily cron (`17 3 * * *`, staging only; production has no cron trigger until the owner turns this on).
+
+- **Selection.**
+  - A trace is aged by its root observation's start: `GET /api/public/v2/observations` with `isRootObservation=true` and `toStartTime` set to now minus 29 days.
+  - Before deleting, one guard read per batch (`filter`: `traceId` any of the batch, `startTime >= cutoff`) keeps any trace with activity after the cutoff.
+  - Only traces in the project the keys belong to (`GET /api/public/projects`) are touched.
+  - Langfuse retired the trace list: `GET /api/public/traces` is served only until 16 Nov 2026 ([migration](https://langfuse.com/faq/all/deprecated-api-migration)). That is why the sweep uses the observation list.
+- **Rating scores.** `reply_rating` scores older than the cutoff are deleted on their own (`GET /api/public/v3/scores`, then `DELETE /api/public/scores/{id}`), because a score can outlive a trace that never reached Langfuse.
+- **Deletion.** `DELETE /api/public/traces` with 40 ids at a time. Langfuse deletes the observations and scores too, usually within 15 minutes ([Data Deletion](https://langfuse.com/docs/administration/data-deletion)).
+- **Limits** ([API limits](https://langfuse.com/faq/all/api-limits), Hobby plan):
+  - The general bucket allows 30 requests a minute. Every request is paced 2.1 s apart.
+  - Deletion allows 50 requests a day per organization, and the same bucket covers trace and score deletes. A run's trace and score deletes together use at most 40, about 1,600 traces, which leaves 10 a day for people and for rating changes (each change of a Like or Dislike deletes the score it replaces). Scores take at most 5, and only what the traces left.
+  - Metrics API v2 allows 100 requests a day. A run makes three.
+  - A 429 waits for its `Retry-After` and is retried three times. If it still holds, the run ends `incomplete` and the next day resumes.
+- **Modes.** `LANGFUSE_RETENTION_SWEEP` is absent by default.
+  - `dry` makes every read and deletes nothing.
+  - `1` deletes.
+  - Any other value is off.
+- **Backlog.** Before deleting, the sweep counts root traces through `GET /api/public/v2/metrics`:
+  - `backlog`: older than the cutoff;
+  - `overdue`: already past the 30 days promised;
+  - `daily_new`: arrived in the last day.
+
+  From those it works out `days_to_clear`. The value is `never` when one day's arrivals alone fill a run's 1,600-trace budget. A run with `overdue` above zero logs at error level, because the promise is already broken. The repo has no alerting (see the production runbook, S10), so the Worker log is where this shows.
+- **Log.** One line with counts and status codes only, never a trace id:
+
+  `langfuse retention sweep <mode> <state> backlog= overdue= daily_new= days_to_clear= candidates= deleted= would_delete= skipped_recent= skipped_project= scores_deleted= would_delete_scores= requests= last_status=`
+
+  States are `complete`, `incomplete` (budget or rate limit; resumes next run), `partial` (a failure after some deletes) and `failed`.
+
 ### Context size per model call
 
 Each `llm_*` generation carries numeric metadata (bytes, UTF-8) describing what filled that call, never text: `context_system_bytes`, `context_request_bytes`, `context_tools_count`, `context_tools_bytes` (the tool definitions sent), `context_tool_turns_bytes`, `context_history_messages`, `context_history_bytes`, `context_current_bytes`, `context_attachments`, and on the owner reply one `context_system_<section>_bytes` per system-prompt section (`reasons`, `behavior`, `health`, `clock`, `memory`, `orders`, `loops`, `skill_catalog`, `task_context`, `skill_procedures`). The sections plus their joins equal `context_system_bytes`. What rides the owner's message as the turn context is sized per section as `context_turn_<section>_bytes`. Calls whose system prompt carries the voice block (`llm_reply`, `llm_background_decision`) also carry `voice_version`. Trace schema version 6.
@@ -78,7 +131,7 @@ Deploy with both vars so traces carry them:
 
 ### Durable cost ledger
 
-`waldo.cost_ledger_daily` (Supabase, migration `20261020120000_waldo_cost_ledger.sql`) holds one row per owner, UTC day, cost kind (`turn`, `background`, `worker`, `heartbeat`, `eval`) and model: calls, input, output and cached tokens, hosted web searches, `sandbox_ms`, `usd_estimate`, and the reserved `browser_ms` and `broker_calls` (no producer yet). Rows that are not a model call file under model `''`. The USD figure comes from `llm/pricing.ts`; an unpriced model counts tokens at `0` USD.
+`waldo.cost_ledger_daily` (Supabase, migration `20261020120000_waldo_cost_ledger.sql`) holds one row per owner, UTC day, cost kind (`turn`, `background`, `worker`, `heartbeat`, `eval`) and model: calls, input, output, cached and cache-write tokens (`cache_write_tokens`, migration `20261030140000`; input includes both), hosted web searches, `sandbox_ms`, `usd_estimate`, and the reserved `browser_ms` and `broker_calls` (no producer yet). Rows that are not a model call file under model `''`. The USD figure comes from `llm/pricing.ts`; an unpriced model counts tokens at `0` USD (every model the router can pick is priced, Workers AI Gemma included; embeddings and transcription write no usage hop, so they are not in the ledger).
 
 The owner's Durable Object is the only writer. `packages/runtime/src/observability/cost-rollup.ts` folds each turn-log hop with usage into per-day deltas held in the DO's KV, and after the hop sends them over the signed router rail (`waldo.cost_ledger_add`). It is write-behind: the turn never waits on Supabase, a failed send keeps the deltas and retries the same batch id on the next hop (the database ignores a batch id it has already applied), and a batch refused 20 times is dropped with a `cost_ledger` hop (`code: sync_failed`). Deleting the owner deletes their ledger rows.
 
@@ -86,14 +139,9 @@ It is off unless the Worker var `WALDO_COST_LEDGER_SYNC=on`. Staging sets it `on
 
 The same KV keeps the owner's spend for the current UTC month (`cost_month_usd`), counted from every delta recorded while the ledger is on, whether or not it has reached Supabase yet. A turn that starts at or past `MONTHLY_SPEND_CEILING_USD` (USD 25 per owner per month in every environment, staging included, a code value in `packages/runtime/src/llm/cost-ledger.ts`) degrades rather than stops. The provider clamps each of its calls to the auxiliary route (Luna, then Haiku), which is where Briefs, check-ins, closes and other machine turns already run, so they keep going. `browse_page`, `browse_act` and `execute_code` are refused by the dispatcher before anything runs, with the tool refusal `spend_ceiling_reached`. Its fix tells the model what still works (the read tools, on the cheaper model) and the UTC day the ceiling resets, so it degrades the task rather than stopping. Each hold logs a `spend_hold` hop (`code: spend_ceiling_reached:<tool>`), and the ledger stores it as one call on model `held:<tool>` with `usd_estimate` 0. To count holds per owner per month, sum `calls` where `model like 'held:%'`; the month's spend is the sum of `usd_estimate` over the other rows. With the ledger off there is no month total and so no ceiling. The total counts model USD only (browser and sandbox time are priced at 0), and it starts at 0 in each DO storage, so the first month undercounts.
 
-Known gap: the ledger undercounts billed tokens, so treat the baseline as a floor. It misses:
+Known gap: the ledger can still undercount billed tokens, so treat the baseline as a floor. An OpenAI call that ends `oversize` (incomplete output) returns no `spent`, so tokens the provider billed for are not logged.
 
-- an OpenAI call that ends `oversize` (incomplete output) returns no `spent`, so tokens the provider billed for are not logged;
-- failed routes and the template floor log no usage;
-- `failFromHook` in `llm/provider.ts` drops a call that was already billed;
-- `llm/pricing.ts` does not model cache writes, which bill above the uncached input rate.
-
-No test yet pins that a failed attempt's `spent` is added exactly once. Follow-up: make every billed attempt reach the turn log and add that test.
+A failed attempt the provider still billed (a reply with neither text nor a tool call, a response from the wrong model, a reply a post-call hook halted) reaches the turn log as an `llm_<purpose>_attempt` hop (`llm_task_attempt`, kind `worker`, for a task worker call, where it also counts toward the owner's spend ceiling) with usage under the model that billed it, whether the turn was answered by a fallback, ended on the template floor, or failed. Tokens a model billed on an earlier try of the step it then answered join that call's usage. A provider that reports more cache reads and writes than the whole prompt logs a `usage_anomaly` hop (`code: cache_exceeds_input`, no numbers) and prices its uncached input at 0.
 
 An active admin sees the same window per owner, with a deployment total, under "Spend (last 30 days)" on the console admin page. It is read through `waldo.admin_cost_summary` (migration `20261024010000`), a signed call that answers only an admin's DO and returns owner, day, USD, calls, input and cached tokens. On a deployment with the ledger off the table says nothing was recorded.
 

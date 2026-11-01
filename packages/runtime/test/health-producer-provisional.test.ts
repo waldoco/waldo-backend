@@ -138,7 +138,7 @@ describe('provisional rows: sleep debt', () => {
     expect(debt.algorithm_version).toBe('sleep-debt.v2');
     expect(debt.activation).toBe('accepted');
     expect(['available', 'partial']).toContain(debt.state);
-    if (debt.state === 'available') expect(Object.keys(debt)).toEqual(['state', 'debt_minutes', 'need_basis', 'algorithm_version', 'activation']);
+    if (debt.state === 'available') expect(Object.keys(debt)).toEqual(['state', 'debt_minutes', 'need_basis', 'algorithm_version', 'activation', 'trend']);
     // The need is the owner's own mean shrunk toward eight hours, so the row says so rather than calling it their own average.
     if (debt.state === 'available') expect(debt.need_basis).toBe('blended_average');
   });
@@ -150,6 +150,21 @@ describe('provisional rows: a confidence that is not a number', () => {
     const nan = (input: Parameters<typeof base>[0]) => { const out = base(input); return out.recovery.state === 'available' ? { ...out, recovery: { ...out.recovery, coverage: Number.NaN } } : out; };
     const payloads = await producerPayloads(nan, goldenProducerCases.apple_mature_with_calendar!);
     expect(payloads).toEqual([]);
+  });
+});
+
+describe('provisional rows off: a coverage that is not a number', () => {
+  it('is written as a null confidence, as it always was, and never refuses the row', async () => {
+    const base = dailyScoresFor(undefined);
+    const nan = (input: Parameters<typeof base>[0]) => { const out = base(input); return out.recovery.state === 'available' ? { ...out, recovery: { ...out.recovery, coverage: Number.NaN } } : out; };
+    const written = (await producerPayloads(nan, goldenProducerCases.apple_mature_with_calendar!)).map(payload => JSON.parse(payload) as Row);
+    expect(written.length).toBeGreaterThan(0);
+    for (const row of written) {
+      if ('reason' in row.recovery!) continue;
+      expect(row.recovery!.confidence).toBeNull();
+      expect(row.confidence).toBeNull();
+    }
+    expect(written.some(row => !('reason' in row.recovery!))).toBe(true);
   });
 });
 

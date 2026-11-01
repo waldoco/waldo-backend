@@ -12,7 +12,7 @@ import {
 } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { MODEL_UNREACHABLE_REPLY, ownerModelGateway, ownerRoutePolicy, type FloorTurn } from '../src/llm/owner-routes';
-import { InMemoryCircuitBreaker, type CircuitBreaker } from '../src/llm/provider';
+import { InMemoryCircuitBreaker, ModelUnavailableError, type CircuitBreaker } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { getContextHandler } from '../src/tools/live/get-context';
@@ -115,6 +115,37 @@ it('a side job tries Luna with full then reduced context, then Haiku, and never 
   const owner = responder(gateway);
   await expect(owner.chooseReaction(ownerTyped({ traceId: 'fallback-reaction-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }))).rejects.toThrow(/live model failed/);
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_LUNA_MODEL, ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]);
+});
+
+it('a job no provider would answer for a refused key fails as model-unavailable, auth_failed, so its schedule waits instead of quarantining', async () => {
+  const { gateway } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'auth_failed' }], [ANTHROPIC_PROVIDER]: [{ fail: 'auth_failed' }] });
+  const failure = await responder(gateway).chooseReaction(ownerTyped({ traceId: 'dead-key-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(ModelUnavailableError);
+  expect(failure).toMatchObject({ reason: 'auth_failed', message: expect.stringMatching(/^live model failed: auth_failed/) });
+});
+
+it('a job every provider failed transiently is model-unavailable; a request the model refused is not', async () => {
+  const down = await responder(scriptedProviders({}).gateway).chooseReaction(ownerTyped({ traceId: 'down-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(down).toMatchObject({ reason: 'template_unavailable' });
+  expect(down).toBeInstanceOf(ModelUnavailableError);
+  const refused = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'invalid_args' }] }).gateway).chooseReaction(ownerTyped({ traceId: 'refused-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(Error);
+  expect(refused).not.toBeInstanceOf(ModelUnavailableError);
+});
+
+it('a request every provider refused is not model-down, so its schedule fails and pauses rather than waiting for the model', async () => {
+  for (const code of ['rejected', 'oversize', 'not_found'] as const) {
+    const refused = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: code }], [ANTHROPIC_PROVIDER]: [{ fail: code }] }).gateway)
+      .chooseReaction(ownerTyped({ traceId: `refused-all-${code}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect(refused).not.toBeInstanceOf(ModelUnavailableError);
+  }
+});
+
+it('a key without model access everywhere is model-down: the key is the outage, not the request', async () => {
+  const forbidden = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'forbidden' }], [ANTHROPIC_PROVIDER]: [{ fail: 'forbidden' }] }).gateway)
+    .chooseReaction(ownerTyped({ traceId: 'forbidden-all', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(forbidden).toBeInstanceOf(ModelUnavailableError);
 });
 
 it('a side job answered by Haiku returns its answer', async () => {
@@ -254,4 +285,16 @@ it('a floor reached after an earlier round read outside text carries that taint,
   await owner.respond(ownerTyped({ traceId: 'mid-turn', conversationRef: 'telegram-1', surface: 'telegram', text: 'check my bank mail', memoryWrites: false }), time);
   expect(promised).toHaveLength(1);
   expect(promised[0]).toMatchObject({ traceId: 'mid-turn', taint: 'external' });
+});
+
+// A fallback that refuses what it was handed (an attachment type it cannot send, a provider 400) says nothing about whether the
+// owner can be answered: the primary was down, so the owner reads the honest line, not an error.
+it.each(['auth_failed', 'transient', 'rate_limited'] as const)('an owner turn whose primary fails with %s and whose fallback refuses the request reaches the floor line', async (primary) => {
+  const { gateway } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: primary }], [ANTHROPIC_PROVIDER]: [{ fail: 'invalid_args' }] });
+  const hops: TurnLogEntry[] = [];
+  const owner = responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); });
+  const reply = await owner.respond(ownerTyped({ traceId: `fallback-refused-${primary}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
+  expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
+  expect(hops).toHaveLength(1);
+  expect(hops[0]).toMatchObject({ ok: true, code: 'template_floor' });
 });

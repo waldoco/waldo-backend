@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -34,6 +35,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
+import { unfinishedReply } from '../src/conversation/tool-loop';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -60,13 +62,14 @@ const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
+const otlp: string[] = [];
 let addresses = 0;
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; proof.moved = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
-  forbiddenEgress.length = 0;
+  forbiddenEgress.length = 0; otlp.length = 0;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
@@ -78,6 +81,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     const handled = await fx.fetcher(input as RequestInfo, init);
     if (handled) return handled;
     const url = String(input instanceof Request ? input.url : input);
+    if (url === 'https://langfuse.fixture.invalid/api/public/otel/v1/traces') { otlp.push(String(init?.body)); return Response.json({}); }
     // Google is down here: the scheduled watch upkeep of an owner with a seeded account fails closed without leaving the isolate.
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ error: 'temporarily_unavailable' }, { status: 503 });
     forbiddenEgress.push(url);
@@ -458,7 +462,7 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
-const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 // Every model call fails, so a retry inside the responder cannot rescue the turn.
 const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
 const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));
@@ -503,6 +507,43 @@ it('an iMessage turn the model fails tells the owner once, with the floor\'s pro
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 
+// Langfuse files a trace only once a root span arrives, so a turn without one never leaves the exporter's buffer.
+// Bound only by vitest.imessage-langfuse.config.ts; the connector suite's config leaves the exporter off.
+const langfuseBound = Boolean((env as unknown as Record<string, unknown>).LANGFUSE_BASE_URL);
+type OtlpSpan = { name: string; parentSpanId?: string; attributes: { key: string; value: { stringValue?: string } }[] };
+const exportedSpans = () => otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+const keyOf = (span: OtlpSpan) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue;
+const rootsOf = (traceKey: string) => exportedSpans().filter(span => !span.parentSpanId && keyOf(span) === traceKey);
+
+it.runIf(langfuseBound)('Langfuse root: an iMessage turn that answers exports one root, with its model and enqueue hops under it and neither side\'s words on the wire', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Plan my afternoon');
+  const [record] = await inbox(w.ownerStub);
+  const traceKey = `imessage-${record!.updateId}`;
+  await vi.waitFor(() => expect(rootsOf(traceKey)).toHaveLength(1));
+  const [root] = rootsOf(traceKey);
+  expect(root!.name).toBe('imessage.turn');
+  const children = exportedSpans().filter(span => span.parentSpanId && keyOf(span) === traceKey).map(span => span.name);
+  expect(children).toEqual(expect.arrayContaining(['respond', 'outbox_enqueue']));
+  const wire = otlp.join('\n');
+  for (const said of ['Plan my afternoon', proof.reply]) expect(wire, said).not.toContain(said);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+it.runIf(langfuseBound)('Langfuse root: an iMessage turn no model answers (the floor reply) exports exactly one root, no more', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  modelDown();
+  await replyFor(w, 'Plan my afternoon');
+  const [record] = await inbox(w.ownerStub);
+  const traceKey = `imessage-${record!.updateId}`;
+  await vi.waitFor(() => expect(rootsOf(traceKey)).toHaveLength(1));
+  await w.pump(2);
+  expect(rootsOf(traceKey)).toHaveLength(1);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
 it('an iMessage turn whose model writes nothing tells the owner once, with the floor\'s promised time', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -533,7 +574,7 @@ it('an iMessage turn that runs out of time while the model works answers with it
   shortDeadline(300);
   proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
   await replyFor(w, 'Plan my afternoon');
-  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  expect(JSON.parse((await sendNext(w)).body).text).toBe(unfinishedReply('time_exhausted', []));
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
   expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
@@ -1732,16 +1773,20 @@ it('a note from the next turn never reaches the owner before the reply still wai
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 600_000);
-  let setTiming!: (timing: unknown) => void;
-  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  let setTiming!: (timing: unknown) => void, ownStorage: unknown;
+  await runInDurableObject(w.ownerStub, async (instance, state) => { ownStorage = state.storage; setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  // The prototype spies below see every owner in the isolate, including one an earlier test left running; only this owner's calls count.
+  const ours = (outbox: IMessageFinalOutbox) => (outbox as unknown as { storage: unknown }).storage === ownStorage;
   const admitted = admissions();
   const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
   vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
-    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+    if (ours(this)) retries.push(ref);
+    return retryLater.call(this, ref, maxAge, delay);
   });
   const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
   vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
-    drops.push(args[0]); return dropProgress.apply(this, args);
+    if (ours(this)) drops.push(args[0]);
+    return dropProgress.apply(this, args);
   });
   const LATER = 'Switching the options to vegetarian ones.';
   proof.notes.push('Looking at dinner spots near you.', LATER);

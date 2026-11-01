@@ -128,7 +128,7 @@ describe('real exporter transport boundary', () => {
     expect(attrs(parent[0])).toMatchObject({ 'langfuse.trace.metadata.cost_coverage': 'unpriced', 'langfuse.trace.metadata.cost_scope': 'pre_root_hops' });
     expect(attrs(parent[0])['langfuse.trace.metadata.estimated_cost_usd']).toBeUndefined();
     expect(attrs(late[0])['langfuse.observation.metadata.cost_kind']).toBe('estimate');
-    expect(JSON.parse(String(attrs(late[0])['langfuse.observation.metadata.price_source']))).toEqual({ source: 'runtime:modelCost:standard-flat', usd_per_million: { input: 0.1, cached: 0.01, output: 0.5 } });
+    expect(JSON.parse(String(attrs(late[0])['langfuse.observation.metadata.price_source']))).toEqual({ source: 'runtime:modelCost:standard-flat', usd_per_million: { input: 0.1, cached: 0.01, cache_write: 0.125, output: 0.5 } });
     expect(bodies.join('')).not.toContain('billed');
   });
 

@@ -12,6 +12,7 @@ import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth
 import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
+import { canonicalRedirect } from './channels/canonical-host';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH, consoleCookie } from './channels/console';
 import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
@@ -19,12 +20,16 @@ import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
 import { sweepHealthRetention } from './health/retention-sweep';
+import { langfuseSweepLogLine, sweepLangfuseRetention } from './observability/langfuse-retention';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
 import { consoleAuth, OWNER_COOKIE } from './identity/console-auth';
 import { readConsoleTicket } from './identity/console-ticket';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
+import { receiveAgentMail } from './channels/agent-mail/ingress';
+import { agentMailRouting, sweepAgentMailRules } from './channels/agent-mail/rules';
+import { agentMailHeldHandles } from './channels/agent-mail/handles';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -66,6 +71,7 @@ declare global {
       IMESSAGE_CONNECTOR_POLICY?: string;
       IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
       WALDO_ENVIRONMENT?: string;
+      WALDO_PUBLIC_ORIGIN?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       WALDO_OAUTH_STATE_SECRET?: string;
@@ -79,6 +85,14 @@ declare global {
       ANTHROPIC_API_KEY?: string;
       WALDO_ENV?: string;
       WALDO_RELEASE?: string;
+      AGENT_MAIL_INBOUND?: string;
+      AGENT_MAIL_DOMAIN?: string;
+      AGENT_MAIL_ZONE_ID?: string;
+      CLOUDFLARE_EMAIL_ROUTING_TOKEN?: string;
+      LANGFUSE_PUBLIC_KEY?: string;
+      LANGFUSE_SECRET_KEY?: string;
+      LANGFUSE_BASE_URL?: string;
+      LANGFUSE_RETENTION_SWEEP?: string;
     }
   }
 }
@@ -131,6 +145,8 @@ const worker = {
     oauthStateSecret(env);
     const crossSite = consoleCrossSiteRefusal(request);
     if (crossSite) return crossSite;
+    const canonical = canonicalRedirect(request, env);
+    if (canonical) return canonical;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
@@ -210,11 +226,22 @@ const worker = {
       },
     });
   },
+  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It throws only while the message could
+  // not be recorded (receiveAgentMail's failure policy), and never calls setReject: a bounce to a forged sender is backscatter.
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+    await receiveAgentMail(message, env);
+  },
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
+    // Waldo's routing rules no held handle accounts for: an account deleted with its owner object leaves its rule behind.
+    const mailRouting = agentMailRouting(env), mailHeld = agentMailHeldHandles(env);
+    if (mailRouting && mailHeld) ctx.waitUntil(sweepAgentMailRules(mailRouting, mailHeld).then((outcome) => console.log(JSON.stringify({ hop: 'agent_mail_rule_sweep', ...outcome }))));
+    // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
+    // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
+    if (env.LANGFUSE_RETENTION_SWEEP === '1' || env.LANGFUSE_RETENTION_SWEEP === 'dry') ctx.waitUntil(sweepLangfuseRetention(env).then((outcome) => (outcome.overdue ? console.error : console.log)(langfuseSweepLogLine(outcome))));
   },
 } satisfies ExportedHandler<Env>;
 

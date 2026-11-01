@@ -1,12 +1,13 @@
 import { TURN_EVENT_SCHEMA_VERSION, type TurnOutcome } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
-import { modelCost } from '../llm/pricing';
+import { modelCost, uncachedInput } from '../llm/pricing';
 import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
 import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
 // userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean }>;
+// traceId, when given, names the Langfuse trace for a trace key it knows; any other key gets a random one.
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean; traceId?: (traceKey: string) => string | undefined }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
@@ -25,7 +26,7 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   receipt: { feature: 'reactions', type: 'tool' }, resolved: { feature: 'reactions', type: 'tool' }, choose_reaction: { feature: 'reactions', type: 'chain' },
   respond: { feature: 'reply', type: 'chain' }, joined_path: { feature: 'reply', type: 'chain' },
   memory: { feature: 'memory', type: 'chain' }, constellation_evidence: { feature: 'memory', type: 'span' }, health_context: { feature: 'health', type: 'span' },
-  llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
+  llm_reply: { feature: 'reply', type: 'span' }, llm_reply_attempt: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
@@ -82,13 +83,14 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       attr('langfuse.observation.type', 'generation'),
       ...optional('langfuse.observation.metadata.cached_share', share(usage.cached, usage.input)),
       attr('langfuse.observation.model.name', usage.model),
-      attr('langfuse.observation.usage_details', JSON.stringify({ input: usage.input - usage.cached, input_cached_tokens: usage.cached, output: usage.output })),
+      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), output: usage.output })),
       attr('langfuse.observation.metadata.cost_kind', cost ? 'estimate' : 'unpriced'),
       ...(cost ? [attr('langfuse.observation.metadata.price_source', JSON.stringify({
         source: 'runtime:modelCost:standard-flat',
         usd_per_million: {
           input: modelCost({ model: usage.model, input: 1_000_000, cached: 0, output: 0 })!.input,
           cached: modelCost({ model: usage.model, input: 1_000_000, cached: 1_000_000, output: 0 })!.input,
+          cache_write: modelCost({ model: usage.model, input: 1_000_000, cached: 0, cache_write: 1_000_000, output: 0 })!.cache_write,
           output: modelCost({ model: usage.model, input: 0, cached: 0, output: 1_000_000 })!.output,
         },
       }))] : []),
@@ -302,7 +304,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       // New work survives; the rejected promise feeds the host's durable export-failure row.
       return overflow ? Promise.reject(new Error('otlp_buffer_evicted')) : Promise.resolve();
     }
-    const ids = { traceId: hex(16), rootId: hex(8), rootHop: entry.hop };
+    const ids = { traceId: context.traceId?.(entry.trace) ?? hex(16), rootId: hex(8), rootHop: entry.hop };
     const hops = pending.get(entry.trace) ?? [];
     pending.delete(entry.trace);
     bufferedHops -= hops.length;

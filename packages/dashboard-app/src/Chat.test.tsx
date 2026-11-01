@@ -10,7 +10,7 @@ import { createChatStore, type ChatDeps } from './chat-store';
 const flush = async () => { await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); }); };
 const deps = (page: () => Promise<ChatPage>, over: Partial<ChatDeps> = {}): ChatDeps => ({
   page, send: async () => ({ message_id: 'app-1', state: 'admitted', closed_reason: null, effects_unconfirmed: false } as ChatReceipt),
-  receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }), cancel: async () => ({ message_id: 'app-1', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: false }),
+  receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }), cancel: async () => ({ message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: false }),
   id: () => 'console-client-1', now: () => 1_760_000_000_000, setTimer: () => 0, clearTimer: () => undefined, visible: () => true, ...over,
 });
 let root: Root | null = null, host: HTMLElement | null = null;
@@ -53,7 +53,7 @@ describe('console chat page', () => {
     expect(page.querySelector('[role="log"]')?.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('draws the reply written so far inside the working row', async () => {
+  it('draws the reply written so far where the reply will be, with the working line under it', async () => {
     const store = createChatStore(deps(async () => ({ messages: [], next_cursor: null }), {
       send: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }),
       receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, draft: 'Here is **the plan** so far' }),
@@ -64,7 +64,7 @@ describe('console chat page', () => {
     await type(input, 'Plan my afternoon');
     await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); await flush();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); }); await flush();
-    expect(page.querySelector('.chat-msg.working .chat-draft')?.textContent).toBe('Here is the plan so far');
+    expect(page.querySelector('.chat-msg.streaming .chat-draft')?.textContent).toBe('Here is the plan so far');
   });
 
   it('says what the turn is doing while its tools run, and gives way to the reply once it is written', async () => {
@@ -84,7 +84,7 @@ describe('console chat page', () => {
     await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); await flush();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); }); await flush();
     expect(page.querySelector('.chat-working')?.textContent).toContain('Checking your email…');
-    await vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); }); expect(page.querySelector('.chat-msg.working .chat-draft')?.textContent).toBe('Two invoices'); }, { timeout: 5_000 });
+    await vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); }); expect(page.querySelector('.chat-msg.streaming .chat-draft')?.textContent).toBe('Two invoices'); }, { timeout: 5_000 });
     expect(page.querySelector('.chat-working')?.textContent).not.toContain('Checking your email…');
     expect(page.querySelector('.chat-working')?.textContent).toContain('Working on it');
   });
@@ -126,5 +126,60 @@ describe('console chat page', () => {
     await act(async () => { store.send('Hi'); }); await flush();
     expect(page.querySelector('.chat-link-dot')).not.toBeNull();
     expect(page.querySelector('.chat-link')?.getAttribute('aria-label')).toBe('Chat with Waldo, Waldo is working');
+  });
+});
+describe('a reply streamed into the console', () => {
+  const user: ChatMessage = { id: 'app-1', role: 'user', text: 'Plan my afternoon', parts: [], channel: 'app', parent_id: null, created_at: 1_760_000_000_000 };
+  const reply = (text: string): ChatMessage => ({ id: 'r1', role: 'assistant', text, parts: [], channel: 'app', parent_id: 'app-1', created_at: 1_760_000_000_000 });
+  const running = (draft: string): ChatReceipt => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, draft });
+  async function streaming(receipts: ChatReceipt[], pages: ChatMessage[][]) {
+    let r = 0, p = 0;
+    const store = createChatStore(deps(async () => ({ messages: pages[Math.min(p++, pages.length - 1)]!, next_cursor: null }), {
+      send: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }),
+      receipt: async () => receipts[Math.min(r++, receipts.length - 1)]!,
+      setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: (id) => window.clearTimeout(id),
+    }));
+    const page = await mount(<ChatPanel zone="Asia/Kolkata" store={store}/>);
+    await act(async () => { store.send('Plan my afternoon'); }); await flush();
+    return page;
+  }
+  const wait = async (check: () => void) => vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); }); check(); }, { timeout: 6_000 });
+
+  it('keeps the words being written out of the live log, so a screen reader hears the reply once it settles', async () => {
+    const page = await streaming([running('Here is the plan')], [[]]);
+    await wait(() => expect(page.querySelector('.chat-msg.streaming .chat-draft')?.textContent).toBe('Here is the plan'));
+    expect(page.querySelector('.chat-msg.streaming .chat-draft')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('puts the reply in the words’ place without the arrival rise, fading in only what came after them', async () => {
+    const page = await streaming(
+      [running('Here is the plan'), { message_id: 'app-1', state: 'completed', closed_reason: null, effects_unconfirmed: false }],
+      [[], [user, reply('Here is the plan for today.')]]);
+    await wait(() => expect(page.querySelector('.chat-msg.waldo:not(.streaming) .chat-prose')?.textContent).toBe('Here is the plan for today.'));
+    expect(page.querySelector('.chat-msg.streaming')).toBeNull();
+    const settled = page.querySelector('.chat-msg.waldo:not(.streaming)')!;
+    expect(settled.classList.contains('arrived')).toBe(false);
+    expect([...settled.querySelectorAll('.word-in')].map(word => word.textContent)).toEqual(['for', 'today.']);
+  });
+
+  // The server closes a stopped turn as interrupted with the reason cancelled, whether it was stopped here or in the app.
+  it('says the owner stopped it when a stop closes the turn, here or elsewhere, with no Ask again', async () => {
+    const page = await streaming([running('Here is')], [[], [user]]);
+    await wait(() => expect(page.querySelector('.composer-send.stop')).not.toBeNull());
+    await act(async () => page.querySelector<HTMLButtonElement>('.composer-send.stop')!.click()); await flush();
+    await wait(() => expect(page.querySelector('.chat-closure')?.textContent).toContain('You stopped this one.'));
+    expect(page.querySelector('.chat-closure')?.textContent).not.toContain('didn’t finish');
+    expect([...page.querySelectorAll('.chat-closure button')].map(button => button.textContent)).toEqual(['Dismiss']);
+    const elsewhere = await streaming([running('Here is'), { message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: true }], [[], [user]]);
+    await wait(() => expect(elsewhere.querySelector('.chat-closure')?.textContent).toContain('You stopped this one. Something Waldo had already started may have happened.'));
+  }, 15_000);
+
+  it('keeps what an interrupted reply had shown, marked unfinished, beside the closure', async () => {
+    const page = await streaming(
+      [running('Here is'), { message_id: 'app-1', state: 'interrupted', closed_reason: 'interrupted', effects_unconfirmed: false }],
+      [[], [user]]);
+    await wait(() => expect(page.querySelector('.chat-closure')?.textContent).toContain('Waldo didn’t finish this one.'));
+    expect(page.querySelector('.chat-unfinished .chat-prose')?.textContent).toBe('Here is');
+    expect(page.querySelector('.chat-unfinished .chat-action')).toBeNull();
   });
 });

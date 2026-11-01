@@ -4,6 +4,7 @@ import {runInDurableObject} from 'cloudflare:test';
 import {consoleAccess,CONSOLE_ACTION_PATH} from '../src/channels/console';
 import {CONTROLS_PATH} from '../src/channels/dashboard-controls';
 import {CONTROL_ACTION_PATH} from '../src/channels/dashboard-control-actions';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // A fake owner directory: one WhatsApp presence per owner, the shape unlink_presence and presence_hint read.
 const directory=vi.hoisted(()=>({linked:new Map<string,boolean>(),unavailable:new Set<string>(),refuse:new Set<string>(),unlinked:[] as string[],asserted:0}));
@@ -33,12 +34,12 @@ const open=async(name:string,subject?:string)=>{
  // One inbound text through the real admit path, which is what opens WhatsApp's 24-hour service window.
  // The turn it would start is stubbed out; the admission record and window bookkeeping still run.
  const inbound=(sender:string)=>runInDurableObject(stub,async instance=>{
-  const live=instance as unknown as {fetch(request:Request):Promise<Response>;turn():Promise<void>;whatsappInflight:Set<Promise<void>>};
+  const live=instance as unknown as {fetch(request:Request):Promise<Response>;turn():Promise<void>};
   const turn=vi.spyOn(live,'turn').mockImplementation(async()=>undefined);
   try{
    const response=await live.fetch(new Request(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},
     body:JSON.stringify({messages:[{from:sender,id:'wamid.'+crypto.randomUUID(),timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'synthetic'}}]})}));
-   expect(response.status).toBe(200);await Promise.all([...live.whatsappInflight]);
+   expect(response.status).toBe(200);await drainWhatsAppTurns(instance as never);
   }finally{turn.mockRestore();}
  });
  // Admission with no messages binds the subject without running a turn.

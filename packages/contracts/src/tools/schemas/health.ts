@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { healthSleepNeedMinutesV1Schema } from '../../app/health-ingest';
 
 // A9 (BUILD_PLAN_2026-09-25): meal + workout logging. Health-adjacent data: log and nudge,
 // never diagnose. Calorie values are model-inferred estimates, stored and presented as
@@ -35,3 +36,12 @@ export const listHealthLogsArgsSchema = z.strictObject({
   limit: z.int().min(1).max(50).default(10),
 });
 export type ListHealthLogsArgs = z.infer<typeof listHealthLogsArgsSchema>;
+
+// The owner's own sleep need, set from chat on any surface. The figure goes to the health plane's setting and nowhere else:
+// the answer is a word, so nothing in the turn's output carries it on.
+export const setSleepNeedArgsSchema = z.strictObject({
+  minutes: healthSleepNeedMinutesV1Schema.nullable().describe('The sleep need the owner stated, in minutes (6 to 10 hours); null when they ask to clear it.'),
+});
+export type SetSleepNeedArgs = z.infer<typeof setSleepNeedArgsSchema>;
+export const setSleepNeedResultSchema = z.strictObject({ state: z.enum(['set', 'cleared']) });
+export type SetSleepNeedResult = z.infer<typeof setSleepNeedResultSchema>;

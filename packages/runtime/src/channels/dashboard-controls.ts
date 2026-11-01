@@ -36,7 +36,10 @@ const projections = {
     timezone: view.timezone,
     timezone_confirmed: view.timezoneConfirmed,
     date: view.now.slice(0,10),
-    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }) })),
+    // Every controls revision's day; the app route reads revision 3's states and fields down for an older build.
+    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }),
+      ...(card.stateReason === undefined ? {} : { state_reason: card.stateReason }), ...(card.retriesLeft === undefined ? {} : { retries_left: card.retriesLeft }),
+      ...(card.revision === undefined || card.revisedAt === undefined ? {} : { revision: card.revision, revised_at: card.revisedAt }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     // app.v1 names five behaviors in a strict object; a later kind stays out until a contract revision names it.
     schedules: { daily_brief: view.schedules.daily_brief, followups: view.schedules.followups, event_briefs: view.schedules.event_briefs, nightly: view.schedules.nightly, heartbeat: view.schedules.heartbeat },

@@ -43,7 +43,7 @@ describe('modern account controls', () => {
     expect(html).toContain('Access granted · read unverified');
     expect(html).toContain('Disconnect &lt;script&gt;@test.invalid'); expect(html).not.toContain('<script>');
     expect(html).toContain('Link a Telegram account'); expect(html).not.toContain('Unlink Telegram');
-    expect(html).toContain('WhatsApp'); expect(html).toContain('Get a WhatsApp link code'); expect(html).not.toContain('/console/legacy');
+    expect(html).toContain('WhatsApp'); expect(html).toContain('Link WhatsApp'); expect(html).not.toContain('/console/legacy');
     expect(html).toContain('Sign out of this browser'); expect(html).toContain('Sign out everywhere');
     expect(html).not.toContain('/console/connections');
     expect(html).toContain('href="#/connections/imessage"'); expect(html).toContain('href="#/connections/devices"');
@@ -54,10 +54,32 @@ describe('modern account controls', () => {
     expect(multiple).toContain('Device names are not recorded');
   });
 
+  it('puts Connect Google in the Google accounts group: an empty group, and after the account list', () => {
+    const inGoogleGroup = (html: string, label: string) => { const at = html.indexOf(label); return at > html.indexOf('Google accounts') && at < html.indexOf('>Chat<'); };
+    const empty = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, google: { connectAvailable: true, accounts: [] } } }} busy={false} onAction={noop}/>);
+    expect(empty).toContain('>Connect Google<'); expect(inGoogleGroup(empty, '>Connect Google<')).toBe(true);
+    const listed = renderToStaticMarkup(<ConnectionsControls record={connections} busy={false} onAction={noop}/>);
+    expect(listed).toContain('>Add Google account<'); expect(inGoogleGroup(listed, '>Add Google account<')).toBe(true);
+    expect(listed.indexOf('>Add Google account<')).toBeGreaterThan(listed.indexOf('Disconnect work@test.invalid'));
+    expect(listed.match(/Add Google account/g)).toHaveLength(1);
+  });
+
   it('does not offer unavailable connect or unlink actions and honestly shows absent accounts', () => {
     const html = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, google: { connectAvailable: false, accounts: [] }, telegram: { linked: true, unlinkAvailable: false } } }} busy={false} onAction={noop}/>);
     expect(html).toContain('No Google accounts returned'); expect(html).toContain('connection is unavailable');
     expect(html).not.toContain('>Connect Google<'); expect(html).not.toContain('>Unlink Telegram<');
+  });
+});
+
+describe('the connect receipt button', () => {
+  const label = (navigation: string) => /<a [^>]*>([^<]*)<\/a>/.exec(renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'recorded', message: 'Ready.', navigation }, duplicate: false }} onRefresh={noop} busy={false}/>))?.[1];
+  it('says sign in for an MCP start link and Google for a Google one, whether the href is absolute or not', () => {
+    const nonce = 'A'.repeat(43);
+    expect(label(`https://w.test/console/mcp/start/${nonce}`)).toBe('Continue to sign in');
+    expect(label(`/console/mcp/start/${nonce}`)).toBe('Continue to sign in');
+    expect(label(`https://w.test/console/google/start/${nonce}`)).toBe('Continue to Google');
+    expect(label('https://accounts.google.com/o/oauth2/v2/auth?state=s')).toBe('Continue to Google');
+    expect(label('https://w.test/c/ABCDEFGHIJKLMNOPQRSTUV')).toBe('Continue to Google');
   });
 });
 

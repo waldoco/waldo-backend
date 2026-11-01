@@ -19,7 +19,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     instruction: [
       'It is morning. Send the owner The Brief: how today looks and what to protect.',
       'Open with a one-line read of the day. Then the day in order: events with times and what each is for, reminders due today, and anything waiting on them.',
-      'Name the one thing that matters most today and one clear action. Use what you know about their routines only when you actually have it.',
+      'Name the one thing that matters most today, and one clear action when one would help. Use what you know about their routines only when you actually have it.',
       'One clear direction, not a list of worries.',
     ].join('\n'),
   },
@@ -27,7 +27,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     id: 'card:midday', name: 'Check-in', defaultTime: '14:00', calendar: 'rest_of_today', body: 'plan',
     instruction: [
       'It is early afternoon. Send the owner a short afternoon check-in: what still matters today and what comes next.',
-      'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day.',
+      'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day, when one would help.',
       `If nothing is left and nothing changed, reply with exactly ${SKIP_CARD} and send nothing else.`,
     ].join('\n'),
   },
@@ -43,9 +43,10 @@ export const DAY_CARDS: readonly DayCard[] = [
 
 // The owner chooses whether their health reaches Waldo, so a card speaks about the body only from what they shared. A
 // card job cannot change the calendar or raise a card for a change, so the plan offers one and the owner's yes raises it.
-const SILENT_WITHOUT = 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score.';
+const SILENT_WITHOUT = 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.';
+export const CLASH_LINE = 'When the calendar asks a lot of them on a day their Form or Recovery is low, that clash is the read of the day: say it plainly, and offer the one change that would ease it most.';
 const BODY_RULE: Readonly<Record<DayCard['body'], string>> = {
-  plan: `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good, a line is enough. You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it; a yes from them puts it on an approval card. When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`,
+  plan: `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good, a line is enough. ${CLASH_LINE} You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it; a yes from them puts it on an approval card. When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`,
   line: `Their body gets at most one line, and only when this request carries their shared health context: say what it shows. ${SILENT_WITHOUT}`,
 };
 
@@ -69,6 +70,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   `<today>\n${context.today || '(no conversation yet today)'}\n</today>`,
   ...(context.updates ? [updatesSection(context.updates)] : []),
   card.instruction,
+  "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
   BODY_RULE[card.body],
   `Format it as a compact card for chat: a first line naming "${card.name}", then short sections. Keep it tight enough to read in 20 seconds.`,
 ].join('\n\n');
@@ -84,9 +86,15 @@ export const DAY_PLAN_INSTRUCTION = [
   'Reply with JSON only: {"cards":[{"id":"<card id>","time":"HH:MM" or "skip","reason":"<short why>"}]}, one entry per card listed.',
 ].join('\n');
 
-export const dayPlanInput = (context: Readonly<{ localNow: string; calendar: string; cards: readonly DayCard[]; proactivity: string }>): string => [
-  `Now: ${context.localNow}. ${context.proactivity}. Plan these cards for today:`,
-  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}`).join('\n'),
+// With `replan` (each card's current time, or null when skipped), the calendar changed during the day: the cards listed are
+// still to come, and each keeps its time unless the change calls for another.
+export const dayPlanInput = (context: Readonly<{ localNow: string; calendar: string; cards: readonly DayCard[]; proactivity: string;
+  replan?: Readonly<Partial<Record<CardId, string | null>>> }>): string => [
+  context.replan
+    ? `Now: ${context.localNow}. ${context.proactivity}. Today's calendar just changed. These cards are still to come today; keep each one's planned time unless the change calls for another, which must be a time after now, or skip one the change made unnecessary:`
+    : `Now: ${context.localNow}. ${context.proactivity}. Plan these cards for today:`,
+  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}${context.replan
+    ? `, planned ${context.replan[card.id] ?? 'skip'}` : ''}`).join('\n'),
   `<calendar>\n${context.calendar}\n</calendar>`,
 ].join('\n\n');
 

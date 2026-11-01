@@ -192,6 +192,9 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await outboxPass(owner, state, ctx);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT, channel: 'app' }]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT }]);
+      // The card keeps the Main chat row it became and when it was delivered, for the day's history.
+      const rows = (await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': ctx.name, 'x-waldo-app-session-hash': 'a'.repeat(64) } }))).json() as { messages: { id: string }[] }).messages;
+      expect(updateBook(state.storage.sql).delivered(DAY)).toEqual([{ app_row: rows[0]!.id, delivered_at: AT + 1000 }]);
     });
   });
 

@@ -36,13 +36,15 @@ import {
 import {
   HookHaltError,
   HOOK_REGISTRY,
+  invalidArgumentsCause,
   runHooks,
+  type ArgumentIssue,
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
 import { guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
-import type { ToolOutputStore } from '../conversation/tool-output-store';
+import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
 
 export type RuntimeToolCall = {
   id: string;
@@ -74,6 +76,10 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   session: SessionState;
   // A host hold on one tool for now (the owner's spend ceiling): the call is refused before anything runs.
   heldTool?: (tool: ToolName) => ToolError | null;
+  // Set by the dispatcher for a call that has the turn's output store: keeps a long text whole behind the offload guard, so
+  // the handler can show a part of it and read_tool_output pages the rest from the guarded text it returns. Null when the
+  // guard refuses the text.
+  keepOutput?: (text: string) => Readonly<{ stored: StoredPut; text: string }> | null;
 };
 
 export type DispatchToolResult = (
@@ -294,11 +300,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   let args: unknown;
   try {
     args = handler.schema.parse(preToolPayload.args);
-  } catch {
+  } catch (error) {
+    // A handler's schema can be stricter than the registry's, which the PreToolUse hook already checked.
+    const issues = (error as { issues?: unknown } | null)?.issues;
     return failDispatch(
       call.id,
       tool.data,
-      toolError('invalid_args'),
+      toolError('invalid_args', Array.isArray(issues) ? invalidArgumentsCause(issues as readonly ArgumentIssue[]) : undefined),
       'invalid_args',
       'invalid_args',
     );
@@ -336,7 +344,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
     } else {
       ctx.runScope?.admit();
-      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id });
+      const store = options.offload;
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
@@ -948,6 +957,13 @@ const offloadResult = (
     // retrievable - the receipt never claims retrievable output the store did not keep
     data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
   };
+};
+
+const keepGuarded = (callId: string, text: string, ctx: ToolDispatcherContext, store: ToolOutputStore): Readonly<{ stored: StoredPut; text: string }> | null => {
+  const guarded = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: ctx.session?.canary_tokens ?? [], source_taint: 'external' });
+  if (!guarded.ok) return null;
+  const kept = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
+  return { stored: store.put(kept, { call_id: callId }), text: kept };
 };
 
 // null when the stored form is refused by the offload guard: then no part of the error is shown.

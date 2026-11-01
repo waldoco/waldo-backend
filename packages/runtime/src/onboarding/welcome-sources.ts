@@ -7,6 +7,9 @@ import { chooseGroup, foldDay, localDayOf, SIGNALS, type HealthReadBook } from '
 import type { GoogleAccess } from '../tools/live/google';
 import type { FindingStore } from './findings';
 import type { ClaimStore } from '../memory/claims';
+import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
+import { numericHealthIn } from '../scribe/sanitiser';
+import { isSetupRef } from './first-run';
 import { runWelcome, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
 // What each source gives the welcome build: bounded reads, as pointers to the items, never their contents.
@@ -146,6 +149,22 @@ export const mailStage = (google: GoogleAccess) => async (): Promise<StageInput>
   return input(mail.lines, ['gmail'], pointers);
 };
 
+// The owner's own setup answers, as they are now: owner-grounded words only, never Waldo's reads or outside text, and nothing a
+// forget still holds. An owner who keeps health out of memory gets neither their health picks nor a stated reading here, and no
+// health node from this stage.
+export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => async (): Promise<StageInput> => {
+  const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
+  const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
+    && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));
+  if (!said.length) return settled('skipped');
+  const pointer = (id: number) => `c${id}`;
+  return {
+    kind: 'input', text: said.map((claim) => `[${pointer(claim.id)}] ${claim.text}`).join('\n'), sources: ['setup'],
+    pointers: new Set(said.map((claim) => pointer(claim.id))), cites: new Map(said.map((claim) => [pointer(claim.id), claim.id])),
+    ...(health ? {} : { noHealth: true }),
+  };
+};
+
 // The public web reaches the gift only as look-up findings, which the app reads on their own route with their own keep,
 // correct and forget. This stage writes no node: it says whether the look-up is live and found anything.
 export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'page'>) => async (): Promise<StageInput> => {
@@ -153,17 +172,34 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
   return settled(findings.page(1).total > 0 ? 'done' : 'empty');
 };
 
-// The owner object's welcome run: the four readers over its own connections, and one model call per stage, which the owner
-// object runs as an owner job on its queue.
+// Whether a stage's source is there now, for a stage that settled skipped: a cheap check, no read of the source itself.
+export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'> }>) =>
+  async (stage: WelcomeStage): Promise<boolean> => {
+    const accounts = async (wants: (account: Account) => boolean) => ((await deps.google.state?.()) ?? []).some((account) => wants(account) && account.error === null);
+    switch (stage) {
+      case 'health': return deps.healthMemory() && (await deps.healthRead.consent()).kind === 'granted';
+      case 'calendar': return accounts((account) => account.calendar || account.tasks);
+      case 'mail': return accounts((account) => account.mail);
+      case 'web': { const findings = deps.findings(); return findings.offered() && findings.lookup() === 'granted'; }
+      case 'setup': return (await setupStage(deps.claims, deps.healthMemory)()).kind === 'input';
+    }
+  };
+
+// The owner object's welcome run: the readers over its own connections, and one model call per stage, which the owner object
+// runs as an owner job on its queue.
 export const ownerWelcome = (deps: Readonly<{
   sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string; healthMemory(): boolean;
   healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
   ask(stage: WelcomeStage, input: string): Promise<string>;
 }>) => ({
   build: () => welcomeBuild(deps.sql, deps.now),
+  // Something to do: a stage due, or a skipped stage to check for its source.
+  wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
+  // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
+  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth()),
   run: () => runWelcome({
-    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask,
-    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())() },
+    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
+    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())(), setup: setupStage(deps.claims, deps.healthMemory) },
   }),
 });
 export type OwnerWelcome = ReturnType<typeof ownerWelcome>;

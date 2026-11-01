@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
+import { lifeAreaSchema } from '../../memory/area';
 import { sourceTaintSchema } from '../../memory/sanitise';
 import { connectIntentSchema } from '../connect-intent';
 
@@ -31,6 +32,7 @@ export const healthReadSignalSchema = z.enum([
   'sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts',
   'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
   'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
+  'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -47,7 +49,25 @@ export const getHealthArgsSchema = z
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg']);
+// One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
+// does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
+const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
+const nonNegative = (max: number) => z.number().finite().min(0).max(max);
+export const healthWorkoutSessionParts = {
+  energy_kcal: nonNegative(30_000), distance_m: nonNegative(1_000_000), elevation_gain_m: nonNegative(20_000),
+  avg_hr_bpm: z.number().finite().positive().max(300), max_hr_bpm: z.number().finite().positive().max(300),
+  zone_minutes: z.tuple([nonNegative(1440), nonNegative(1440), nonNegative(1440), nonNegative(1440), nonNegative(1440)]),
+  effort: z.strictObject({ score: z.number().finite().min(1).max(10), method: z.enum(['rated', 'estimated']) }),
+  running: sport({ power_w: nonNegative(2_000), cadence_spm: nonNegative(300), stride_length_m: nonNegative(4), vertical_oscillation_cm: nonNegative(30), ground_contact_ms: nonNegative(2_000) }),
+  cycling: sport({ power_w: nonNegative(2_000), cadence_rpm: nonNegative(250) }),
+  swimming: sport({ strokes: z.int().min(0).max(100_000) }),
+};
+export const healthWorkoutSessionSchema = z.strictObject({
+  day: healthReadDaySchema, activity: z.string().min(1).max(64), minutes: nonNegative(1440),
+  ...Object.fromEntries(Object.entries(healthWorkoutSessionParts).map(([key, part]) => [key, part.optional()])) as { [K in keyof typeof healthWorkoutSessionParts]: z.ZodOptional<(typeof healthWorkoutSessionParts)[K]> },
+}).refine(session => session.avg_hr_bpm === undefined || session.max_hr_bpm === undefined || session.avg_hr_bpm <= session.max_hr_bpm, 'average heart rate above the maximum');
+export const HEALTH_READ_MAX_SESSIONS = 100;
 export const healthReadUnavailableReasonSchema = z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_readings', 'read_failed']);
 export const getHealthResultSchema = z.discriminatedUnion('state', [
   z.strictObject({
@@ -71,6 +91,8 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     freshness: z.enum(['fresh', 'stale', 'expired']),
     // The share of asked signal-days that have a value, 0 to 1.
     coverage: z.number().min(0).max(1),
+    // Daily reads that ask for workouts: each session, oldest first, at most the newest HEALTH_READ_MAX_SESSIONS.
+    sessions: z.array(healthWorkoutSessionSchema).max(HEALTH_READ_MAX_SESSIONS).optional(),
   }),
   z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema }),
 ]);
@@ -226,7 +248,12 @@ export const readMemoryArgsSchema = z.strictObject({
   hall: hallTypeSchema.optional(),
   limit: z.int().min(1).max(50).default(10),
   query: z.string().min(1).max(500).optional(),
-});
+  // Only claims filed under this part of the owner's life; unsorted reads what is not filed yet.
+  area: lifeAreaSchema.optional(),
+  // Claims by id (the number in a c12 tag), as a stub in recall names them. An id this read may not show is left out,
+  // the same as one that does not exist.
+  ids: z.array(z.int().positive()).min(1).max(12).optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
 // return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.
@@ -241,6 +268,7 @@ export const readMemoryClaimSchema = z.strictObject({
   verification_status: z.string(),
   supersedes_id: z.int().positive().nullable(),
   last_seen_at: z.string(),
+  area: lifeAreaSchema.optional(),
 });
 export const readMemoryResultSchema = z.strictObject({
   claims: z.array(readMemoryClaimSchema),

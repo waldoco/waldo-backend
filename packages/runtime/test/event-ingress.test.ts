@@ -59,6 +59,14 @@ describe('handleEventIngress', () => {
     expect(envelope.title).not.toContain('long body here');
   });
 
+  it('forwards the configured public origin, not the host the event reached', async () => {
+    const { fetch, ns } = namespace();
+    const body = JSON.stringify({ repository: { full_name: 'waldoco/waldo-backend' }, pusher: { name: 'octocat' }, commits: [], head_commit: { message: 'm' } });
+    await run(post('github', body, { 'x-github-event': 'push', 'x-hub-signature-256': await sign('gh-secret', body) }), { OWNER_DO: ns, WALDO_EVENT_SOURCES: SOURCES, WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' });
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['x-waldo-origin']).toBe('https://staging.fixture.invalid');
+  });
+
   it('rejects a bad signature with 403 and never wakes the owner', async () => {
     const { fetch, ns } = namespace();
     const env: EventIngressEnv = { OWNER_DO: ns, WALDO_EVENT_SOURCES: SOURCES };

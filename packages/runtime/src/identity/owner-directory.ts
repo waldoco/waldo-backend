@@ -47,15 +47,19 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
 
-/** redeem_link_code's own refusal; any other unique_violation (an index race) stays uncertain. */
+/** redeem_link_code's own refusals; any other unique_violation (an index race) stays uncertain. */
 const CLAIMED_ELSEWHERE = 'presence already linked to another owner';
+/** A WhatsApp link from a number another owner holds, by an owner who has proven no number of their own. */
+const NUMBER_HELD = 'phone number held by another owner';
 /** A refused directory call, with the PostgreSQL code PostgREST reported. The message is reduced to whether it was
  * redeem_link_code's own refusal: a database message can quote a subject, so it is never kept where it could be serialized. */
 export class OwnerDirectoryError extends Error {
   readonly claimedElsewhere: boolean;
+  readonly numberHeld: boolean;
   constructor(readonly status: number, readonly sqlState: string | null, dbMessage: string | null) {
     super(`owner directory ${status}`);
     this.claimedElsewhere = sqlState === '23505' && dbMessage === CLAIMED_ELSEWHERE;
+    this.numberHeld = sqlState === '23505' && dbMessage === NUMBER_HELD;
   }
 }
 
@@ -111,4 +115,15 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
       return owner ? byPresence(provider, subject) : null;
     },
   };
+};
+
+// The owner one agent mail handle routes to, with the confirmed sign-in address route_presence trusts (null when there is
+// none). Null: no live handle, or no directory. A directory that cannot answer throws, so an outage is never read as an
+// unknown handle and dropped.
+export type AgentMailRoute = Readonly<{ doName: string; ownerEmail: string | null }>;
+export const agentMailRoute = async (env: OwnerDirectoryEnv, handle: string, fetcher: typeof fetch = fetch, now = () => Date.now()): Promise<AgentMailRoute | null> => {
+  const call = signedRpc(env, fetcher, now);
+  if (!call) return null;
+  const [row] = (await call('route_agent_mail', `mailroute.${handle}`, { p_handle: handle })) as { do_name: string; owner_email: string | null }[];
+  return row ? { doName: row.do_name, ownerEmail: row.owner_email } : null;
 };

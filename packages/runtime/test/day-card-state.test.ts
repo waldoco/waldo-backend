@@ -14,10 +14,11 @@ import { ensureSchema } from '../src/tracer/schema';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 // A day card finishes as sent or skipped, is held in quiet hours, or is still pending; sent keeps its meaning throughout.
-const model = vi.hoisted(() => ({ reply: 'Your morning is clear until noon.' }));
+const model = vi.hoisted(() => ({ reply: 'Your morning is clear until noon.', down: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
+    if (model.down) return { ok: false, code: 'auth_failed', error: 'synthetic provider refused the key (401)' };
     const content = request.request.messages.at(-1)?.content ?? '';
     const text = String(content).includes('[Scheduled card') ? model.reply : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -34,6 +35,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 
 beforeEach(() => {
   model.reply = 'Your morning is clear until noon.';
+  model.down = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -98,7 +100,7 @@ it('a card finishes as skipped or sent; a send is never turned into a skip, and 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown>; act(action: { action: string; value?: string }): Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 // An app-only owner whose Brief comes due now; the day view is read through the app's controls route.
 const briefComesDue = async (name: string, before: (owner: Owner) => Promise<void> = async () => undefined, fire = true) => {
-  let cards: Record<string, { sent: boolean; state?: string }> = {}, rows: unknown[] = [];
+  let cards: Record<string, { sent: boolean; state?: string }> = {}, rows: unknown[] = [], brief: { status: string; attempts: number } | undefined;
   await inObject(name, async state => {
     const originalNow = Date.now;
     Date.now = () => AT;
@@ -125,9 +127,10 @@ const briefComesDue = async (name: string, before: (owner: Owner) => Promise<voi
       if (day.view !== 'day') throw Error(`unexpected view ${day.view}`);
       cards = Object.fromEntries(day.data.cards.map(row => [row.id, row]));
       rows = (await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers }))).json() as { messages: unknown[] }).messages;
+      brief = state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = 'card:brief'").toArray()[0];
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
-  return { cards, rows };
+  return { cards, rows, brief };
 };
 
 it('a card with nothing planned or recorded for today reads as pending', async () => {
@@ -153,6 +156,36 @@ it('a Brief due in quiet hours reads as held and unfinished', async () => {
   const { cards, rows } = await briefComesDue('card-state-held', owner => owner.setup('app').act({ action: 'proactivity.set', value: '08:00|10:00|normal' }).then(() => undefined));
   expect(cards['card:brief']).toMatchObject({ sent: false, state: 'held' });
   expect(rows).toEqual([]);
+});
+
+it('a Brief no model can write waits for the model: the app reads it as pending, and its schedule stays armed, not paused', async () => {
+  model.down = true;
+  const { cards, rows, brief } = await briefComesDue('card-state-model-down');
+  expect(cards['card:brief']).toMatchObject({ sent: false, state: 'pending' });
+  expect(rows).toEqual([]);
+  expect(brief).toEqual({ status: 'armed', attempts: 0 });
+});
+
+it('the console says a card could not be made, why, and offers Try again while tries are left', () => {
+  const failed = { ...SAMPLE_CONSOLE_VIEW.cards[0]!, sent: false, state: 'failed' as const, stateReason: "Waldo couldn't reach its model this morning", retriesLeft: 2 };
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [failed] }, 'day');
+  expect(html).toContain("Couldn&#39;t make it");
+  expect(html).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(html).toContain('value="card.retry"');
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, retriesLeft: 0 }] }, 'day')).not.toContain('value="card.retry"');
+  // A card that is not stuck carries no tries left (cardStatus), so it offers no Try again: one that went out, and one skipped
+  // for an outage, which still says why.
+  const { retriesLeft: _left, ...unstuck } = failed;
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'sent' as const, sent: true }] }, 'day')).not.toContain('value="card.retry"');
+  const skipped = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'skipped' as const, sent: true }] }, 'day');
+  expect(skipped).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(skipped).not.toContain('value="card.retry"');
+});
+
+it('the console offers Resume on each paused job, by its schedule id', () => {
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [{ id: 'card:brief', name: 'Your Brief', until: 'Sat 4 Oct, 09:00' }] }, 'day');
+  expect(html).toContain('value="schedule.resume"');
+  expect(html).toContain('value="card:brief"');
 });
 
 it('the console calls a skipped card skipped, a card with no outcome done, and an unplanned card not scheduled', () => {

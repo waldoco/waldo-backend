@@ -13,6 +13,7 @@ import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { DASHBOARD_ACCESS_LOG_PATH } from './dashboard-access-log';
+import { DASHBOARD_HELD_CHANGES_PATH } from './dashboard-held-changes';
 import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
 import { fenceSession, ownerSessionHash } from './session-fence';
 import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -20,7 +21,7 @@ import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_SIGNIN_PATH}/google`;
-const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
+export const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
 
 // Auth-specific fixed-window limits (per email, and per IP across both endpoints), enforced in
 // the owner directory so they hold globally: OTP send 5 per 15 min, verify 10 per 15 min,
@@ -34,7 +35,7 @@ export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string }>;
 // The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
 const dashboardJson = (url: URL, request: Request) =>
-  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_ACCESS_LOG_PATH].includes(url.pathname)
+  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_ACCESS_LOG_PATH,DASHBOARD_HELD_CHANGES_PATH].includes(url.pathname)
   ||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json');
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;

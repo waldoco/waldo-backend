@@ -63,15 +63,12 @@ export const MAX_CONCURRENT_READS = 4;
 // caller contract for existing child outcome consumers.
 export type LoopExit = 'completed' | 'budget_exhausted' | 'time_exhausted' | 'withdrawn';
 
-// The reply when a turn's budget ends and the model has no words of its own: what ran, and that the rest can continue.
-export const unfinishedReply = (exit: Extract<LoopExit, 'budget_exhausted' | 'time_exhausted'>, done: readonly string[]): string => {
-  const steps = [...new Set(done)].map((name) => name.replaceAll('_', ' '));
-  return [
-    exit === 'time_exhausted' ? 'I ran out of time before finishing this.' : 'I reached the most steps I take in one go before finishing this.',
-    steps.length > 0 ? `Done so far: ${steps.join(', ')}.` : 'I had not finished a step yet.',
-    'The rest is still open; say "continue" and I will pick it up from here.',
-  ].join(' ');
-};
+// The reply when a turn's budget ends and the model has no words of its own: whether it got anywhere, and that a reply
+// carries on. Tool names stay out; any effect it made is on the turn's receipt line.
+export const unfinishedReply = (exit: Extract<LoopExit, 'budget_exhausted' | 'time_exhausted'>, done: readonly string[]): string =>
+  `${exit === 'time_exhausted' ? 'I ran out of time' : 'I reached my limit for one go'}${done.length > 0
+    ? " partway through this. Reply and I'll pick it up from where I stopped."
+    : " before I got anywhere with this. Reply and I'll try again."}`;
 const CLOSING = 'answer now with what you found or did, what is left, and offer to continue';
 export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for the rest of this turn; use what you have or say what you could not read.';
 // For the browse tools, auth_failed is a configuration fact that cannot clear within a turn (no browser binding, the
@@ -165,6 +162,7 @@ export async function runToolLoop(input: Readonly<{
 }>): Promise<string> {
   const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
+  const offeredNames = new Set(tools.map((tool) => tool.name));
   const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
   const seen = new Map<string, LoopToolResult>();
   // A resumed step that cannot be repeated and already ran is refused if called again, as it is within one slice. One whose
@@ -197,6 +195,10 @@ export async function runToolLoop(input: Readonly<{
   const done: string[] = [];
   let dispatched = 0;
   const readRuns = new Map<string, Readonly<{ dispatched: number; at: number }>>();
+  // An exact call that ran again and came back byte-identical, and how many runs in a row did. The model hears the count as
+  // a fact and judges it; nothing is refused. Only the exact call counts: distinct calls with alike results (two searches
+  // that both find nothing) say nothing about progress.
+  const unchangedRuns = new Map<string, Readonly<{ json: string; times: number }>>();
   // A request replays at most LLM_TOOL_TURNS_MAX results. A longer turn sends its latest whole rounds, so each round's
   // reasoning items still precede its calls, and names what it set aside.
   // A resumed checkpoint's rounds start where a reasoning item opens one; turns from a model that sends none each count as one.
@@ -297,7 +299,7 @@ export async function runToolLoop(input: Readonly<{
       input.onSettle?.(exit);
       return guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
         ? unfinishedReply(exit, done)
-        : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
+        : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls);
     }
     let firstCall = true;
     roundStarts.push(turns.length);
@@ -364,9 +366,10 @@ export async function runToolLoop(input: Readonly<{
         readRuns.set(key, { dispatched, at: Date.now() });
         if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
       }
-      // A call through use_tool whose arguments missed the schema gets the definition back, so its next call can be right.
-      if (routed[index]!.via && !result.ok && result.error_code === 'invalid_args') {
-        const definition = loader?.definition(call.name);
+      // A call whose arguments missed the schema gets the definition back when its function list lacks it (a call through
+      // use_tool, or a deferred tool called by name), so its next call can be right.
+      if (loader && !result.ok && result.error_code === 'invalid_args' && (routed[index]!.via || !offeredNames.has(call.name))) {
+        const definition = loader.definition(call.name);
         if (definition) result = { ...result, tool_definition: definition };
       }
       input.ctx.runScope?.admit();
@@ -436,9 +439,17 @@ export async function runToolLoop(input: Readonly<{
       const replayNote = previous && !previous.ok
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
+      const json = JSON.stringify(result);
+      let unchangedNote = '';
+      if (runs) {
+        const before = unchangedRuns.get(key);
+        const times = before?.json === json ? before.times + 1 : 1;
+        unchangedRuns.set(key, { json, times });
+        if (times > 1) unchangedNote = `\n[unchanged: this exact call has returned the same result ${times} times this turn]`;
+      }
+      const output = capToolOutput(json, input.offload, call.call_id) + replayNote + unchangedNote + browsingNote + budgetNote;
       turns.push({ call: made, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
-      results.push({ lead: '', full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
+      results.push({ lead: '', full: json, ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error

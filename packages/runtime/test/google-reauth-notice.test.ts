@@ -12,8 +12,8 @@ import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
 // A Google grant that dies (a Testing-mode grant lapses after seven days) earns the owner one notice per failure episode,
-// on the surface their proactive messages reach. Telegram and WhatsApp carry a reconnect button; the app has none, so its
-// notice is plain text through the delivery outbox into the owner's transcript, and no connect link is minted.
+// on the surface their proactive messages reach. Telegram carries a reconnect button; the app and WhatsApp have none, so their
+// notice is plain text through the delivery outbox, saying where to reconnect, and no connect link is minted.
 const EMAIL = 'owner@example.test';
 const ACCOUNT = `local:${EMAIL}`;
 const CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
@@ -233,28 +233,33 @@ describe('a Google grant that stops working, on the app', () => {
 });
 
 describe('a Google grant that stops working, on WhatsApp', () => {
-  it('inside the 24-hour window, sends one reconnect link as text, once per episode', async () => {
+  // The WhatsApp world binds only a WhatsApp number: no app session and no iMessage, so the outbox has WhatsApp alone to reach.
+  it('a WhatsApp-only owner, inside the 24-hour window, gets one plain notice on WhatsApp saying where to reconnect, with no link, once per episode', async () => {
     await world('reauth-whatsapp-open', 'whatsapp', async w => {
+      expect([w.state.storage.kv.get('app_subject'), w.state.storage.kv.get('imessage_subject')]).toEqual([undefined, undefined]);
       await w.read('whatsapp');
-      await vi.waitFor(() => expect(w.hops('google_reauth_notice')).toEqual([1]), { timeout: 5_000, interval: 20 });
-      expect(wire.whatsapp).toHaveLength(1);
-      expect(wire.whatsapp[0]).toContain(`Your Google connection (${EMAIL}) stopped working`);
-      expect(wire.whatsapp[0]).toMatch(/Reconnect Google: https:\/\/fixture\.invalid\/c\//);
-      expect(wire.rpcs).toContain('connect_session_issue');
-      expect(w.notices(), 'a signed link is never queued').toEqual([]);
+      await vi.waitFor(() => expect(w.notices()).toHaveLength(1), { timeout: 5_000, interval: 20 });
+      expect(w.notices().map(record => record.payload.text)).toEqual([reconnectNoticeText('console', EMAIL)]);
+      expect(wire.rpcs).not.toContain('connect_session_issue');
+      await w.deliver();
+      expect(wire.whatsapp).toEqual([reconnectNoticeText('console', EMAIL)]);
       w.later(GOOGLE_PROBE_MS + 1);
       await w.read('whatsapp');
+      await w.deliver();
       expect(wire.whatsapp).toHaveLength(1);
+      expect(w.hops('google_reauth_notice')).toEqual([1]);
     });
   });
 
-  it('outside the window, the signed link is not kept for later: nothing is sent and the episode records no notice', async () => {
+  it('outside the window, the notice waits for the owner instead of being dropped: it holds no link, so keeping it is safe', async () => {
     await world('reauth-whatsapp-closed', 'whatsapp', async w => {
       await w.read('whatsapp');
-      await vi.waitFor(() => expect(w.hops('google_reauth_notice')).toEqual([0]), { timeout: 5_000, interval: 20 });
+      await vi.waitFor(() => expect(w.notices()).toHaveLength(1), { timeout: 5_000, interval: 20 });
+      await w.deliver();
       expect(wire.whatsapp.filter(sent => !sent.startsWith('template:'))).toEqual([]);
-      expect(w.notices()).toEqual([]);
-      expect(await w.state.storage.get('google:reauth-noticed')).toBeUndefined();
+      expect(w.notices().map(record => record.status)).not.toContain('delivered');
+      expect(Object.keys(await w.state.storage.get<Record<string, number>>('google:reauth-noticed') ?? {})).toEqual([ACCOUNT]);
+      expect(wire.rpcs).not.toContain('connect_session_issue');
     }, false);
   });
 });

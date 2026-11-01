@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { HEALTH_RECOMPUTE_ID, HEALTH_RECOMPUTE_WINDOW_MS, healthRecompute } from '../src/health/recompute';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { HEALTH_SAMPLES_PATH, notifyOwnerHealthSamples, verifiedHealthSamples } from '../src/health/zone-change-route';
+import { welcomeBuild } from '../src/onboarding/welcome';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import type { ScheduleEntry } from '@waldo/contracts';
@@ -23,7 +24,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00
 // What the database functions hold and answer for this owner: the derived rows by day, and every call made.
 const plane = vi.hoisted(() => ({
   rows: new Map<string, Record<string, Record<string, unknown>>>(), calls: [] as { fn: string; payload: Record<string, unknown> }[],
-  seriesFails: false, hourly: false, during: null as null | (() => Promise<void>),
+  seriesFails: false, hourly: false, during: null as null | (() => Promise<void>), otlp: [] as string[],
 }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => true }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -35,6 +36,8 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
   WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
+const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' };
+const LANGFUSE_URL = 'https://langfuse.test/api/public/otel/v1/traces';
 
 // Twenty-five nights from the phone, ending on the last day the read asks for, so the zone the recompute runs in decides
 // which days it writes. With hourly on, each day before the last also has its daytime hours, 08:00 to 16:00 in Kolkata.
@@ -65,10 +68,11 @@ const newestBefore = (day: string) => [...plane.rows.keys()].filter(d => d < day
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  plane.rows.clear(); plane.calls = []; plane.seriesFails = false; plane.hourly = false; plane.during = null; printed.length = 0;
+  plane.rows.clear(); plane.calls = []; plane.seriesFails = false; plane.hourly = false; plane.during = null; plane.otlp = []; printed.length = 0;
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
   for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input instanceof Request ? input.url : input) === LANGFUSE_URL) { plane.otlp.push(String(init?.body)); return Response.json({}); }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, string | number> : {};
     const payload = typeof body.p_payload === 'string' ? JSON.parse(body.p_payload) as Record<string, unknown> : {};
@@ -101,15 +105,17 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   [...state.storage.kv.list()],
 ]);
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
-const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload(): Promise<void>; pass(): Promise<void> }) => Promise<void>) => {
+const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload(): Promise<void>; needChanged(): Promise<void>; pass(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
   const doName = `health-recompute-do-${sequence++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7');
-    const owner = new OwnerDO(state, CONFIG as never) as unknown as Owner;
-    const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
+    const owner = new OwnerDO(state, config as never) as unknown as Owner;
+    const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+    const upload = () => notifyOwnerHealthSamples(owners, SECRET, doName);
+    const needChanged = () => notifyOwnerHealthSamples(owners, SECRET, doName, 'settings');
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
-    try { await work({ owner, state, upload, pass }); } finally { await state.storage.deleteAlarm(); }
+    try { await work({ owner, state, upload, needChanged, pass }); } finally { await state.storage.deleteAlarm(); }
   });
 };
 const entry = (state: DurableObjectState, id = HEALTH_RECOMPUTE_ID) => state.storage.sql.exec<{ kind: string; due_at: number; status: string; attempts: number }>('SELECT kind, due_at, status, attempts FROM schedule WHERE id = ?', id).toArray()[0] ?? null;
@@ -124,9 +130,9 @@ const tableExists = (state: DurableObjectState, name: string) => state.storage.s
 const earlierToday = (day = '2026-10-21') => plane.rows.set(day, { recovery: { score: 20, zone: 'low', algorithm_version: 'recovery.candidate.v1' }, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } });
 
 describe('the readings-changed notice', () => {
-  const capture = async (doName = 'owner-a') => {
+  const capture = async (doName = 'owner-a', cause: 'readings' | 'settings' = 'readings') => {
     let sent!: Request;
-    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName);
+    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName, cause);
     return sent;
   };
   const resend = async (request: Request, over: { headers?: Record<string, string>; body?: unknown; method?: string } = {}) =>
@@ -137,7 +143,19 @@ describe('the readings-changed notice', () => {
     const request = await capture();
     expect(new URL(request.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     expect(await request.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe(true);
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('readings');
+  });
+
+  it('says a stated sleep need changed with one signed word, which a readings signature does not cover', async () => {
+    const request = await capture('owner-a', 'settings');
+    expect(await request.clone().json()).toEqual({ settings: true });
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('settings');
+    const readings = await capture();
+    const swapped = await resend(readings, { body: { settings: true } });
+    expect(await verifiedHealthSamples(swapped, SECRET, isOwnerA)).toBeNull();
+    for (const body of [{ settings: false }, { settings: 'yes' }, { settings: true, day: '2026-10-21' }]) {
+      expect(await verifiedHealthSamples(await resend(request, { body }), SECRET, isOwnerA), JSON.stringify(body)).toBeNull();
+    }
   });
 
   it('refuses a forged, re-addressed, padded, malformed or unsigned request', async () => {
@@ -151,8 +169,23 @@ describe('the readings-changed notice', () => {
       empty: await resend(await capture(), { body: null }),
       wrongMethod: await resend(await capture(), { method: 'GET' }),
     };
-    for (const [label, request] of Object.entries(cases)) expect([label, await verifiedHealthSamples(request, SECRET, isOwnerA)]).toEqual([label, false]);
-    expect(await verifiedHealthSamples(await capture(), undefined, isOwnerA)).toBe(false);
+    for (const [label, request] of Object.entries(cases)) expect([label, await verifiedHealthSamples(request, SECRET, isOwnerA)]).toEqual([label, null]);
+    expect(await verifiedHealthSamples(await capture(), undefined, isOwnerA)).toBeNull();
+  });
+});
+
+describe('a change of the stated sleep need', () => {
+  it('arms one recompute like new readings, and never spends the welcome\'s one retry for late health data', async () => {
+    vi.setSystemTime(NOW);
+    await withOwner(async ({ state, upload, needChanged }) => {
+      const welcome = () => welcomeBuild(state.storage.sql, Date.now);
+      welcome().start(); welcome().begin('health'); welcome().settle('health', 'empty', 0);
+      await needChanged();
+      expect(entry(state)).toMatchObject({ kind: 'provider_sync', status: 'armed', due_at: NOW + HEALTH_RECOMPUTE_WINDOW_MS });
+      expect(welcome().view().stages.health).toBe('empty');
+      await upload();
+      expect(welcome().view().stages.health).not.toBe('empty');
+    });
   });
 });
 
@@ -298,5 +331,34 @@ describe('the owner object recomputes the derived rows', () => {
       await pass();
       expect(writtenDays()).toEqual(['2026-10-20', '2026-10-21']);
     });
+  });
+});
+
+describe('the recompute\'s trace', () => {
+  type Span = { name: string; attributes: { key: string; value: { stringValue?: string } }[] };
+  const spans = () => plane.otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  const attribute = (span: Span, key: string) => span.attributes.find(a => a.key === key)?.value.stringValue;
+  const roots = (state: DurableObjectState) => state.storage.sql.exec<{ trace: string; ok: number }>("SELECT trace, ok FROM trace_log WHERE hop = 'machine_turn' AND trace LIKE 'health-recompute:%'").toArray();
+
+  it('closes each run with a machine root, so it exports with its step and no reading, whether it wrote or failed', async () => {
+    earlierToday();
+    await withOwner(async ({ state, upload, pass }) => {
+      await upload();
+      vi.setSystemTime(NOW + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      plane.seriesFails = true;
+      await upload();
+      vi.setSystemTime(entry(state)!.due_at);
+      await pass();
+      expect(recomputeLogs()).toEqual([{ ok: true, code: 'written' }, { ok: false, code: 'failed' }]);
+      expect(roots(state)).toEqual([{ trace: expect.stringMatching(/^health-recompute:/), ok: 1 }, { trace: expect.stringMatching(/^health-recompute:/), ok: 0 }]);
+      const recomputeRoots = () => spans().filter(span => span.name.endsWith('.machine') && attribute(span, 'langfuse.observation.metadata.trace_key')?.startsWith('health-recompute:'));
+      await vi.waitFor(() => expect(recomputeRoots()).toHaveLength(2));
+      for (const root of recomputeRoots()) {
+        const key = attribute(root, 'langfuse.observation.metadata.trace_key');
+        expect(spans().filter(span => !span.name.endsWith('.machine') && attribute(span, 'langfuse.observation.metadata.trace_key') === key).map(span => span.name)).toEqual(['health_recompute']);
+      }
+      for (const leak of LEAKS) expect(plane.otlp.join('\n'), leak).not.toContain(leak);
+    }, { ...CONFIG, ...LANGFUSE });
   });
 });

@@ -24,6 +24,7 @@ import { argumentDigest } from '../src/tools/dispatcher';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { reportMachineJobs } from './helpers/heartbeat-job';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // The forgotten literal comes only from what the model wrote, never from the loop title or the reminder note: a loop whose
 // title carried it would be dropped by the purge, and the outbox would then refuse the check-back for that reason instead.
@@ -104,8 +105,7 @@ type Steps = Readonly<{
   age(ms: number): void;
   remember(text: string, status?: 'purging'): void;
   outbox(): Row[];
-  // The job's background run and the scheduler's run row for the occurrence that ran. The heartbeat's interval sits on the
-  // clock's half hours, so a test that crosses one also records the occurrence it skipped as missed; that row is left out.
+  // The job's background run and the scheduler's run row for the occurrence that ran.
   job(kind: 'heartbeat' | 'reminder'): Readonly<{ run: { status: string; summary: string | null }[]; scheduled: { outcome: string; delivery: string | null }[] }>;
   note(id: string): string | null;
   armed(id: string): boolean;
@@ -148,7 +148,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
     const loops = loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now });
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-    const internals = owner as unknown as { turn(...args: unknown[]): Promise<void>; whatsappInflight: Set<Promise<void>>; serial(work: () => Promise<void>): Promise<void>;
+    const internals = owner as unknown as { turn(...args: unknown[]): Promise<void>; serial(work: () => Promise<void>): Promise<void>;
       setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const realTurn = internals.turn.bind(owner);
     let runTurn = false;
@@ -166,16 +166,19 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
             body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
           }));
           expect(response.status).toBe(200);
-          await Promise.all([...internals.whatsappInflight]);
-          await internals.serial(async () => undefined);
+          await drainWhatsAppTurns(owner);
           runTurn = false;
         },
         // The tick writes a check-back job on the first pass; its worker reports (stood in for here) for the passes after.
+        // The interval runs from this occurrence, so the next tick is half an hour away: one on the clock's half hours fired
+        // again in any test that crossed one.
         heartbeat: async () => {
           loops.open({ title: 'Send the quarterly numbers', due: new Date(Date.now() - HOUR).toISOString().slice(0, 16) });
-          await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000,
-            recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: 0 } });
+          const occurrenceAt = Date.now() - 60_000;
+          await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt, dueAt: occurrenceAt,
+            recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: occurrenceAt % HEARTBEAT_EVERY_MS } });
           await owner.alarm(); await state.storage.deleteAlarm();
+          expect(scheduler.lookup(HEARTBEAT_ID)).toMatchObject({ state: 'entry', entry: { occurrence_at: occurrenceAt + HEARTBEAT_EVERY_MS } });
           expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
         },
         reminder: async repeat => {
@@ -223,7 +226,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
         outbox: () => (state.storage.kv.get<Row[]>('telegram_final_outbox_v1') ?? []).map(({ id, status, reason, payload }) => ({ id, status, ...(reason ? { reason } : {}), payload: { text: payload.text } })),
         job: kind => ({
           run: state.storage.sql.exec<{ status: string; summary: string | null }>('SELECT status, summary FROM background_runs WHERE kind = ? ORDER BY started_at', kind).toArray(),
-          scheduled: state.storage.sql.exec<{ outcome: string; delivery: string | null }>("SELECT r.outcome, r.delivery FROM schedule_runs r WHERE r.schedule_id LIKE ? AND r.outcome != 'missed' ORDER BY r.id", kind === 'heartbeat' ? HEARTBEAT_ID : 'reminder:%').toArray(),
+          scheduled: state.storage.sql.exec<{ outcome: string; delivery: string | null }>("SELECT r.outcome, r.delivery FROM schedule_runs r WHERE r.schedule_id LIKE ? ORDER BY r.id", kind === 'heartbeat' ? HEARTBEAT_ID : 'reminder:%').toArray(),
         }),
         note: id => reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').note(id),
         armed: id => scheduler.lookup(id).state === 'entry',

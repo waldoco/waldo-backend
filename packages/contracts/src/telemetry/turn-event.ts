@@ -44,9 +44,10 @@ export const turnIdentifierSchema = z.string().regex(/^[A-Za-z0-9:_.-]{1,64}$/);
 // A typed error code, optionally qualified ("rate_limited", "transient:approval_denied").
 export const turnErrorCodeSchema = z.string().regex(/^[a-z0-9_]+(?::[a-z0-9_]+)*$/).max(96);
 
-// web_searches: hosted web search calls the model ran inside this call.
+// web_searches: hosted web search calls the model ran inside this call. input is the whole prompt; cached (cache reads) and
+// cache_write (tokens written to the provider's cache) are parts of it that bill at their own rates.
 export const turnModelUsageSchema = z.strictObject({
-  model: z.string().min(1), input: count, output: count, cached: count, web_searches: count.optional(),
+  model: z.string().min(1), input: count, output: count, cached: count, cache_write: count.optional(), web_searches: count.optional(),
 });
 export type TurnModelUsage = z.infer<typeof turnModelUsageSchema>;
 

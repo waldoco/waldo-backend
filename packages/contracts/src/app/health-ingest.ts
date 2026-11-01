@@ -185,7 +185,7 @@ const sampleCommon = {
   utc_offset_minutes: z.int().min(-840).max(840),
 };
 const hrvMethodV1 = z.enum(['rmssd', 'sdnn']);
-const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration'];
+const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration', 'stand_hour'];
 const HOUR_MS = 3_600_000;
 // The bucket is exactly one hour and starts on the hour of the reading's own offset (so +05:30 and +05:45
 // zones align on their local clock, not the UTC clock).
@@ -207,6 +207,43 @@ const stagesMatchContext = (sample: { method?: string | undefined; value: number
   return near(light, reduced.light) && near(deep, reduced.deep) && near(rem, reduced.rem) && near(unspecified, reduced.unspecified) && near(awake, reduced.awake)
     && near(light + deep + rem + unspecified, sample.value);
 };
+// Health revision 5: what a coach reads from a session, body composition and stand hours. A build sends these from revision 5;
+// a backend that does not know one rejects that reading alone (per-sample, revision 3), and an older build never sends them.
+// A workout's type is `activity` and its minutes are `value`, as before; every key below is optional, so a type-minutes-energy
+// workout is unchanged. Pace and speed are distance over minutes, so neither is sent.
+export const HEALTH_COACH_REVISION_V1 = 5;
+// Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
+// beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
+// durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
+const zoneSeconds = z.int().min(0).max(86_400);
+export const healthWorkoutZonesV1Schema = z.strictObject({
+  basis: z.enum(['heart_rate_reserve', 'max_heart_rate', 'provider']),
+  lower_bounds_bpm: z.tuple([bpm, bpm, bpm, bpm]).nullable(),
+  seconds: z.tuple([zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds]),
+}).refine(zones => zones.lower_bounds_bpm === null ? zones.basis === 'provider' : zones.lower_bounds_bpm.every((bound, i, all) => i === 0 || all[i - 1]! < bound),
+  'zone bounds rise, and only a provider omits them');
+// Apple's workout effort: `rated` is the owner's own 1-10 rating, `estimated` is Apple's estimate on the same scale.
+export const healthWorkoutEffortV1Schema = z.strictObject({ score: z.number().finite().min(1).max(10), method: z.enum(['rated', 'estimated']) });
+const watts = z.number().finite().min(0).max(2_000);
+const workoutDetail = {
+  distance_m: z.number().finite().min(0).max(1_000_000).optional(),
+  elevation_gain_m: z.number().finite().min(0).max(20_000).optional(),
+  avg_hr_bpm: bpm.optional(),
+  max_hr_bpm: bpm.optional(),
+  hr_zones: healthWorkoutZonesV1Schema.optional(),
+  effort: healthWorkoutEffortV1Schema.optional(),
+  running: z.strictObject({
+    power_w: watts.optional(), cadence_spm: z.number().finite().min(0).max(300).optional(), stride_length_m: z.number().finite().min(0).max(4).optional(),
+    vertical_oscillation_cm: z.number().finite().min(0).max(30).optional(), ground_contact_ms: z.number().finite().min(0).max(2_000).optional(),
+  }).optional(),
+  cycling: z.strictObject({ power_w: watts.optional(), cadence_rpm: z.number().finite().min(0).max(250).optional() }).optional(),
+  // A swim's distance is distance_m.
+  swimming: z.strictObject({ strokes: z.int().min(0).max(100_000) }).optional(),
+};
+type WorkoutShape = { start_at: string; end_at: string; avg_hr_bpm?: number | undefined; max_hr_bpm?: number | undefined; hr_zones?: { seconds: readonly number[] } | undefined };
+const isOneSession = (workout: WorkoutShape): boolean =>
+  (workout.avg_hr_bpm === undefined || workout.max_hr_bpm === undefined || workout.avg_hr_bpm <= workout.max_hr_bpm)
+  && (!workout.hr_zones || workout.hr_zones.seconds.reduce((a, b) => a + b, 0) <= (Date.parse(workout.end_at) - Date.parse(workout.start_at)) / 1000 + 60);
 // Bounds are plausibility limits that catch unit mistakes. They are not medical thresholds.
 export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440), stages: healthSleepStagesV1Schema.optional() }),
@@ -223,7 +260,8 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('respiratory_rate'), unit: z.literal('breaths_per_minute'), value: z.number().finite().min(4).max(80) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('steps_window'), unit: z.literal('count'), value: z.int().min(0).max(300_000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('active_energy_window'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(30_000) }),
-  z.strictObject({ ...sampleCommon, signal: z.literal('workout'), unit: z.literal('minutes'), activity: z.string().min(1).max(64), value: z.number().finite().min(0).max(1440), energy_kcal: z.number().finite().min(0).max(30_000).optional() }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('workout'), unit: z.literal('minutes'), activity: z.string().min(1).max(64), value: z.number().finite().min(0).max(1440), energy_kcal: z.number().finite().min(0).max(30_000).optional(), ...workoutDetail })
+    .refine(isOneSession, 'workout heart rate or zones cannot be one session'),
   // The Apple Watch wellness tier. A build sends these only under health revision 3, so a backend that does not know one yet
   // rejects that reading, never the batch. Sleeping wrist temperature is one value per night: HealthKit's is absolute;
   // Health Connect's is the night's mean delta against its own baseline. The two have separate baselines, never blended.
@@ -235,6 +273,12 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('heart_rate_recovery'), unit: z.literal('beats_per_minute'), value: z.number().finite().min(0).max(120) }),
   // One mindful session: its minutes are its start to its end.
   z.strictObject({ ...sampleCommon, signal: z.literal('mindful_duration'), unit: z.literal('minutes'), value: z.number().finite().min(0).max(1440) }),
+  // Revision 5. Body composition readings are point records, each as the scale or the owner entered it.
+  z.strictObject({ ...sampleCommon, signal: z.literal('body_mass'), unit: z.literal('kilograms'), value: z.number().finite().min(20).max(400) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('body_fat_percentage'), unit: z.literal('percent'), value: z.number().finite().min(2).max(75) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('lean_body_mass'), unit: z.literal('kilograms'), value: z.number().finite().min(10).max(250) }),
+  // One local hour: 1 when the owner stood and moved in it, 0 when the Watch saw the hour idle.
+  z.strictObject({ ...sampleCommon, signal: z.literal('stand_hour'), unit: z.literal('count'), value: z.union([z.literal(0), z.literal(1)]) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
@@ -243,6 +287,7 @@ export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
+  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
@@ -431,6 +476,15 @@ export const healthScoresHistoryV1Schema = z.strictObject({
 export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
 export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
 
+// The owner's own sleep need, when they have stated one, in whole minutes and inside the range the score engine trusts (six to
+// ten hours). null clears it, and the engine goes back to the owner's own nights. It is the owner's statement, not a reading:
+// no source holds it, so one source's withdrawal leaves it, and account deletion removes it. The app reads it with GET and
+// replaces it whole with PUT, which answers with what is now stored.
+export const HEALTH_SLEEP_NEED_MIN_MINUTES_V1 = 360;
+export const HEALTH_SLEEP_NEED_MAX_MINUTES_V1 = 600;
+export const healthSleepNeedMinutesV1Schema = z.int().min(HEALTH_SLEEP_NEED_MIN_MINUTES_V1).max(HEALTH_SLEEP_NEED_MAX_MINUTES_V1);
+export const healthSettingsV1Schema = z.strictObject({ sleep_need_minutes: healthSleepNeedMinutesV1Schema.nullable() });
+
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
@@ -444,9 +498,12 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/settings', response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/health/settings', request: healthSettingsV1Schema, response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;
 export type HealthSampleV1 = z.infer<typeof healthSampleV1Schema>;
 export type HealthScoresV1 = z.infer<typeof healthScoresV1Schema>;
 export type HealthScoresResponseV1 = z.infer<typeof healthScoresResponseV1Schema>;
+export type HealthSettingsV1 = z.infer<typeof healthSettingsV1Schema>;
