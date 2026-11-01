@@ -95,11 +95,13 @@ export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
 
 export const GOOGLE_AUTH_ORIGIN = 'https://accounts.google.com';
-export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
+// loginHint is the subject of the Google identity the owner signs in with: Google goes to that account (or asks it to sign in)
+// instead of showing the account chooser, and still shows its consent. Without one, the chooser lets the owner pick any account.
+export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string, loginHint?: string): string {
   const url = new URL('/o/oauth2/v2/auth', GOOGLE_AUTH_ORIGIN);
   url.search = new URLSearchParams({
     client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_CONSENT_SCOPES.join(' '),
-    access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
+    access_type: 'offline', prompt: loginHint ? 'consent' : 'consent select_account', ...(loginHint ? { login_hint: loginHint } : {}), include_granted_scopes: 'true', state,
     code_challenge: codeChallenge, code_challenge_method: 'S256',
   }).toString();
   return url.toString();
