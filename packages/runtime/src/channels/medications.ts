@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { nextOccurrence, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
+import { MEDICATION_MEMORY_RULE } from '../memory/health-rules';
 import { localIso, localToEpoch } from './reminders';
 
 // The owner's medicines (ADR-0081 amendment of 1 November 2026). The list and the doses live on the health plane
@@ -172,7 +173,7 @@ const failed = (outcome: MedicationFailure) => outcome.failed === 'not_found'
 export const medicationHandlers = (book: MedicationBook) => [
   {
     name: 'track_medication',
-    description: 'Track a medicine the owner takes: its daily reminder times and, when they say, how many they have so you remind them to reorder. Pass medication_id to change one. Keep the name exactly as they say it. Never record, suggest or change a dose: the reminder names the medicine and the time only, and how much to take is their doctor or pharmacist\'s call.',
+    description: `Track a medicine the owner takes: its daily reminder times and, when they say, how many they have so you remind them to reorder. Pass medication_id to change one. Keep the name exactly as they say it. Never record, suggest or change a dose: the reminder names the medicine and the time only, and how much to take is their doctor or pharmacist\'s call. ${MEDICATION_MEMORY_RULE}`,
     schema: trackMedicationArgsSchema,
     trigger_allowlist: allowlist('track_medication'),
     autonomy_gated: false,

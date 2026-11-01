@@ -13,6 +13,7 @@ export const HEALTH_MEMORY_RULES = [
 // is at the 1,024-character cap and set_sleep_need's is not offered while coaching is off or its namespace is deferred.
 export const SLEEP_NEED_MEMORY_RULE = 'Never keep a figure for the owner\'s sleep need in memory, at most that they stated one.';
 // A medicine the owner tracks lives in their medicine list on the health plane (ADR-0081, 1 November 2026); memory keeps at most
-// that they track one. Like the sleep need, the words hold whether the medicine tools are offered or not.
+// that they track one. The background writers carry it with the others; in chat it is in track_medication's description, which the
+// model reads whenever it tracks one.
 export const MEDICATION_MEMORY_RULE = 'Never keep the name or times of a medicine the owner tracks in memory, at most that they track medicines.';
 export const PASS_HEALTH_MEMORY_RULES = [...HEALTH_MEMORY_RULES, SLEEP_NEED_MEMORY_RULE, MEDICATION_MEMORY_RULE];
