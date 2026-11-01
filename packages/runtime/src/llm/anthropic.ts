@@ -149,7 +149,8 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         ? ` (${[error.status, error.type].filter((part) => part !== undefined && part !== null).join(' ')})`
         : '';
       const retry = error instanceof Anthropic.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      const wireRejected = error instanceof Anthropic.APIError && error.status === 400;
+      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
@@ -253,6 +254,8 @@ function attachmentBlock(file: LLMAttachment): Anthropic.ContentBlockParam | nul
 function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
   const history: Array<{ role: 'user' | 'assistant'; content: Anthropic.ContentBlockParam[] }> = [];
   for (const message of request.messages) {
+    // The Messages API refuses an empty text block, so an empty entry is left out rather than sent (or cache-marked).
+    if (message.content.trim().length === 0) continue;
     const last = history[history.length - 1];
     const block: Anthropic.TextBlockParam = { type: 'text', text: message.content };
     // Roles alternate on the wire: consecutive same-role entries join one message as separate blocks.

@@ -358,3 +358,22 @@ it('with Claude chosen, a turn Sonnet refuses goes to Terra next, never to a sec
   await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'sonnet-first-refusal', conversationRef: 'telegram-1', surface: 'telegram', text: 'help me with this', memoryWrites: false }), time)).resolves.toBe('Answered by Terra.');
   expect(models()).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
 });
+
+it('with Claude chosen, a request shape Claude refuses (400) is answered by Terra, and ends the turn when no other provider is ahead', async () => {
+  const run = async (access: Readonly<{ anthropicApiKey: string; openaiApiKey: string }>) => {
+    const requests: LLMGatewayRequest[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (input) => {
+      requests.push(input);
+      if (input.step.provider === ANTHROPIC_PROVIDER) return { ok: false, code: 'invalid_args', error: 'Anthropic request failed (400 invalid_request_error)', wireRejected: true };
+      return { ok: true, data: { model: input.request.model, text: 'Terra took it.', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } };
+    } };
+    const args: Parameters<typeof createOwnerResponder> = [{ ...access, floorReply: true }];
+    args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway; args[18] = ['👌'];
+    const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: `sonnet-first-400-${access.openaiApiKey ? 'with' : 'without'}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'plan it', memoryWrites: false }), time).catch((error: unknown) => error);
+    return { reply, models: requests.map((request) => request.request.model) };
+  };
+  await expect(run({ anthropicApiKey: 'fixture-anthropic', openaiApiKey: 'fixture-openai' })).resolves.toEqual({ reply: 'Terra took it.', models: [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL] });
+  const alone = await run({ anthropicApiKey: 'fixture-anthropic', openaiApiKey: '' });
+  expect(alone.models).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+  expect(alone.reply).not.toBe('Terra took it.');
+});

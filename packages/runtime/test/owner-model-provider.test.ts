@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
@@ -61,4 +61,18 @@ it('keeps the OpenAI routes as they were: Terra then Sonnet, Luna then Haiku', (
 it('has no fallback step when the other provider key is not deployed', () => {
   expect(ownerRoutePolicy(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, { openaiApiKey: '', anthropicApiKey: 'fixture-anthropic' }).routes[0]!.fallback).toEqual([]);
   expect(ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'fixture-openai' }).routes[0]!.fallback).toEqual([]);
+});
+
+it('logs each unrecognised value once, so a mistyped rollback is seen without a line per turn', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    for (const value of ['opneai', 'opneai', 'Open AI', 'opneai']) modelProviderSetting(value);
+    modelProviderSetting(undefined);
+    modelProviderSetting('');
+    modelProviderSetting('openai');
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(warn.mock.calls[0]![0]))).toEqual({ hop: 'model_provider_unrecognised', ok: false, detail: 'WALDO_MODEL_PROVIDER is not anthropic or openai; the owner path runs on anthropic' });
+  } finally {
+    warn.mockRestore();
+  }
 });

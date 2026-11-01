@@ -595,3 +595,29 @@ describe('AnthropicMessagesAdapter streaming through the SDK', () => {
     expect(result).toMatchObject({ ok: false, code: 'transient', firstTokenLate: true });
   });
 });
+
+describe('AnthropicMessagesAdapter requests the API would refuse', () => {
+  it('sends no empty text block, so none carries a cache marker', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Hi.' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native');
+    await adapter.complete({ ...base, request: { ...base.request, messages: [
+      { role: 'user', content: 'Plan my day' }, { role: 'assistant', content: '' }, { role: 'user', content: '  ' }, { role: 'user', content: 'and lunch' },
+    ] } });
+    const blocks = (bodies[0]!.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>).flatMap((message) => message.content);
+    expect(blocks.filter((block) => block.type === 'text' && !block.text?.trim())).toEqual([]);
+    expect(bodies[0]!.messages).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'Plan my day' },
+      { type: 'text', text: 'and lunch', cache_control: { type: 'ephemeral' } },
+    ] }]);
+  });
+
+  it('marks a 400 as the provider refusing the request shape, and no other failure', async () => {
+    const failing = (status: number) => new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      throw Anthropic.APIError.generate(status, { type: 'error', error: { type: status === 400 ? 'invalid_request_error' : 'authentication_error', message: 'quoted request text' } }, undefined, new Headers());
+    } } } as never });
+    const refused = await failing(400).complete(gatewayRequest());
+    expect(refused).toMatchObject({ ok: false, code: 'invalid_args', wireRejected: true });
+    expect(JSON.stringify(refused)).not.toContain('quoted request text');
+    expect(await failing(401).complete(gatewayRequest())).not.toHaveProperty('wireRejected');
+  });
+});

@@ -39,8 +39,18 @@ export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;
 
-// The deploy's WALDO_MODEL_PROVIDER: openai or anthropic exactly; anything else is the default provider.
-export const modelProviderSetting = (value: string | undefined): ModelProvider => modelProviderSchema.safeParse(value).data ?? DEFAULT_MODEL_PROVIDER;
+// The deploy's WALDO_MODEL_PROVIDER: openai or anthropic exactly; anything else is the default provider. A set value it does
+// not recognise is logged once per value, since a mistyped rollback would otherwise silently stay on the default.
+const unrecognisedProviders = new Set<string>();
+export const modelProviderSetting = (value: string | undefined): ModelProvider => {
+  const parsed = modelProviderSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  if (value && !unrecognisedProviders.has(value)) {
+    unrecognisedProviders.add(value);
+    console.warn(JSON.stringify({ hop: 'model_provider_unrecognised', ok: false, detail: `WALDO_MODEL_PROVIDER is not anthropic or openai; the owner path runs on ${DEFAULT_MODEL_PROVIDER}` }));
+  }
+  return DEFAULT_MODEL_PROVIDER;
+};
 
 const otherProvider = (provider: ModelProvider): ModelProvider => provider === ANTHROPIC_PROVIDER ? OPENAI_PROVIDER : ANTHROPIC_PROVIDER;
 const keyOf = (access: OwnerModelAccess, provider: ModelProvider): string | undefined => provider === ANTHROPIC_PROVIDER ? access.anthropicApiKey : access.openaiApiKey;

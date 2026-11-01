@@ -26,7 +26,9 @@
   // WALDO_MODEL_PROVIDER: the provider that runs the owner path, "anthropic" (Sonnet turns, Haiku side jobs; the default
   // when unset) or "openai" (Terra turns, Luna side jobs). The other provider is every route's fallback when its key is
   // deployed, and a chosen provider without its key yields to the one that has it. Both stay "openai" until the
-  // environment's ANTHROPIC_API_KEY passes a live check; flipping back to "openai" is the rollback.
+  // environment's ANTHROPIC_API_KEY passes a live check and BRAVE_SEARCH_API_KEY is set (Claude has no hosted search, so
+  // without it Claude turns have no web search); flipping back to "openai" is the rollback. An unrecognised value runs
+  // the default and logs model_provider_unrecognised.
   // WALDO_TOOL_SEARCH: "on" sends the core tools up front and the rest behind the provider's tool search; "off" sends
   // every tool on every round, and is the rollback.
   // WALDO_TOOL_LOADER: "harness" sends the core tools plus find_tools and use_tool on any provider, with the rest named in

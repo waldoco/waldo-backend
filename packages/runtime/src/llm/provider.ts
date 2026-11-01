@@ -155,8 +155,9 @@ export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean
 // is metered whole. `retry` carries the provider's own retry headers to the one retry owner. `firstTokenLate`: a streamed
 // call showed nothing within the first-token window and was cut to fail over; the provider was slow, not failing, so it
 // does not count against the provider's circuit. `unsendable`: the provider has no wire for this request (an attachment type
-// it cannot carry), which says nothing about the request, so the route moves on to a provider that may.
-export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true; unsendable?: true }>;
+// it cannot carry), which says nothing about the request, so the route moves on to a provider that may. `wireRejected`: the
+// provider refused this request's shape (its 400); another provider may take it, so the route moves on when one is ahead.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true; unsendable?: true; wireRejected?: true }>;
 
 export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
 
@@ -604,7 +605,13 @@ export class RuntimeLLMProvider {
           // and then the floor.
           const reachedByOutage = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
             && PROVIDER_HEALTH_CODES.has(attempt.code) && attempt.provider !== plan.step.provider);
-          if (!reachedByOutage && !gatewayResult.unsendable) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          // A shape this provider refused may suit the next one, as the tool-search refusal above degrades instead of failing.
+          const usableAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider
+            && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
+          const walkPastRejection = gatewayResult.wireRejected === true && usableAhead;
+          if (!reachedByOutage && !gatewayResult.unsendable && !walkPastRejection) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          // The adapter's error names only the status and the provider's error type, never its message.
+          if (walkPastRejection) console.warn(JSON.stringify({ hop: 'provider_rejected_request', ok: false, provider: plan.step.provider, model: plan.step.model, detail: gatewayResult.error }));
           settledModels.add(modelKey(plan.step));
           continue;
         }
