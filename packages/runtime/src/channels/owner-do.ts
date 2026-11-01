@@ -1422,19 +1422,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const auth = consoleAuth(this.env);
     return !auth || telegramLinked(this.ctx.storage.kv) || this.appBound() || this.whatsappBound() || (this.imessageBound() && await this.imessageLinked(auth) !== false);
   }
-  // Whether iMessage takes copies of proactive work: the composition is deployed, the owner has written from a sender, and the
-  // directory still binds that sender to this owner. An unlink or a relink to another number ends it at once; the newest inbox
-  // record alone outlives both. Null when the directory could not say.
   // Whether each chat a proactive surface names is linked now: the directory binds it to this owner, which is what the
   // connections tile shows, and, for WhatsApp, this object holds the binding delivery uses. null when the directory cannot say;
   // without a directory, the binding this object holds.
   private async proactiveLinks(auth: ReturnType<typeof consoleAuth>): Promise<ChatLinks> {
     const name = this.ctx.storage.kv.get<string>('do_name');
     if (!auth || !name) return { whatsapp: this.whatsappBound(), imessage: false };
-    const hinted = async () => { if (!auth.whatsAppHandleHint) return false; try { return (await auth.whatsAppHandleHint(name)) !== null; } catch { return null; } };
+    const hinted = async () => { if (!auth.whatsAppHandleHint) return null; try { return (await auth.whatsAppHandleHint(name)) !== null; } catch { return null; } };
     const [whatsapp, imessage] = await Promise.all([hinted(), this.imessageLinked(auth)]);
     return { whatsapp: whatsapp === null ? null : whatsapp && this.whatsappBound(), imessage };
   }
+  // Whether iMessage takes copies of proactive work: the composition is deployed, the owner has written from a sender, and the
+  // directory still binds that sender to this owner. An unlink or a relink to another number ends it at once; the newest inbox
+  // record alone outlives both. Null when the directory could not say.
   private async imessageLinked(auth: NonNullable<ReturnType<typeof consoleAuth>>): Promise<boolean | null> {
     const latest = new IMessageOwnerInbox(this.ctx.storage).latest(), doName = this.ctx.storage.kv.get<string>('do_name');
     if (iMessageComposition(this.imessageHost.env) === null || !latest || !doName) return false;
