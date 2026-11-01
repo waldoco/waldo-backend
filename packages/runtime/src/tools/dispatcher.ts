@@ -42,7 +42,7 @@ import {
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
-import { guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
+import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
 
@@ -911,7 +911,7 @@ function failParse(error: string, repaired: boolean): ParseToolCallsResult & { o
 
 
 type OffloadedResult =
-  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string; read_with: 'read_tool_output' } }
+  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string; read_with: 'read_tool_output'; withheld?: { count: number; note: string } } }
   | { ok: false; result: DispatchToolResult };
 
 // Raw external output is never stored: the offload guard runs the full sanitise pipeline minus
@@ -951,11 +951,15 @@ const offloadResult = (
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
   const stored = store.put(text, { call_id: callId });
+  const withheld = guarded.redactions.find((redaction) => redaction.kind === 'deep_encoding')?.count;
   return {
     ok: true,
     // total_chars is the full guarded length; stored_chars + truncated say what is actually
     // retrievable - the receipt never claims retrievable output the store did not keep
-    data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
+    data: {
+      stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output',
+      ...(withheld === undefined ? {} : { withheld: { count: withheld, note: `${withheld === 1 ? 'One value was' : `${withheld} values were`} withheld in place as ${DEEP_ENCODING_MARKER}, because the content was encoded too deeply to check. Nothing else in the result was withheld for this.` } }),
+    },
   };
 };
 
