@@ -185,6 +185,12 @@ describe('welcome Google stages across accounts', () => {
     });
     const read = await calendarStage(g, () => NOW)();
     expect(read.kind === 'input' && [...read.pointers]).toEqual(['evt_b']);
+    // One account empty and another failing is a failed read, not an empty calendar.
+    const quiet = google([account('a@x.com'), account('b@y.com')], {
+      'a@x.com': new GoogleError(500, 'down'),
+      'b@y.com': { calendarPage: async () => ({ events: [], next_page_token: null, fetched_count: 0, account: { connection_id: null, email: 'b@y.com' }, observed_at: '' }) },
+    });
+    await expect(calendarStage(quiet, () => NOW)()).rejects.toThrow('down');
   });
 
   it('counts the days of readings the health stage read, never a reading', async () => {

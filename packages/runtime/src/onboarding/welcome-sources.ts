@@ -70,15 +70,15 @@ const perAccount = async (google: GoogleAccess, wants: (account: Account) => boo
   read: (account: Account) => Promise<readonly string[] | 'revoked'>): Promise<Readonly<{ lines: string[]; revoked: boolean; any: boolean }>> => {
   const accounts = ((await google.state?.()) ?? []).filter(wants);
   const lines: string[] = [];
-  let revoked = false, answered = 0, failure: unknown = null;
+  let revoked = false, failure: unknown = null;
   for (const account of accounts) {
     if (account.error !== null) { revoked = true; continue; }
     let got: readonly string[] | 'revoked';
     try { got = await read(account); } catch (error) { failure = error; continue; }
-    answered += 1;
     if (got === 'revoked') revoked = true; else lines.push(...got);
   }
-  if (failure !== null && answered === 0) throw failure;
+  // A failed account read with nothing from the others is a failed stage, not an empty one.
+  if (failure !== null && !lines.length) throw failure;
   return { lines, revoked, any: accounts.length > 0 };
 };
 const guarded = async (work: () => Promise<readonly string[]>): Promise<readonly string[] | 'revoked'> => {

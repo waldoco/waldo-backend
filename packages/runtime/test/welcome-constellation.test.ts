@@ -818,6 +818,20 @@ describe('welcome build v2: one source after another, no copies, late sources on
     });
   });
 
+  it('adds nothing to a node the nightly pass built, and writes no copy of it', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const claims = claimStore(sql, transaction), at = new Date(T0).toISOString();
+      claims.add({ kind: 'observation', text: 'Plans the week on Mondays.', source: 'stated', evidence: 'said so', origin: 'owner', source_ref: 'owner, tg-1' }, at);
+      const nightly = claims.saveNode({ id: null, domain: 'work', label: 'Monday planning ritual', summary: 'Plans the week on Mondays.', strength: 0.6, status: 'active', supporting_spots: [claims.allClaims().at(-1)!.id] }, at);
+      const { build, deps: d } = v2(sql, transaction, clock, { answers: { calendar: answer(extend(calendarNode(), nightly), calendarNode({ observation: 'A Monday block recurs.' })) } });
+      build.start();
+      await runWelcome(d);
+      expect(active(claims).map((node) => node.label)).toEqual(['Monday planning ritual']);
+      expect(JSON.parse(active(claims)[0]!.supporting_spots)).toHaveLength(1);
+    });
+  });
+
   it('a source read again writes no copy and no second support', async () => {
     await withSql(async (sql, transaction) => {
       const clock = { at: T0 };

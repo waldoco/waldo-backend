@@ -7,8 +7,9 @@ import type { ConsentLedger } from './consent-ledger';
 export const LOOKUP_DEADLINE_MS = 10 * 60_000;
 export const LOOKUP_MAX_ROUNDS = 24;
 // A worker's page read takes the owner's serial lane, which the owner's first reply needs too. So the worker starts once the
-// first message has been answered (the owner object brings it forward), and at the latest this long after the yes.
-export const LOOKUP_START_DELAY_MS = 60_000;
+// first message has been answered (the owner object brings it forward), and otherwise this long after the yes, once the
+// tour is over; its deadline runs from then.
+export const LOOKUP_START_DELAY_MS = 5 * 60_000;
 
 const GOAL = [
   'Look the owner up on the public web, by the name and address below, and keep what you find for them to review.',
@@ -44,7 +45,7 @@ export const startLookup = (deps: LookupDeps, identity: LookupIdentity | null): 
     job: 'owner_lookup', scope: 'owner', key: `machine:owner_lookup:${grant.granted_at}`, surface: deps.surface,
     text: { title: 'Owner look-up', goal: GOAL, done_when: DONE },
     items: [{ ref: 'name', detail: name }, ...(identity.email ? [{ ref: 'email', detail: identity.email }] : [])],
-    timezone: deps.timezone, now, dueAt: now + LOOKUP_START_DELAY_MS, deadlineAt: now + LOOKUP_DEADLINE_MS, maxRounds: LOOKUP_MAX_ROUNDS,
+    timezone: deps.timezone, now, dueAt: now + LOOKUP_START_DELAY_MS, deadlineAt: now + LOOKUP_START_DELAY_MS + LOOKUP_DEADLINE_MS, maxRounds: LOOKUP_MAX_ROUNDS,
   };
   const made = enqueueMachine(deps.book, spec, deps.held);
   if (made.code === 'enqueued' || made.code === 'existing') deps.markStarted(grant.granted_at);
@@ -53,3 +54,11 @@ export const startLookup = (deps: LookupDeps, identity: LookupIdentity | null): 
 
 // The open look-up job, which the first answered message lets start at once.
 export const openLookup = (book: JobBook) => book.openMachine('owner_lookup', 'owner');
+
+// Whether a look-up is running or about to be written: an open job, or a live yes with the owner's name in and no job yet for
+// this grant. The welcome build's web stage waits on either; the job is written a read later than the build begins.
+export const lookupPending = (deps: Pick<LookupDeps, 'book' | 'consent' | 'started'>, named: boolean): boolean => {
+  if (openLookup(deps.book)) return true;
+  const grant = deps.consent.state('owner_lookup');
+  return named && deps.consent.active('owner_lookup') && grant.granted_at !== null && deps.started() !== grant.granted_at;
+};

@@ -16,6 +16,10 @@ export const refSource = (ref: string | null | undefined): AppNodeSourceV14 | nu
   return parsed.success ? parsed.data : null;
 };
 
+// The note a node was written on: its oldest support that is not the owner's yes. A welcome node's read is stored before the
+// node, and evidence added to it later is stored after, so the oldest note is the one its words came from.
+export const writtenOn = (claims: readonly Claim[], node: Pick<ConstellationNode, 'supporting_spots'>): Claim | undefined =>
+  nodeSupports(claims, node).filter((claim) => claim.kind !== NODE_STATEMENT).sort((a, b) => a.id - b.id)[0];
 export const supportIds = (node: Pick<ConstellationNode, 'supporting_spots'>): readonly number[] => {
   try { const ids: unknown = JSON.parse(node.supporting_spots); return Array.isArray(ids) ? ids.filter((id): id is number => Number.isSafeInteger(id)) : []; } catch { return []; }
 };

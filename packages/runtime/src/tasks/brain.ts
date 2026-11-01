@@ -44,6 +44,9 @@ export type TaskHostDeps = Readonly<{
   // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
   // checkpoint that carries one cancels its job rather than write it back.
   heldTopics?(): readonly string[];
+  // Whether a job's own reason to run is gone (the owner look-up's yes no longer counts). Asked at the claim and before each
+  // worker call; a lapsed job is cancelled and fenced, so nothing more leaves for it.
+  lapsed?(row: JobRow): boolean;
   // Whether the directory still admits the owner, asked before each worker call as an owner job asks before each effect.
   // Without it (no directory on this deploy) the owner stands.
   admitted?(): Promise<'admitted' | 'dormant' | 'retry'>;
@@ -169,11 +172,19 @@ export const taskHost = (deps: TaskHostDeps) => {
     return (await eligibleHandlers(own)).handlers;
   };
 
+  const stopLapsed = (row: JobRow): boolean => {
+    if (!deps.lapsed?.(row)) return false;
+    deps.book.cancel(row.id, 'owner');
+    fence(row.id);
+    hop(row, 'task_cancelled', { ok: false, code: 'lapsed' });
+    return true;
+  };
   // One worker tool call's work, once the call holds its attempt busy.
   const serve = async (ticket: TaskTicket, row: JobRow, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> => {
     const started = deps.now();
     const allowed = jobTools(row).includes(call.name as never);
     const { scope, outputs } = attemptFor(ticket, row);
+    if (stopLapsed(row)) return 'fenced';
     // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
     const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
     if (admission === 'dormant') {
@@ -288,6 +299,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         hop(row, 'task_parked', { ok: false, code: 'brief_changed' });
         return 'fenced';
       }
+      if (stopLapsed(row)) return 'fenced';
       const handlers = await profileHandlers(row, attemptFor(ticket, row).outputs);
       const spend = ownerSpend();
       const { conversation_ref: _replyChain, ...brief } = taskBrief(row);

@@ -64,7 +64,7 @@ const consents = async (app: (path: string, body: unknown) => Promise<Response>,
 const settle = () => new Promise(resolve => setTimeout(resolve, 150));
 
 it('the yes and the setup answers write one look-up job carrying only the name, and the first reply lets it start', async () => {
-  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ app, jobs, hops }) => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, app, jobs, hops }) => {
     await consents(app, true);
     await settle();
     // No name yet: the yes alone writes nothing.
@@ -80,6 +80,9 @@ it('the yes and the setup answers write one look-up job carrying only the name, 
     // The welcome build's web stage waits on the running look-up.
     await vi.waitFor(() => expect(model.welcome.some(body => body.includes('Source: what the owner told Waldo'))).toBe(true), { timeout: 10_000, interval: 25 });
     expect(model.welcome.some(body => body.includes('Source: what the owner look-up found'))).toBe(false);
+    // The build began before the job was written, and still waits for it: the web stage is pending, not settled empty.
+    const web = () => (JSON.parse(state.storage.sql.exec<{ stages_json: string }>('SELECT stages_json FROM welcome_builds').one().stages_json) as Record<string, { state: string }>).web!.state;
+    expect(web()).toBe('pending');
     // The owner's first message is answered before the look-up's worker may take the serial lane.
     const sent = await app('/app/v1/chat/main/messages', { client_message_id: 'lookup-first-message', text: 'Show me today as you see it.' });
     expect(sent.status).toBe(202);

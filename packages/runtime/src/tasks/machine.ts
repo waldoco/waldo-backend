@@ -100,7 +100,8 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
 }>): Promise<void> => {
   try { await applyOnce(row, deps); } finally {
     const after = deps.book.get(row.id);
-    if (after && SETTLED.has(after.status)) deps.appliers[taskBrief(row).machine!.job]?.ended?.(after);
+    // Work waiting on the job is the waiter's to carry; a failure there never stands in for the apply's own outcome.
+    if (after && SETTLED.has(after.status)) try { deps.appliers[taskBrief(row).machine!.job]?.ended?.(after); } catch { deps.hop(after, 'machine_ended_failed', { ok: false }); }
   }
 };
 const SETTLED: ReadonlySet<string> = new Set(['applied', 'parked', 'cancelled']);

@@ -1,7 +1,7 @@
 import { APP_WELCOME_STAGES_V5, type AppNodeSourceV14, type AppWelcomeBuildV1 } from '../../../contracts/src/app/controls';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
 import { carriesTopic } from '../memory/forget-guard';
-import { isWelcomeRef, nodeSources, nodeSupports, sourceRef, supportIds, type WelcomeSource } from '../memory/node-sources';
+import { isWelcomeRef, nodeSources, nodeSupports, sourceRef, supportIds, writtenOn, type WelcomeSource } from '../memory/node-sources';
 import { numericHealthIn } from '../scribe/sanitiser';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -198,6 +198,8 @@ export const WELCOME_SCHEMA_V2 = {
 type ProposedNode = Readonly<{ domain: string; label: string; summary: string; observation: string; source: string; pointers: readonly string[]; extends?: number | null }>;
 
 const squash = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ');
+// A node the welcome build wrote: the note it was written on is a welcome read.
+const builtByWelcome = (claims: ClaimStore, node: Parameters<typeof supportIds>[0]): boolean => isWelcomeRef(writtenOn(claims.allClaims(), node)?.source_ref);
 const barred = (claims: ClaimStore) => {
   const barriers = claims.barriers();
   return (text: string) => barriers.some((barrier) => (barrier.topic !== FORGOTTEN && carriesTopic(text, barrier.topic))
@@ -226,7 +228,9 @@ export const admitWelcomeNodes = (claims: ClaimStore, build: WelcomeBuild, stage
     if (!source || !pointers.length) continue;
     const active = v2 ? claims.nodes().filter((row) => row.status === 'active') : [];
     const target = active.find((row) => row.id === node.extends) ?? active.find((row) => squash(row.label) === squash(texts.label));
-    if (target && input.noHealth && target.domain === 'health') continue;
+    // Only a node the welcome build wrote takes more evidence: one the nightly pass built rests on the owner's own words, and a
+    // read of mail or the web would change how a forget there treats it. A copy of one is never written either.
+    if (target && (!builtByWelcome(claims, target) || (input.noHealth && target.domain === 'health'))) continue;
     if (!target && added >= room) continue;
     const ref = sourceRef(source, pointers);
     const support = (() => {

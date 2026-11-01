@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import { APP_FINDING_UNCONFIRMED_DAYS_V1, type AppFindingCategoryV1, type AppFindingV1 } from '../../../contracts/src/app/onboarding';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
-import { refPointers, refSource } from '../memory/node-sources';
+import { refPointers, refSource, supportIds, writtenOn } from '../memory/node-sources';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { MemoryToolContext } from '../tools/live/memory';
 import type { ConsentLedger } from './consent-ledger';
@@ -69,13 +69,20 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
   // way the finding is gone for the owner, so it is deleted here before anything reads it, as is one left unconfirmed too long.
   // Expiry is not the owner's no, so it bars nothing: the same page found again is a new finding.
   const live = (status: string) => status === 'active' || status === 'promoted';
-  // Waldo's welcome reads citing any of these findings go, through the purge every derived store follows. The purge drops a
-  // node that rested on one of them along with any other welcome read, since its words may carry what the finding said.
+  // Waldo's welcome reads citing any of these findings go, through the purge every derived store follows. A node written on one
+  // (writtenOn) goes with it, since its words may carry what the finding said. One the read only added evidence to kept
+  // its own words, so the read is taken off it first and the node stands, the owner's yes to it included.
   const dropWebReads = (ids: readonly string[], at: number): void => {
     if (!ids.length) return;
     const gone = new Set(ids);
     const reads = claims.allClaims().filter(claim => live(claim.status) && refSource(claim.source_ref) === 'web' && refPointers(claim.source_ref).some(id => gone.has(id))).map(claim => claim.id);
-    if (reads.length && claims.purge(reads, new Date(at).toISOString()).ready) claims.settle(reads);
+    if (!reads.length) return;
+    const iso = new Date(at).toISOString(), all = claims.allClaims();
+    for (const node of claims.nodes()) {
+      const held = supportIds(node), added = held.filter(id => reads.includes(id)), origin = writtenOn(all, node)?.id;
+      if (added.length && origin !== undefined && !reads.includes(origin)) claims.saveNode({ id: node.id, domain: node.domain, label: node.label, summary: node.summary, strength: node.strength, status: node.status, supporting_spots: held.filter(id => !added.includes(id)) }, iso);
+    }
+    if (claims.purge(reads, iso).ready) claims.settle(reads);
   };
   const settle = () => {
     const leaving = sql.exec<{ id: string }>(`SELECT id FROM owner_findings WHERE (state = 'unconfirmed' AND found_at <= ?)

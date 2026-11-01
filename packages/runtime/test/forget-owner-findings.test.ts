@@ -5,6 +5,7 @@ import { APP_FINDING_UNCONFIRMED_DAYS_V1 } from '../../contracts/src/app/onboard
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
+import { nodeConfirmation } from '../src/memory/node-sources';
 import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
@@ -258,7 +259,7 @@ describe('welcome reads resting on findings', () => {
     agree(consent);
     const id = (findings.record(finding, 'Team', 1_000) as { id: string }).id;
     const other = (findings.record({ ...finding, text: 'Speaks at design meetups', evidence_quote: 'Sam Rivera, product manager at Acme' }, 'Team', 1_000) as { id: string }).id;
-    const support = (text: string, ref: string, origin = 'untrusted') => { claims.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin, source_ref: ref }, at); return claims.allClaims().at(-1)!.id; };
+    const support = (text: string, ref: string, origin = 'untrusted') => { claims.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin, source_ref: ref }, at); return claims.allClaims().find(claim => claim.source_ref === ref && claim.text === text)!.id; };
     const web = support('Works in product at Acme.', `welcome:web:${id}`), calendar = support('A weekly product review recurs.', 'welcome:calendar:evt_a');
     const kept = support('Speaks at meetups.', `welcome:web:${other}`);
     const lone = claims.saveNode({ id: null, domain: 'work', label: 'Product role at Acme', summary: 'Works in product.', strength: 0.5, status: 'active', supporting_spots: [web] }, at);
@@ -284,6 +285,20 @@ describe('welcome reads resting on findings', () => {
     expect(s.findings.decide(s.id, { action: 'correct', text: 'Design lead at Acme' }, 2_000)).toBe('corrected');
     expect(live(s.claims, s.web)).toBe(false);
     expect(nodeIds(s.claims)).toEqual([s.meetups]);
+  }));
+
+  it('a read that only added evidence to a node goes alone: the node keeps its words and the owner\'s yes', () => withStorage(storage => {
+    const s = seed(storage, { at: 2_000 });
+    // The node's own read is stored first; the web read a later stage added to it is stored after.
+    const note = (text: string, ref: string) => { s.claims.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: ref }, at); return s.claims.allClaims().find(claim => claim.source_ref === ref && claim.text === text)!.id; };
+    const origin = note('A weekly review block recurs.', 'welcome:calendar:evt_b'), added = note('Their team page lists reviews.', `welcome:web:${s.id}`);
+    const own = s.claims.saveNode({ id: null, domain: 'work', label: 'Weekly product reviews', summary: 'Runs a weekly review.', strength: 0.5, status: 'active', supporting_spots: [origin, added] }, at);
+    expect(s.claims.confirmNode(own, 'app:node.confirm', at)).toBe(true);
+    s.findings.forget(s.id, 2_000);
+    const kept = s.claims.nodes().find(node => node.id === own)!;
+    expect(kept).toBeDefined();
+    expect(JSON.parse(kept.supporting_spots)).not.toContain(added);
+    expect(nodeConfirmation(s.claims.allClaims(), kept)).toBe('confirmed');
   }));
 
   it('withdrawing the look-up takes every read on a finding with it', () => withStorage(storage => {

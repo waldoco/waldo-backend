@@ -98,7 +98,7 @@ import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '..
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, recordSignupName } from '../onboarding/first-run';
-import { openLookup, startLookup } from '../onboarding/lookup';
+import { lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
@@ -627,6 +627,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
+      // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
+      lapsed: row => row.origin === 'machine:owner_lookup' && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
     });
@@ -5418,23 +5420,28 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'welcome' }); }
       }),
       // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
-      ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => openLookup(this.jobs()) !== null } } : {}) });
+      ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => lookupOn
+        ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
     // The owner look-up (ONBOARDING_LOOKUP): written once the owner's yes and their name are both here, at most once a grant, and
     // stopped and fenced when the yes no longer counts. Its worker's page reads take the owner's serial lane, so it starts once
     // the owner's first reply is out (afterReply), or a minute after the yes.
     const lookupOn = this.env.ONBOARDING_LOOKUP === '1';
     const lookupConsent = () => consentLedger(storage.sql, consentSwitches(this.env));
+    const lookupStarted = () => identity.get<number>(LOOKUP_STARTED_KEY) ?? null;
     const lookup: OwnerRuntime['lookup'] = {
       reconcile: async () => {
-        if (!lookupOn) return;
-        if (!lookupConsent().active('owner_lookup')) {
+        // A yes that no longer counts stops a running look-up whatever the switch says now, so turning the switch off never
+        // leaves one running.
+        const consent = lookupConsent();
+        if (!consent.active('owner_lookup')) {
           for (const id of this.jobs().cancelMachine('owner_lookup')) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
           return;
         }
+        if (!lookupOn || lookupStarted() === consent.state('owner_lookup').granted_at) return;
         const name = ownerName(memory), doName = identity.get<string>('do_name');
         const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
         const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, timezone: clock.timezone, surface: 'app',
-          started: () => identity.get<number>(LOOKUP_STARTED_KEY) ?? null, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
+          started: lookupStarted, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
         if (made.code !== 'enqueued') return;
         log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());

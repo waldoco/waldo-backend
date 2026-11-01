@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
-import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, openLookup, startLookup, type LookupDeps } from '../src/onboarding/lookup';
+import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupPending, openLookup, startLookup, type LookupDeps } from '../src/onboarding/lookup';
 import { jobBook, taskBrief, type JobBook } from '../src/tasks/jobs';
 import { applyMachineJob } from '../src/tasks/machine';
 import { fenced } from '../src/prompt/turn-prompt';
@@ -43,7 +43,7 @@ describe('starting the owner look-up', () => {
     expect(row.origin).toBe('machine:owner_lookup');
     expect(brief.machine).toMatchObject({ job: 'owner_lookup', refs: ['name', 'email'], max_rounds: LOOKUP_MAX_ROUNDS });
     expect(brief.context).toBe(fenced('Data fetched for this job', '- [name] Asha Rao\n- [email] asha@studio.example').trim());
-    expect([row.due_at, row.deadline_at]).toEqual([T0 + LOOKUP_START_DELAY_MS, T0 + LOOKUP_DEADLINE_MS]);
+    expect([row.due_at, row.deadline_at]).toEqual([T0 + LOOKUP_START_DELAY_MS, T0 + LOOKUP_START_DELAY_MS + LOOKUP_DEADLINE_MS]);
   }));
 
   it('gives the worker exactly the look-up tools, and no other machine job any egress read', () => withOwner(({ book, deps }) => {
@@ -91,6 +91,21 @@ describe('starting the owner look-up', () => {
     expect(book.bringForward(id, (clock.at += 5000))).toBe(true);
     expect(book.due().map(row => row.id)).toEqual([id]);
     expect(book.bringForward(id, clock.at + 60_000)).toBe(false);
+  }));
+});
+
+describe('whether a look-up is pending', () => {
+  it('is pending from the live yes with a name until its job ends, so the web stage never reads before the job is written', () => withOwner(({ book, deps }) => {
+    const d = deps();
+    agree(d.consent, T0);
+    expect(lookupPending(d, false)).toBe(false);
+    expect(lookupPending(d, true)).toBe(true);
+    startLookup(d, identity);
+    expect(lookupPending(d, true)).toBe(true);
+    book.cancel(openLookup(book)!.id, 'owner');
+    expect(lookupPending(d, true)).toBe(false);
+    d.consent.withdraw('owner_lookup', T0 + 5);
+    expect(lookupPending(d, true)).toBe(false);
   }));
 });
 
