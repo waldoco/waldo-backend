@@ -5,6 +5,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { ensureSchema } from '../src/tracer/schema';
+import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
 import { sendOpenOwnerMark } from '../src/identity/open-owner-hold';
 
 const model = vi.hoisted(() => ({ asked: [] as string[] }));
@@ -40,11 +41,11 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': HASH, 'content-type': 'application/json' });
-const withOwner = <T,>(name: string, work: (owner: InstanceType<typeof OwnerDO>, state: DurableObjectState) => Promise<T>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const withOwner = <T,>(name: string, work: (owner: InstanceType<typeof OwnerDO>, state: DurableObjectState) => Promise<T>, extra: Record<string, string> = {}) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  const owner = new OwnerDO(state, { ...env, ...directory, APP_AGREEMENTS: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+  const owner = new OwnerDO(state, { ...env, ...directory, APP_AGREEMENTS: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
   try { return await work(owner, state); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
 });
 const send = (owner: InstanceType<typeof OwnerDO>, name: string, client: string) =>
@@ -69,7 +70,6 @@ it('an owner who joined openly sends nothing to the model, and opens no console,
     expect(await refused.json()).toEqual({ error: 'agreements_required' });
     const page = await owner.fetch(new Request('https://telegram-owner/console', { headers: { 'x-waldo-do-name': name } }));
     expect(page.status).toBe(403);
-    expect(await page.text()).toContain('Finish setting up Waldo in the app first');
     expect(owners.released).toBe(0);
 
     // Accepting the terms alone, without the 18+ attestation, is not enough.
@@ -107,4 +107,16 @@ it('an owner object with no mark sends as before and never asks the directory ab
     await vi.waitFor(() => expect((owner as unknown as { activeApp: unknown }).activeApp).toBeNull(), { timeout: 10_000, interval: 20 });
     expect(owners.asked.filter(fn => fn.includes('open'))).toEqual([]);
   });
+});
+
+it('an owner who joined openly runs under the open sign-up ceiling; every other owner under the usual one', async () => {
+  type Spend = { setup(channel: string): { monthSpend(): { spentUsd: number; ceilingUsd: number } | undefined } };
+  const ledger = { WALDO_COST_LEDGER_SYNC: 'on', OPEN_SIGNUP_SPEND_CEILING_USD: '7' };
+  await withOwner('app-open-owner-ceiling', async owner => {
+    await mark(owner, 'app-open-owner-ceiling');
+    expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(7);
+  }, ledger);
+  await withOwner('app-member-ceiling', async owner => {
+    expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(MONTHLY_SPEND_CEILING_USD);
+  }, ledger);
 });

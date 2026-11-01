@@ -4,7 +4,6 @@ import {
 } from '@waldo/contracts';
 import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
 import { billedAttemptEntries } from '../channels/billed-attempts';
-import { OwnerHeldError } from '../identity/open-owner-hold';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
@@ -228,7 +227,6 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
   const { chat, auxiliary } = ownerModels(access);
   return async ({ ticket, claim, system, content, tools, turns, canaries }) => {
     const model: ModelName = claim.brief.effort === 'deep' ? chat : auxiliary;
-    if (await access.held?.()) throw new OwnerHeldError();
     const started = Date.now();
     // A worker call may reason as long as an owner turn's reply: it has no reply waiting on it.
     const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access, { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS }), circuitBreaker: health }).complete({

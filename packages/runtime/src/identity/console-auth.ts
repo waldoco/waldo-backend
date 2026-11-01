@@ -5,7 +5,6 @@ import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv }
 import { openValue, sealValue } from './sealed-value';
 
 export const OWNER_COOKIE = 'waldo_owner';
-const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 // A console sign-in stays signed in while it is used: it ends 7 days after its last signed-in request, and 30 days
 // after sign-in however much it is used. The directory row and the owner object's own session both enforce it, and
 // the database refuses a row past 30 days. Email codes are a single factor, so 30 days is NIST SP 800-63B-4's AAL1
@@ -289,14 +288,16 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     console.error(JSON.stringify({ hop: 'open_signup', ok: false, code }));
     return null;
   };
-  // Each attempt spends one of the address's and one of the email's daily attempts, keyed by their digests. The database
+  // Each attempt spends one of the address's and one of the email's daily attempts, keyed by a router-keyed digest, so a
+  // leaked key names neither an address nor an email that can be guessed and hashed. The database
   // counts the day's joins against the signed caps under one lock and trusts the joining identity as an invite join does.
   const openJoin = async (user: Readonly<{ id: string; email: string }>, joinPhone: string,
     identity: Readonly<{ provider: 'apple' | 'google'; subject: string }> | undefined, open: OpenSignup): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
     const address = user.email;
     const attempt = async (key: string, limit: number) =>
       (await rpc('open_signup_throttle', `signup.open.throttle.${key}.${limit}`, { p_key: key, p_limit: limit })) === true;
-    if (!(await attempt(`ip.${await sha256(open.ip)}`, OPEN_SIGNUP_IP_DAILY_LIMIT)) || !(await attempt(`email.${await sha256(address)}`, OPEN_SIGNUP_EMAIL_DAILY_LIMIT)))
+    const keyed = (text: string) => routerSignature(secret, 0, `openthrottle.${text}`);
+    if (!(await attempt(`ip.${await keyed(open.ip)}`, OPEN_SIGNUP_IP_DAILY_LIMIT)) || !(await attempt(`email.${await keyed(address)}`, OPEN_SIGNUP_EMAIL_DAILY_LIMIT)))
       return refuseOpen('open_signup_limited');
     const provider = identity?.provider ?? '', subject = identity?.subject ?? '';
     const result = (await rpc('signup_owner_open', `signup.open.${user.id}.${address}.${provider}.${subject}.${joinPhone}.${open.dailyCap}.${open.totalCap}`,

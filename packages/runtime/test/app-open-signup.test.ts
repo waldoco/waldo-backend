@@ -246,7 +246,9 @@ describe('open sign-up in the app', () => {
     const before = state.calls.filter(fn => fn === 'signup_owner_open').length;
     await app('/auth/id_token', google(token('google', 'taken@example.test')), OPEN, '198.51.100.200');
     expect(state.calls.filter(fn => fn === 'signup_owner_open').length).toBe(before);
-    expect([...state.attempts.keys()]).toContain(`email.${await sha('taken@example.test')}`);
+    // Keyed by the router secret: a plain digest of the email names no key.
+    expect([...state.attempts.keys()]).toContain(`email.${await routerSignature(SECRET, 0, 'openthrottle.taken@example.test')}`);
+    expect([...state.attempts.keys()]).not.toContain(`email.${await sha('taken@example.test')}`);
     expect([...state.attempts.keys()].join(',')).not.toContain('taken@example.test');
     expect([...state.attempts.keys()].join(',')).not.toContain(IP);
   });

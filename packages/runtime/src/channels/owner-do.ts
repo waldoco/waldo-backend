@@ -658,7 +658,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book. Storage with no job
   // book (an owner erase since the worker started) has no attempt to serve: the call is fenced before the book is opened,
   // which would make its table again.
-  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return jobsKept(this.ctx.storage.sql) ? this.tasks.claim(ticket) : 'fenced'; }
+  // A task worker's model access is its own, so an owner held after joining openly is fenced here, before any attempt runs.
+  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return jobsKept(this.ctx.storage.sql) && !(await this.openHold().held()) ? this.tasks.claim(ticket) : 'fenced'; }
   async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return jobsKept(this.ctx.storage.sql) ? this.tasks.tool(ticket, call, canaries) : 'fenced'; }
   async taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'> {
     return jobsKept(this.ctx.storage.sql) ? this.tasks.checkpoint(ticket, seq, turns, events, spend, outcomes) : 'fenced';
