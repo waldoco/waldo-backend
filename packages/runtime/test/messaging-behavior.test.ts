@@ -31,7 +31,7 @@ describe('messagingSystemPrompt', () => {
   // The model's function list names the callable tools each round, and narrows when a round withholds some; a copy here
   // would only go stale. A turn with no tools says so, because an empty function list says nothing.
   it('leaves tool names to the function list and says so only when there are none', () => {
-    const prompt = messagingSystemPrompt(['get_context', 'calendar_read']);
+    const prompt = messagingSystemPrompt(['get_context', 'calendar_read', 'web_search']);
     expect(prompt).not.toContain('Tools available in this chat');
     expect(prompt).not.toMatch(/\bcalendar_read\b/);
     expect(prompt.endsWith(MESSAGING_BEHAVIOR)).toBe(true);
@@ -362,4 +362,17 @@ describe('ownerClockLine', () => {
 it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
   expect(MESSAGING_BEHAVIOR).toContain('a bare "today" usually means the day that just ended');
   expect(MESSAGING_BEHAVIOR).toContain('"tomorrow" means exactly that day');
+});
+
+// A turn with no web search on offer (Claude with no search key deployed) is not pointed at one.
+describe('the tool ladder', () => {
+  const ladder = (prompt: string) => prompt.split('\n').find((line) => line.startsWith('- Use the cheapest way')) ?? '';
+  it('names web_search only when the turn offers it', () => {
+    for (const shown of SURFACES) {
+      expect(ladder(messagingSystemPrompt(['get_context', 'web_search', 'browse_page'], shown)), shown.surface).toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).not.toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).toContain('browse_page');
+    }
+    expect(ladder(messagingSystemPrompt(['get_context', 'browse_page']))).not.toContain('web_search');
+  });
 });

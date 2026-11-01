@@ -32,6 +32,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  // The provider that runs the owner path: 'openai' or 'anthropic' (the default). The other provider is every route's
+  // fallback when its key is deployed; a chosen provider without a deployed key yields to the one that has it.
+  WALDO_MODEL_PROVIDER?: string;
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;

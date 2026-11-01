@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
   ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
+  DEFAULT_MODEL_PROVIDER,
+  MODEL_REASONING,
+  modelProviderSchema,
+  OWNER_MODELS,
   OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
@@ -68,6 +73,40 @@ describe('chat model seam', () => {
     expect(WALDO_AUXILIARY_FALLBACK_MODEL).toBe('claude-haiku-5-5');
     expect(PROVIDER_OF[WALDO_CHAT_FALLBACK_MODEL]).toBe('anthropic');
     expect(PROVIDER_OF[WALDO_AUXILIARY_FALLBACK_MODEL]).toBe('anthropic');
+  });
+});
+
+describe('owner model provider', () => {
+  it('defaults the owner path to Claude, Sonnet for turns and Haiku for everything else, with OpenAI as the other provider', () => {
+    expect(DEFAULT_MODEL_PROVIDER).toBe('anthropic');
+    expect(OWNER_MODELS.anthropic).toEqual({ chat: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, auxiliary: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL });
+    expect(OWNER_MODELS.openai).toEqual({ chat: OPENAI_GPT_6_1_TERRA_MODEL, auxiliary: OPENAI_GPT_6_LUNA_MODEL });
+    for (const provider of modelProviderSchema.options) {
+      expect(PROVIDER_OF[OWNER_MODELS[provider].chat], provider).toBe(provider);
+      expect(PROVIDER_OF[OWNER_MODELS[provider].auxiliary], provider).toBe(provider);
+    }
+  });
+
+  it('switches between exactly the two providers that hold owner keys', () => {
+    expect(modelProviderSchema.options).toEqual(['anthropic', 'openai']);
+    for (const value of ['workers_ai', 'Anthropic', 'claude', '']) expect(modelProviderSchema.safeParse(value).success, value).toBe(false);
+  });
+});
+
+describe('model reasoning', () => {
+  it('asks Sonnet for medium and Haiku for low, with output room for adaptive thinking', () => {
+    expect(MODEL_REASONING[ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]).toEqual({ effort: 'medium', outputTokens: 32_000 });
+    expect(MODEL_REASONING[ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]).toEqual({ effort: 'medium', outputTokens: 32_000 });
+    expect(MODEL_REASONING[ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]).toEqual({ effort: 'low', outputTokens: 16_000 });
+  });
+
+  it('carries every OpenAI setting unchanged and covers every owner model of both providers', () => {
+    for (const [model, reasoning] of Object.entries(OPENAI_REASONING)) {
+      expect(MODEL_REASONING[model as keyof typeof MODEL_REASONING], model).toEqual({ effort: reasoning!.effort, ...(reasoning!.outputTokens ? { outputTokens: reasoning!.outputTokens } : {}) });
+    }
+    for (const provider of modelProviderSchema.options) {
+      for (const model of Object.values(OWNER_MODELS[provider])) expect(MODEL_REASONING[model], model).toBeDefined();
+    }
   });
 });
 
