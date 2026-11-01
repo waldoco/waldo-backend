@@ -18,8 +18,8 @@ export const DAY_CARDS: readonly DayCard[] = [
     id: 'card:brief', name: 'The Brief', defaultTime: '08:00', calendar: 'today', body: 'plan',
     instruction: [
       'It is morning. Send the owner The Brief: how today looks and what to protect.',
-      'Open with a one-line read of the day. Then the day in order: events with times and what each is for, reminders due today, and anything waiting on them.',
-      'Name the one thing that matters most today, and one clear action when one would help. Use what you know about their routines only when you actually have it.',
+      'Open with a one-line read of the day. Then walk them through it in order: events with times and what each is for, and any reminder due today or anything waiting on them, said in the sentence where it matters.',
+      'Name the one thing that matters most today and one clear action. Use what you know about their routines only when you actually have it.',
       'One clear direction, not a list of worries.',
     ].join('\n'),
   },
@@ -35,7 +35,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     id: 'card:close', name: 'The Close', defaultTime: '21:30', calendar: 'tomorrow', body: 'line',
     instruction: [
       'It is evening. Send the owner The Close: the end-of-day wrap.',
-      'Done today: what they did and what you did for them, from the conversation and the ledger. Carried over: what is still open, said plainly and without guilt. Tomorrow: the first things on the calendar and a simple plan for the morning.',
+      'Say what they did today and what you did for them, from the conversation and the ledger; then what is still open, plainly and without guilt; then the first things on tomorrow\'s calendar and a simple plan for the morning.',
       'Close loops, do not open new ones. No new tasks, no stress, nothing that needs an answer tonight. If the day was hard, say so gently.',
     ].join('\n'),
   },
@@ -49,6 +49,10 @@ const BODY_RULE: Readonly<Record<DayCard['body'], string>> = {
   plan: `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good, a line is enough. ${CLASH_LINE} You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it; a yes from them puts it on an approval card. When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`,
   line: `Their body gets at most one line, and only when this request carries their shared health context: say what it shows. ${SILENT_WITHOUT}`,
 };
+
+// The app reads the card aloud on Home as one paragraph (owner, 28 October 2026): a bullet list of labelled categories, with the empty ones
+// still named ("Reminders: None listed. Waiting on you: Nothing open."), read like a form, not like Waldo.
+export const PROSE_RULE = 'Plain sentences only: no headings, labels, bullet points or numbered lists. Leave out whatever has nothing in it; never name an empty category ("Reminders: none", "Waiting on you: nothing open").';
 
 const STATE_WORDS: Readonly<Record<ApprovalItem['state'], string>> = {
   open: 'needs their decision', review_only: 'too long to approve on its card', unconfirmed: 'its review card is not confirmed delivered', done: 'decided',
@@ -72,7 +76,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   card.instruction,
   "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
   BODY_RULE[card.body],
-  `Format it as a compact card for chat: a first line naming "${card.name}", then short sections. Keep it tight enough to read in 20 seconds.`,
+  `Format it as a compact card for chat: a first line naming "${card.name}", then a few short sentences, the way a person would say it. ${PROSE_RULE} Keep it tight enough to read in 20 seconds.`,
 ].join('\n\n');
 
 export const DAY_PLAN_INSTRUCTION = [
