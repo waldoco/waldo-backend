@@ -1,6 +1,6 @@
 # Wake-driven Brief
 
-Status: **Proposed**. Design only, no code. Code references are pinned to `beta-mvp` at `b80f0f1a`; ADR-0081 references to waldo-brain `7faba7e`. The owner asked for it ("Yes, design it"). It builds on S8c-1 (#1780).
+Status: **Accepted**, 1 November 2026. Design only, no code; the build follows the W-1 spike. Code references are pinned to `beta-mvp` at `b80f0f1a`; ADR-0081 references to waldo-brain `7faba7e`. The owner asked for it ("Yes, design it"). It builds on S8c-1 (#1780).
 
 ## The ask
 
@@ -125,7 +125,7 @@ A wake turn only moves a pending card. It never writes a second one.
   - and, said outright: the time Waldo acts on the signal, and the Brief's send time, are system event times kept like any card's. They roughly show when the owner woke. The sample's own times never cross.
 - **What a Brief does not newly gain.** It may say "good morning" sooner; it gains no new readings. Owner-channel replies may already carry the owner's own readings (owner ruling for beta).
 
-The amendment is drafted as a waldo-brain PR, marked **Proposed**: see the link in this PR's description.
+The amendment is a waldo-brain PR, marked **Accepted** on 1 November 2026: see the link in this PR's description.
 
 ## 5. Flags, tests and evals
 
