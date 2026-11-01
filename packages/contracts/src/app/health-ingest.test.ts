@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_WEAR_SENSOR_REVISION_V1, HEALTH_WEAR_PACKAGE_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -617,5 +617,39 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
     const request = { ...batch, samples: Array.from({ length: fits }, (_, i) => ({ ...full, sample_id: `HK:1F0E7C9A-0000-4000-8000-${String(i).padStart(12, '0')}` })) };
     expect(healthIngestV1Schema.safeParse(request).success).toBe(true);
     expect(bytes(request)).toBeLessThanOrEqual(HEALTH_INGEST_MAX_REQUEST_BYTES_V1);
+  });
+});
+
+// Health revision 7: Waldo's own watch app measures beat intervals overnight and the phone sends one night's RMSSD from them.
+// Its origin is read_api wear_sensor with Waldo's package, and that origin rides an overnight RMSSD reading only.
+describe('health revision 7: the night\'s RMSSD from Waldo\'s watch app', () => {
+  const wear = { read_api: 'wear_sensor', source_bundle_id: null, source_package_name: HEALTH_WEAR_PACKAGE_V1, source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic' };
+  const night = { ...common, sample_id: 'overnight_hrv:wear:rmssd:2026-10-10', start_at: '2026-10-09T23:10:00+05:30', end_at: '2026-10-10T06:40:00+05:30', origin: wear };
+  const rmssd = { ...night, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: 41.25 };
+
+  it('is health revision 7, after the observed workout peak, for Waldo\'s own package', () => {
+    expect(HEALTH_WEAR_SENSOR_REVISION_V1).toBe(HEALTH_OBSERVED_PEAK_REVISION_V1 + 1);
+    expect(HEALTH_WEAR_PACKAGE_V1).toBe('com.heywaldo.app');
+  });
+  it('takes the night\'s RMSSD in a Health Connect batch, as one change of a revision-3 upload', () => {
+    expect(healthIngestV1Schema.safeParse({ ...batch, source: 'health_connect', samples: [rmssd] }).success).toBe(true);
+    expect(checkHealthChangeV1('sample', 0, rmssd)).toMatchObject({ ok: true });
+  });
+  it('refuses the watch origin on anything but an overnight RMSSD reading from Waldo\'s package, and an unknown read API', () => {
+    const hourly = { ...hour, sample_id: 'wear:hr:1', origin: wear };
+    rejected(healthSampleV1Schema, [
+      { ...rmssd, method: 'sdnn' },
+      { ...rmssd, origin: { ...wear, source_package_name: 'com.example.ringapp' } },
+      { ...rmssd, origin: { ...wear, source_package_name: null } },
+      { ...rmssd, origin: { ...wear, read_api: 'wear' } },
+      { ...hourly, signal: 'heart_rate_window', unit: 'beats_per_minute', value: 60, min: 52, max: 70, n_samples: 60 },
+      { ...hourly, signal: 'hrv_window', unit: 'milliseconds', method: 'rmssd', value: 40 },
+      { ...night, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 420 },
+      { ...night, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'overnight_resting', value: 52 },
+    ]);
+    expect(checkHealthChangeV1('sample', 2, { ...rmssd, method: 'sdnn' })).toMatchObject({ ok: false, rejection: { index: 2, signal: 'overnight_hrv', reason: 'invalid_sample' } });
+  });
+  it('leaves Waldo\'s package valid under any other read API, which no backend marks as the watch\'s', () => {
+    expect(healthSampleV1Schema.safeParse({ ...rmssd, origin: { ...wear, read_api: 'health_connect' } }).success).toBe(true);
   });
 });

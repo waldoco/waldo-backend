@@ -32,6 +32,9 @@ export type ProducerDeps = Readonly<{
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
+  // Off unless true. Off, a reading the read marks as the night's RMSSD from Waldo's own watch app is left out before any
+  // compute, so every row is as if it was never sent. On, it counts as a trusted writer's, like Samsung Health's.
+  wearHrv?: boolean;
 }>;
 
 // The stated need and when it last changed, or null for an answer that is not the settings shape.
@@ -73,9 +76,10 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
+// waldoWear is whether the read marked it as the night's RMSSD from Waldo's own watch app; false for every other reading.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; waldoWear?: boolean; workout?: WorkoutDetail | null }>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
@@ -111,6 +115,7 @@ const reading = (raw: unknown): Reading | null => {
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
     samsungWriter: r.samsung_writer === true,
+    waldoWear: r.waldo_wear === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
   };
 };
@@ -154,6 +159,9 @@ const withVitals = (series: Series, vitals: Series | null): Series => (!vitals ?
     return same ? { ...source, readings: [...source.readings, ...same.readings.filter(r => VITAL_SIGNALS.includes(r.signal))] } : source;
   }),
 });
+
+// The series with every reading the read marked as the watch app's left out, as the wear-HRV switch off has it everywhere.
+export const withoutWear = (series: Series): Series => ({ ...series, sources: series.sources.map(source => ({ ...source, readings: source.readings.filter(r => r.waldoWear !== true) })) });
 
 const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
   readings.reduce<T | undefined>((best, r) => (!best || (r.startAt ?? '') >= (best.startAt ?? '') ? r : best), undefined);
@@ -327,12 +335,13 @@ const LOWEST_SOURCE_CONFIDENCE = 0.6;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 
 // Whether a row computed from this source may carry activation accepted. An unknown source never may. A Health Connect row
-// may only when every reading it was computed from was written by Samsung Health, and none without a writer recorded
-// counts; otherwise it is computed the same and written as a candidate.
+// may only when every reading it was computed from was written by Samsung Health, or is the night's RMSSD from Waldo's own
+// watch app, and none without a writer recorded counts; otherwise it is computed the same and written as a candidate. The
+// watch's readings reach here only while the wear-HRV switch is on.
 const acceptable = (source: Source): boolean => {
   if (source.source === 'health_connect') {
     const scored = source.readings.filter(r => SIGNALS.includes(r.signal));
-    return scored.length > 0 && scored.every(r => r.samsungWriter);
+    return scored.length > 0 && scored.every(r => r.samsungWriter || r.waldoWear === true);
   }
   return Object.hasOwn(SOURCE_CONFIDENCE, source.source);
 };
@@ -456,7 +465,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
-    const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
+    const scoredSeries = deps.wearHrv === true ? parsed.series : withoutWear(parsed.series);
+    const series = withVitals(untruncated(scoredSeries, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
     // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
     // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
     const present = [...series.sources].filter(s => s.readings.length > 0);

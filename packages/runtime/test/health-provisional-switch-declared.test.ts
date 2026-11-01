@@ -59,6 +59,13 @@ describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
   });
 });
 
+describe('HEALTH_WEAR_HRV in the Worker config', () => {
+  it('is off in both blocks until the ADR-0081 writer amendment merges and the gate turns it on with migration 20261101050000', () => {
+    expect(parsed.vars.HEALTH_WEAR_HRV).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_WEAR_HRV).toBe('0');
+  });
+});
+
 describe('MEDICATIONS in the Worker config', () => {
   it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
     expect(parsed.vars.MEDICATIONS).toBe('0');

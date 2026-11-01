@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { md5Hex } from '../../channels/md5';
-import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
+import { parseSeries, untruncated, withoutWear, type Reading, type SleepStages } from '../../health/producer';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -164,7 +164,8 @@ const methodOf = (signal: HealthReadSignal, group: Group): Method | null => (sig
 
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('get_health'));
 
-export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
+// wearHrv: the wear-HRV switch. Off, the night's RMSSD from Waldo's own watch app is left out here as in every score.
+export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock, options: Readonly<{ wearHrv?: boolean }> = {}): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
     "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. The numbers stay in this turn and are never stored or logged.",
@@ -190,7 +191,8 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const sources = untruncated(parsed.series, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
+    const read = options.wearHrv === true ? parsed.series : withoutWear(parsed.series);
+    const sources = untruncated(read, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;

@@ -88,7 +88,7 @@ export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConse
 // The permission API is not the physiological producer: keep the observed read origin and
 // recording method without inferring a vendor.
 export const healthSampleOriginV1Schema = z.strictObject({
-  read_api: z.enum(['healthkit', 'health_connect', 'samsung_health', 'provider_api', 'manual']),
+  read_api: z.enum(['healthkit', 'health_connect', 'samsung_health', 'provider_api', 'manual', 'wear_sensor']),
   source_bundle_id: z.string().min(1).max(200).nullable(),
   source_package_name: z.string().min(1).max(200).nullable(),
   source_version: z.string().min(1).max(128).nullable(),
@@ -215,6 +215,14 @@ export const HEALTH_COACH_REVISION_V1 = 5;
 // Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, rather than a measured or entered
 // maximum, name the basis observed_workout_peak, so the model can call them approximate. An older build never sends it.
 export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
+// Health revision 7: Waldo's own watch app reads beat intervals overnight and the phone sends the night's RMSSD from them, in
+// its Health Connect batch, with origin read_api wear_sensor and Waldo's package. The intervals stay on the phone. That origin
+// is admitted on an overnight RMSSD reading only. An older build never sends it; an older backend rejects that reading alone.
+export const HEALTH_WEAR_SENSOR_REVISION_V1 = 7;
+export const HEALTH_WEAR_PACKAGE_V1 = 'com.heywaldo.app';
+const isWearReading = (sample: { signal: string; method?: string | undefined; origin?: { read_api: string; source_package_name: string | null } | undefined }) =>
+  sample.origin?.read_api !== 'wear_sensor'
+  || (sample.signal === 'overnight_hrv' && sample.method === 'rmssd' && sample.origin.source_package_name === HEALTH_WEAR_PACKAGE_V1);
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
@@ -285,7 +293,8 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
-  .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals');
+  .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals')
+  .refine(isWearReading, 'the watch origin is an overnight RMSSD reading from Waldo\'s package');
 export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
