@@ -195,6 +195,8 @@ export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
 export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?: CalendarSendUpdates }>;
+// A move can also rename the event in its slot.
+export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: string }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
@@ -431,8 +433,11 @@ export type GoogleClient = Readonly<{
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
-  cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarMoveOptions): Promise<CalendarItem>;
+  // With a marker, answers the cancelled version it left, which a restore is fenced on.
+  cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem | void>;
+  // Puts a cancelled event back, only while it is still the version etag names.
+  restoreEvent(id: string, etag: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
@@ -447,7 +452,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'restoreEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -895,14 +900,15 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
-    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
+    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...(options?.title ? { summary: options.title } : {}), ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
     async cancelEvent(id, etag, operationMarker, options) {
       const url = events(options?.calendarId, id, { sendUpdates: options?.sendUpdates });
       // Put cancellation and its marker in one version-fenced mutation. A missing tombstone
       // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
-      if (operationMarker) await send(url, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
-      else await call(url, { method: 'DELETE', headers: match(etag) });
+      if (operationMarker) return send(url, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
+      await call(url, { method: 'DELETE', headers: match(etag) });
     },
+    restoreEvent: async (id, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { status: 'confirmed', ...calendarMarker(operationMarker) }, etag),
     async searchContacts(query, limit) {
       if (typeof query !== 'string' || !query || query.length > 100 || !validPageLimit(limit, 10)) throw new Error('invalid contacts search');
       // Google asks for an empty-query request before each search so the contact cache is current.

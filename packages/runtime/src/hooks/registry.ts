@@ -88,6 +88,10 @@ import {
   updateTodoArgsSchema,
   listHealthLogsArgsSchema,
   setSleepNeedArgsSchema,
+  trackMedicationArgsSchema,
+  logMedicationArgsSchema,
+  listMedicationsArgsSchema,
+  stopMedicationArgsSchema,
   listRemindersArgsSchema,
   listStandingOrdersArgsSchema,
   logMealArgsSchema,
@@ -248,6 +252,10 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   log_workout: logWorkoutArgsSchema,
   list_health_logs: listHealthLogsArgsSchema,
   set_sleep_need: setSleepNeedArgsSchema,
+  track_medication: trackMedicationArgsSchema,
+  log_medication: logMedicationArgsSchema,
+  list_medications: listMedicationsArgsSchema,
+  stop_medication: stopMedicationArgsSchema,
   set_standing_order: setStandingOrderArgsSchema,
   list_standing_orders: listStandingOrdersArgsSchema,
   cancel_standing_order: cancelStandingOrderArgsSchema,
@@ -956,6 +964,9 @@ async function checkExecutableArgs(
 ): Promise<HookResult> {
   const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
   if (!checked.ok) return checked.result;
+  // A value encoded past the decode limit is withheld only in the scribe's copy, and these arguments go on as written,
+  // so it refuses here as the decode check did before anything was withheld.
+  if (checked.redactions.some(redaction => redaction.kind === 'deep_encoding')) return halt('scribe:invalid_payload', sanitiseFailureCode('invalid_payload'));
   if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
   return ok();
 }

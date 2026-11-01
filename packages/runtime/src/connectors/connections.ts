@@ -65,7 +65,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
         const wireArgs = [...args];
         while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
-        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(method);
+        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','restoreEvent','createTask','patchTask'].includes(method);
         if(effect&&!intent)throw new ProxyIntentError('intent_required');
         // This Worker reads calendar detail fields and the owner's status, so it asks for both; a proxy that predates either ignores its key.
         const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, calendar_owner_status: true, ...(effect?{intent_id:intent!.id}:{}) });
