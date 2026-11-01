@@ -32,6 +32,11 @@ export type ProducerDeps = Readonly<{
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
+  // Off unless true. On, today's row carries a digest of the night chosen for it, and the writer answers whether that night
+  // changed; the row writer must admit it. The digest stays in the health plane: no read returns it.
+  nightRef?: boolean;
+  // Told the owner's local today when the night chosen for it changed. It carries the day only: no time, span or reading.
+  onNightRecorded?: (day: string) => Promise<void>;
 }>;
 
 // The stated need and when it last changed, or null for an answer that is not the settings shape.
@@ -423,6 +428,13 @@ const steadied = (scores: DailyScores, before: Record<string, unknown> | null): 
   };
 };
 
+// The night a day's row was computed from: its source, start and end, digested, so the writer can tell a new night from the one
+// it holds without any time leaving the plane.
+const nightRefOf = async (source: string, sleep: NonNullable<DayRecord['sleep']>): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${source}|${sleep.startAt}|${sleep.endAt}`)))]
+    .map(byte => byte.toString(16).padStart(2, '0')).join('');
+const nightMoved = (answer: unknown): boolean => asRecord(answer)?.night_changed === true;
+
 // The writer names the pillars whose zone word changed; only whether any did leaves this function.
 const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
 
@@ -526,14 +538,17 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
           continue;
         }
       }
+      const sleep = targetDay === today && deps.nightRef ? days.find(d => d.day === today)?.sleep : null;
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+        ...(sleep ? { night_ref: await nightRefOf(chosen.source, sleep) } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+      if (sleep && writeOutcome(answer) === 'written' && nightMoved(answer)) await deps.onNightRecorded?.(today).catch(() => console.error('health night notice failed'));
     }
     if (provisional && deps.readHistory && !needMoved) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.

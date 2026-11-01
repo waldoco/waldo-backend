@@ -44,3 +44,10 @@ describe('HEALTH_COACHING in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('0');
   });
 });
+
+describe('WAKE_BRIEF in the Worker config', () => {
+  it('is off in both blocks until the device spike says go and migration 20261101030000 is applied', () => {
+    expect(parsed.vars.WAKE_BRIEF).toBe('0');
+    expect(parsed.env.staging.vars.WAKE_BRIEF).toBe('0');
+  });
+});

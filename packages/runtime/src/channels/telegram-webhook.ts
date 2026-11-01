@@ -109,6 +109,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
   // revise a delivered day card or push. Anything else keeps the update card as it was.
   WALDO_DAY_STATE?: string;
+  // '1', with the day state on, lets the health plane's night-recorded signal give a pending Brief a wake turn; the nightly
+  // plan then times the Brief as its latest-by. Anything else plans and sends the Brief as before.
+  WAKE_BRIEF?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

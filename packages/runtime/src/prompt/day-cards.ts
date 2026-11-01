@@ -87,13 +87,17 @@ export const DAY_PLAN_INSTRUCTION = [
 ].join('\n');
 
 // With `replan` (each card's current time, or null when skipped), the calendar changed during the day: the cards listed are
-// still to come, and each keeps its time unless the change calls for another.
+// still to come, and each keeps its time unless the change calls for another. With `wake`, the owner's wearable shows their
+// night is in, and the Brief may go now or earlier than its latest-by. With `wakeMode`, the nightly plan times the Brief as
+// that latest-by.
 export const dayPlanInput = (context: Readonly<{ localNow: string; calendar: string; cards: readonly DayCard[]; proactivity: string;
-  replan?: Readonly<Partial<Record<CardId, string | null>>> }>): string => [
-  context.replan
+  replan?: Readonly<Partial<Record<CardId, string | null>>>; wake?: Readonly<{ latestBy: string; weekday: string }>; wakeMode?: boolean }>): string => [
+  context.wake
+    ? `Now: ${context.localNow}, ${context.wake.weekday}. ${context.proactivity}. The owner's wearable shows their night is in. The Brief is planned for ${context.wake.latestBy} at the latest. From the time, their quiet hours, their routine and today's calendar, judge whether they are up for the day or only awake in the night or after a nap. Reply with time "now" to send it now, a time after now and before ${context.wake.latestBy} to send it then, or ${context.wake.latestBy} to keep it. Never later.`
+    : context.replan
     ? `Now: ${context.localNow}. ${context.proactivity}. Today's calendar just changed. These cards are still to come today; keep each one's planned time unless the change calls for another, which must be a time after now, or skip one the change made unnecessary:`
-    : `Now: ${context.localNow}. ${context.proactivity}. Plan these cards for today:`,
-  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}${context.replan
+    : `Now: ${context.localNow}. ${context.proactivity}. ${context.wakeMode ? 'The Brief also goes out as soon as their wearable shows they are up, so time it as the latest it should go: after they usually wake on a day like today. ' : ''}Plan these cards for today:`,
+  context.cards.map((card) => `- ${card.id} (${card.name}), default ${card.defaultTime}${context.wake ? `, latest ${context.wake.latestBy}` : context.replan
     ? `, planned ${context.replan[card.id] ?? 'skip'}` : ''}`).join('\n'),
   `<calendar>\n${context.calendar}\n</calendar>`,
 ].join('\n\n');
