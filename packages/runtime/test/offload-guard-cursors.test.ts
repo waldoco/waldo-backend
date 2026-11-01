@@ -213,7 +213,45 @@ describe('a value encoded past the decode limit is withheld, not the whole page'
   it('a mail body with a deeply encoded tracking link keeps the rest of its text', () => {
     const link = `https://click.example.com/ls/click?upn=${thrice('https://shop.example.com/sale?ref=newsletter')}`;
     const body = `Hi Sam,\n\nYour order shipped. Track it here: ${link}\n\nThanks`;
-    expect(scribedBody(body, canaryTokens)).toBe(body.replace(link.slice(link.indexOf('upn=') + 4), DEEP_ENCODING_MARKER));
+    expect(scribedBody(body, canaryTokens)).toBe(body.replace(link.slice(link.indexOf('?') + 1), DEEP_ENCODING_MARKER));
+  });
+
+  it('a deep token whose head alone is percent-encoded is withheld whole, not just the wrapped head', () => {
+    const deep = thrice('ordinary words, encoded three times');
+    const percent = (text: string) => [...text].map((character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`).join('');
+    const scribed = sanitise({ payload: { notes: `see ${percent(deep.slice(0, 6))}${deep.slice(6)} y` }, destination: 'internal_context', canary_tokens: [...canaryTokens], source_taint: 'external' });
+    expect(scribed).toEqual({ ok: true, source_taint: 'external', redactions: [{ kind: 'deep_encoding', count: 1 }], payload: { notes: `see ${DEEP_ENCODING_MARKER} y` } });
+  });
+
+  it('a secret the partial decode already shows still refuses the page, though its token nests too deep', async () => {
+    const { kept, store } = recording();
+    const { result } = await dispatch(getTasks(tasksFetcher(b64(`key sk-proj-${'A1b2C3d4'.repeat(4)} ${b64(b64('ordinary words, encoded'))}`))), { limit: 100 }, store);
+    expect(result).toMatchObject({ ok: false, guard: { check: 'canary_token', reason: 'secret_leak' } });
+    expect(kept).toHaveLength(0);
+  });
+
+  // The first scans stop at the first value they cannot decode, so whatever else the page holds is found only when the
+  // scans run again over the page with its deep values withheld.
+  describe('the scans run again after withholding, so the rest of the page is still checked', () => {
+    const deep = thrice('ordinary words, encoded three times');
+    const inline = (payload: Record<string, unknown>) => sanitise({ payload: payload as never, destination: 'internal_context', canary_tokens: [...canaryTokens], source_taint: 'external' });
+    const offload = (payload: Record<string, unknown>) => guardForOffload({ payload: JSON.stringify(payload), destination: 'internal_context', canary_tokens: [...canaryTokens], source_taint: 'external' });
+
+    it('a plain canary in another task refuses the page, inline and offloaded', () => {
+      const page = { tasks: [{ notes: deep }, { notes: `ref ${canaryTokens[1]}` }] };
+      for (const scribed of [inline(page), offload(page)]) expect(scribed).toMatchObject({ ok: false, check: 'canary_token', reason: 'canary_leak' });
+    });
+
+    it('a deep key beside a deep value refuses the page as a decode, inline and offloaded', () => {
+      const page = { tasks: [{ notes: deep }, { [thrice('another key, encoded three times')]: 'x' }] };
+      for (const scribed of [inline(page), offload(page)]) {
+        expect(scribed).toMatchObject({ ok: false, reason: 'invalid_payload', diagnostic: { stage: 'decode', decode: { cause: 'nesting', depth: 3 } } });
+      }
+    });
+
+    it('a visible reading in another task refuses the offloaded page', () => {
+      expect(offload({ tasks: [{ notes: deep }, { notes: 'hrv: 42 ms overnight' }] })).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    });
   });
 
   it('a value that nests only beside its neighbour is withheld whole', () => {

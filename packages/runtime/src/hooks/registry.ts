@@ -956,6 +956,9 @@ async function checkExecutableArgs(
 ): Promise<HookResult> {
   const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
   if (!checked.ok) return checked.result;
+  // A value encoded past the decode limit is withheld only in the scribe's copy, and these arguments go on as written,
+  // so it refuses here as the decode check did before anything was withheld.
+  if (checked.redactions.some(redaction => redaction.kind === 'deep_encoding')) return halt('scribe:invalid_payload', sanitiseFailureCode('invalid_payload'));
   if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
   return ok();
 }

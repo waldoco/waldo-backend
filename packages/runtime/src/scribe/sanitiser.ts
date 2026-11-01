@@ -679,6 +679,8 @@ export const carriesSecretOrCanary = (text: string, canaries: readonly string[] 
 
 // Lowercase words with no '=', so no decoder reads it as an encoding.
 export const DEEP_ENCODING_MARKER = '[withheld: content encoded too deeply to check]';
+// Every character a base64, base64url, percent or JSON escape can be made of.
+const ENCODING_CHARACTER = /[A-Za-z0-9+/=_%\\-]/;
 
 // External content read into the model or the offload store: a value still decodable after MAX_DECODE_PASSES is
 // withheld in place, so one such value no longer refuses the whole read. The offending token goes first, then the whole
@@ -722,17 +724,22 @@ function withholdDeepEncoding(input: PreparedInput): SanitiseResult | { payload:
     }
     const serialized = nest > 0;
     if (!failing(text, serialized)) return text;
-    let narrowed = text;
-    let tokens = 0;
-    let from = text.length;
-    for (const span of encodedSpans(text).reverse()) {
-      if (span.end > from || !failing(text.slice(span.start, span.end), serialized)) continue;
-      narrowed = `${narrowed.slice(0, span.start)}${DEEP_ENCODING_MARKER}${narrowed.slice(span.end)}`;
-      from = span.start;
-      tokens += 1;
+    // A failing span is widened to the run of encoding characters around it: when the decoder wraps only part of a
+    // token, the rest of that token is still most of the encoded content, shifted out of alignment.
+    const runs: Array<{ start: number; end: number }> = [];
+    for (const span of encodedSpans(text)) {
+      if (!failing(text.slice(span.start, span.end), serialized)) continue;
+      let { start, end } = span;
+      while (start > 0 && ENCODING_CHARACTER.test(text[start - 1]!)) start -= 1;
+      while (end < text.length && ENCODING_CHARACTER.test(text[end]!)) end += 1;
+      const last = runs.at(-1);
+      if (last !== undefined && start <= last.end) last.end = Math.max(last.end, end);
+      else runs.push({ start, end });
     }
-    const kept = tokens > 0 && !failing(narrowed, serialized);
-    count += kept ? tokens : 1;
+    let narrowed = text;
+    for (const { start, end } of [...runs].reverse()) narrowed = `${narrowed.slice(0, start)}${DEEP_ENCODING_MARKER}${narrowed.slice(end)}`;
+    const kept = runs.length > 0 && !failing(narrowed, serialized);
+    count += kept ? runs.length : 1;
     return kept ? narrowed : DEEP_ENCODING_MARKER;
   };
   const walk = (value: JsonValue, nest: number): JsonValue => {
