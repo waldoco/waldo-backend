@@ -46,6 +46,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_EGRESS_ALLOWLIST: gap('the world has no network, so the egress boundary is held by its own tests, not by a trial'),
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
+  CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it off'),
+  HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),

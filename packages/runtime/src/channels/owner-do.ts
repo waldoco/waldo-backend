@@ -4021,7 +4021,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
-      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow,
+      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
@@ -4885,7 +4885,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
       let outcome: HealthTriggerOutcome = 'failed';
-      try { outcome = await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
+      try { outcome = await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone, easeWorkout: () => this.env.HEALTH_EASE_WORKOUT === '1',
         enabled: () => schedPrefs.enabled('health_proposals'), modeSetting: () => schedPrefs.healthMode(), proactivity: () => loops.proactivity(),
         readHealth: async () => (rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null),
         comingItems: async (from, to) => {
