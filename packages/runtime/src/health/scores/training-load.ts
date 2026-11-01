@@ -6,13 +6,15 @@ import { shiftDay } from './time';
 export const TRAINING_LOAD_VERSION = 'training-load.candidate.v1';
 export const TRAINING_LOAD_PHRASES = ['much lighter than usual', 'lighter than usual', 'about usual', 'heavier than usual', 'much heavier than usual'] as const;
 export type TrainingLoadPhrase = (typeof TRAINING_LOAD_PHRASES)[number];
-export type LoadMethod = 'hr_zones' | 'effort' | 'minutes';
+export type LoadMethod = 'hr_zones' | 'hr_zones_observed_peak' | 'effort' | 'minutes';
 export interface WorkoutLoad {
   // The local day the workout started on.
   readonly day: string;
   readonly minutes: number;
   // Seconds in zones 1 to 5, as the phone or provider bucketed them.
   readonly zoneSeconds: readonly number[] | null;
+  // The zones were set from the highest heart rate seen in a workout, not a measured maximum, so they are approximate.
+  readonly zonesFromObservedPeak?: boolean;
   readonly effort: Readonly<{ score: number; method: 'rated' | 'estimated' }> | null;
 }
 export type TrainingLoad =
@@ -24,14 +26,15 @@ const WINDOW_DAYS = 28;
 const MIN_OBSERVED_DAYS = 21;
 
 // Edwards' summated heart-rate-zone TRIMP, session RPE (Foster 2001), or minutes. A window takes the first method every
-// workout in it carries, so two methods are never added together; an effort window is all rated or all estimated.
+// workout in it carries, so two methods are never added together; an effort window is all rated or all estimated. Zones are
+// counted the same way whatever set them; a window with any zones set from an observed peak says so, as approximate.
 const methodOf = (workouts: readonly WorkoutLoad[]): LoadMethod => {
-  if (workouts.every(w => w.zoneSeconds?.length === 5)) return 'hr_zones';
+  if (workouts.every(w => w.zoneSeconds?.length === 5)) return workouts.some(w => w.zonesFromObservedPeak === true) ? 'hr_zones_observed_peak' : 'hr_zones';
   const kinds = new Set(workouts.map(w => w.effort?.method ?? null));
   return kinds.size === 1 && !kinds.has(null) ? 'effort' : 'minutes';
 };
 const loadOf = (workout: WorkoutLoad, method: LoadMethod): number =>
-  method === 'hr_zones' ? workout.zoneSeconds!.reduce((sum, seconds, zone) => sum + (zone + 1) * seconds / 60, 0)
+  method === 'hr_zones' || method === 'hr_zones_observed_peak' ? workout.zoneSeconds!.reduce((sum, seconds, zone) => sum + (zone + 1) * seconds / 60, 0)
     : method === 'effort' ? workout.minutes * workout.effort!.score
       : workout.minutes;
 

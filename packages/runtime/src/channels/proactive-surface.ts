@@ -1,3 +1,4 @@
+import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../../contracts/src/app/controls';
 import type { AppSend, ScheduledAppDelivery } from './surfaces/app';
 import type { OutboxRoute } from './delivery-routes';
 import { telegramReceipt, tookPart, type FinalRecord } from './telegram-final-outbox';
@@ -32,6 +33,32 @@ export const setProactiveSurface = (kv: Kv, value: string): boolean => {
   kv.put(PROACTIVE_SURFACE_KEY, value);
   return true;
 };
+
+// Whether a surface reaches the owner only once the owner links it (a chat), or always (the app they are signed in to).
+const LINKED: Readonly<Record<ProactiveTarget, boolean>> = { app: false, whatsapp: true, imessage: true };
+type Chat = Exclude<ProactiveTarget, 'app'>;
+// Whether each chat is linked to the owner now; null when that cannot be read.
+export type ChatLinks = Readonly<Record<Chat, boolean | null>>;
+// The chats a surface names that are not known to be linked now.
+const unlinkedChats = (surface: ProactiveSurface, links: ChatLinks): readonly Chat[] =>
+  wantedTargets(surface).filter((target): target is Chat => LINKED[target] && links[target as Chat] !== true);
+// What the owner can choose now: a surface whose every chat is linked.
+export const proactiveSurfaceChoices = (links: ChatLinks): readonly ProactiveSurface[] =>
+  PROACTIVE_SURFACES.filter(surface => unlinkedChats(surface, links).length === 0);
+export type ProactiveSurfaceChoice = 'saved' | 'unchanged' | 'unchecked' | 'invalid' | `${Chat}_not_linked`;
+// The owner choosing a surface in the app or the console: what proactiveSurfaceChoices offers is stored, through the one
+// writer, and nothing else. The first run's channel.set comes before any chat is linked, so it stores its choice as is.
+export const chooseProactiveSurface = (kv: Kv, value: string, links: ChatLinks): ProactiveSurfaceChoice => {
+  if (!known(value)) return 'invalid';
+  const missing = unlinkedChats(value, links);
+  const unlinked = missing.find(chat => links[chat] === false);
+  if (unlinked) return `${unlinked}_not_linked`;
+  if (missing.length) return 'unchecked';
+  if (proactiveSurface(kv) === value) return 'unchanged';
+  setProactiveSurface(kv, value);
+  return 'saved';
+};
+export const proactiveSurfaceReceipt = (choice: ProactiveSurfaceChoice) => choice === 'invalid' ? false : APP_PROACTIVE_SURFACE_RECEIPTS_V1[choice];
 
 // The wanted surfaces the owner can be reached on now, in order: the first takes the work, the rest get a copy. When the
 // first of them cannot take the work, the first reachable surface that can is used alone, the app first: a chat surface that
