@@ -504,7 +504,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
-    let provisional = false;
+    let provisional = false, needMoved = false;
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
@@ -515,6 +515,17 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const before = await storedBefore(deps.readScores, targetDay);
+      // A need saved since this run read it would leave today's row on the old need but stamped after the change, out of
+      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days; a need saved
+      // again with the same figure is the same need. A read that fails asks for nothing, so the run fails and is retried.
+      if (targetDay === today && deps.readSettings) {
+        const again = statedNeedOf(await deps.readSettings().catch(() => null));
+        if (again === null || again.minutes !== stated.minutes) {
+          outcomes.push(again === null ? 'failed' : 'stale');
+          needMoved = true;
+          continue;
+        }
+      }
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
@@ -524,7 +535,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
-    if (provisional && deps.readHistory) {
+    if (provisional && deps.readHistory && !needMoved) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.
       try { await backfill(deps.readHistory); } catch { console.error('health backfill failed'); }
     }

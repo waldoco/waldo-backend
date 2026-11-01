@@ -82,12 +82,25 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
     expect(run.woken).toEqual([[TODAY, ['sleep_debt_building']]]);
   });
 
+  it('fails the recompute when the need cannot be read again before today\'s row, so the scheduler retries it', async () => {
+    const run = world(nights, '0');
+    run.state(540);
+    run.need.failRead = run.need.reads + 2;
+    run.clock.at = noonOf(TODAY);
+    await expect(run.recompute.run()).rejects.toThrow('health recompute failed');
+    expect(run.debt(TODAY)).toBeUndefined();
+    expect(run.woken).toEqual([]);
+    expect(await run.recompute.run()).toBe('written');
+    expect(run.debt(TODAY)?.need_basis).toBe('owner_confirmed');
+  });
+
   it('asks no debt question when the need cannot be read after the rows are written', async () => {
     const shrinking = (day: string) => ({ [TODAY]: 300, [addDays(TODAY, -1)]: 330 } as Record<string, number>)[day] ?? 400;
     const run = world(shrinking, '0');
     run.state(540);
     await run.runOn(addDays(TODAY, -2));
-    run.need.failRead = run.need.reads + 2;
+    // The run reads the need to compute on and again before today's row; the third read is the wake check's.
+    run.need.failRead = run.need.reads + 3;
     await run.runOn(TODAY);
     expect(run.debt(TODAY)?.need_basis).toBe('owner_confirmed');
     expect(run.woken).toEqual([]);
