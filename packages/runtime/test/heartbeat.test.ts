@@ -124,6 +124,20 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     });
   });
 
+  // Waldo writes first about what is open, within a lenient ceiling: at most CHECK_BACKS_PER_DAY check-back messages in any
+  // 24 hours, whatever the number of loops. A loop over it is not dropped; it waits for a later tick.
+  it('sends at most six check-backs in 24 hours; the next due loop waits', async () => {
+    await withBeat(at('2026-09-26T10:30:00Z'), async ({ sql, beat, sent }) => {
+      const book = loopBook(sql, { newId: (() => { let n = 0; return () => `cap${++n}`; })(), now: () => at('2026-09-26T08:00:00Z') });
+      for (let n = 1; n <= 7; n += 1) {
+        book.open({ title: `Loop ${n}`, due: '2026-09-26T13:00' });
+        await beat(at('2026-09-26T10:00:00Z') + n * 60_000);
+      }
+      expect(sent).toEqual(['Checked Loop 1', 'Checked Loop 2', 'Checked Loop 3', 'Checked Loop 4', 'Checked Loop 5', 'Checked Loop 6']);
+      expect(book.list().find(loop => loop.title === 'Loop 7')?.status).toBe('open');
+    });
+  });
+
   it('quiet hours suppress the send even when loops are past due', async () => {
     await withBeat(at('2026-09-26T01:00:00Z'), async ({ sql, beat, sent, runs }) => {
       // Date-only due, so the loop is past due at 06:30 local; 06:30 IST is inside 23:00-07:30 quiet.

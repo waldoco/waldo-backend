@@ -7,7 +7,7 @@ import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
-import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
+import { IMESSAGE_MEDIA_REPLIES, iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
 import type { TapbackPort } from '../../tools/live/react-to-message';
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
@@ -42,7 +42,8 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   // Bytes never cross from the bridge; files arrive as media references, and a message may be files alone.
   if (!binding.success || !media.success || binding.data.conversationKind !== 'direct' || input.envelope.surface !== 'imessage'
     || input.envelope.conversationRef !== JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid])
-    || typeof input.envelope.text !== 'string' || (!input.envelope.text.trim() && !media.data) || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length
+    || typeof input.envelope.text !== 'string' || (!input.envelope.text.trim() && !media.data && input.unreadable !== true) || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length
+    || (input.unreadable !== undefined && (input.unreadable !== true || !!input.envelope.text || !!media.data))
     || (input.replyQuote !== undefined && typeof input.replyQuote !== 'string')) return 'refused';
   const digestOfBinding = await bindingDigest(binding.data);
   const record = { environment: input.environment, binding: binding.data, revision: input.revision, ownerDoName: input.ownerDoName, bindingDigest: digestOfBinding };
@@ -55,6 +56,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
     bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
+    ...(input.unreadable ? { unreadable: true as const } : {}),
     ...(input.envelope.replyTo || ref?.threadOriginatorId ? { ownerThreaded: true as const } : {}),
     ...(input.replyQuote !== undefined ? { replyNote: `[Replying to your message: ${JSON.stringify(redactNumericHealth(input.replyQuote, HEALTH_SPAN_MARKER))}]` } : {}),
   });
@@ -120,6 +122,10 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
 export type OpenedIMessageTurnMedia = Extract<OpenedIMessageMedia, { kind: 'opened' }>;
 export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope)
   : Promise<Readonly<{ kind: 'text' | 'answered' }> | OpenedIMessageTurnMedia> => {
+  if (record.unreadable) {
+    scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, IMESSAGE_MEDIA_REPLIES.unreadable); new IMessageOwnerInbox(host.storage).closeFinal(record); });
+    return { kind: 'answered' };
+  }
   if (!record.media) return { kind: 'text' };
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
     sender: record.binding.subject, signal: scope.signal, admit: scope.admit });

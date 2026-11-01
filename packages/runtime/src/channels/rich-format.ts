@@ -76,4 +76,14 @@ export const plainTelegram=(text:string):string=>text.split(/(```[\s\S]*?```|`[^
  .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g,'$1')
  .replace(/__(?=\S)([^_\n]*?\S)__/g,'$1')
  .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/gm,'$1$2')).join('');
+// WhatsApp and iMessage show text as typed: **bold** becomes WhatsApp's *bold*, a link its label and address (the address
+// alone when the label is that address or its site), and heading marks go. Code and fences stay as written.
+const sameAddress=(label:string,url:string):boolean=>{
+ const bare=(s:string)=>s.trim().toLowerCase().replace(/^https?:\/\//,'').replace(/^www\./,'').replace(/\/$/,'');
+ try{return bare(label)===bare(url)||bare(label)===new URL(url).hostname.replace(/^www\./,'');}catch{return false;}
+};
+export const plainChatText=(text:string):string=>text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part,index)=>index%2?part:part
+ .replace(/\[([^\[\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)/g,(_,label:string,url:string)=>sameAddress(label,url)?url:`${label} (${url})`)
+ .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g,'*$1*')
+ .replace(/^#{1,6}[ \t]+/gm,'')).join('');
 export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML';fallback_text:string}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML',fallback_text:text});

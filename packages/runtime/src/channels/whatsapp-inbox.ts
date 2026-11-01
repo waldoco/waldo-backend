@@ -2,7 +2,7 @@ import { literalTextRedactor } from '@waldo/contracts';
 import { carriesTopic } from '../memory/forget-guard';
 import { WHATSAPP_INBOX_DUE_KEY } from '../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
+import { plainOwnerText, WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
 
 // Owner-DO side of WhatsApp ingress: one durable row per owner message, written in the same synchronous step that claims its
 // wamid and before Meta gets its 200. The alarm drains the rows one turn at a time, so a message that arrives while another
@@ -18,6 +18,9 @@ export const WHATSAPP_RUNNING_CHECK_MS = 60_000;
 // wamid dedupe lives in its own claims, so nothing depends on keeping it longer.
 export const WHATSAPP_INBOX_MAX_OPEN = 256;
 export const WHATSAPP_FINISHED_RETENTION_MS = 24 * 60 * 60_000;
+// A thought typed across several messages is one turn: text waits until the owner has been quiet for the inbox's quiet window
+// after their newest message, and never longer than this after the oldest one waiting.
+export const WHATSAPP_QUIET_MAX_MS = 8_000;
 const PREFIX = 'whatsapp:inbox-record:';
 const SEQ = 'wa_seq';
 
@@ -55,7 +58,9 @@ const redacted = (update: WaSyntheticUpdate, redact: (text: string) => string): 
 };
 
 export class WhatsAppOwnerInbox {
-  constructor(private readonly storage: DurableObjectStorage, private readonly now: () => number = () => Date.now()) {}
+  // quietMs: how long text waits for the owner to go quiet before its turn starts; 0 starts it at once.
+  // merge: false keeps every message its own turn, claimed at once and never overtaken, whatever quietMs says.
+  constructor(private readonly storage: DurableObjectStorage, private readonly now: () => number = () => Date.now(), private readonly quietMs = 0, private readonly merge = true) {}
 
   records(): WhatsAppInboxRecord[] {
     return [...this.storage.kv.list<WhatsAppInboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.updateId - b.updateId);
@@ -89,13 +94,24 @@ export class WhatsAppOwnerInbox {
   }
 
   /**
-   * Claims the oldest waiting row in one step: running, with a new attempt and its deadline. Null only when no row waits, so a
-   * drain that stops on null can never retry a row it could not claim.
+   * Claims the next turn in one step: running, with a new attempt and its deadline. When the oldest waiting row is plain owner
+   * text, the plain owner texts from the same sender right behind it join it under the newest message (its update id and
+   * wamid), and their own rows close. Null when no row waits, or while the owner may still be typing; the inbox's due wake
+   * brings the drain back when the quiet window ends.
    */
   claimNext(deadline: number): WhatsAppInboxRecord | null {
     return this.storage.transactionSync(() => {
-      const r = this.next();
+      const run = this.nextRun();
+      const r = run[0];
       if (!r) return null;
+      if (this.now() < this.readyAt(run)) { this.refreshDue(); return null; }
+      const last = run.at(-1)!;
+      if (run.length > 1) {
+        const joined = run.map(row => (row.update as { message: { text: string } }).message.text).join('\n');
+        r.update = { ...last.update!, message: { ...(last.update!.message as object), text: joined } };
+        r.wamid = last.wamid;
+        for (const row of run.slice(1)) this.close(row, 'completed');
+      }
       r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline;
       this.storage.kv.put(PREFIX + r.id, r);
       this.refreshDue();
@@ -118,6 +134,24 @@ export class WhatsAppOwnerInbox {
         return result;
       }),
     };
+  }
+
+  /** Whether newer plain text from the same sender waits behind this running plain-text row, so its reply may be dropped for one turn that answers both. */
+  overtaken(id: string): boolean {
+    const r = this.get(id), next = this.next();
+    return this.merge && !!r && r.state === 'running' && plainOwnerText(r.update) && !!next && next.subject === r.subject && plainOwnerText(next.update);
+  }
+
+  /** A running row whose reply was dropped because newer text overtook it waits again, to join that text at the next claim. True when it did. */
+  requeue(record: WhatsAppInboxRecord): boolean {
+    return this.storage.transactionSync(() => {
+      const r = this.get(record.id);
+      if (!r || r.state !== 'running' || r.attempt !== record.attempt) return false;
+      r.state = 'admitted'; delete r.attempt; delete r.deadline;
+      this.storage.kv.put(PREFIX + r.id, r);
+      this.refreshDue();
+      return true;
+    });
   }
 
   /** After a drain that failed or could not run: the open rows, waiting or cut off while running, wake again after `delayMs`, not at the floor. */
@@ -175,9 +209,24 @@ export class WhatsAppOwnerInbox {
     r.state = state; r.closedAt = this.now(); r.update = null;
     this.storage.kv.put(PREFIX + r.id, r);
   }
+  // The oldest waiting row, with the plain owner texts from the same sender right behind it when it is one.
+  private nextRun(): WhatsAppInboxRecord[] {
+    const waiting = this.records().filter(r => r.state === 'admitted');
+    const first = waiting[0];
+    if (!first) return [];
+    if (!this.merge || !plainOwnerText(first.update)) return [first];
+    const run = [first];
+    for (const r of waiting.slice(1)) { if (r.subject !== first.subject || !plainOwnerText(r.update)) break; run.push(r); }
+    return run;
+  }
+  // When a run of text may start: the quiet window after its newest message, never past the cap after its oldest.
+  private readyAt(run: readonly WhatsAppInboxRecord[]): number {
+    if (!this.merge || !this.quietMs || !run.length || !plainOwnerText(run[0]!.update)) return 0;
+    return Math.min(run.at(-1)!.admittedAt + this.quietMs, run[0]!.admittedAt + WHATSAPP_QUIET_MAX_MS);
+  }
   private refreshDue(): void {
     const rows = this.records();
-    const due = rows.some(r => r.state === 'admitted') ? this.now() + 250 : rows.some(r => r.state === 'running') ? this.now() + WHATSAPP_RUNNING_CHECK_MS : null;
+    const due = rows.some(r => r.state === 'admitted') ? Math.max(this.now() + 250, this.readyAt(this.nextRun())) : rows.some(r => r.state === 'running') ? this.now() + WHATSAPP_RUNNING_CHECK_MS : null;
     if (due === null) this.storage.kv.delete(WHATSAPP_INBOX_DUE_KEY); else this.storage.kv.put(WHATSAPP_INBOX_DUE_KEY, due);
   }
 }
