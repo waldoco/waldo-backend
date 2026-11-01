@@ -44,9 +44,11 @@ const harness = (name: string, work: (world: World) => Promise<void>) =>
     const replies = () => sent.map(row => row.text).filter(text => text.startsWith('Reply to turn'));
     try { await work({ instance, state, inbox: new WhatsAppOwnerInbox(state.storage), sent, typing, replies }); } finally { await state.storage.deleteAlarm(); }
   });
-const post = (instance: OwnerDO, id: string, body: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+// Plain texts in a row join into one turn (whatsapp-merge-owner-do); a test about a second turn sends its second message as a
+// forward, which never joins.
+const post = (instance: OwnerDO, id: string, body: string, forwarded = false) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
-  body: JSON.stringify({ messages: [{ from: SUBJECT, id, type: 'text', text: { body } }] }),
+  body: JSON.stringify({ messages: [{ from: SUBJECT, id, type: 'text', text: { body }, ...(forwarded ? { context: { forwarded: true } } : {}) }] }),
 }));
 const states = (inbox: WhatsAppOwnerInbox) => inbox.records().map(row => [row.wamid, row.state]);
 
@@ -60,7 +62,7 @@ it('B is a durable row while A runs: Meta gets its 200 at once, A is not steered
     const drained = drainWhatsAppTurns(instance);
     await vi.waitFor(() => expect(model.turns).toHaveLength(1), { timeout: 10_000, interval: 20 });
 
-    expect((await post(instance, 'wamid.second.B', 'Also, is it raining in Pune?')).status).toBe(200);
+    expect((await post(instance, 'wamid.second.B', 'Also, is it raining in Pune?', true)).status).toBe(200);
     expect(states(inbox)).toEqual([['wamid.second.A', 'running'], ['wamid.second.B', 'admitted']]);
 
     gate.resolve();
@@ -107,7 +109,7 @@ it('a turn that runs past the old 150 seconds still replies; one past its 15 min
 it('after an eviction, the turn that was running gets one notice quoting its message, and the message behind it is answered, not lost', async () => {
   await harness('whatsapp-second-message-eviction', async ({ instance, inbox, sent, replies }) => {
     expect((await post(instance, 'wamid.evict.A', 'Book me a table for Friday.')).status).toBe(200);
-    expect((await post(instance, 'wamid.evict.B', 'Also, is it raining in Pune?')).status).toBe(200);
+    expect((await post(instance, 'wamid.evict.B', 'Also, is it raining in Pune?', true)).status).toBe(200);
     // A was running in an instance that is gone: its attempt is live nowhere.
     inbox.claimNext(Date.now() + WHATSAPP_TURN_DEADLINE_MS);
     await drainWhatsAppTurns(instance);
@@ -306,7 +308,7 @@ it('keeps showing typing through a long turn, follows the owner to a second mess
     expect(typing.every(call => call.id === 'wamid.typing.A')).toBe(true);
 
     // B is the owner's latest message now; the indicator moves onto it at the next tick while A is still running.
-    expect((await post(instance, 'wamid.typing.B', 'Also, is it raining in Pune?')).status).toBe(200);
+    expect((await post(instance, 'wamid.typing.B', 'Also, is it raining in Pune?', true)).status).toBe(200);
     await vi.waitFor(() => expect(typing.at(-1)?.id).toBe('wamid.typing.B'), { timeout: 6_000, interval: 50 });
     expect(replies()).toEqual([]);
     const during = typing.length;

@@ -432,6 +432,13 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
   return { updates, seq, sources };
 };
 
+// Text the owner typed themselves, which may join the texts typed right after it into one turn: not a command, an approval
+// reply (a callback, not a message), a forward, a quoted reply or media.
+export const plainOwnerText = (update: WaSyntheticUpdate | null): boolean => {
+  const message = (update as { message?: { text?: unknown; reply_to_message?: unknown; forward_origin?: unknown } } | null)?.message;
+  return typeof message?.text === 'string' && message.reply_to_message === undefined && message.forward_origin === undefined && !message.text.trimStart().startsWith('/');
+};
+
 // Meta redelivers a webhook until it gets a 200, for up to 7 days
 // (https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks/ , "Webhook delivery failure").
 // A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier

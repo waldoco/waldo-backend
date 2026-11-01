@@ -132,7 +132,8 @@ it.each([['🎉', '🎉'], ['love', '❤️']])('Waldo\'s reaction %s goes out a
 
 it('a reply quotes the owner\'s message only when another came in after it', async () => {
   await whatsappOwner('wa-quote-out', async (deliver, graph) => {
-    await deliver(text('first question', 'wamid.first'), text('second question', 'wamid.second'));
+    // Two texts in a row would be one turn, so the later message is a photo: two turns, two replies.
+    await deliver(text('first question', 'wamid.first'), { id: 'wamid.second', type: 'sticker', sticker: { id: 'media-sticker', mime_type: 'image/webp', animated: false } });
     const replies = sends(graph).filter(call => call.type === 'text');
     expect(replies).toHaveLength(2);
     expect(replies[0]!.context).toEqual({ message_id: 'wamid.first' });
