@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { consoleAccess } from '../src/channels/console';
@@ -40,6 +40,10 @@ const owner = async (name: string) => {
 };
 
 describe('the held-changes read', () => {
+  // The read takes "today" from the owner object's clock, so the tests pin it: a recording an hour or two back must not fall on the previous day.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-21T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('golden: today\'s undelivered changes, newest first, with times, kind, title, sender and subject only', async () => {
     const o = await owner('held-golden');
     const now = Date.now();
