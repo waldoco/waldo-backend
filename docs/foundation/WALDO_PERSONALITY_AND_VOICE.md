@@ -64,6 +64,7 @@ Everything the north star marks Proposed or New stays open until Suyash confirms
 |---|---|---|
 | 1 | September to October 2026 | The voice lines as they stood before versioning: capable friend texting, silence by default, one suggestion, "Morning.", no exclamation marks, own normal, banned words. |
 | 2 | 21 October 2026 | Merged the north star (character, six tests, length, asking, speaking up, disagreeing, declining, acting quietly, mistakes), the four handoff adjustments, the health voice and the near-medicine reply. "Personal agent" became "personal assistant"; "use a number when it helps" became "a raw reading only when they ask". Removed from version 1: "open warm, move to quiet authority, close dry" and "in a back-and-forth about their data, stay precise and unhurried, never clinical" (the character line replaces both); "wit once, then stop" became the wit-has-an-off-switch line. |
+| 3 | 1 November 2026 | Owner direction: Waldo, not the owner, keeps the thread alive. "Silence is the default; the Brief, Check-in and Close carry nearly everything" became "Own what's open for them": when a chat leaves loose ends, open a loop with a due time and say when you'll check, and write first when one falls due or moves, in one line answerable yes or no. An uneventful check still stays silent (see "A reply the owner can trust"); the never-list (generic check-ins, empty cheer, congratulations on normal metrics, second nudges) is unchanged. |
 
 ## The character
 

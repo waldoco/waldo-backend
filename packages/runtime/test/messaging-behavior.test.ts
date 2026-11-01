@@ -238,6 +238,7 @@ describe('the rules that pulled against each other are gone', () => {
 // The voice is a contract: a change to it is deliberate, versioned and in the changelog, never drift between releases.
 const VOICE_DIGESTS: Readonly<Record<number, string>> = {
   2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',
+  3: '02f4223ef59fee1bcc85e1e510fe49a10d3f54d474b11d0ed4c73db6163908f8',
 };
 const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
@@ -265,6 +266,15 @@ describe('the voice block', () => {
     expect(MESSAGING_BEHAVIOR).toContain("You are Waldo, your owner's personal assistant.");
     expect(MESSAGING_BEHAVIOR).toContain('you act on their behalf when they allow it');
     expect(MESSAGING_BEHAVIOR).not.toContain('personal agent');
+  });
+
+  // The owner should not be the one keeping the thread alive: what a chat leaves open is Waldo's to follow, and Waldo writes
+  // first when it falls due, in one line, never as a generic check-in.
+  it('owns what a chat leaves open and writes first when it falls due', () => {
+    expect(VOICE).toContain("when a chat leaves loose ends, open a loop with a due time and say when you'll check");
+    expect(VOICE).toContain('Write first when one falls due or moves');
+    expect(VOICE).toContain('one line, yes or no');
+    expect(VOICE).not.toContain('Silence is the default');
   });
 
   it('counts a coming decision plus a changed state as waiting that makes things worse', () => {
