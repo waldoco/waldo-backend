@@ -160,7 +160,8 @@ const withVitals = (series: Series, vitals: Series | null): Series => (!vitals ?
   }),
 });
 
-const withoutWear = (series: Series): Series => ({ ...series, sources: series.sources.map(source => ({ ...source, readings: source.readings.filter(r => r.waldoWear !== true) })) });
+// The series with every reading the read marked as the watch app's left out, as the wear-HRV switch off has it everywhere.
+export const withoutWear = (series: Series): Series => ({ ...series, sources: series.sources.map(source => ({ ...source, readings: source.readings.filter(r => r.waldoWear !== true) })) });
 
 const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
   readings.reduce<T | undefined>((best, r) => (!best || (r.startAt ?? '') >= (best.startAt ?? '') ? r : best), undefined);

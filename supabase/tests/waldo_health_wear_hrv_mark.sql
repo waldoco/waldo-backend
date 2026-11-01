@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(11);
+select plan(14);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -27,8 +27,8 @@ create function pg_temp.night(id text,signal text,unit text,method text,val nume
 create function pg_temp.hour(id text,val numeric,origin jsonb) returns jsonb language sql as $$
   select jsonb_build_object('sample_id',id,'revision',1,'signal','heart_rate_window','unit','beats_per_minute','value',val,'min',val-5,'max',val+8,'n_samples',40,
     'day',((date_trunc('hour',now())-interval '5 hours') at time zone 'UTC')::date,'start_at',pg_temp.iso(date_trunc('hour',now())-interval '5 hours'),'end_at',pg_temp.iso(date_trunc('hour',now())-interval '4 hours'),'utc_offset_minutes',0,'origin',origin) $$;
-create function pg_temp.batch(rid text,before_anchor text,after_anchor text,samples jsonb) returns jsonb language sql as $$
-  select jsonb_build_object('request_id',rid,'source','health_connect','consent_epoch',1,'timezone','UTC','anchor_before',before_anchor,'anchor_after',after_anchor,'samples',samples,'deletions','[]'::jsonb) $$;
+create function pg_temp.batch(rid text,before_anchor text,after_anchor text,samples jsonb,src text default 'health_connect') returns jsonb language sql as $$
+  select jsonb_build_object('request_id',rid,'source',src,'consent_epoch',1,'timezone','UTC','anchor_before',before_anchor,'anchor_after',after_anchor,'samples',samples,'deletions','[]'::jsonb) $$;
 create function pg_temp.read(signals jsonb) returns jsonb language sql as $$
   select pg_temp.h('series_read','wear-owner',jsonb_build_object('from',pg_temp.today()-2,'to',pg_temp.today(),'signals',signals)) $$;
 -- Each returned reading's value, against whether it carries each mark.
@@ -62,6 +62,12 @@ select is(pg_temp.h('ingest','wear-owner',pg_temp.batch('wear-0002','wa1','wa2',
   pg_temp.hour('w-wear',61,pg_temp.wear()))))->>'accepted','3','sleep, resting and hourly heart-rate readings with the watch origin are stored');
 select is(pg_temp.marks('["sleep_duration","resting_heart_rate","heart_rate_window"]'),
   '{"421":{"wear":false,"samsung":false},"51":{"wear":false,"samsung":false},"61":{"wear":false,"samsung":false}}'::jsonb,'and none of them is marked as the watch''s');
+
+-- The same reading in another source's batch is not the watch's: the watch app's night rides the Health Connect batch only.
+select is(pg_temp.h('consent_grant','wear-owner',jsonb_build_object('request_id','grant-w-apple001','source','apple','purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true))->'consent'->>'status','granted','the owner grants storage for Apple Health too');
+select is(pg_temp.h('ingest','wear-owner',pg_temp.batch('wear-0003',null::text,'wb1',jsonb_build_array(pg_temp.night('h-apple','overnight_hrv','milliseconds','rmssd',47,pg_temp.wear())),'apple'))->>'accepted','1','a watch-origin RMSSD reading in an Apple Health batch is stored');
+select is((select coalesce(s->'waldo_wear','false'::jsonb) from jsonb_array_elements(pg_temp.read('["overnight_hrv"]')->'sources') src, jsonb_array_elements(src->'samples') s
+  where src->>'source'='apple' and s->>'value'='47'),'false'::jsonb,'but it is not marked as the watch''s');
 
 select ok(position('com.heywaldo.app' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window"]')::text)=0
   and position('wear_sensor' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window"]')::text)=0,'no package name or read API appears anywhere in the read');

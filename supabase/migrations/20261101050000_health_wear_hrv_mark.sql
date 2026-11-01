@@ -1,8 +1,8 @@
 -- Health contract revision 7 (the night's RMSSD from Waldo's own watch app): the read's mark. Nothing is stored differently.
--- - waldo.health_series_read is re-created whole from its last definition (20261031120000). A reading whose stored origin
---   names read_api wear_sensor and Waldo's package com.heywaldo.app, on an overnight RMSSD reading, is returned with
---   waldo_wear: true, beside samsung_writer, and nothing else of the origin, so no package name leaves the database. The
---   producer decides what the mark is worth; the mark lands on no other signal, method, read API or package.
+-- - waldo.health_series_read is re-created whole from its last definition (20261031120000). A Health Connect reading whose
+--   stored origin names read_api wear_sensor and Waldo's package com.heywaldo.app, on an overnight RMSSD reading, is returned
+--   with waldo_wear: true, beside samsung_writer, and nothing else of the origin, so no package name leaves the database. The
+--   producer decides what the mark is worth; the mark lands on no other source, signal, method, read API or package.
 -- Its signature, security definer, search_path, grants, 31-day window, row cap and truncated flag are unchanged.
 create or replace function waldo.health_series_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -60,8 +60,8 @@ begin
               'utc_offset_minutes', p.utc_offset_minutes, 'timezone', p.timezone,
               'value', p.payload->'value', 'method', p.payload->'method', 'activity', p.payload->'activity',
               'samsung_writer', case when (p.payload #>> '{origin,source_package_name}') = 'com.sec.android.app.shealth' then true end,
-              'waldo_wear', case when p.signal = 'overnight_hrv' and (p.payload->>'method') = 'rmssd' and (p.payload #>> '{origin,read_api}') = 'wear_sensor'
-                and (p.payload #>> '{origin,source_package_name}') = 'com.heywaldo.app' then true end,
+              'waldo_wear', case when p.source = 'health_connect' and p.signal = 'overnight_hrv' and (p.payload->>'method') = 'rmssd'
+                and (p.payload #>> '{origin,read_api}') = 'wear_sensor' and (p.payload #>> '{origin,source_package_name}') = 'com.heywaldo.app' then true end,
               'stages', case when p.signal = 'sleep_duration' then p.payload->'stages' end,
               'workout', case when p.signal = 'workout' then nullif(jsonb_strip_nulls(jsonb_build_object(
                 'energy_kcal', p.payload->'energy_kcal', 'distance_m', p.payload->'distance_m', 'elevation_gain_m', p.payload->'elevation_gain_m',
