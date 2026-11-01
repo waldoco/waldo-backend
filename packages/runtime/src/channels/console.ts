@@ -136,6 +136,12 @@ export const signInPage = (token: string): Response => new Response(
   { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
 );
 
+// An owner who joined without an invite finishes setting up in the app, agreements first, before the console opens.
+export const openOwnerConsolePage = (): Response => new Response(
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}p{max-width:28em;text-align:center;padding:0 16px}</style></head><body><p>Finish setting up Waldo in the app first. The console opens once you've accepted the terms there.</p></body></html>`,
+  { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
+);
+
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 

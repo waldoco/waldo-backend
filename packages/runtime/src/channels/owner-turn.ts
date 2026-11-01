@@ -1,5 +1,6 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerHeldError } from '../identity/open-owner-hold';
 import { OWNER_REQUEST_HOP } from './harness';
 import { applyForgetBarrier, barrierMemory, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { heldTopicsOf } from '../memory/forget-guard';
@@ -264,6 +265,7 @@ export const createOwnerResponder = (
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
     await assertCurrent();
+    if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
