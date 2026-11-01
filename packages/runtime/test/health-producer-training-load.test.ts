@@ -103,6 +103,18 @@ describe('producer: candidate training load', () => {
     for (const row of writes) expect(row.training_load, String(row.day)).toMatchObject({ state: 'available', phrase: 'about usual' });
   });
 
+  it('counts a session two apps wrote to the store once', async () => {
+    // The same 60-minute run each day, recorded by the watch with zones and mirrored by another app a minute later without
+    // them. This week the mirror is on; before it, off. One run a day throughout, so the week is about usual, in zones.
+    const mirrored = (day: string): Sample => ({ ...workout(day, 60), start_at: `${day}T06:01:00.000Z`, end_at: `${day}T07:01:00.000Z` });
+    const samples = Array.from({ length: 31 }, (_, i) => addDays(TODAY, -i)).flatMap((day, i) => [
+      worn(day), workout(day, 60, zones([600, 1200, 1200, 600, 0])), ...(i < 8 ? [mirrored(day)] : []),
+    ]);
+    const writes = await run(seriesOf(samples), { trainingLoad: true });
+    expect(writes.map(row => row.day)).toEqual([addDays(TODAY, -1), TODAY]);
+    for (const row of writes) expect(row.training_load, String(row.day)).toMatchObject({ state: 'available', phrase: 'about usual', method: 'hr_zones' });
+  });
+
   it('says why when the window cannot carry a load', async () => {
     const fewDays = await run(seriesOf(month(() => undefined).filter(s => String(s.day) >= addDays(TODAY, -9))), { trainingLoad: true });
     expect(fewDays.at(-1)?.training_load).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
