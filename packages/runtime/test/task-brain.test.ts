@@ -31,7 +31,7 @@ const UNTYPED_BROWSE = { call_id: 'c-untyped', name: 'browse_act', arguments: JS
 const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.stringify(VALID_ARGS[name] ?? {}) });
 
 type Harness = Readonly<{
-  book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[];
+  book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[]; ended: string[];
   ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
@@ -53,7 +53,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     let n = 0;
     const clock = { at: T0 };
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
-    const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [], withdrawn: string[] = [];
+    const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [], withdrawn: string[] = [], ended: string[] = [];
     let spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined;
     const hold: Harness['hold'] = {};
     let queue: Promise<unknown> = Promise.resolve();
@@ -75,7 +75,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
-      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
+      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); }, endGrant: runRef => { ended.push(runRef); },
       providerHealth: health,
       admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
       heldTopics: () => topics, lapsed: () => lapse.now,
@@ -85,10 +85,20 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics, lapse });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, ended, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics, lapse });
   });
 
 describe('the task brain host', () => {
+  it('a job that reports or is cancelled ends its site grant', async () => {
+    await withHost(async ({ host, ticket, ended }) => {
+      const done = ticket('errand');
+      expect(await host.report(done, { kind: 'result', result: { status: 'done', summary: 'Checked in.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(ended).toEqual([`task:${done.jobId}`]);
+      const stopped = ticket('errand');
+      host.cancelled(stopped.jobId);
+      expect(ended).toEqual([`task:${done.jobId}`, `task:${stopped.jobId}`]);
+    });
+  });
   // A research worker reads pages, which a web_search snippet often cannot answer; acting on a page stays the errand's.
   it('a reader job is offered only reader tools, page reads among them, and a call outside its profile is refused without running', async () => {
     await withHost(async ({ host, ticket, ran, released }) => {
@@ -698,6 +708,19 @@ describe('the task brain host', () => {
       const fresh = ticket('reader');
       expect(await host.claim(fresh)).toBe('fenced');
       expect(book.get(fresh.jobId)).toMatchObject({ status: 'cancelled' });
+    });
+  });
+
+  it('a lapsed job ends its site grant on both paths, so the record of what it submitted reaches the owner', async () => {
+    await withHost(async ({ host, ticket, ended, lapse }) => {
+      const t = ticket('reader');
+      await host.claim(t);
+      lapse.now = true;
+      expect(await host.tool(t, call('browse_page'), CANARIES)).toBe('fenced');
+      expect(ended).toEqual([`task:${t.jobId}`]);
+      const fresh = ticket('reader');
+      expect(await host.claim(fresh)).toBe('fenced');
+      expect(ended).toEqual([`task:${t.jobId}`, `task:${fresh.jobId}`]);
     });
   });
 

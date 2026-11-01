@@ -1472,6 +1472,12 @@ describe('structured tool identifier integrity', () => {
     const output = '['.repeat(150) + '"4111 1111 1111 1114"' + ']'.repeat(150);
     expect(inspectTrusted([{ output }])).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
   });
+  it.each(['internal_context', 'owner_reply'] as const)('keeps a browser session handle whose uuid looks like a card number at %s, and still redacts the digits in free text', destination => {
+    const handle = '84787490-6996-4943-909b-ef579e7d7cf6';
+    const result = inspectTrusted({ session_handle: handle, browser_action_session_handle: handle, notice: 'card 8478 7490 6996 4943' }, destination);
+    expect(result).toMatchObject({ ok: true, payload: { session_handle: handle, browser_action_session_handle: handle, notice: 'card [REDACTED_CREDIT_CARD]' } });
+    expect(inspectTrusted({ session_handle: 'card 8478 7490 6996 4943' }, destination)).toMatchObject({ ok: true, payload: { session_handle: 'card [REDACTED_CREDIT_CARD]' } });
+  });
   it('does not exempt a field name without a valid identifier value', () => {
     expect(inspectTrusted({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
   });
