@@ -55,7 +55,8 @@ const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectS
   });
 };
 const consents = async (app: (path: string, body: unknown) => Promise<Response>, lookup: boolean) => {
-  for (const purpose of ['terms', 'privacy_notice', ...(lookup ? ['owner_lookup'] : [])] as const) {
+  const purposes: readonly ('terms' | 'privacy_notice' | 'owner_lookup')[] = lookup ? ['terms', 'privacy_notice', 'owner_lookup'] : ['terms', 'privacy_notice'];
+  for (const purpose of purposes) {
     const granted = await app('/app/v1/consents', { request_id: `consent-${purpose}-1`, purpose, version: CURRENT_CONSENT_VERSION[purpose], age_attested_18_plus: true });
     expect(granted.status, await granted.clone().text()).toBe(200);
   }
