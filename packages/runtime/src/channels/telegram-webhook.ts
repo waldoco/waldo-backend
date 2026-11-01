@@ -48,6 +48,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // "1" lets the night's RMSSD from Waldo's own watch app count toward Recovery, as a trusted writer beside Samsung Health;
+  // anything else leaves those readings out of every score. Apply migration 20261101050000 first.
+  HEALTH_WEAR_HRV?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.

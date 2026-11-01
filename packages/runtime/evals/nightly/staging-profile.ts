@@ -50,6 +50,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
+  HEALTH_WEAR_HRV: gap('the world serves no watch beat intervals; staging has it off until the ADR-0081 writer amendment and validation nights'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
