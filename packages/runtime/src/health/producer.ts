@@ -43,8 +43,6 @@ export const statedNeedOf = (raw: unknown): StatedNeed | null => {
   const changedAt = typeof answer.updated_at === 'string' ? Date.parse(answer.updated_at) : NaN;
   return { minutes: minutes.data, changedAt: Number.isFinite(changedAt) ? changedAt : null };
 };
-// The row is on the current need when the need read again is the figure it was computed on, even if the owner saved it again.
-const sameNeed = (read: StatedNeed, again: StatedNeed | null): boolean => again !== null && again.minutes === read.minutes;
 // A row compiled before the need last changed, or at that instant, may move zone only because the need moved, not the body,
 // so its move is not told to the health trigger. The next compile is on the new need on both sides.
 const needMovedSince = (stated: StatedNeed, before: Record<string, unknown> | null): boolean => {
@@ -78,7 +76,7 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal.
 export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
-export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
+export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -93,10 +91,11 @@ const stagesOf = (raw: unknown): SleepStages | null => {
 // A workout's zones and effort, each dropped on its own when it is not the shape the contract admits.
 const workoutDetailOf = (activity: unknown, raw: unknown): WorkoutDetail => {
   const r = asRecord(raw);
-  const seconds = asRecord(r?.hr_zones)?.seconds;
+  const zones = asRecord(r?.hr_zones), seconds = zones?.seconds;
   const effort = asRecord(r?.effort);
   return {
     zoneSeconds: Array.isArray(seconds) && seconds.length === 5 && seconds.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) ? seconds as number[] : null,
+    zonesFromObservedPeak: zones?.basis === 'observed_workout_peak',
     effort: effort && typeof effort.score === 'number' && effort.score >= 1 && effort.score <= 10 && (effort.method === 'rated' || effort.method === 'estimated')
       ? { score: effort.score, method: effort.method } : null,
     activity: typeof activity === 'string' ? activity : null,
@@ -369,7 +368,7 @@ const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overni
 const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
   throughDay: yesterday,
   observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
-  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, effort: r.workout?.effort ?? null })),
+  workouts: source.readings.filter(r => r.signal === 'workout').map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
 });
 
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
@@ -518,11 +517,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const before = await storedBefore(deps.readScores, targetDay);
       // A need saved since this run read it would leave today's row on the old need but stamped after the change, out of
-      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days.
-      if (targetDay === today && deps.readSettings && !sameNeed(stated, statedNeedOf(await deps.readSettings().catch(() => null)))) {
-        outcomes.push('stale');
-        needMoved = true;
-        continue;
+      // the next run's fence. That row is left to the recompute the save asks for, and so are the late days; a need saved
+      // again with the same figure is the same need. A read that fails asks for nothing, so the run fails and is retried.
+      if (targetDay === today && deps.readSettings) {
+        const again = statedNeedOf(await deps.readSettings().catch(() => null));
+        if (again === null || again.minutes !== stated.minutes) {
+          outcomes.push(again === null ? 'failed' : 'stale');
+          needMoved = true;
+          continue;
+        }
       }
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
