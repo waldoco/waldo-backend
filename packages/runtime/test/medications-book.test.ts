@@ -27,6 +27,20 @@ const withBook = async (answers: (operation: string, payload: Record<string, unk
 };
 const entries = (state: DurableObjectState) => state.storage.sql.exec<{ id: string; note: string }>('SELECT s.id, n.note FROM schedule s JOIN reminder_notes n ON n.id = s.id ORDER BY s.id').toArray();
 
+describe('a tracked medicine and memory', () => {
+  it('every memory writer is told to keep no medicine name or times, and every owner turn reads it in Remembering', async () => {
+    const { HEALTH_MEMORY_RULES, MEDICATION_MEMORY_RULE } = await import('../src/memory/health-rules');
+    const { NIGHTLY_MEMORY_INSTRUCTION, MIGRATION_INSTRUCTION } = await import('../src/memory/claims');
+    const { MESSAGING_BEHAVIOR } = await import('../src/prompt/messaging-behavior');
+    for (const instruction of [NIGHTLY_MEMORY_INSTRUCTION, MIGRATION_INSTRUCTION]) expect(instruction).toContain(MEDICATION_MEMORY_RULE);
+    // remember's description carries HEALTH_MEMORY_RULES and is at its cap, and the medicine tools may be deferred or off, so in
+    // chat the rule is in the Remembering section every owner turn reads.
+    expect(HEALTH_MEMORY_RULES).not.toContain(MEDICATION_MEMORY_RULE);
+    expect(MESSAGING_BEHAVIOR.slice(MESSAGING_BEHAVIOR.indexOf('Remembering\n'))).toContain(MEDICATION_MEMORY_RULE);
+    expect(Buffer.byteLength(MEDICATION_MEMORY_RULE)).toBeLessThanOrEqual(100);
+  });
+});
+
 describe('the medicine book', () => {
   it('tracks on the health plane and schedules each time under the opaque id with a name-free note', async () => {
     await withBook(() => stored(), async (book, asked, state) => {
