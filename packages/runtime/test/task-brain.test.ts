@@ -44,6 +44,8 @@ type Harness = Readonly<{
   admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws'; waiting?: Promise<void> };
   // Topics the owner is forgetting whose purge has not settled.
   topics: string[];
+  // Whether a job's own reason to run is gone.
+  lapse: { now: boolean };
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -61,6 +63,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const health = new InMemoryCircuitBreaker({ now: () => clock.at });
     const admission: Harness['admission'] = { now: 'admitted' };
     const topics: string[] = [];
+    const lapse = { now: false };
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -75,14 +78,14 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); }, endGrant: runRef => { ended.push(runRef); },
       providerHealth: health,
       admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
-      heldTopics: () => topics,
+      heldTopics: () => topics, lapsed: () => lapse.now,
       replayApproval: async () => { throw new Error('no approval replays in this harness'); },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, ended, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, ended, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics, lapse });
   });
 
 describe('the task brain host', () => {
@@ -690,6 +693,23 @@ describe('the task brain host', () => {
       expect(await slow).toBe('fenced');
       expect(book.get(t1.jobId)).toMatchObject({ status: 'running', attempt: 2, crashes: 1 });
     });
+  });
+
+  it('a job whose reason to run lapsed is cancelled and fenced at its next call or claim, and runs nothing more', async () => {
+    await withHost(async ({ host, ticket, book, ran, log, lapse }) => {
+      const t = ticket('reader');
+      await host.claim(t);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+      lapse.now = true;
+      expect(await host.tool(t, call('browse_page'), CANARIES)).toBe('fenced');
+      expect(ran).toEqual(['search_communication']);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'cancelled' });
+      expect(log.find(entry => entry.hop === 'task_cancelled')).toMatchObject({ ok: false, code: 'lapsed' });
+      const fresh = ticket('reader');
+      expect(await host.claim(fresh)).toBe('fenced');
+      expect(book.get(fresh.jobId)).toMatchObject({ status: 'cancelled' });
+    });
+  });
   });
 
   it('a worker call for an owner the directory no longer admits runs nothing; the job waits in the queue, not counted as a crash', async () => {
