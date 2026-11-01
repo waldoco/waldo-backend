@@ -556,3 +556,42 @@ describe('AnthropicMessagesAdapter structured output', () => {
     }
   });
 });
+
+// The same calls through the installed SDK's own MessageStream, over a scripted SSE response: event parsing, the final
+// message after the last event, and an abort while the response is open.
+describe('AnthropicMessagesAdapter streaming through the SDK', () => {
+  const sse = (events: ReadonlyArray<Record<string, unknown>>) => events.map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+  const head = { type: 'message_start', message: { id: 'msg_s', type: 'message', role: 'assistant', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+  const sdk = (fetch: typeof globalThis.fetch) => new Anthropic({ apiKey: 'test-key', maxRetries: 0, fetch });
+
+  it('streams text, takes it back at the tool call, and returns the final message the SDK assembled', async () => {
+    const body = sse([head,
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Checking ' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'now.' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_context', input: {} } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"n":1}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 20 } },
+      { type: 'message_stop' },
+    ]);
+    const client = sdk(async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { seen, deltas } = sink();
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client }).complete({ ...gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL), stream: deltas });
+    expect(seen).toEqual(['Checking ', 'now.', '<retract>']);
+    expect(result).toMatchObject({ ok: true, data: { model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, text: 'Checking now.', tool_calls: [{ call_id: 'toolu_1', name: 'get_context', arguments: '{"n":1}' }], input_tokens: 12, output_tokens: 20, ttft_ms: expect.any(Number) } });
+  });
+
+  it('abandons an open response that writes no content block in the first-token window, as a late first token', async () => {
+    const encoder = new TextEncoder();
+    const client = sdk(async (_url, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse([head])));
+        init?.signal?.addEventListener('abort', () => controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client, firstTokenTimeoutMs: 30 }).complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true });
+    expect(result).toMatchObject({ ok: false, code: 'transient', firstTokenLate: true });
+  });
+});

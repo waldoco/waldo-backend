@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_FALLBACK_MODEL, WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMResponse } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OWNER_MODELS, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_FALLBACK_MODEL, WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMResponse } from '@waldo/contracts';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { callBudget } from '../evals/nightly/budget';
 import { nightlyConfig } from '../evals/nightly/config';
+import { modelProviderSetting } from '../src/llm/owner-routes';
 import { readStagingVars, staleClasses, STAGING_VAR_CLASSES, stagingProfile, unclassifiedVars } from '../evals/nightly/staging-profile';
 import { runTrial, type TrialScenario } from '../evals/nightly/trial';
 import { runNightly } from '../evals/nightly/suite';
@@ -13,6 +14,8 @@ import { scorecardMarkdown, gateScorecard, thresholdsFor } from '../evals/nightl
 const START = '2026-09-24T09:00:00+05:30';
 const scenario = (steps: TrialScenario['steps'], world: TrialScenario['world'] = {}): TrialScenario => ({ id: 'profile-test', start: START, steps, world });
 const STAGING = readStagingVars();
+// Staging with the owner path on OpenAI, whatever wrangler.jsonc says today: a live run can only judge an OpenAI staging.
+const OPENAI_STAGING = () => ({ ...STAGING, WALDO_MODEL_PROVIDER: 'openai' });
 const CLOUDFLARE = { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'cf-token-secret' };
 const LIVE = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, WALDO_EVAL_MAX_CALLS: '600', WALDO_EVAL_PROFILE: 'staging' };
 
@@ -34,7 +37,7 @@ describe('the staging profile', () => {
 
   it('reads staging as it is deployed: the harness loader, compaction on, the items forget barrier, semantic recall, memory selection, the chat model', () => {
     const profile = stagingProfile(STAGING);
-    expect(profile).toMatchObject({ label: 'staging', model: WALDO_CHAT_MODEL, toolLoader: 'harness', forgetBarrier: 'items', semantic: true, memorySelection: true });
+    expect(profile).toMatchObject({ label: 'staging', model: OWNER_MODELS[modelProviderSetting(STAGING.WALDO_MODEL_PROVIDER)].chat, toolLoader: 'harness', forgetBarrier: 'items', semantic: true, memorySelection: true });
     expect(profile.compaction.enabled).toBe(true);
     expect(profile.toolSearch).toBeUndefined();
   });
@@ -49,10 +52,13 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '0' }).memorySelection).toBe(false);
   });
 
-  it('runs the OpenAI chat model while staging runs OpenAI, and refuses to stand in for a Claude staging it cannot judge apart', () => {
-    expect(stagingProfile({ ...STAGING, WALDO_MODEL_PROVIDER: 'openai' }).model).toBe(WALDO_CHAT_MODEL);
+  it('runs the chat model of the provider staging runs, and a live run refuses a Claude staging it cannot judge apart', () => {
+    expect(stagingProfile(OPENAI_STAGING()).model).toBe(WALDO_CHAT_MODEL);
     for (const value of ['anthropic', '']) {
-      expect(() => stagingProfile({ ...STAGING, WALDO_MODEL_PROVIDER: value }), value).toThrow(/Claude/);
+      const claude = () => ({ ...STAGING, WALDO_MODEL_PROVIDER: value });
+      expect(stagingProfile(claude()).model, value).toBe(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL);
+      expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, claude).candidate, value).toBe('recorded+staging+semantic+selection');
+      expect(() => nightlyConfig({ ...LIVE, ...CLOUDFLARE }, claude), value).toThrow(/staging runs Claude/);
     }
   });
 
@@ -87,20 +93,20 @@ describe('the staging profile in the run settings', () => {
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'production' })).toThrow(/must be staging/);
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging', WALDO_EVAL_TOOL_SEARCH: 'on' })).toThrow(/leave WALDO_EVAL_TOOL_SEARCH/);
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging', WALDO_EVAL_COMPACTION: 'on' })).toThrow(/leave WALDO_EVAL_TOOL_SEARCH, WALDO_EVAL_COMPACTION, WALDO_EVAL_SEMANTIC and WALDO_EVAL_MEMORY_SELECTION unset/);
-    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_MODEL: OPENAI_GPT_6_1_SOL_MODEL })).toThrow(/staging chat model/);
+    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_MODEL: OPENAI_GPT_6_1_SOL_MODEL }, OPENAI_STAGING)).toThrow(/staging chat model/);
   });
 
   it('holds the judge apart from the fallback models the trials can now meet', () => {
-    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL })).toThrow(/judge must differ/);
-    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_AUXILIARY_FALLBACK_MODEL })).toThrow(/judge must differ/);
-    expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE })).toMatchObject({ toolLoader: 'harness', candidate: `${WALDO_CHAT_MODEL}+staging+semantic+selection` });
+    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL }, OPENAI_STAGING)).toThrow(/judge must differ/);
+    expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_AUXILIARY_FALLBACK_MODEL }, OPENAI_STAGING)).toThrow(/judge must differ/);
+    expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE }, OPENAI_STAGING)).toMatchObject({ toolLoader: 'harness', candidate: `${WALDO_CHAT_MODEL}+staging+semantic+selection` });
     // Without the profile a trial never meets a fallback model, so the earlier rule stands.
     const { WALDO_EVAL_PROFILE: _profile, ...plain } = LIVE;
     expect(() => nightlyConfig({ ...plain, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL })).not.toThrow();
   });
 
   it('gives the trials an embedder when staging turns semantic recall on, and names the leg on the card', () => {
-    const on = () => ({ ...STAGING, MEMORY_SEMANTIC_RECALL: '1', MEMORY_SELECTION: '0' });
+    const on = () => ({ ...OPENAI_STAGING(), MEMORY_SEMANTIC_RECALL: '1', MEMORY_SELECTION: '0' });
     const recorded = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, on);
     expect(recorded.candidate).toBe('recorded+staging+semantic');
     expect(recorded.embeddings).toBeTypeOf('function');
@@ -130,7 +136,7 @@ describe('the staging profile in the run settings', () => {
   });
 
   it('refuses a fallback key the provider would refuse to read', () => {
-    expect(() => nightlyConfig({ ...LIVE, ANTHROPIC_API_KEY: 'has a space' })).toThrow(/usable ANTHROPIC_API_KEY/);
+    expect(() => nightlyConfig({ ...LIVE, ANTHROPIC_API_KEY: 'has a space' }, OPENAI_STAGING)).toThrow(/usable ANTHROPIC_API_KEY/);
   });
 });
 

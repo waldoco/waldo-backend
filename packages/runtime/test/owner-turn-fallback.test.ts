@@ -352,3 +352,9 @@ it('with Claude chosen, a file Claude cannot carry is answered by Terra, and a b
   const refused = await run({});
   expect(refused.models).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
 });
+
+it('with Claude chosen, a turn Sonnet refuses goes to Terra next, never to a second Sonnet call', async () => {
+  const { gateway, models } = scriptedProviders({ [ANTHROPIC_PROVIDER]: [{ fail: 'rejected' }], [OPENAI_PROVIDER]: [{ text: 'Answered by Terra.' }] });
+  await expect(claudeResponder(gateway).respond(ownerTyped({ traceId: 'sonnet-first-refusal', conversationRef: 'telegram-1', surface: 'telegram', text: 'help me with this', memoryWrites: false }), time)).resolves.toBe('Answered by Terra.');
+  expect(models()).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
+});
