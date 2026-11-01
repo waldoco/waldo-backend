@@ -446,9 +446,10 @@ export const parseHealthDecision = (raw: string, items: readonly ComingItem[], n
 };
 
 // The calendar fields that reach Google carry no health word from this run. Egress is a hard boundary, so a hit refuses
-// the whole proposal rather than editing it.
-export const calendarEgressClear = (args: Pick<ProposeCalendarChangeArgs, 'title' | 'description' | 'location' | 'rename_to'>, words: readonly string[]): boolean =>
-  ![args.title, args.description, args.location, args.rename_to].some(field => typeof field === 'string' && mentions(field, words));
+// the whole proposal rather than editing it. On a move the title only names the event as it is now, on the card; Google
+// receives the new name, rename_to.
+export const calendarEgressClear = (args: Pick<ProposeCalendarChangeArgs, 'title' | 'description' | 'location' | 'rename_to'> & Partial<Pick<ProposeCalendarChangeArgs, 'action'>>, words: readonly string[]): boolean =>
+  ![args.action === 'move' ? undefined : args.title, args.description, args.location, args.rename_to].some(field => typeof field === 'string' && mentions(field, words));
 
 export type HealthTriggerDeps = Readonly<{
   book: HealthTriggerBook;

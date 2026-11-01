@@ -619,6 +619,19 @@ describe('easing a workout', () => {
     expect(calendarEgressClear({ title: 'Track intervals', rename_to: 'Recovery jog' }, ['recovery', 'low'])).toBe(false);
   });
 
+  it('scans only what Google receives: on a move the current name names the event on the card and is never sent', () => {
+    expect(calendarEgressClear({ action: 'move', title: 'Form drills', rename_to: 'Easy walk' }, ['form'])).toBe(true);
+    expect(calendarEgressClear({ action: 'move', title: 'Form drills', rename_to: 'Form walk' }, ['form'])).toBe(false);
+    expect(calendarEgressClear({ action: 'create', title: 'Form drills' }, ['form'])).toBe(false);
+  });
+
+  it('swaps a workout whose current name has a health word', () => withTrigger(async ({ deps, proposals }) => {
+    const heavy: ComingItem = { ...RUN, title: 'Heavy load day' };
+    deps().book.mark('2026-10-21', NOW - 60_000);
+    expect(await runHealthTrigger(deps({ comingItems: async () => [heavy], easeWorkout: () => true, decide: async () => swap('Easy walk') }))).toBe('proposed');
+    expect(proposals).toEqual([expect.objectContaining({ action: 'move', title: 'Heavy load day', rename_to: 'Easy walk' })]);
+  }));
+
   it('puts the swap up as one card when the run has it on', () => withTrigger(async ({ deps, proposals }) => {
     deps().book.mark('2026-10-21', NOW - 60_000);
     expect(await runHealthTrigger(deps({ comingItems: async () => [RUN], easeWorkout: () => true, decide: async () => swap('Easy run') }))).toBe('proposed');
