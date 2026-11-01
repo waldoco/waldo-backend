@@ -8,6 +8,8 @@ const PREFIX = 'welcome:';
 export type WelcomeSource = AppNodeSourceV14;
 export const sourceRef = (source: WelcomeSource, pointers: readonly string[]): string => `${PREFIX}${source}:${pointers.join(',')}`;
 export const isWelcomeRef = (ref: string | null | undefined): boolean => ref?.startsWith(PREFIX) === true;
+export const refPointers = (ref: string | null | undefined): readonly string[] =>
+  ref?.startsWith(PREFIX) ? ref.slice(PREFIX.length).split(':').slice(1).join(':').split(',').filter(Boolean) : [];
 export const refSource = (ref: string | null | undefined): AppNodeSourceV14 | null => {
   if (!ref?.startsWith(PREFIX)) return null;
   const parsed = appNodeSourceV14Schema.safeParse(ref.slice(PREFIX.length).split(':')[0]);

@@ -248,3 +248,55 @@ describe('owner findings', () => {
     expect(claims.allClaims()).toHaveLength(0);
   }));
 });
+
+// A welcome node may rest on Waldo's read of look-up findings. The finding is outside text the owner has not confirmed, so the
+// read goes when the finding does: forgotten, corrected, withdrawn with the look-up, or expired unconfirmed.
+describe('welcome reads resting on findings', () => {
+  const at = new Date(1_000).toISOString();
+  const seed = (storage: DurableObjectStorage, now: { at: number }) => {
+    const { claims, consent, findings } = stores(storage, { now: () => now.at });
+    agree(consent);
+    const id = (findings.record(finding, 'Team', 1_000) as { id: string }).id;
+    const other = (findings.record({ ...finding, text: 'Speaks at design meetups', evidence_quote: 'Sam Rivera, product manager at Acme' }, 'Team', 1_000) as { id: string }).id;
+    const support = (text: string, ref: string, origin = 'untrusted') => { claims.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin, source_ref: ref }, at); return claims.allClaims().at(-1)!.id; };
+    const web = support('Works in product at Acme.', `welcome:web:${id}`), calendar = support('A weekly product review recurs.', 'welcome:calendar:evt_a');
+    const kept = support('Speaks at meetups.', `welcome:web:${other}`);
+    const lone = claims.saveNode({ id: null, domain: 'work', label: 'Product role at Acme', summary: 'Works in product.', strength: 0.5, status: 'active', supporting_spots: [web] }, at);
+    const shared = claims.saveNode({ id: null, domain: 'work', label: 'Runs product reviews', summary: 'Reviews product weekly.', strength: 0.5, status: 'active', supporting_spots: [web, calendar] }, at);
+    const meetups = claims.saveNode({ id: null, domain: 'interests', label: 'Design meetups', summary: 'Goes to design meetups.', strength: 0.5, status: 'active', supporting_spots: [kept] }, at);
+    return { claims, findings, id, other, web, calendar, lone, shared, meetups };
+  };
+  const live = (claims: ReturnType<typeof claimStore>, id: number) => claims.allClaims().some(claim => claim.id === id && (claim.status === 'active' || claim.status === 'promoted'));
+  const nodeIds = (claims: ReturnType<typeof claimStore>) => claims.nodes().map(node => node.id);
+
+  it('a forgotten finding takes the read on it and every node that read held up, whose words may carry it', () => withStorage(storage => {
+    const s = seed(storage, { at: 2_000 });
+    s.findings.forget(s.id, 2_000);
+    expect(live(s.claims, s.web)).toBe(false);
+    expect(live(s.claims, s.calendar)).toBe(true);
+    expect(nodeIds(s.claims)).toEqual([s.meetups]);
+  }));
+
+  it('a corrected finding takes the read on its old words; a kept one leaves it standing', () => withStorage(storage => {
+    const s = seed(storage, { at: 2_000 });
+    expect(s.findings.decide(s.other, { action: 'keep' }, 2_000)).toBe('kept');
+    expect(nodeIds(s.claims)).toContain(s.meetups);
+    expect(s.findings.decide(s.id, { action: 'correct', text: 'Design lead at Acme' }, 2_000)).toBe('corrected');
+    expect(live(s.claims, s.web)).toBe(false);
+    expect(nodeIds(s.claims)).toEqual([s.meetups]);
+  }));
+
+  it('withdrawing the look-up takes every read on a finding with it', () => withStorage(storage => {
+    const s = seed(storage, { at: 2_000 });
+    s.findings.eraseAll(2_000);
+    expect(nodeIds(s.claims)).toEqual([]);
+  }));
+
+  it('a finding that expires unconfirmed takes its read too', () => withStorage(storage => {
+    const now = { at: 2_000 };
+    const s = seed(storage, now);
+    now.at = 1_000 + APP_FINDING_UNCONFIRMED_DAYS_V1 * DAY;
+    expect(s.findings.page(10).total).toBe(0);
+    expect(nodeIds(s.claims)).toEqual([]);
+  }));
+});

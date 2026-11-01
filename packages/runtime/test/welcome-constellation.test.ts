@@ -797,7 +797,7 @@ describe('welcome build v2: one source after another, no copies, late sources on
       await runWelcome(d);
       const nodes = active(claims);
       expect(nodes.map((node) => node.label)).toEqual(['Guards early mornings']);
-      expect(nodeSources(claims.allClaims(), nodes[0]!).sort()).toEqual(['calendar', 'gmail', 'setup']);
+      expect([...nodeSources(claims.allClaims(), nodes[0]!)].sort()).toEqual(['calendar', 'gmail', 'setup']);
       expect(build.view()).toMatchObject({ nodes: 1, stages: { calendar: 'done', mail: 'done' } });
     });
   });

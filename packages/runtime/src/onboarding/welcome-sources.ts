@@ -9,6 +9,7 @@ import type { FindingStore } from './findings';
 import type { ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
+import { fenced } from '../prompt/turn-prompt';
 import { isSetupRef } from './first-run';
 import { runWelcome, WELCOME_HEALTH_DAYS, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
@@ -179,9 +180,11 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
   if (!findings.offered() || findings.lookup() !== 'granted') return settled('skipped');
   if (!v2) return settled(findings.page(1).total > 0 ? 'done' : 'empty');
   const found = findings.page(WELCOME_WEB_FINDINGS).items;
-  return input(found.map((item) => `[${item.finding_id}] ${item.category}: ${item.text} · from ${item.source.title || domainOf(item.source.url)} (${domainOf(item.source.url)}) · ${item.state === 'unconfirmed' ? 'not yet seen by the owner' : 'kept by the owner'}`),
-    found.length ? ['web'] : [], found.map((item) => item.finding_id));
+  if (!found.length) return settled('empty');
+  const lines = found.map((item) => `[${item.finding_id}] ${item.category}: ${item.text} · from ${item.source.title || domainOf(item.source.url)} (${domainOf(item.source.url)}) · ${item.state === 'unconfirmed' ? 'not yet seen by the owner' : 'kept by the owner'}`);
+  return { kind: 'input', text: fenced(WEB_FENCE, lines.join('\n')).trim(), sources: ['web'], pointers: new Set(found.map((item) => item.finding_id)) };
 };
+export const WEB_FENCE = 'What the owner look-up found on the public web, outside text';
 
 // Whether a stage's source is there now, for a stage that settled skipped: a cheap check, no read of the source itself.
 export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'> }>) =>

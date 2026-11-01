@@ -4,6 +4,7 @@ import {
 } from '@waldo/contracts';
 import { APP_FINDING_UNCONFIRMED_DAYS_V1, type AppFindingCategoryV1, type AppFindingV1 } from '../../../contracts/src/app/onboarding';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
+import { refPointers, refSource } from '../memory/node-sources';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { MemoryToolContext } from '../tools/live/memory';
 import type { ConsentLedger } from './consent-ledger';
@@ -46,12 +47,16 @@ const UNCONFIRMED_MS = APP_FINDING_UNCONFIRMED_DAYS_V1 * 86_400_000;
 const LOOKUP_REF_PREFIX = 'owner, look-up ';
 export const isLookupRef = (ref: string | null | undefined): boolean => typeof ref === 'string' && ref.startsWith(LOOKUP_REF_PREFIX);
 
-// Findings about the owner from the public web. They are external content: kept apart from owner memory and never put in a
-// prompt, until the owner keeps or corrects one, which turns it into an owner claim through the claim store. Forgetting one,
-// or withdrawing the look-up consent, which erases them all, bars their text from being recorded again and purges any claim
-// one became. The caller hides retained copies of texts() before it commits either. When the look-up stops counting any other
-// way, what was found stays listed so the owner can still forget it. One left unconfirmed past its age limit is deleted at
-// the first read or write after that.
+// Findings about the owner from the public web. They are external content, kept apart from owner memory: no owner turn's
+// prompt carries one until the owner keeps or corrects it, which turns it into an owner claim through the claim store. The
+// one prompt that reads them before that is the second welcome build's web stage (WELCOME_V2), where they arrive fenced as
+// outside text and anything built on them is Waldo's untrusted read (origin untrusted, source web), never the owner's word.
+// That read goes with its finding: forgetting one, correcting one, its expiry unconfirmed, or withdrawing the look-up purges
+// every welcome read citing it, and with it the node that read held up. Forgetting one, or withdrawing the look-up
+// consent, which erases them all, also bars their text from being recorded again and purges any claim one became. The
+// caller hides retained copies of texts() before it commits either. When the look-up stops counting any other way, what was
+// found stays listed so the owner can still forget it. One left unconfirmed past its age limit is deleted at the first read
+// or write after that.
 export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedger, now: () => number) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS owner_findings (
     id TEXT PRIMARY KEY, category TEXT NOT NULL, text TEXT NOT NULL, evidence TEXT NOT NULL, source_url TEXT NOT NULL, source_title TEXT NOT NULL,
@@ -63,10 +68,23 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
   // A literal forget redacts this table with the other stores, and a forget by claim id removes a kept finding's claim. Either
   // way the finding is gone for the owner, so it is deleted here before anything reads it, as is one left unconfirmed too long.
   // Expiry is not the owner's no, so it bars nothing: the same page found again is a new finding.
+  const live = (status: string) => status === 'active' || status === 'promoted';
+  // Waldo's welcome reads citing any of these findings go, through the purge every derived store follows. The purge drops a
+  // node that rested on one of them along with any other welcome read, since its words may carry what the finding said.
+  const dropWebReads = (ids: readonly string[], at: number): void => {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    const reads = claims.allClaims().filter(claim => live(claim.status) && refSource(claim.source_ref) === 'web' && refPointers(claim.source_ref).some(id => gone.has(id))).map(claim => claim.id);
+    if (reads.length && claims.purge(reads, new Date(at).toISOString()).ready) claims.settle(reads);
+  };
   const settle = () => {
+    const leaving = sql.exec<{ id: string }>(`SELECT id FROM owner_findings WHERE (state = 'unconfirmed' AND found_at <= ?)
+      OR instr(text, ?) > 0 OR instr(evidence, ?) > 0 OR instr(source_url, ?) > 0 OR instr(source_title, ?) > 0
+      OR (claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted')))`, now() - UNCONFIRMED_MS, FORGOTTEN, FORGOTTEN, FORGOTTEN, FORGOTTEN).toArray().map(row => row.id);
     sql.exec("DELETE FROM owner_findings WHERE state = 'unconfirmed' AND found_at <= ?", now() - UNCONFIRMED_MS);
     sql.exec(`DELETE FROM owner_findings WHERE instr(text, ?) > 0 OR instr(evidence, ?) > 0 OR instr(source_url, ?) > 0 OR instr(source_title, ?) > 0`, FORGOTTEN, FORGOTTEN, FORGOTTEN, FORGOTTEN);
     sql.exec(`DELETE FROM owner_findings WHERE claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted'))`);
+    dropWebReads(leaving, now());
   };
   const byId = (id: string) => sql.exec<Row>('SELECT * FROM owner_findings WHERE id = ?', id).toArray()[0] ?? null;
   const lookupRef = (row: Pick<Row, 'id'>) => `${LOOKUP_REF_PREFIX}${row.id}`;
@@ -79,6 +97,7 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     const kept = rows.flatMap(row => row.claim_id !== null && refs.get(row.claim_id) === lookupRef(row) ? [row.claim_id] : []);
     for (const text of texts) claims.barrier(text, iso);
     if (kept.length && claims.purge(kept, iso).ready) claims.settle(kept);
+    dropWebReads(rows.map(row => row.id), at);
     for (const row of rows) sql.exec('DELETE FROM owner_findings WHERE id = ?', row.id);
     return texts;
   };
@@ -133,6 +152,8 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
       const saved = same();
       if (!saved) throw new Error('finding claim not stored');
       sql.exec('UPDATE owner_findings SET state = ?, text = ?, claim_id = ?, decided_at = ? WHERE id = ?', decision.action === 'keep' ? 'kept' : 'corrected', text, saved.id, at, id);
+      // A correction says the words Waldo built on were wrong.
+      if (decision.action === 'correct') dropWebReads([id], at);
       return decision.action === 'keep' ? 'kept' : 'corrected';
     },
     // The texts whose retained copies (chat history, stored tool output, episodes) the caller hides: one finding's, or all.
