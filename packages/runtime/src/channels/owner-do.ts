@@ -239,7 +239,7 @@ import { sendMessageHandler } from '../tools/live/messaging';
 import { approvalJobReplay, approvalReplayContext, proposeActionHandler, replayHost, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { sanitise } from '../scribe/sanitiser';
-import { newSessionCanaryTokens, ownerToolApproval } from './owner-turn';
+import { newSessionCanaryTokens, OvertakenTurnError, ownerToolApproval } from './owner-turn';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
@@ -421,6 +421,13 @@ const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
+
+// A thought typed across several WhatsApp messages is one turn: text waits this long for the owner to go quiet. 0 turns it off.
+const WHATSAPP_QUIET_MS = 3_000;
+const whatsappQuietMs = (value: string | undefined): number => {
+  const parsed = Number(value);
+  return value !== undefined && value !== '' && Number.isFinite(parsed) && parsed >= 0 ? parsed : WHATSAPP_QUIET_MS;
+};
 
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
@@ -689,7 +696,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { kv, sql } = this.ctx.storage;
     const moving = subject === null || kv.get<string>('whatsapp_subject') !== subject;
     const retired = bindWhatsAppNumber(kv, subject, this.appBound());
-    if (moving) { endCardWaits(sql, 'whatsapp'); new WhatsAppOwnerInbox(this.ctx.storage).revokeOpen(); }
+    if (moving) { endCardWaits(sql, 'whatsapp'); this.whatsappInbox().revokeOpen(); }
     return retired;
   }
 
@@ -2137,7 +2144,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // as interrupted and its owner gets the one notice once that commits.
   private readonly whatsappAttempts = new Set<string>();
   private async drainWhatsApp(alarmEnd?: number): Promise<void> {
-    const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
+    const inbox = this.whatsappInbox();
     // Without a WhatsApp transport nothing can be claimed or sent: open rows wake again in a minute, not at the floor. A row
     // cut off while running is recovered once the transport returns, so its notice can go out.
     if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) { inbox.deferWake(WHATSAPP_RUNNING_CHECK_MS); return; }
@@ -2152,12 +2159,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const record = inbox.claimNext(deadline); if (!record) break;
       // How long the owner waited between Meta's 200 and the turn starting, with how many messages wait behind it: counts only.
       console.log(JSON.stringify({ hop: 'whatsapp_turn_start', ok: true, ms: Date.now() - record.admittedAt, queued: inbox.records().filter(row => row.state === 'admitted').length }));
-      let completed = false;
+      let completed = false, overtaken = false;
       this.whatsappAttempts.add(record.attempt!);
-      try { await this.whatsappTurn(record); completed = true; } catch { console.error('whatsapp turn outcome unconfirmed'); }
+      try { await this.whatsappTurn(record); completed = true; }
+      // Newer text overtook a turn that did nothing yet: nothing was saved or sent, and it waits again to join that text.
+      catch (error) { if (error instanceof OvertakenTurnError) overtaken = inbox.requeue(record); else console.error('whatsapp turn outcome unconfirmed'); }
       finally { this.whatsappAttempts.delete(record.attempt!); }
-      if (inbox.settle(record, completed)) await this.whatsappNotice(record);
+      if (!overtaken && inbox.settle(record, completed)) await this.whatsappNotice(record);
     }
+  }
+  // The owner's WhatsApp inbox. WHATSAPP_REPLY_MERGE=1 turns on the quiet window text waits for (WHATSAPP_QUIET_MS; unset is 3000 ms),
+  // joining close texts into one turn, and dropping a reply newer text overtook; any other value is one turn per message.
+  private whatsappInbox(): WhatsAppOwnerInbox { const merge = this.env.WHATSAPP_REPLY_MERGE === '1'; return new WhatsAppOwnerInbox(this.ctx.storage, undefined, merge ? whatsappQuietMs(this.env.WHATSAPP_QUIET_MS) : 0, merge); }
+  // Only the exact turn WhatsApp is running is ever told it was overtaken; any other surface's turn asks with a scope that never matches.
+  private whatsappOvertaken(scope: RunEffectScope | undefined): boolean {
+    return scope !== undefined && this.activeWhatsApp?.scope === scope && this.whatsappInbox().overtaken(scope.runId);
   }
   // WhatsApp turns run first in every pass, ahead of every slower lane (mail, the app and iMessage drains, nightly work,
   // sweeps, jobs) and of the link mode and directory checks, and outside the lane holds (UNHELD_LANES): another lane's failure,
@@ -2166,7 +2182,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async whatsappTurns(alarmEnd?: number): Promise<void> {
     try { await this.serialWithin(alarmEnd, () => this.drainWhatsApp(alarmEnd)); }
     catch (error) {
-      try { new WhatsAppOwnerInbox(this.ctx.storage).deferWake(30_000); } catch { /* the wake already armed stands */ }
+      try { this.whatsappInbox().deferWake(30_000); } catch { /* the wake already armed stands */ }
       console.error(JSON.stringify({ hop: 'whatsapp_drain', ok: false, code: error instanceof Error ? error.name : 'unknown' }));
     }
   }
@@ -2190,7 +2206,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { kv } = this.ctx.storage;
     const doName = kv.get<string>('do_name');
     const abort = new AbortController();
-    const scope = new WhatsAppOwnerInbox(this.ctx.storage).scope(record, abort.signal, () =>
+    const scope = this.whatsappInbox().scope(record, abort.signal, () =>
       kv.get<string>('whatsapp_subject') === record.subject && kv.get<boolean>('whatsapp_unlinked') !== true && kv.get<string>('do_name') === doName);
     const update = record.update!;
     this.activeScope = scope; this.activeAbort = abort;
@@ -2248,7 +2264,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
     const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
     this.bindIdentity(request.headers);
-    const inbox = new WhatsAppOwnerInbox(this.ctx.storage);
+    const inbox = this.whatsappInbox();
     // The wake is armed before the rows exist: a spurious alarm finds nothing, a missing one would strand a row.
     await armWhatsappPendingWake(this.ctx.storage, Date.now() + 250);
     let claimed: NonNullable<typeof value.messages> = [];
@@ -4509,7 +4525,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),
       // Scheduled jobs for an owner whose only surface is iMessage run as the owner the pass admitted.
-      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView},
+      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it

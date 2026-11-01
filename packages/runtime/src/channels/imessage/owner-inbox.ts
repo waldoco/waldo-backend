@@ -32,6 +32,8 @@ export type IMessageInboxRecord = {
   ownerThreaded?: true;
   /** The message's files as references: the turn fetches the bytes, and they are never stored. */
   media?: IMessageMedia;
+  /** The message reached the host with nothing Waldo can read: the turn is one honest reply, with no model call. */
+  unreadable?: true;
   /** Tapback lines taken for this turn when it started; cleared with its text. */
   reactions?: string[];
   /** The line naming the message of Waldo's this one replies to, its health readings withheld; cleared with its text. */
