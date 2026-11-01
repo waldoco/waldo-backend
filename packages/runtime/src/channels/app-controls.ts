@@ -1,4 +1,4 @@
-import { APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -45,17 +45,22 @@ const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
 const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
-const withoutLocalId=({local_id:_local,...item}:Item)=>item;
+// A build below controls revision 14 knows five node sources: a web or setup source is left out of what it reads.
+const V1_SOURCES:ReadonlySet<unknown>=new Set(appNodeSourceV1Schema.options);
+const withoutLocalId=(webSources:boolean)=>({local_id:_local,...item}:Item)=>webSources||!Array.isArray(item.sources)?item:{...item,sources:item.sources.filter(source=>V1_SOURCES.has(source))};
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
 // A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
 // revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
 const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
   :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
-const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins?:ReadonlyMap<number,string>)=>({
-  ...rest,memory_view:view,
-  ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(pinOf(pins)(item as Item))}:{}),
-  ...(center?{center:withoutLocalId(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(withoutLocalId)}:{}),
-});
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins:ReadonlyMap<number,string>|undefined,webSources:boolean)=>{
+  const shown=withoutLocalId(webSources);
+  return {
+    ...rest,memory_view:view,
+    ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(shown)}:{}),...(item?{item:shown(pinOf(pins)(item as Item))}:{}),
+    ...(center?{center:shown(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(shown)}:{}),
+  };
+};
 type Book=Record<string,{receipt:unknown;expires:number}>;
 // A build before controls revision 5 knows four stages: the setup stage is left out of what it reads.
 const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBuildV1=>{
@@ -89,9 +94,9 @@ const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:s
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
 const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit'};
 // One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
-const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean)=>{
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean,webSources:boolean)=>{
   const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
-  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined)}:{status:paged.status,error:paged.body.error};
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined,webSources)}:{status:paged.status,error:paged.body.error};
 };
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
@@ -120,7 +125,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
       let graph:ReturnType<typeof constellationData>;
-      try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
+      try{graph=constellationData(host.storage,paging,showsPins(request),appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION);}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);

@@ -92,3 +92,21 @@ it('the setup stage reaches only a build that reads controls revision 5', async 
     expect(await stagesAt('controls=5')).toEqual(withSetup.stages);
   });
 });
+
+it('names web and setup node sources from controls revision 14, and leaves them out below it', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`welcome-controls-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const claims = claimStore(state.storage.sql), at = '2026-10-25T13:00:00Z';
+    claims.add({ kind: 'observation', text: 'A public talk on product design.', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:web:fnd_a' }, at);
+    claims.add({ kind: 'observation', text: 'Calls their mornings sacred.', source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: 'welcome:setup:c9' }, at);
+    claims.add({ kind: 'observation', text: 'A weekly design review recurs.', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:evt_a' }, at);
+    claims.saveNode({ id: null, domain: 'work', label: 'Speaks about design', summary: 'Talks about product design in public.', strength: 0.5, status: 'active', supporting_spots: [1, 2, 3] }, at);
+    const h = host(state.storage, []);
+    const sourcesAt = async (revision: number) => {
+      const response = await appControlsRequest(new Request('https://app.fixture.invalid/app/v1/controls?view=constellation&memory_view=interpretations&limit=10', { headers: { 'x-waldo-app-contract': `controls=${revision}` } }), h);
+      const body = appControlProjectionV1Schema.parse(await response.json());
+      return body.view === 'constellation' && body.data.memory_view === 'interpretations' ? body.data.items[0]!.sources : null;
+    };
+    expect((await sourcesAt(14))?.slice().sort()).toEqual(['calendar', 'setup', 'web']);
+    expect(await sourcesAt(11)).toEqual(['calendar']);
+  });
+});
