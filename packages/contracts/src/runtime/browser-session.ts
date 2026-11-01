@@ -8,7 +8,7 @@ const publicUrlSchema = z.url().refine((url) => /^https:\/\/(?![^/]*@)/.test(url
 export const browserSessionSchema = z.strictObject({
   id: z.string().min(1),
   ownerId: z.string().min(1),
-  provider: z.enum(['browserbase_stagehand_http_v3', 'cloudflare_playwright']),
+  provider: z.enum(['browserbase_stagehand_http_v3', 'cloudflare_playwright', 'browserbase_cdp', 'browser_use_cdp']),
   providerSessionId: z.string().min(1),
   contextHandle: z.string().min(1).nullable(),
   mode: z.enum(['public', 'authenticated_takeover']),
