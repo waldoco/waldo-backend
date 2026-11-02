@@ -1,5 +1,5 @@
-// Waldo tidying its own approval cards, from the 2 Nov WhatsApp session where it revised one intro email four times, left
-// four cards waiting, and could not tell them apart or close the stale ones. Which card is the live draft is the model's
+// Waldo tidying its own approval cards: it revised one intro email four times, left four cards waiting, and could not tell
+// them apart or close the stale ones. Which card is the live draft is the model's
 // call; a receipt holds only the state that must come out: one Varun card still waits, the earlier three are withdrawn
 // with a reason, the unrelated card is untouched, and nothing was approved or sent. Every person and address is synthetic.
 import { none, type Receipt } from './receipts';

@@ -1,5 +1,5 @@
 import { raiseApprovalArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type RaiseApprovalArgs, type ToolHandler, type ToolName } from '@waldo/contracts';
-import type { ApprovalDesk, ReraiseOutcome, WithdrawOutcome } from '../../channels/approvals';
+import { turnReadOutside, type ApprovalDesk, type ReraiseOutcome, type WithdrawOutcome } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -15,7 +15,6 @@ const note = (result: ReraiseOutcome): string => {
   if (result.on_this_reply) return 'Its card is on this reply.';
   return result.shown_on.some(surface => surface !== 'app') ? 'A fresh card with its buttons was sent to the owner.' : "It is back in the owner's approvals list; no card is on this reply.";
 };
-const OUTSIDE_TEXT: ReadonlySet<string> = new Set(['browser_submit', 'tainted_action']);
 const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', imessage: 'iMessage' };
 const withdrawNote = (result: WithdrawOutcome): string => {
   if (result.outcome === 'not_found') return 'No card of yours has that id, so nothing changed.';
@@ -32,14 +31,15 @@ export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' 
     trigger_allowlist: allowlist('raise_approval'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args: RaiseApprovalArgs) {
-      // A browser or held-back action card carries words from a page or a message, so a list showing one is outside text.
+    async handle(args: RaiseApprovalArgs, ctx?: ToolDispatcherContext) {
+      // A list that shows any card whose words may carry outside text is outside text itself.
       if (args.operation === 'list') {
         const approvals = desk.waiting();
-        return { ok: true as const, data: { approvals }, source_taint: approvals.some(card => OUTSIDE_TEXT.has(card.kind)) ? 'external' as const : null };
+        return { ok: true as const, data: { approvals }, source_taint: approvals.some(card => card.outside_text) ? 'external' as const : null };
       }
       if (args.operation === 'withdraw') {
-        const result = await desk.withdraw(args.approval_id!, args.reason!);
+        // In a turn that read outside text the desk closes the card with its own fixed words and tells the owner itself.
+        const result = await desk.withdraw(args.approval_id!, args.reason!, { outside: turnReadOutside(ctx) });
         return { ok: true as const, data: { approval_id: args.approval_id!, ...result, note: withdrawNote(result) }, source_taint: null };
       }
       const result = await desk.reraise(args.approval_id!);

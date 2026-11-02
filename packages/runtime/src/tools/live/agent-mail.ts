@@ -2,7 +2,7 @@ import {
   sendAgentMailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendAgentMailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, type CardPlacement, type ProposeOptions, type Replacement } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type CardPlacement, type ProposeOptions, type Replacement } from '../../channels/approvals';
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import { agentMailDirectory, agentMailFirstName } from '../../channels/agent-mail/handles';
 import { agentMailInbox } from '../../channels/agent-mail/inbox';
@@ -71,7 +71,7 @@ export const sendAgentMailHandler = (host: AgentMailToolHost): ToolHandler<SendA
       const proposal_id = await host.desk.proposeAgentMailSend({
         ...(operation_ref ? { operation_ref } : {}), idempotency_key, handle, ...draft,
         from: rendered.preview.from, subject: rendered.preview.subject, body: rendered.preview.text, parts_digest: await agentMailPartsDigest(rendered.parts),
-      }, { replaces: args.replaces });
+      }, { replaces: args.replaces, outside: turnReadOutside(ctx) });
       return { ok: true, data: { proposal_id, status: `${proposalStatus(host.desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
     } catch (error) {
       if (error instanceof ApprovalReplaceError) return refused(replaceRefusal(args.replaces!, error));

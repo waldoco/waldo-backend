@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
 import { appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appApprovalsRequest } from '../src/channels/app-approvals';
-import { ApprovalReplaceError, approvalDesk, PROPOSAL_TTL_MS, REPLACED_REASON } from '../src/channels/approvals';
+import { ApprovalReplaceError, approvalDesk, PROPOSAL_TTL_MS, REPLACED_REASON, replacementStatus } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import type { GoogleClient } from '../src/connectors/google';
 import { approvalHandlers } from '../src/tools/live/raise-approval';
@@ -19,12 +19,13 @@ const gate = () => { let open!: () => void; const opened = new Promise<void>(res
 // calls can be held open, so a test can land a withdraw while an approval waits inside its effect.
 const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
   desk: ReturnType<typeof approvalDesk>; sql: SqlStorage; calls: Call[]; retired: string[]; sends: string[]; creates: string[]; denied: string[]; clock: { at: number };
-  holds: { google?: ReturnType<typeof gate>; googleCalled?: ReturnType<typeof gate>; send?: ReturnType<typeof gate>; sendCalled?: ReturnType<typeof gate>; create?: ReturnType<typeof gate>; createCalled?: ReturnType<typeof gate> };
+  holds: { google?: ReturnType<typeof gate>; googleCalled?: ReturnType<typeof gate>; send?: ReturnType<typeof gate>; sendCalled?: ReturnType<typeof gate>; create?: ReturnType<typeof gate>; createCalled?: ReturnType<typeof gate>; card?: ReturnType<typeof gate>; cardCalled?: ReturnType<typeof gate> };
   telegram: { deliver: boolean }; writesFirst: { now: boolean }; app: { has: boolean };
   tool(args: unknown): Promise<Record<string, unknown>>;
   list(revision?: number): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
   decideInApp(id: string, digest: string): Promise<Response>;
-  email(subject: string, extra?: Partial<{ cc: string[]; account: string; body: string }>, replaces?: string): Promise<string>;
+  email(subject: string, extra?: Partial<{ cc: string[]; account: string; body: string; wireBody: string }>, replaces?: string): Promise<string>;
+  shownCount(id: string): number;
   status(id: string): string; tap(id: string, action?: string): Promise<Call[]>;
 }>) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
@@ -42,6 +43,7 @@ const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
       effects: ownerEffectLedger(state.storage, () => clock.at),
       call: async (method, body) => {
         calls.push({ method, body: body as Record<string, unknown> });
+        if (method === 'sendMessage' && holds.cardCalled) { holds.cardCalled.open(); await holds.card?.opened; }
         return method === 'sendMessage' ? telegram.deliver ? { message_id: ++mid, chat: { id: 42 } } : undefined : true;
       },
       owner: 42, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'Asia/Kolkata', log: () => undefined,
@@ -60,8 +62,9 @@ const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
       email: async (subject, extra = {}, replaces) => {
         clock.at += 60_000;
         return desk.proposeSendEmail(await emailProposal({ to: ['varun@example.com'], subject, body: extra.body ?? 'Hi Varun, meet Jay.', message_id: `<${subject.replace(/\W/g, '')}-${++messageSeq}@waldo-send>`,
-          ...(extra.cc ? { cc: extra.cc } : {}), ...(extra.account ? { account: extra.account } : {}) }), { ...(replaces ? { replaces } : {}) });
+          ...(extra.cc ? { cc: extra.cc } : {}), ...(extra.account ? { account: extra.account } : {}) }, extra.wireBody ? { body: extra.wireBody } : {}), { ...(replaces ? { replaces } : {}) });
       },
+      shownCount: id => state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ?', id).one().n,
       status: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
       // The owner taps a button on the Telegram card this desk sent for the approval.
       tap: async (id, action = 'a') => {
@@ -176,11 +179,64 @@ describe('withdraw', () => {
       const approving = desk.decide(id, 'a', 'trace');
       await holds.createCalled.opened;
       expect(status(id)).toBe('open');
-      expect((await desk.withdraw(id, 'Not needed.')).outcome).toBe('not_waiting');
+      expect(await desk.withdraw(id, 'Not needed.')).toEqual({ outcome: 'not_waiting', state: 'outcome_unknown' });
       holds.create.open();
       await approving;
       expect(creates).toEqual(['event']);
       expect(status(id)).toBe('done');
+    });
+  });
+});
+
+describe('a withdraw racing a decision or a card going out', () => {
+  it('a refusal that awaited past its checks records nothing over a withdrawn card', async () => {
+    await ownerDesk('withdraw-stays', async ({ desk, email, holds, sends, status }) => {
+      const id = await email('Changed', { wireBody: 'Other words than the card shows.' });
+      holds.google = gate(); holds.googleCalled = gate();
+      const approving = desk.decide(id, 'a', 'trace');
+      await holds.googleCalled.opened;
+      expect(await desk.withdraw(id, 'Stale.')).toMatchObject({ outcome: 'withdrawn' });
+      holds.google.open();
+      await approving;
+      expect(status(id)).toBe('withdrawn');
+      expect(sends).toEqual([]);
+    });
+  });
+
+  it('a card withdrawn while its own message was going out records no presentation, and its buttons are cleared', async () => {
+    await ownerDesk('withdraw-while-sending', async ({ desk, email, holds, retired, shownCount, sql, status, app }) => {
+      app.has = false;
+      holds.card = gate(); holds.cardCalled = gate();
+      const proposing = email('Going out');
+      await holds.cardCalled.opened;
+      const { id } = sql.exec<{ id: string }>("SELECT id FROM ledger WHERE status = 'card_unconfirmed'").one();
+      expect(await desk.withdraw(id, 'Not needed after all.')).toMatchObject({ outcome: 'withdrawn' });
+      holds.card.open();
+      expect(await proposing).toBe(id);
+      expect(status(id)).toBe('withdrawn');
+      expect(shownCount(id)).toBe(0);
+      expect(retired.some(ref => ref.startsWith('telegram:'))).toBe(true);
+    });
+  });
+
+  it('a replace whose earlier calendar card the owner approved meanwhile leaves it, and says the owner decided it', async () => {
+    await ownerDesk('replace-race-calendar', async ({ desk, email, holds, status, app }) => {
+      app.has = false;
+      const walk = await desk.propose({ action: 'create', title: 'Walk', start: iso('2026-11-03T07:00:00+05:30'), end: iso('2026-11-03T07:30:00+05:30'), reason: 'morning' });
+      holds.card = gate(); holds.cardCalled = gate();
+      const proposing = email('Skip the walk', {}, walk);
+      await holds.cardCalled.opened;
+      holds.cardCalled = undefined;
+      holds.create = gate(); holds.createCalled = gate();
+      const approving = desk.decide(walk, 'a', 'trace');
+      await holds.createCalled.opened;
+      holds.card.open();
+      const revised = await proposing;
+      expect(desk.replacement(revised)).toEqual({ approval_id: walk, replaced: false, state: 'outcome_unknown', card: 'shown' });
+      expect(replacementStatus(desk.replacement(revised))).toContain('outcome_unknown');
+      holds.create.open();
+      await approving;
+      expect(status(walk)).toBe('done');
     });
   });
 });
