@@ -41,6 +41,8 @@ export type AgentMailRow = Readonly<{ id: string; handle: string; basis: AgentMa
 type Counts = Record<string, Partial<Record<'admitted' | 'cold' | 'over_cap', number>>>;
 
 const dayOf = (at: number) => new Date(at).toISOString().slice(0, 10);
+// The thread map keeps Message-IDs without their angle brackets, as the ingress reads them from headers.
+const bare = (id: string) => id.replace(/^<|>$/g, '');
 const digest = async (bytes: Uint8Array) => hex(await crypto.subtle.digest('SHA-256', bytes));
 
 export const agentMailInbox = (storage: Pick<DurableObjectStorage, 'sql' | 'kv' | 'transactionSync'>, now = Date.now) => {
@@ -154,6 +156,25 @@ export const agentMailInbox = (storage: Pick<DurableObjectStorage, 'sql' | 'kv' 
       });
     },
     retryLater(ms: number): void { kv.put(AGENT_MAIL_DUE_KEY, now() + ms); },
+    // A send as Waldo joins the thread it replies in, or starts its own, so mail answering it is read as that thread's.
+    recordOutbound(messageId: string, inReplyTo?: string): void {
+      const id = bare(messageId);
+      if (!id) return;
+      storage.transactionSync(() => {
+        sql.exec('INSERT OR IGNORE INTO agent_mail_threads (message_id, direction, at, thread) VALUES (?, ?, ?, ?)',
+          id, 'out', now(), (inReplyTo === undefined ? null : knownThread([bare(inReplyTo)])) ?? id);
+      });
+    },
+    // The References of a reply: the thread's root and the ids Waldo knows in it up to the one replied to, oldest first,
+    // with angle brackets. Null when Waldo is not part of that mail's thread.
+    replyReferences(inReplyTo: string): string[] | null {
+      const id = bare(inReplyTo);
+      const thread = knownThread([id]);
+      if (thread === null) return null;
+      const ids = sql.exec<{ message_id: string }>('SELECT message_id FROM agent_mail_threads WHERE thread = ? ORDER BY at, rowid', thread).toArray().map(row => row.message_id);
+      const upTo = ids.slice(0, ids.indexOf(id) + 1);
+      return [...(upTo.includes(thread) ? [] : [thread]), ...upTo].slice(-AGENT_MAIL_REFERENCES_MAX).map(known => `<${known}>`);
+    },
     counts,
   };
 };
