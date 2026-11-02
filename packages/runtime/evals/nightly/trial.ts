@@ -25,6 +25,7 @@ import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
+import { welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -42,7 +43,9 @@ export type Step =
   | Readonly<{ outside_job: string }>
   // A batch of Google changes reaches the triage turn (GOOGLE_REALTIME_TRIAGE) through the production prompt, tainted
   // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
-  | Readonly<{ triage: readonly Change[] }>;
+  | Readonly<{ triage: readonly Change[] }>
+  // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
+  | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
 // call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave. light_steps are the
 // owner turns that took a light step (WALDO_LIGHT_CHAT), light_handovers those the light model handed to the chat model.
@@ -197,6 +200,12 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         const raised = carded() > before;
         world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
         if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
+      } else if ('welcome' in step) {
+        const { stage, sources, text } = step.welcome;
+        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, 'The constellation is empty so far.', text), 2);
+        const nodes = (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes ?? [];
+        transcript.push({ role: 'waldo', text: nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
