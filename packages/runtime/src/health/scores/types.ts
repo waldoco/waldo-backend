@@ -149,15 +149,22 @@ export interface PartBasis {
   readonly need?: Readonly<{ minutes: number; basis: 'owner_confirmed' | 'blended_average' }>;
 }
 export type Absent = 'no_reading' | 'baseline_immature';
+// days_until_personal is the days short of the fourteen that make the usual the owner's own, so no client does the subtraction.
+export type PartBaseline = Readonly<{ state: 'provisional' | 'personal'; own_days: number; own_share: number; days_until_personal: number }>;
 export type PartDirection = 'above_usual' | 'usual' | 'below_usual';
 export type PartRow =
   | Readonly<{
     key: string; state: 'available'; score: number; share: number; points: number; direction: PartDirection | null; signals: readonly string[];
-    baseline: Readonly<{ state: 'provisional' | 'personal'; own_days: number; own_share: number }> | null;
+    baseline: PartBaseline | null;
     need_minutes?: number; need_basis?: 'owner_confirmed' | 'blended_average';
   }>
   | Readonly<{ key: string; state: 'unavailable'; reason: Absent }>;
-export type PartsByPillar = Readonly<{ recovery?: readonly PartRow[]; form?: readonly PartRow[]; weight?: readonly PartRow[] }>;
+// One row of the app's screens made of two parts of a pillar: Resting State (HRV and resting heart rate, in Recovery) and
+// Circadian (sleep midpoint and daylight, in Form). The fine parts stay as they are; a group is their sum.
+export type GroupRow =
+  | Readonly<{ key: 'resting_state' | 'circadian'; pillar: 'recovery' | 'form'; state: 'available'; score: number; share: number; points: number; direction: PartDirection | null; parts: readonly string[]; signals: readonly string[]; baseline: PartBaseline | null }>
+  | Readonly<{ key: 'resting_state' | 'circadian'; pillar: 'recovery' | 'form'; state: 'unavailable'; reason: Absent }>;
+export type PartsByPillar = Readonly<{ recovery?: readonly PartRow[]; form?: readonly PartRow[]; weight?: readonly PartRow[]; groups?: readonly GroupRow[] }>;
 // One band of the owner's usual for a reading, in the shape the contract serves.
 export interface UsualRow {
   readonly signal: string;
@@ -168,6 +175,7 @@ export interface UsualRow {
   readonly high: number;
   readonly own_days: number;
   readonly own_share: number;
+  readonly days_until_personal: number;
   readonly window_days: 30;
   readonly estimator: 'shrunk_predictive' | 'own_mean_sd';
 }

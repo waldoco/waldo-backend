@@ -16,8 +16,16 @@ export type HistoryReaders = Readonly<{
 }>;
 // A pillar's parts are its score taken apart, so they are shown only for a pillar the view shows as available.
 export type PartsOfPillars = Partial<Record<Pillar, unknown>>;
-export const partsOfShownPillars = (parts: PartsOfPillars, shown: Readonly<Record<Pillar, object | null>>): PartsOfPillars =>
-  Object.fromEntries(Object.entries(parts).filter(([pillar]) => (shown[pillar as Pillar] as { state?: string } | null)?.state === 'available'));
+export const partsOfShownPillars = (parts: PartsOfPillars, shown: Readonly<Record<Pillar, object | null>>): PartsOfPillars => {
+  const available = (pillar: string) => (shown[pillar as Pillar] as { state?: string } | null)?.state === 'available';
+  // A grouped row follows the pillar it belongs to; it is dropped with it, and with nothing left of the list the key goes.
+  const entries = Object.entries(parts).flatMap(([key, value]): [string, unknown][] => {
+    if (key !== 'groups') return available(key) ? [[key, value]] : [];
+    const kept = (value as { pillar: string }[]).filter(group => available(group.pillar));
+    return kept.length ? [[key, kept]] : [];
+  });
+  return Object.fromEntries(entries);
+};
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 

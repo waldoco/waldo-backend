@@ -3,7 +3,7 @@ import { driverRanges, driversOf, SUBJECT_SIGNALS } from './drivers';
 import { formScore } from './form';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { energyWindows } from './energy-windows';
-import { PART_ORDER, partRows } from './parts';
+import { PART_ORDER, groupRows, partRows } from './parts';
 import { inUsualOrder, usualOfRange } from './usual';
 import { priorDays, sleepDebt } from './sleep-debt';
 import { combine } from './stats';
@@ -77,6 +77,8 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     ...(form.state === 'available' && form.parts ? { form: form.parts } : {}),
     ...(weight.state === 'available' && weight.parts ? { weight: weight.parts } : {}),
   };
+  const groups = groupRows({ ...(components.recovery ? { recovery: components.recovery } : {}), ...(components.form ? { form: components.form } : {}) });
+  const componentsWithGroups: PartsByPillar = groups.length ? { ...components, groups } : components;
   const energy = ownRange(target, prior, activeEnergy);
   const usual: UsualRow[] = inUsualOrder([
     ...(recoveryRead?.components.flatMap(component => (component.usual ? [component.usual] : [])) ?? []),
@@ -87,7 +89,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   return {
     ...scores,
     form: withoutDetail(form), weight: withoutDetail(weight),
-    ...(input.parts === true && Object.keys(components).length ? { components } : {}),
+    ...(input.parts === true && Object.keys(components).length ? { components: componentsWithGroups } : {}),
     ...(input.usual === true && usual.length ? { usual } : {}),
   };
 };

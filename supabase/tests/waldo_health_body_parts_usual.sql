@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(39);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -28,7 +28,7 @@ create function pg_temp.ctx(extra jsonb default '{}',days_back int default 0) re
 create function pg_temp.write(extra jsonb default '{}') returns jsonb language sql as $$ select pg_temp.h('context_write','parts-owner',pg_temp.ctx(extra)) $$;
 create function pg_temp.part(key text,score numeric,share numeric,points numeric,over jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('key',key,'state','available','score',score,'share',share,'points',points,'direction','usual','signals','[]'::jsonb,
-    'baseline',jsonb_build_object('state','personal','own_days',21,'own_share',0.9)) || over $$;
+    'baseline',jsonb_build_object('state','personal','own_days',21,'own_share',0.9,'days_until_personal',0)) || over $$;
 create function pg_temp.sleep(over jsonb default '{}') returns jsonb language sql as $$
   select pg_temp.part('sleep',80,0.5,40,jsonb_build_object('direction',null,'need_minutes',462,'need_basis','blended_average')) || over $$;
 create function pg_temp.recovery(extra jsonb default '[]') returns jsonb language sql as $$
@@ -42,7 +42,7 @@ create function pg_temp.parts(over jsonb default '{}') returns jsonb language sq
   select jsonb_build_object('recovery',pg_temp.recovery(),'form',pg_temp.form(),'weight',pg_temp.weight()) || over $$;
 create function pg_temp.band(signal text,over jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('signal',signal,'method',case signal when 'overnight_hrv' then 'rmssd' when 'resting_heart_rate' then 'overnight_resting' else null end,
-    'state','personal','low',40,'centre',45,'high',52,'own_days',21,'own_share',case when signal in ('overnight_hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress_heart_rate') then 0.9 else 1 end,
+    'state','personal','low',40,'centre',45,'high',52,'own_days',21,'days_until_personal',0,'own_share',case when signal in ('overnight_hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress_heart_rate') then 0.9 else 1 end,
     'window_days',30,'estimator',case when signal in ('overnight_hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress_heart_rate') then 'shrunk_predictive' else 'own_mean_sd' end) || over $$;
 create function pg_temp.usual() returns jsonb language sql as $$
   select jsonb_build_array(pg_temp.band('overnight_hrv'),pg_temp.band('resting_heart_rate'),pg_temp.band('breathing_rate'),pg_temp.band('spo2')) $$;
@@ -100,17 +100,19 @@ select is((select count(*)::int from unnest(array[
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"need_minutes":300}'),pg_temp.part('hrv',70,0.3,21),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"need_minutes":462.5}'),pg_temp.part('hrv',70,0.3,21),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"need_basis":"population"}'),pg_temp.part('hrv',70,0.3,21),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
-  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":5,"own_share":1}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
-  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"provisional","own_days":20,"own_share":1}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
-  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":31,"own_share":1}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
-  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":21,"own_share":1.2}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":5,"own_share":1,"days_until_personal":9}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"provisional","own_days":20,"own_share":1,"days_until_personal":0}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":31,"own_share":1,"days_until_personal":0}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":21,"own_share":1.2,"days_until_personal":0}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":21}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"personal","own_days":21,"own_share":0.9,"days_until_personal":3}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
+  pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21,'{"baseline":{"state":"provisional","own_days":9,"own_share":1,"days_until_personal":4}}'),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
   -- shares and points have to be the pillar's own: the points add up to its stored score and the shares to one
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21),pg_temp.part('resting_heart_rate',55,0.2,30))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.4,21),pg_temp.part('resting_heart_rate',55,0.2,11))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.3,21))))::text,
   pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"state":"unavailable","reason":"no_reading"}'))))::text
-]::jsonb[]) bad where pg_temp.refused_parts(bad)),12,'the need, the baseline and the sums are held to their closed rules as well');
+]::jsonb[]) bad where pg_temp.refused_parts(bad)),14,'the need, the baseline and the sums are held to their closed rules as well');
 select is((select count(*)::int from unnest(array[
   jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"state":"unavailable","reason":"nothing"}'))),
   jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.5,35,'{"state":"unavailable","reason":"no_reading"}'),pg_temp.part('resting_heart_rate',55,0.2,11))),
@@ -133,11 +135,35 @@ select is((select count(*)::int from unnest(array[
   jsonb_build_array(pg_temp.band('overnight_hrv','{"estimator":"own_mean_sd"}'))::text, jsonb_build_array(pg_temp.band('breathing_rate','{"estimator":"shrunk_predictive"}'))::text,
   jsonb_build_array(pg_temp.band('overnight_hrv','{"state":"provisional"}'))::text, jsonb_build_array(pg_temp.band('overnight_hrv','{"own_days":9}'))::text,
   jsonb_build_array(pg_temp.band('breathing_rate','{"own_share":0.5}'))::text, jsonb_build_array(pg_temp.band('overnight_hrv','{"own_days":31}'))::text,
+  jsonb_build_array(pg_temp.band('overnight_hrv','{"days_until_personal":3}'))::text, jsonb_build_array(pg_temp.band('overnight_hrv','{"state":"provisional","own_days":9,"days_until_personal":4}'))::text,
   jsonb_build_array(pg_temp.band('overnight_hrv','{"window_days":60}'))::text, jsonb_build_array(pg_temp.band('overnight_hrv','{"signal":"sleep_score"}'))::text,
   jsonb_build_array(pg_temp.band('overnight_hrv','{"target":44}'))::text, jsonb_build_array(pg_temp.band('overnight_hrv','{"low":"40"}'))::text,
   jsonb_build_array(pg_temp.band('sleep_midpoint','{"low":1500,"centre":1430,"high":20}'))::text, jsonb_build_array(pg_temp.band('sleep_midpoint','{"low":1400,"centre":600,"high":20}'))::text,
   jsonb_build_array(pg_temp.band('sleep_midpoint','{"low":700,"centre":650,"high":800}'))::text
-]::jsonb[]) bad where pg_temp.refused_usual(bad)),23,'bands outside their closed shape are refused whole');
+]::jsonb[]) bad where pg_temp.refused_usual(bad)),25,'bands outside their closed shape are refused whole');
+
+-- The two grouped rows are exactly the sum of two parts the same row holds, or the writer refuses them.
+create function pg_temp.grp(gkey text,over jsonb default '{}') returns jsonb language sql as $$
+  select (case gkey
+    when 'resting_state' then jsonb_build_object('key','resting_state','pillar','recovery','state','available','score',64,'share',0.5,'points',32,'direction','usual','parts','["hrv","resting_heart_rate"]'::jsonb,'signals','[]'::jsonb,
+      'baseline',jsonb_build_object('state','personal','own_days',21,'own_share',0.9,'days_until_personal',0))
+    else jsonb_build_object('key','circadian','pillar','form','state','available','score',65,'share',0.2,'points',13,'direction','usual','parts','["sleep_midpoint","daylight"]'::jsonb,'signals','[]'::jsonb,
+      'baseline',jsonb_build_object('state','personal','own_days',21,'own_share',0.9,'days_until_personal',0)) end) || over $$;
+create function pg_temp.with_groups(groups jsonb) returns jsonb language sql as $$ select pg_temp.parts(jsonb_build_object('groups',groups)) $$;
+select is(pg_temp.write(jsonb_build_object('components',pg_temp.with_groups(jsonb_build_array(pg_temp.grp('resting_state'),pg_temp.grp('circadian')))))->>'written','true','a row with both grouped rows is written');
+select is(pg_temp.h('scores_read','parts-owner')->'scores'->'components'->'groups'->0->>'key','resting_state','and the app''s scores read returns them with the parts');
+select is((select count(*)::int from unnest(array[
+  jsonb_build_array(pg_temp.grp('resting_state','{"pillar":"form"}')), jsonb_build_array(pg_temp.grp('resting_state','{"parts":["hrv","daylight"]}')),
+  jsonb_build_array(pg_temp.grp('resting_state','{"score":80}')), jsonb_build_array(pg_temp.grp('resting_state','{"share":0.6}')), jsonb_build_array(pg_temp.grp('resting_state','{"points":40}')),
+  jsonb_build_array(pg_temp.grp('resting_state','{"direction":"above_usual"}')), jsonb_build_array(pg_temp.grp('resting_state','{"direction":null}')),
+  jsonb_build_array(pg_temp.grp('resting_state','{"signals":["overnight_hrv"]}')), jsonb_build_array(pg_temp.grp('resting_state','{"baseline":null}')),
+  jsonb_build_array(pg_temp.grp('resting_state','{"baseline":{"state":"personal","own_days":21,"own_share":0.9,"days_until_personal":2}}')),
+  jsonb_build_array(pg_temp.grp('resting_state','{"state":"unavailable","reason":"no_reading"}')), jsonb_build_array(pg_temp.grp('resting_state','{"target":70}')),
+  jsonb_build_array(pg_temp.grp('resting_state'),pg_temp.grp('resting_state')), jsonb_build_array(pg_temp.grp('circadian','{"key":"cardio"}')), '[]'::jsonb, '"groups"'::jsonb
+]::jsonb[]) bad where pg_temp.write(jsonb_build_object('components',pg_temp.with_groups(bad)))->>'error' = 'invalid_request'),16,'a group that is not the sum of its parts, or not their direction, signals and baseline, is refused');
+select is(pg_temp.write(jsonb_build_object('components',pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.5,35,'{"state":"unavailable","reason":"no_reading"}') - 'score' - 'share' - 'points' - 'direction' - 'signals' - 'baseline',pg_temp.part('resting_heart_rate',64,0.5,32)),'groups',jsonb_build_array(jsonb_build_object('key','resting_state','pillar','recovery','state','unavailable','reason','no_reading'))))))->>'written','true','a group is unavailable, for the part''s reason, when a part has no reading');
+select ok(pg_temp.write(jsonb_build_object('components',pg_temp.parts(jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep(),pg_temp.part('hrv',70,0.5,35,'{"state":"unavailable","reason":"no_reading"}') - 'score' - 'share' - 'points' - 'direction' - 'signals' - 'baseline',pg_temp.part('resting_heart_rate',64,0.5,32)),'groups',jsonb_build_array(jsonb_build_object('key','resting_state','pillar','recovery','state','unavailable','reason','baseline_immature'))))))->>'error' = 'invalid_request','and refused when it names another reason');
+select ok(pg_temp.write(jsonb_build_object('components',pg_temp.parts() - 'recovery' || jsonb_build_object('groups',jsonb_build_array(pg_temp.grp('resting_state')))))->>'error' = 'invalid_request','a group whose pillar is not in the row is refused');
 
 -- A backfilled row never carries either.
 select ok(pg_temp.h('context_write','parts-owner',pg_temp.ctx(jsonb_build_object('components',jsonb_build_object('recovery',jsonb_build_array(pg_temp.sleep('{"share":1,"points":72}'))),'backfilled',true,'form',jsonb_build_object('reason','intraday_inputs_unavailable'),'weight',jsonb_build_object('reason','calendar_demand_unavailable')),5))->>'error' = 'invalid_request','a backfilled row never carries parts');

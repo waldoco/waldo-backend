@@ -17,6 +17,7 @@ const NON_NEGATIVE = new Set(['daylight', 'movement', 'awake_time', 'active_ener
 const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
 const clock = (minute: number) => round4(((minute % 1440) + 1440) % 1440) % 1440;
 const stateOf = (days: number) => (days >= BASELINE_DAYS ? 'personal' as const : 'provisional' as const);
+const daysLeft = (days: number) => Math.max(0, BASELINE_DAYS - days);
 
 // A band from the estimate that scored the reading. A natural-log estimate is back-transformed, so its band is not symmetric.
 // A circular one is minutes on the clock and may cross midnight; a spread of half a day or more leaves no band to show.
@@ -34,7 +35,7 @@ export const usualOfStanding = (signal: string, method: string | null, at: Stand
   if (![low, centre, high].every(Number.isFinite)) return null;
   return {
     signal, method, state: stateOf(at.own), low, centre, high, own_days: Math.min(at.own, BASELINE_WINDOW_DAYS),
-    own_share: Math.round(at.ownShare * 1e6) / 1e6, window_days: BASELINE_WINDOW_DAYS, estimator: 'shrunk_predictive',
+    own_share: Math.round(at.ownShare * 1e6) / 1e6, days_until_personal: daysLeft(Math.min(at.own, BASELINE_WINDOW_DAYS)), window_days: BASELINE_WINDOW_DAYS, estimator: 'shrunk_predictive',
   };
 };
 
@@ -43,7 +44,7 @@ export const usualOfRange = (signal: string, method: string | null, range: OwnRa
   signal, method, state: 'personal',
   low: round4(NON_NEGATIVE.has(signal) ? Math.max(0, range.mean - range.sd * OUTSIDE) : range.mean - range.sd * OUTSIDE),
   centre: round4(range.mean), high: round4(range.mean + range.sd * OUTSIDE),
-  own_days: Math.min(range.days, BASELINE_WINDOW_DAYS), own_share: 1, window_days: BASELINE_WINDOW_DAYS, estimator: 'own_mean_sd',
+  own_days: Math.min(range.days, BASELINE_WINDOW_DAYS), own_share: 1, days_until_personal: daysLeft(Math.min(range.days, BASELINE_WINDOW_DAYS)), window_days: BASELINE_WINDOW_DAYS, estimator: 'own_mean_sd',
 });
 
 // The bands in the contract's order, one per signal.

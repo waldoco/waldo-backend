@@ -170,7 +170,7 @@ describe('parts: what each stands on', () => {
     expect(part.need_basis).toBe('blended_average');
     expect(part.need_minutes).toBeGreaterThanOrEqual(360);
     expect(part.need_minutes).toBeLessThanOrEqual(600);
-    expect(part.baseline).toEqual({ state: 'personal', own_days: 29, own_share: expect.closeTo(29 / (14 + 29), 5) });
+    expect(part.baseline).toEqual({ state: 'personal', own_days: 29, own_share: expect.closeTo(29 / (14 + 29), 5), days_until_personal: 0 });
   });
   it('is personal from fourteen own days and provisional before, by the count and not by how much a prior carries', () => {
     const at = (nights: number) => withParts(syntheticInput(syntheticRun(nights), { sleepNeedMinutes: null }));
@@ -368,5 +368,76 @@ describe('parts and usual: golden vectors', async () => {
   it.each(Object.keys(golden.scores))('%s is written exactly as pinned', name => {
     const scores = withParts(goldenScoreInputs()[name]!);
     expect(JSON.stringify({ components: scores.components, usual: scores.usual })).toBe(golden.scores[name]);
+  });
+});
+
+describe('days left on every band and baseline', () => {
+  it.each(inputs)('%s: each band, part and group says the days short of fourteen, never below nothing', (_name, input) => {
+    const scores = withParts(input);
+    for (const band of scores.usual ?? []) expect(band.days_until_personal, band.signal).toBe(Math.max(0, 14 - band.own_days));
+    for (const pillar of PILLARS) for (const part of available(scores.components?.[pillar])) if (part.baseline) expect(part.baseline.days_until_personal, `${pillar}.${part.key}`).toBe(Math.max(0, 14 - part.baseline.own_days));
+    for (const group of scores.components?.groups ?? []) if (group.state === 'available' && group.baseline) expect(group.baseline.days_until_personal).toBe(Math.max(0, 14 - group.baseline.own_days));
+  });
+  it('counts down as the owner\'s days build: five short at nine days, none from fourteen', () => {
+    const at = (nights: number) => withParts(syntheticInput(syntheticRun(nights), { sleepNeedMinutes: null }));
+    expect(usualOf(at(10), 'movement')!.days_until_personal).toBe(5);
+    expect(usualOf(at(15), 'overnight_hrv')!.days_until_personal).toBe(0);
+    expect((partOf(at(10), 'recovery', 'hrv') as Extract<PartRow, { state: 'available' }>).baseline!.days_until_personal).toBe(14 - 9);
+  });
+});
+
+describe('grouped rows: Resting State and Circadian', () => {
+  type Group = Extract<NonNullable<DailyScores['components']>['groups'], readonly unknown[]>[number];
+  const groupOf = (scores: DailyScores, key: string): Group | undefined => scores.components?.groups?.find(group => group.key === key);
+  const mature = withParts(goldenScoreInputs().mature_confirmed_need!);
+  const rowOf = (scores: DailyScores, pillar: 'recovery' | 'form', key: string) => partOf(scores, pillar, key) as Extract<PartRow, { state: 'available' }>;
+  it('is each the sum of its two parts: the share and points added, the score their weighted mean by the weights the formulas give them', () => {
+    for (const [key, pillar, members] of [['resting_state', 'recovery', ['hrv', 'resting_heart_rate']], ['circadian', 'form', ['sleep_midpoint', 'daylight']]] as const) {
+      const group = groupOf(mature, key) as Extract<Group, { state: 'available' }>;
+      const parts = members.map(member => rowOf(mature, pillar, member));
+      expect(group.pillar).toBe(pillar);
+      expect(group.parts).toEqual(members);
+      expect(group.share).toBeCloseTo(parts[0]!.share + parts[1]!.share, 5);
+      expect(group.points).toBeCloseTo(parts[0]!.points + parts[1]!.points, 5);
+      expect(group.score).toBeCloseTo((parts[0]!.score * parts[0]!.share + parts[1]!.score * parts[1]!.share) / (parts[0]!.share + parts[1]!.share), 4);
+    }
+  });
+  it('takes the shares the existing formulas give: Resting State half of Recovery, Circadian a fifth of Form', () => {
+    expect((groupOf(mature, 'resting_state') as { share: number }).share).toBeCloseTo(0.5, 5);
+    expect((groupOf(mature, 'circadian') as { share: number }).share).toBeCloseTo(0.2, 5);
+  });
+  it('keeps the fine parts, and the pillar\'s points still add up to its score with the groups beside them', () => {
+    const scores = withParts(goldenScoreInputs().mature_own_average_need!);
+    expect(available(scores.components!.recovery).map(row => row.key)).toEqual(['sleep', 'hrv', 'resting_heart_rate']);
+    expect(Math.round(available(scores.components!.recovery).reduce((sum, row) => sum + row.points, 0))).toBe((scores.recovery as { score: number }).score);
+    expect(healthPartsV1Schema.safeParse(scores.components).success).toBe(true);
+  });
+  it('gives the direction both parts share, and none when they differ', () => {
+    const high = syntheticRun(25, i => (i === 0 ? { overnightHrv: [{ value: 200, method: 'rmssd' as const }], restingHeartRate: [{ value: 95, method: 'provider_resting_daily' as const }] } : {}));
+    const split = syntheticRun(25, i => (i === 0 ? { overnightHrv: [{ value: 200, method: 'rmssd' as const }], restingHeartRate: [{ value: 40, method: 'provider_resting_daily' as const }] } : {}));
+    expect((groupOf(withParts(syntheticInput(high)), 'resting_state') as { direction: unknown }).direction).toBe('above_usual');
+    expect((groupOf(withParts(syntheticInput(split)), 'resting_state') as { direction: unknown }).direction).toBeNull();
+    expect((groupOf(mature, 'circadian') as { direction: unknown }).direction).toBe(rowOf(mature, 'form', 'sleep_midpoint').direction === rowOf(mature, 'form', 'daylight').direction ? rowOf(mature, 'form', 'sleep_midpoint').direction : null);
+    const usual = withParts(syntheticInput(syntheticRun(25)));
+    for (const key of ['resting_state', 'circadian']) {
+      const group = groupOf(usual, key) as unknown as { direction: unknown; parts: string[] };
+      const pillar = key === 'circadian' ? 'form' : 'recovery';
+      const dirs = group.parts.map(part => rowOf(usual, pillar, part).direction);
+      expect(group.direction).toBe(dirs[0] === dirs[1] ? dirs[0] : null);
+    }
+  });
+  it('is unavailable when either part is, for that part\'s reason', () => {
+    const noHrv = withParts(syntheticInput(syntheticRun(25, i => (i === 0 ? { overnightHrv: [] } : {}))));
+    expect(groupOf(noHrv, 'resting_state')).toEqual({ key: 'resting_state', pillar: 'recovery', state: 'unavailable', reason: 'no_reading' });
+    const noDaylight = withParts(syntheticInput(syntheticRun(25, i => (i === 0 ? { hourly: syntheticDay(0).hourly.map(bucket => ({ ...bucket, daylightMinutes: null })) } : {}))));
+    expect(groupOf(noDaylight, 'circadian')).toEqual({ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_reading' });
+    expect(groupOf(noHrv, 'circadian')).toMatchObject({ state: 'available' });
+  });
+  it('stands on the less settled of its parts, and names no group for a pillar that is not there', () => {
+    const young = withParts(syntheticInput(syntheticRun(10), { sleepNeedMinutes: 480 }));
+    const group = groupOf(young, 'circadian') as Extract<Group, { state: 'available' }>;
+    expect(group.baseline).toMatchObject({ state: 'provisional', days_until_personal: 14 - group.baseline!.own_days });
+    expect(groupOf(withParts(goldenScoreInputs().missing_target_sleep!), 'resting_state')).toBeUndefined();
+    expect(withParts(goldenScoreInputs().first_day_only!).components?.groups?.map(entry => entry.key)).toEqual(['resting_state']);
   });
 });

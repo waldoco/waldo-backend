@@ -132,7 +132,8 @@ describe('scores at health revision 8', () => {
     answers = { health_scores_read: { scores: row({ recovery: damaged, components: served.components, usual: served.usual }) } };
     const body = JSON.parse((await text(SCORES, contracts('health=8'), ON))[1]);
     expect(body.recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
-    expect(Object.keys(body.components)).toEqual(['form', 'weight']);
+    expect(Object.keys(body.components).sort()).toEqual(['form', 'groups', 'weight']);
+    expect(body.components.groups.map((group: { key: string }) => group.key)).toEqual(['circadian']);
     expect(JSON.stringify(body)).not.toContain('"hrv"');
     expect(body.usual).toEqual(served.usual);
     // A row whose pillar is unavailable and still holds parts for it shows no parts for it either, and none at all when none is left.

@@ -5,10 +5,10 @@
 --   and a later write without them clears them. They are columns of their own, not keys of a pillar, because
 --   waldo.health_context_read passes the pillar objects and sleep_debt whole into the owner's Durable Object for the model's
 --   context; that read is not changed and does not return either column. Row-level security on the table is unchanged.
--- - waldo.health_parts_valid and waldo.health_usual_valid are the closed shapes: the parts of one pillar (its part keys, a score,
+-- - waldo.health_parts_valid, waldo.health_groups_valid and waldo.health_usual_valid are the closed shapes: the parts of one pillar (its part keys, a score,
 --   a share, points, a direction word, usual-signals from the closed list, a baseline that is personal exactly from fourteen own
 --   days, and for the sleep part its need) and one band per signal (its method, the statistic its signal uses, the band in order,
---   or crossing midnight for the sleep midpoint). The shares must add up to one and the points to the pillar's own stored score.
+--   or crossing midnight for the sleep midpoint), each carrying the days short of fourteen. The shares must add up to one and the points to the pillar's own stored score; a grouped row (Resting State, Circadian) must be exactly the sum of its two parts.
 -- - waldo.health_context_write is re-created whole from its last definition (20261101020000), admits the two keys through those
 --   functions, and never on a backfilled row. waldo.health_scores_read is re-created whole from its last definition (20261027170000)
 --   and returns both columns when set; waldo.health_scores_history is re-created whole from its last definition (20261027140000)
@@ -56,11 +56,13 @@ begin
       or (select count(distinct s) from jsonb_array_elements(v_part->'signals') s) <> jsonb_array_length(v_part->'signals')
       or (jsonb_typeof(v_part->'baseline') is distinct from 'null' and (
         jsonb_typeof(v_part->'baseline') is distinct from 'object'
-        or (select array_agg(k order by k) from jsonb_object_keys(v_part->'baseline') k) is distinct from array['own_days','own_share','state']
+        or (select array_agg(k order by k) from jsonb_object_keys(v_part->'baseline') k) is distinct from array['days_until_personal','own_days','own_share','state']
+        or jsonb_typeof(v_part #> '{baseline,days_until_personal}') is distinct from 'number' or (v_part #>> '{baseline,days_until_personal}') !~ '^[0-9]{1,2}$'
         or jsonb_typeof(v_part #> '{baseline,state}') is distinct from 'string' or (v_part #>> '{baseline,state}') not in ('provisional','personal')
         or jsonb_typeof(v_part #> '{baseline,own_days}') is distinct from 'number' or (v_part #>> '{baseline,own_days}') !~ '^[0-9]{1,2}$' or (v_part #>> '{baseline,own_days}')::int > 30
         or jsonb_typeof(v_part #> '{baseline,own_share}') is distinct from 'number' or (v_part #>> '{baseline,own_share}')::numeric not between 0 and 1
-        or ((v_part #>> '{baseline,state}') = 'personal') <> ((v_part #>> '{baseline,own_days}')::int >= 14)))
+        or ((v_part #>> '{baseline,state}') = 'personal') <> ((v_part #>> '{baseline,own_days}')::int >= 14)
+        or (v_part #>> '{baseline,days_until_personal}')::int <> greatest(0, 14 - (v_part #>> '{baseline,own_days}')::int)))
       or (p_pillar = 'recovery' and v_key = 'sleep' and (
         jsonb_typeof(v_part->'need_minutes') is distinct from 'number' or (v_part->>'need_minutes') !~ '^[0-9]{3}$' or (v_part->>'need_minutes')::int not between 360 and 600
         or jsonb_typeof(v_part->'need_basis') is distinct from 'string' or v_part->>'need_basis' not in ('owner_confirmed','own_average','blended_average'))) then return false; end if;
@@ -82,7 +84,7 @@ begin
   if jsonb_typeof(p_usual) is distinct from 'array' or jsonb_array_length(p_usual) not between 1 and 14 then return false; end if;
   for v_band in select value from jsonb_array_elements(p_usual) loop
     if jsonb_typeof(v_band) is distinct from 'object'
-      or (select array_agg(k order by k) from jsonb_object_keys(v_band) k) is distinct from array['centre','estimator','high','low','method','own_days','own_share','signal','state','window_days']
+      or (select array_agg(k order by k) from jsonb_object_keys(v_band) k) is distinct from array['centre','days_until_personal','estimator','high','low','method','own_days','own_share','signal','state','window_days']
       or jsonb_typeof(v_band->'signal') is distinct from 'string' or not ((v_band->>'signal') = any (v_signals)) or (v_band->>'signal') = any (v_seen) then return false; end if;
     v_signal := v_band->>'signal';
     v_seen := v_seen || v_signal;
@@ -96,6 +98,8 @@ begin
     if jsonb_typeof(v_band->'state') is distinct from 'string' or v_band->>'state' not in ('provisional','personal')
       or jsonb_typeof(v_band->'own_days') is distinct from 'number' or (v_band->>'own_days') !~ '^[0-9]{1,2}$' or (v_band->>'own_days')::int > 30
       or ((v_band->>'state') = 'personal') <> ((v_band->>'own_days')::int >= 14)
+      or jsonb_typeof(v_band->'days_until_personal') is distinct from 'number' or (v_band->>'days_until_personal') !~ '^[0-9]{1,2}$'
+      or (v_band->>'days_until_personal')::int <> greatest(0, 14 - (v_band->>'own_days')::int)
       or jsonb_typeof(v_band->'own_share') is distinct from 'number' or (v_band->>'own_share')::numeric not between 0 and 1
       or v_band->'window_days' is distinct from '30'::jsonb
       or jsonb_typeof(v_band->'estimator') is distinct from 'string'
@@ -113,6 +117,68 @@ begin
   end loop;
   return true;
 end $$;
+-- The two grouped rows (Resting State, Circadian): each the sum of two fine parts the same row holds. The group must name its
+-- pillar's two parts, both present; its share and points must be the sums of theirs and its score points over share; its
+-- direction the one they share, or null; its baseline the least settled of theirs; or, with either part unavailable, unavailable
+-- for that part's reason. A group is only ever the parts it sums, so it can add nothing the fine parts do not hold.
+create function waldo.health_groups_valid(p_groups jsonb, p_components jsonb) returns boolean
+language plpgsql immutable set search_path = '' as $$
+declare
+  v_group jsonb; v_key text; v_pillar text; v_parts text[]; v_rows jsonb; v_m jsonb; v_members jsonb[]; v_seen text[] := '{}'::text[]; v_share numeric; v_points numeric;
+  v_dirs text[]; v_reason text; v_least jsonb; v_signals text[];
+begin
+  if jsonb_typeof(p_groups) is distinct from 'array' or jsonb_array_length(p_groups) not between 1 and 2 then return false; end if;
+  for v_group in select value from jsonb_array_elements(p_groups) loop
+    if jsonb_typeof(v_group) is distinct from 'object' or jsonb_typeof(v_group->'key') is distinct from 'string' then return false; end if;
+    v_key := v_group->>'key';
+    if v_key = any (v_seen) then return false; end if;
+    v_seen := v_seen || v_key;
+    case v_key
+      when 'resting_state' then v_pillar := 'recovery'; v_parts := array['hrv','resting_heart_rate'];
+      when 'circadian' then v_pillar := 'form'; v_parts := array['sleep_midpoint','daylight'];
+      else return false;
+    end case;
+    v_rows := p_components->v_pillar;
+    if jsonb_typeof(v_rows) is distinct from 'array' or v_group->'pillar' is distinct from to_jsonb(v_pillar) then return false; end if;
+    v_members := '{}'::jsonb[]; v_reason := null;
+    foreach v_key in array v_parts loop
+      select value into v_m from jsonb_array_elements(v_rows) value where value->>'key' = v_key;
+      if v_m is null then return false; end if;
+      v_members := v_members || v_m;
+      if v_m->>'state' = 'unavailable' then v_reason := case when v_reason = 'no_reading' or v_m->>'reason' = 'no_reading' then 'no_reading' else 'baseline_immature' end; end if;
+    end loop;
+    if v_reason is not null then
+      if (select array_agg(k order by k) from jsonb_object_keys(v_group) k) is distinct from array['key','pillar','reason','state']
+        or v_group->>'state' <> 'unavailable' or v_group->>'reason' is distinct from v_reason then return false; end if;
+      continue;
+    end if;
+    if (select array_agg(k order by k) from jsonb_object_keys(v_group) k) is distinct from array['baseline','direction','key','parts','pillar','points','score','share','signals','state']
+      or v_group->>'state' <> 'available' or v_group->'parts' is distinct from to_jsonb(v_parts)
+      or jsonb_typeof(v_group->'score') is distinct from 'number' or jsonb_typeof(v_group->'share') is distinct from 'number' or jsonb_typeof(v_group->'points') is distinct from 'number' then return false; end if;
+    v_share := (v_members[1]->>'share')::numeric + (v_members[2]->>'share')::numeric;
+    v_points := (v_members[1]->>'points')::numeric + (v_members[2]->>'points')::numeric;
+    if abs((v_group->>'share')::numeric - v_share) > 0.0001 or abs((v_group->>'points')::numeric - v_points) > 0.0001
+      or v_share <= 0 or abs((v_group->>'score')::numeric - v_points / v_share) > 0.01 then return false; end if;
+    v_dirs := array[coalesce(v_members[1]->>'direction', ''), coalesce(v_members[2]->>'direction', '')];
+    if v_group->'direction' is distinct from (case when v_dirs[1] = v_dirs[2] and v_dirs[1] <> '' then to_jsonb(v_dirs[1]) else 'null'::jsonb end) then return false; end if;
+    select coalesce(array_agg(distinct s order by s), '{}'::text[]) into v_signals from (select jsonb_array_elements_text(m->'signals') s from unnest(v_members) m) x;
+    if jsonb_typeof(v_group->'signals') is distinct from 'array'
+      or (select coalesce(array_agg(distinct s order by s), '{}'::text[]) from jsonb_array_elements_text(v_group->'signals') s) is distinct from v_signals then return false; end if;
+    if jsonb_typeof(v_members[1]->'baseline') = 'null' or jsonb_typeof(v_members[2]->'baseline') = 'null' then
+      if jsonb_typeof(v_group->'baseline') is distinct from 'null' then return false; end if;
+    else
+      v_least := case when (v_members[1] #>> '{baseline,own_days}')::int <= (v_members[2] #>> '{baseline,own_days}')::int then v_members[1]->'baseline' else v_members[2]->'baseline' end;
+      if jsonb_typeof(v_group->'baseline') is distinct from 'object'
+        or (select array_agg(k order by k) from jsonb_object_keys(v_group->'baseline') k) is distinct from array['days_until_personal','own_days','own_share','state']
+        or v_group #>> '{baseline,state}' is distinct from v_least->>'state' or v_group #>> '{baseline,own_days}' is distinct from v_least->>'own_days'
+        or v_group #>> '{baseline,days_until_personal}' is distinct from v_least->>'days_until_personal'
+        or jsonb_typeof(v_group #> '{baseline,own_share}') is distinct from 'number'
+        or abs((v_group #>> '{baseline,own_share}')::numeric - least((v_members[1] #>> '{baseline,own_share}')::numeric, (v_members[2] #>> '{baseline,own_share}')::numeric)) > 0.000001 then return false; end if;
+    end if;
+  end loop;
+  return true;
+end $$;
+revoke all on function waldo.health_groups_valid(jsonb, jsonb) from public, anon, authenticated, service_role;
 revoke all on function waldo.health_parts_valid(text, jsonb, numeric) from public, anon, authenticated, service_role;
 revoke all on function waldo.health_usual_valid(jsonb) from public, anon, authenticated, service_role;
 
@@ -250,10 +316,11 @@ begin
   if v_body ? 'components' then
     v_p := v_body->'components';
     if jsonb_typeof(v_p) is distinct from 'object' or v_body ? 'backfilled' or not exists (select 1 from jsonb_object_keys(v_p))
-      or exists (select 1 from jsonb_object_keys(v_p) k where k not in ('recovery','form','weight')) then return '{"error":"invalid_request"}'; end if;
+      or exists (select 1 from jsonb_object_keys(v_p) k where k not in ('recovery','form','weight','groups')) then return '{"error":"invalid_request"}'; end if;
     foreach v_pillar in array array['recovery','form','weight'] loop
       if v_p ? v_pillar and ((v_body->v_pillar) ? 'reason' or not waldo.health_parts_valid(v_pillar, v_p->v_pillar, (v_body->v_pillar->>'score')::numeric)) then return '{"error":"invalid_request"}'; end if;
     end loop;
+    if v_p ? 'groups' and not waldo.health_groups_valid(v_p->'groups', v_p) then return '{"error":"invalid_request"}'; end if;
   end if;
   if v_body ? 'usual' and (v_body ? 'backfilled' or not waldo.health_usual_valid(v_body->'usual')) then return '{"error":"invalid_request"}'; end if;
   -- A backfilled row is a day recomputed from history that arrived late: true or absent (never false), for a day older than

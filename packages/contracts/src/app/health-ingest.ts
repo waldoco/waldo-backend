@@ -474,11 +474,14 @@ export const healthUsualV1Schema = z.strictObject({
   own_days: z.int().min(0).max(HEALTH_USUAL_WINDOW_DAYS_V1),
   // How much of the centre is the owner's own data rather than a population prior, 0 to 1.
   own_share: z.number().finite().min(0).max(1),
+  // The days short of the fourteen that make the band the owner's own: 0 once personal. The client never subtracts.
+  days_until_personal: z.int().min(0).max(14),
   window_days: z.literal(HEALTH_USUAL_WINDOW_DAYS_V1),
   estimator: z.enum(['shrunk_predictive', 'own_mean_sd']),
 }).refine(usual => usualMethodFits(usual.signal, usual.method), { error: 'the method belongs to the signal', path: ['method'] })
   .refine(usual => usual.estimator === (SHRUNK_SIGNALS.includes(usual.signal) ? 'shrunk_predictive' : 'own_mean_sd'), { error: 'the estimator belongs to the signal', path: ['estimator'] })
   .refine(usual => (usual.own_days >= 14) === (usual.state === 'personal'), { error: 'personal from fourteen own days', path: ['state'] })
+  .refine(usual => usual.days_until_personal === Math.max(0, 14 - usual.own_days), { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] })
   .refine(usual => usual.estimator === 'shrunk_predictive' || (usual.state === 'personal' && usual.own_share === 1), { error: 'an own-days band is the owner\'s own', path: ['own_share'] })
   .refine(usual => (usual.signal === 'sleep_midpoint'
     ? [usual.low, usual.centre, usual.high].every(minute => minuteOfDay.safeParse(minute).success)
@@ -492,7 +495,9 @@ export const healthPartBaselineV1Schema = z.strictObject({
   state: z.enum(['provisional', 'personal']),
   own_days: z.int().min(0).max(HEALTH_USUAL_WINDOW_DAYS_V1),
   own_share: z.number().finite().min(0).max(1),
-}).refine(baseline => (baseline.own_days >= 14) === (baseline.state === 'personal'), { error: 'personal from fourteen own days', path: ['state'] });
+  days_until_personal: z.int().min(0).max(14),
+}).refine(baseline => (baseline.own_days >= 14) === (baseline.state === 'personal'), { error: 'personal from fourteen own days', path: ['state'] })
+  .refine(baseline => baseline.days_until_personal === Math.max(0, 14 - baseline.own_days), { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] });
 export const healthPartUnavailableReasonV1Schema = z.enum(['no_reading', 'baseline_immature']);
 const partCommon = {
   state: z.literal('available'),
@@ -521,8 +526,28 @@ const partsOf = <Part extends z.ZodType<{ key: string }>>(part: Part, max: numbe
 export const healthRecoveryPartV1Schema = z.union([healthSleepPartV1Schema, partOf(z.enum(['hrv', 'resting_heart_rate']))]);
 export const healthFormPartV1Schema = partOf(z.enum(healthPartKeysV1.form));
 export const healthWeightPartV1Schema = partOf(z.enum(healthPartKeysV1.weight));
+// The two rows the app's screens show, each the sum of two fine parts of one pillar, which stay as they are: Resting State
+// (hrv and resting_heart_rate, in Recovery) and Circadian (sleep_midpoint and daylight, in Form). Score is the weighted mean of
+// the two by the weights the pillar's formula already gives them, so share and points are the sums of the parts' and still add
+// up to the pillar. Direction is the one both parts share and null when they differ: two readings have no common direction to
+// average, and a score cannot stand in for one, since it says better or worse and not which way. With either part missing the
+// group is unavailable, for that part's reason.
+export const healthGroupKeysV1 = { resting_state: { pillar: 'recovery', parts: ['hrv', 'resting_heart_rate'] }, circadian: { pillar: 'form', parts: ['sleep_midpoint', 'daylight'] } } as const;
+export const healthGroupKeyV1Schema = z.enum(['resting_state', 'circadian']);
+const groupFits = (group: { key: 'resting_state' | 'circadian'; pillar: string }) => healthGroupKeysV1[group.key].pillar === group.pillar;
+export const healthPartGroupV1Schema = z.union([
+  z.strictObject({
+    key: healthGroupKeyV1Schema, pillar: z.enum(['recovery', 'form']), state: z.literal('available'),
+    score: z.number().finite().min(0).max(100), share: z.number().finite().min(0).max(1), points: z.number().finite().min(0).max(100),
+    direction: healthPartDirectionV1Schema.nullable(), parts: z.array(z.string()).length(2),
+    signals: z.array(healthUsualSignalV1Schema).max(3), baseline: healthPartBaselineV1Schema.nullable(),
+  }).refine(group => groupFits(group) && group.parts.join() === healthGroupKeysV1[group.key].parts.join(), { error: 'the group is its pillar\'s two named parts', path: ['parts'] }),
+  z.strictObject({ key: healthGroupKeyV1Schema, pillar: z.enum(['recovery', 'form']), state: z.literal('unavailable'), reason: healthPartUnavailableReasonV1Schema })
+    .refine(groupFits, { error: 'the group belongs to its pillar', path: ['pillar'] }),
+]);
 // Present for a pillar only while that pillar is available, and only the pillars that are.
 export const healthPartsV1Schema = z.strictObject({
+  groups: z.array(healthPartGroupV1Schema).min(1).max(2).refine(groups => new Set(groups.map(group => group.key)).size === groups.length, { error: 'one row per group' }).optional(),
   recovery: partsOf(healthRecoveryPartV1Schema, healthPartKeysV1.recovery.length).optional(),
   form: partsOf(healthFormPartV1Schema, healthPartKeysV1.form.length).optional(),
   weight: partsOf(healthWeightPartV1Schema, healthPartKeysV1.weight.length).optional(),

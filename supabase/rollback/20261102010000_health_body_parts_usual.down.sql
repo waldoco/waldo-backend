@@ -1,5 +1,5 @@
 -- Rolls back 20261102010000: restores the previous definitions of the three functions it re-created (as of 20261101020000,
--- 20261027170000 and 20261027140000), drops the two helper functions and the two columns. The columns hold derived rows only, so
+-- 20261027170000 and 20261027140000), drops the three shape-check functions and the two columns. The columns hold derived rows only, so
 -- dropping them loses nothing the readings cannot recompute. Run only after the Worker has both switches (HEALTH_SCORE_PARTS,
 -- HEALTH_USUAL) at 0, or the writer will refuse the rows it still sends.
 create or replace function waldo.health_context_write(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
@@ -266,6 +266,7 @@ exception
   when data_exception then return '{"error":"invalid_request"}';
 end $$;
 
+drop function waldo.health_groups_valid(jsonb, jsonb);
 drop function waldo.health_parts_valid(text, jsonb, numeric);
 drop function waldo.health_usual_valid(jsonb);
 alter table public.health_context_daily drop column components;

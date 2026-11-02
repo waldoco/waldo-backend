@@ -8,7 +8,7 @@ import {
   HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
-  healthUsualMethodV1Schema, healthWeightPartV1Schema,
+  healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -664,7 +664,7 @@ describe('health revision 8: parts of each score and the owner\'s usual', async 
       expect(usualBand.centre - usualBand.low).not.toBeCloseTo(usualBand.high - usualBand.centre, 1);
       expect(midnightBand.low).toBeGreaterThan(midnightBand.high);
       expect(healthUsualV1Schema.safeParse({ ...midnightBand, low: 1000, centre: 1030, high: 1060 }).success).toBe(true);
-      expect(healthUsualV1Schema.safeParse({ ...usualBand, state: 'provisional', own_days: 9, own_share: 0.4 }).success).toBe(true);
+      expect(healthUsualV1Schema.safeParse({ ...usualBand, state: 'provisional', own_days: 9, own_share: 0.4, days_until_personal: 5 }).success).toBe(true);
     });
     it('refuses a band that is out of order, mislabelled or not the statistic its signal uses', () => {
       rejected(healthUsualV1Schema, [
@@ -672,7 +672,7 @@ describe('health revision 8: parts of each score and the owner\'s usual', async 
         { ...usualBand, estimator: 'own_mean_sd' }, { ...scores.usual[4], estimator: 'shrunk_predictive' },
         { ...usualBand, method: null }, { ...usualBand, method: 'overnight_resting' }, { ...scores.usual[1], method: 'rmssd' }, { ...scores.usual[3], method: 'rmssd' },
         { ...usualBand, state: 'provisional' }, { ...usualBand, own_days: 9 }, { ...scores.usual[4], own_share: 0.5 },
-        { ...usualBand, window_days: 60 }, { ...usualBand, own_days: 31 }, { ...usualBand, own_share: 1.1 }, { ...usualBand, signal: 'sleep_score' },
+        { ...usualBand, window_days: 60 }, { ...usualBand, days_until_personal: 3 }, { ...usualBand, days_until_personal: undefined }, { ...usualBand, state: 'provisional', own_days: 9, days_until_personal: 4 }, { ...usualBand, own_days: 31 }, { ...usualBand, own_share: 1.1 }, { ...usualBand, signal: 'sleep_score' },
         { ...usualBand, target: 44 }, { ...usualBand, low: Infinity }, { ...usualBand, low: null },
         { ...midnightBand, low: 1500 }, { ...midnightBand, high: -1 }, { ...midnightBand, centre: 600 }, { ...midnightBand, low: 700, centre: 650, high: 800 },
         'overnight_hrv', null,
@@ -732,16 +732,45 @@ describe('health revision 8: one valid and one invalid input for each exported s
     ['healthUsualV1Schema', healthUsualV1Schema, scores.usual[0], { ...scores.usual[0], low: 99 }],
     ['healthUsualListV1Schema', healthUsualListV1Schema, scores.usual, [scores.usual[0], scores.usual[0]]],
     ['healthPartDirectionV1Schema', healthPartDirectionV1Schema, 'below_usual', 'good'],
-    ['healthPartBaselineV1Schema', healthPartBaselineV1Schema, { state: 'personal', own_days: 21, own_share: 0.9 }, { state: 'personal', own_days: 5, own_share: 0.9 }],
+    ['healthPartBaselineV1Schema', healthPartBaselineV1Schema, { state: 'personal', own_days: 21, own_share: 0.9, days_until_personal: 0 }, { state: 'personal', own_days: 5, own_share: 0.9, days_until_personal: 9 }],
     ['healthPartUnavailableReasonV1Schema', healthPartUnavailableReasonV1Schema, 'baseline_immature', 'no_data'],
     ['healthSleepPartV1Schema', healthSleepPartV1Schema, sleepPart, { ...sleepPart, need_minutes: undefined }],
     ['healthRecoveryPartV1Schema', healthRecoveryPartV1Schema, hrvPart, { ...hrvPart, key: 'daylight' }],
     ['healthFormPartV1Schema', healthFormPartV1Schema, dayPart, { ...dayPart, key: 'hrv' }],
     ['healthWeightPartV1Schema', healthWeightPartV1Schema, scores.components.weight[0], { ...scores.components.weight[0], key: 'sleep' }],
     ['healthPartsV1Schema', healthPartsV1Schema, scores.components, { recovery: [hrvPart, hrvPart] }],
+    ['healthGroupKeyV1Schema', healthGroupKeyV1Schema, 'circadian', 'rest'],
+    ['healthPartGroupV1Schema', healthPartGroupV1Schema, scores.components.groups[0], { ...scores.components.groups[0], pillar: 'form' }],
   ];
   it.each(cases)('%s reads its valid input and refuses its invalid one', (_name, schema, valid, invalid) => {
     expect(schema.safeParse(valid).success).toBe(true);
     expect(schema.safeParse(invalid).success).toBe(false);
+  });
+});
+
+describe('health revision 8: days left and grouped rows', async () => {
+  const { scores, history } = (await import('./fixtures/health-scores-parts.v8.json')).default as unknown as { scores: Record<string, any>; history: Record<string, any> };
+  const [resting, circadian] = scores.components.groups;
+  const parts = (over: Record<string, unknown>) => ({ ...scores.components, ...over });
+  it('serves the days left on every band and every part and group baseline, as fourteen less the own days and never below nothing', () => {
+    for (const band of scores.usual) expect(band.days_until_personal, band.signal).toBe(Math.max(0, 14 - band.own_days));
+    for (const pillar of ['recovery', 'form', 'weight']) for (const part of scores.components[pillar]) if (part.baseline) expect(part.baseline.days_until_personal).toBe(Math.max(0, 14 - part.baseline.own_days));
+    expect(circadian.baseline.days_until_personal).toBe(5);
+    rejected(healthPartBaselineV1Schema, [{ state: 'personal', own_days: 21, own_share: 1, days_until_personal: 1 }, { state: 'provisional', own_days: 9, own_share: 1, days_until_personal: 14 }, { state: 'provisional', own_days: 9, own_share: 1 }, { state: 'provisional', own_days: 9, own_share: 1, days_until_personal: -1 }]);
+  });
+  it('reads the fixture\'s groups, a group built of two named parts of its own pillar, and an unavailable group with its reason', () => {
+    expect(healthPartsV1Schema.safeParse(scores.components).success).toBe(true);
+    expect(healthPartsV1Schema.safeParse(history.days[0].components).success).toBe(true);
+    expect(healthPartsV1Schema.safeParse(parts({ groups: [resting] })).success).toBe(true);
+    expect(healthGroupKeysV1).toEqual({ resting_state: { pillar: 'recovery', parts: ['hrv', 'resting_heart_rate'] }, circadian: { pillar: 'form', parts: ['sleep_midpoint', 'daylight'] } });
+  });
+  it('refuses a group on the wrong pillar, over other parts, repeated, with a made-up key or direction, or with extra keys', () => {
+    rejected(healthPartsV1Schema, [
+      parts({ groups: [{ ...resting, pillar: 'form' }] }), parts({ groups: [{ ...resting, parts: ['hrv', 'daylight'] }] }), parts({ groups: [{ ...resting, parts: ['resting_heart_rate', 'hrv'] }] }),
+      parts({ groups: [resting, resting] }), parts({ groups: [] }), parts({ groups: [resting, circadian, circadian] }), parts({ groups: [{ ...resting, key: 'stress_state' }] }),
+      parts({ groups: [{ ...resting, direction: 'good' }] }), parts({ groups: [{ ...resting, target: 70 }] }), parts({ groups: [{ ...resting, score: 101 }] }),
+      parts({ groups: [{ key: 'circadian', pillar: 'recovery', state: 'unavailable', reason: 'no_reading' }] }), parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_data' }] }),
+      parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_reading', score: 0 }] }), parts({ groups: 'resting_state' }),
+    ]);
   });
 });

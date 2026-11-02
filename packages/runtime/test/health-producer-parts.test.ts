@@ -82,10 +82,13 @@ describe('producer: parts and usual behind their switches', () => {
     const [both] = [await rows('1', { scoreParts: true, usual: true })];
     for (const row of both) {
       expect(Object.keys(row.components)).toEqual(expect.arrayContaining(['recovery']));
-      for (const parts of Object.values(row.components) as Record<string, unknown>[][]) for (const part of parts) {
+      for (const part of ['recovery', 'form', 'weight'].flatMap(pillar => (row.components[pillar] ?? []) as Record<string, unknown>[])) {
         expect(Object.keys(part).every(key => ['key', 'state', 'reason', 'score', 'share', 'points', 'direction', 'signals', 'baseline', 'need_minutes', 'need_basis'].includes(key))).toBe(true);
       }
-      for (const band of row.usual as Record<string, unknown>[]) expect(Object.keys(band).sort()).toEqual(['centre', 'estimator', 'high', 'low', 'method', 'own_days', 'own_share', 'signal', 'state', 'window_days']);
+      for (const group of (row.components.groups ?? []) as Record<string, unknown>[]) {
+        expect(Object.keys(group).every(key => ['key', 'pillar', 'state', 'reason', 'score', 'share', 'points', 'direction', 'parts', 'signals', 'baseline'].includes(key))).toBe(true);
+      }
+      for (const band of row.usual as Record<string, unknown>[]) expect(Object.keys(band).sort()).toEqual(['centre', 'days_until_personal', 'estimator', 'high', 'low', 'method', 'own_days', 'own_share', 'signal', 'state', 'window_days']);
     }
   });
 });
