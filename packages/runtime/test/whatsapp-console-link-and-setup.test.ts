@@ -6,6 +6,7 @@ import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const model = vi.hoisted(() => ({ requests: [] as string[], all: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -38,7 +39,7 @@ const deliver = async (instance: InstanceType<typeof OwnerDO>, id: string, text:
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: NAME, subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
   expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  await drainWhatsAppTurns(instance);
 };
 
 it('a WhatsApp turn that asks for the console link sends it as its own message now, and keeps it out of history, search and every model request', async () => {

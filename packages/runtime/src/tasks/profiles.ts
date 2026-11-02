@@ -1,6 +1,6 @@
 import type { TaskProfile, ToolName } from '@waldo/contracts';
 import { TOOL_REPLAY_CLASS } from '../hooks/tool-replay-class';
-import { isMachine, type JobRow } from './jobs';
+import { isMachine, MACHINE_ORIGIN, type JobRow } from './jobs';
 
 // What each worker profile may call. The brain enforces this on every call a worker sends; the worker never holds a
 // handler or a credential. No profile carries memory, send, approve, delegation or start_task (a worker cannot act for
@@ -19,6 +19,13 @@ const READER: readonly ToolName[] = [
 // and the tasks the owner starts keep them.
 export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'browse_page', 'read_mcp_tool'];
 export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
+// The owner look-up's worker: the one machine job with egress reads. It holds no private read (no mail, calendar, memory or
+// health), and its brief holds no time zone, so the only owner data it can carry out in a query is the name and address the
+// owner agreed to be searched by. Its web search is the owner's without a location (lookupToolHandlers in the owner object),
+// so the search provider is sent no country either. It writes nothing but unconfirmed findings, each grounded in a page this
+// attempt read.
+export const LOOKUP_READER: readonly ToolName[] = ['list_owner_findings', 'web_search', 'browse_page', 'record_owner_finding', 'read_tool_output'];
+export const LOOKUP_ORIGIN = `${MACHINE_ORIGIN}owner_lookup`;
 // The browser host serves one active run scope per owner, so these run in the brain's serial lane under the job's scope.
 export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'browse_act']);
 
@@ -48,4 +55,4 @@ export const unreplayable = (name: string): boolean => {
 
 // The tools a job's worker may call: its profile's, or the machine reader's for a job the brain started itself.
 export const jobTools = (row: Pick<JobRow, 'profile' | 'origin'>): readonly ToolName[] =>
-  isMachine(row) ? MACHINE_READER : row.profile === null ? [] : TASK_PROFILE_SPECS[row.profile].tools;
+  row.origin === LOOKUP_ORIGIN ? LOOKUP_READER : isMachine(row) ? MACHINE_READER : row.profile === null ? [] : TASK_PROFILE_SPECS[row.profile].tools;

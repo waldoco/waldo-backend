@@ -56,10 +56,17 @@ export type HostReply = { status: number; json: string };
  * Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only.
  * replyQuote: the opening of the message Waldo sent this owner in this chat that the turn replies to; absent for any other reply.
  */
+// unreadable: the owner's message reached the host with nothing Waldo can read; the owner answers it with one honest reply.
 export type IMessageTurnHandoff = Readonly<{
   dedupKey: string; digest: string; envelope: OwnerTurnEnvelope; binding: IMessageBinding; revision: string;
-  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia; replyQuote?: string;
+  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia; replyQuote?: string; unreadable?: true;
 }>;
+// Never drop an owner message silently: one that reached the host with nothing Waldo can read (no text, a file that could not be
+// fetched, an iMessage app's card) runs the owner checks as an empty message, so its sender hears it was not read.
+const unreadableMessage = (event: Extract<IMessageEvent, { kind: 'unsupported' }>): Extract<IMessageEvent, { kind: 'message' }> => {
+  const { bundleId: _bundleId, kind: _kind, ...common } = event;
+  return { ...common, kind: 'message', text: '', attachments: [] };
+};
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
 // reaction: a tapback instead of text, on a message in the bound chat. replyTo: the owner's message in the bound chat a
@@ -421,7 +428,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const bridgeId = store.meta('bridge_id'), accountId = store.meta('account_id');
     if (!bridgeId || !accountId) return true;
     for (let pending = store.nextPendingEvent(); pending; pending = store.nextPendingEvent()) {
-      const event = parseStoredEvent(pending);
+      const stored = parseStoredEvent(pending);
+      const unreadable = stored.kind === 'unsupported';
+      const event = stored.kind === 'unsupported' ? unreadableMessage(stored) : stored;
       let authority: BridgeAuthority | null;
       try { authority = await this.directory().authority(environment, bridgeId, accountId); } catch { return false; }
       if (!authority || (authority.state !== 'active' && authority.state !== 'pending')) { if (authority || store.revokedRevision() === null) this.applyRevocation(store, authority?.revision ?? 'deleted'); return true; }
@@ -439,14 +448,14 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         // Shared Waldo number: a sender reaches only their own Waldo, through their own presence.
         if (authority.state !== 'active') { settle('acknowledged', 'shared_bridge_pending'); continue; }
         if (event.chatGuid !== `iMessage;-;${event.senderHandle}`) { settle('acknowledged', 'not_sender_direct_chat'); continue; }
-        const outcome = await this.routeSharedSender(event, pending.digest, environment, bridgeId, accountId, store);
+        const outcome = await this.routeSharedSender(event, pending.digest, environment, bridgeId, accountId, store, unreadable);
         if (outcome === 'retry') return false;
         settle(outcome === 'handed' ? 'handed' : outcome === 'held' ? 'held' : 'acknowledged', outcome);
         continue;
       }
       const binding = bindingFromAuthority(authority);
       if (!binding) { settle('held', 'binding_unavailable'); continue; }
-      const outcome = await this.handToOwner(event, pending.digest, authority, binding, environment, store);
+      const outcome = await this.handToOwner(event, pending.digest, authority, binding, environment, store, undefined, unreadable);
       if (outcome === 'retry') return false;
       settle(outcome === 'handed' ? 'handed' : outcome === 'held' ? 'held' : 'acknowledged', outcome);
     }
@@ -454,7 +463,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 
   private async handToOwner(event: IMessageEvent, digest: string, authority: BridgeAuthority, binding: IMessageBinding, environment: string, store: BridgeStore,
-    refresh: () => Promise<SenderAuthority | null> = () => this.directory().authority(environment, binding.bridgeId, binding.accountId))
+    refresh: () => Promise<SenderAuthority | null> = () => this.directory().authority(environment, binding.bridgeId, binding.accountId), unreadable = false)
     : Promise<'handed' | 'not_admitted' | 'held' | 'retry'> {
     let latest = authority;
     const grant: IMessageAdmissionGrant = { binding, revision: authority.revision, doName: authority.doName };
@@ -483,7 +492,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
         digest, envelope: turn, binding, revision: grant.revision, environment,
         bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
-        ...(media ? { media } : {}), ...(replyQuote !== null ? { replyQuote } : {}),
+        ...(media ? { media } : {}), ...(replyQuote !== null ? { replyQuote } : {}), ...(unreadable ? { unreadable: true as const } : {}),
       }));
       const admitted = await this.owner(authority.doName).admitIMessageTurn(handoff);
       if (admitted === 'admitted' || admitted === 'duplicate') return 'handed';
@@ -523,7 +532,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 
   /** Shared bridge: the sender's own authority decides; no linked Waldo means the stranger path. */
-  private async routeSharedSender(event: IMessageEvent, digest: string, environment: string, bridgeId: string, accountId: string, store: BridgeStore)
+  private async routeSharedSender(event: IMessageEvent, digest: string, environment: string, bridgeId: string, accountId: string, store: BridgeStore, unreadable = false)
     : Promise<'handed' | 'not_admitted' | 'held' | 'retry' | SharedStrangerOutcome> {
     // "waldo CODE" is always a link action, never a turn. It links a new sender and moves the code owner's
     // own handle (for example off their per-owner Mac bridge); a handle another owner holds is refused.
@@ -536,7 +545,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (sender.state !== 'active') return 'held';
     const binding = bindingFromAuthority(sender);
     if (!binding || binding.subject !== event.senderHandle) return 'held';
-    return this.handToOwner(event, digest, sender, binding, environment, store, read);
+    return this.handToOwner(event, digest, sender, binding, environment, store, read, unreadable);
   }
 
   /** A "waldo CODE" link attempt from anyone, or one throttled onboarding reply to a sender with no Waldo. Never a turn. */

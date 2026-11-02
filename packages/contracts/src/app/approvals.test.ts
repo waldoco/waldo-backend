@@ -277,7 +277,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(6);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(5);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -337,7 +337,7 @@ describe('the health origin of an approval, approvals revision 4', () => {
   });
 });
 
-describe('a send as Waldo, approvals revision 6', () => {
+describe('a send as Waldo, approvals revision 5', () => {
   const sender = { name: "Waldo, Sam's assistant", address: 'sam@mail.example.com' };
   const asWaldo = {
     ...email, approval_id: 'p0007', kind: 'agent_mail_send', review: `From: ${sender.name} <${sender.address}>\nTo: lee@example.com\nSubject: Friday\n\nSee you at 4.`,
@@ -345,7 +345,7 @@ describe('a send as Waldo, approvals revision 6', () => {
   } as const;
 
   it('accepts a send that names its sender, its recipients and its draft', () => {
-    expect(APP_APPROVALS_AGENT_MAIL_REVISION).toBe(6);
+    expect(APP_APPROVALS_AGENT_MAIL_REVISION).toBe(5);
     expect(appApprovalV1Schema.safeParse(asWaldo).success).toBe(true);
     const { message: _draft, ...withoutDraft } = asWaldo.exact;
     expect(appApprovalV1Schema.safeParse({ ...asWaldo, exact: withoutDraft }).success).toBe(true);

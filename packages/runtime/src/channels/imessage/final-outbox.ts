@@ -39,6 +39,8 @@ export type IMessageOutboxRecord = {
   result?: IMessageResult; conflicts?: number;
   /** Its place in the order this owner's records were frozen. Absent on records frozen before the order was kept. */
   seq?: number;
+  /** When its hand-off age starts, where that is not frozenAt: a plain resend keeps its reply's place but gets its own age. */
+  agedFrom?: number;
 };
 
 // Where a message goes: the bridge, the owner object, the sender and the exact binding the bridge must still hold.
@@ -46,9 +48,12 @@ export type IMessageProactiveTarget = Readonly<{ bridgeDoName: string; ownerDoNa
 export const targetOf = (record: IMessageInboxRecord): IMessageProactiveTarget =>
   ({ bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject, revision: record.revision, bindingDigest: record.bindingDigest });
 
-/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console or connect link, tapback or a progress note. */
+// A turn's reply sent once more, unthreaded, after the host refused the threaded send before sending anything.
+const PLAIN = 'plain:';
+
+/** Whether a record is one an owner turn sent under its own name: its reply (or that reply resent plain), failure notice, console or connect link, tapback or a progress note. */
 export const sentByTurn = (replyRef: string, turnId: string) =>
-  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef === `connect:${turnId}` || replyRef === `react:${turnId}`
+  replyRef === `reply:${turnId}` || replyRef === `${PLAIN}${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef === `connect:${turnId}` || replyRef === `react:${turnId}`
   || replyRef.startsWith(`${PROGRESS}${turnId}:`);
 
 export class IMessageFinalOutbox {
@@ -130,7 +135,7 @@ export class IMessageFinalOutbox {
   }
 
   private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string,
-    { reaction, replyTo }: Readonly<{ reaction?: IMessageTapback; replyTo?: IMessageMessageTarget }> = {}): IMessageOutboxRecord {
+    { reaction, replyTo, place }: Readonly<{ reaction?: IMessageTapback; replyTo?: IMessageMessageTarget; place?: Readonly<{ frozenAt: number; seq?: number }> }> = {}): IMessageOutboxRecord {
     const prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
@@ -143,10 +148,10 @@ export class IMessageFinalOutbox {
       if (!evict) throw new Error('imessage_outbox_capacity');
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
-    const seq = (this.storage.kv.get<number>(SEQ_KEY) ?? 0) + 1;
-    this.storage.kv.put(SEQ_KEY, seq);
+    let seq = place?.seq;
+    if (seq === undefined) { seq = (this.storage.kv.get<number>(SEQ_KEY) ?? 0) + 1; this.storage.kv.put(SEQ_KEY, seq); }
     const row: IMessageOutboxRecord = { replyRef, commandId: target.commandId, text, bridgeDoName: target.bridgeDoName, ownerDoName: target.ownerDoName, subject: target.subject,
-      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, seq, ...(reaction ? { reaction } : {}), ...(replyTo ? { replyTo } : {}) };
+      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: place?.frozenAt ?? this.now(), ...(place ? { agedFrom: this.now() } : {}), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, seq, ...(reaction ? { reaction } : {}), ...(replyTo ? { replyTo } : {}) };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;
@@ -161,11 +166,17 @@ export class IMessageFinalOutbox {
       if (r.state !== 'frozen') return;
       r.attempts += 1;
       // Bounded: a reply the bridge never accepted is proved not_started, not silently resent forever.
-      if (this.now() - r.frozenAt >= maxAgeMs) { r.state = 'settled'; r.text = ''; r.result = notStarted(r.commandId, 'bridge_unavailable'); }
+      if (this.now() - (r.agedFrom ?? r.frozenAt) >= maxAgeMs) { r.state = 'settled'; r.text = ''; r.result = notStarted(r.commandId, 'bridge_unavailable'); }
       else r.nextAttemptAt = this.now() + delayMs;
     });
   }
-  /** First terminal result is authoritative; a different later result is counted, never applied. */
+  /**
+   * First terminal result is authoritative; a different later result is counted, never applied. A threaded reply the host
+   * proved it never sent (rejected, not_started) is frozen once more, unthreaded, in the same transaction: a refused thread
+   * never costs the owner their answer. Its record and command are keyed to the turn's, so a repeated result freezes nothing new.
+   * It keeps its reply's place (frozenAt and seq) ahead of later turns' messages, and gets the whole hand-off age from its own
+   * freeze. An uncertain result is never resent: it may have been delivered.
+   */
   settle(replyRef: string, commandId: string, input: unknown): boolean {
     const result = iMessageResultSchema.parse(input);
     if (result.state === 'queued' || result.state === 'started' || result.commandId !== commandId) throw new Error('imessage_result_invalid');
@@ -174,6 +185,16 @@ export class IMessageFinalOutbox {
       if (r.commandId !== commandId) return;
       known = true;
       if (r.state === 'settled') { if (JSON.stringify(r.result) !== JSON.stringify(result)) r.conflicts = (r.conflicts ?? 0) + 1; return; }
+      // A command conflict proves nothing about the other delivery under that command, which may have gone out.
+      if (r.replyTo && r.text && r.subject !== undefined && r.replyRef.startsWith('reply:') && result.state === 'rejected' && result.disposition === 'not_started'
+        && result.reason !== 'command_conflict') {
+        // A full outbox of live replies has no room: the refusal is still recorded, and the answer stays unsent.
+        try { this.put(`${PLAIN}${r.replyRef.slice('reply:'.length)}`, { ...r, subject: r.subject, commandId: `wpl_${r.commandId}` }, r.text, { place: { frozenAt: r.frozenAt, ...(r.seq === undefined ? {} : { seq: r.seq }) } }); }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== 'imessage_outbox_capacity') throw error;
+          console.error(JSON.stringify({ hop: 'imessage_plain_resend', ok: false, code: 'outbox_capacity' }));
+        }
+      }
       r.state = 'settled'; r.result = result; r.text = '';
     });
     return known;

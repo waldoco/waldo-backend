@@ -12,6 +12,7 @@ import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
 import type { LoopBook } from './loops';
 import type { MachineJob } from '../tasks/jobs';
 import { HEALTH_TRIGGER_ID, type HealthTriggerSetting } from '../health/trigger';
+import { MEMORY_DAYTIME_ID } from '../memory/consolidator';
 
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 export type SchedulePreferences = Readonly<Record<ScheduleKind, boolean>>;
@@ -74,7 +75,7 @@ const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine
 export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
   const { scheduler, plans, timezone, now } = ctx;
   const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
-  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await scheduler.cancelReadable(id); }
+  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await scheduler.cancelReadable(id); }
   if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else { await scheduler.cancelReadable(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); } }
   // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
@@ -99,7 +100,7 @@ export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, t
 export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext): Promise<void> => {
   const { scheduler } = ctx;
   const cancelIf = (id: string) => scheduler.cancelReadable(id);
-  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await cancelIf(id);
+  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await cancelIf(id);
   if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); }
   if (!prefs.event_briefs) { await cancelIf(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); }
   if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
@@ -108,7 +109,8 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
 
 // The kind an out-of-the-box schedule entry belongs to, or null for owner-created and internal entries.
 const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
-  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID)) return 'nightly';
+  // The daytime memory pass is part of the memory pass the owner can turn off.
+  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID || entry.id === MEMORY_DAYTIME_ID)) return 'nightly';
   if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
   if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';

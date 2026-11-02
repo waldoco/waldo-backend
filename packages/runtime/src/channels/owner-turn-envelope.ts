@@ -46,10 +46,12 @@ export type OwnerTurnEnvelope = Readonly<{
   // Set by a channel that shows the reply while it is written; absent, the reply is delivered whole as before.
   replyStream?: ReplyStream;
 }>;
+// When a reminder was due and when it fires, in the owner's local time, for the model to judge: one that fires hours late says so.
+export type ReminderTiming = Readonly<{ due: string; now: string; timezone: string }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
-  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
+  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string, timing?: ReminderTiming): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
   // answers the owner's own message late, never for one Waldo starts itself.
@@ -64,8 +66,8 @@ export type OwnerResponder = Readonly<{
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
   promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
-  // One welcome-build stage's structured answer; its input and output never reach a trace.
-  welcome?(trace: string, stage: string, input: string): Promise<string>;
+  // One welcome-build stage's structured answer; its input and output never reach a trace. version 2 is the second build's.
+  welcome?(trace: string, stage: string, input: string, version?: 2): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.

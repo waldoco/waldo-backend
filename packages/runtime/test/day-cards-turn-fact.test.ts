@@ -8,6 +8,7 @@ import { localIso } from '../src/channels/reminders';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const ZONE = 'Asia/Kolkata';
 // 09:56 in Kolkata.
@@ -100,7 +101,7 @@ it('a hello on WhatsApp carries where the Brief went today, in the turn context 
         body: JSON.stringify({ messages: [{ from: subject, timestamp: String(Math.floor(Date.now() / 1000)), id: 'wamid.hello', type: 'text', text: { body: 'hello' } }] }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
       const turn = model.requests.filter(request => !request.text?.format && request.tools?.length).at(-1)!;
       const input = turn.input;
       const message = JSON.stringify(Array.isArray(input) ? input.at(-1) : input);

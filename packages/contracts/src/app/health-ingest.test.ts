@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
-  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
+  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
+  HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -431,11 +432,22 @@ describe('health scores history (revision 4)', () => {
   });
 });
 
+describe('health settings', () => {
+  it('holds the owner\'s stated sleep need in whole minutes, in the range the score engine trusts, or none', () => {
+    expect([HEALTH_SLEEP_NEED_MIN_MINUTES_V1, HEALTH_SLEEP_NEED_MAX_MINUTES_V1]).toEqual([360, 600]);
+    for (const value of [{ sleep_need_minutes: 480 }, { sleep_need_minutes: 360 }, { sleep_need_minutes: 600 }, { sleep_need_minutes: null }]) {
+      expect(healthSettingsV1Schema.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+    rejected(healthSettingsV1Schema, [{}, { sleep_need_minutes: 359 }, { sleep_need_minutes: 601 }, { sleep_need_minutes: 480.5 }, { sleep_need_minutes: '480' },
+      { sleep_need_minutes: 480, owner_id: 'x' }, { sleep_need_hours: 8 }]);
+  });
+});
+
 describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
-      'GET /app/v1/health/scores/history',
+      'GET /app/v1/health/scores/history', 'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);
@@ -544,6 +556,14 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
     for (const sample of [full, ride, swim, { ...workout, hr_zones: { ...zones, basis: 'provider', lower_bounds_bpm: null } }, { ...workout, hr_zones: { ...zones, basis: 'max_heart_rate' } }]) {
       expect(healthSampleV1Schema.safeParse(sample).success, JSON.stringify(sample)).toBe(true);
     }
+  });
+  // Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, not a measured maximum, say so,
+  // so the model can call them approximate. They name their bounds like any phone-built zones.
+  it('takes zones on the highest observed workout peak from revision 6, with their bounds', () => {
+    expect(HEALTH_OBSERVED_PEAK_REVISION_V1).toBe(HEALTH_COACH_REVISION_V1 + 1);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_workout_peak' } }).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_workout_peak', lower_bounds_bpm: null } }).success).toBe(false);
+    expect(healthSampleV1Schema.safeParse({ ...workout, hr_zones: { ...zones, basis: 'observed_peak' } }).success).toBe(false);
   });
   it('refuses a workout whose heart rate, zones or effort cannot be one session', () => {
     rejected(healthSampleV1Schema, [

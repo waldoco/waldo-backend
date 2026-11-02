@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { HEALTH_RECOMPUTE_ID, HEALTH_RECOMPUTE_WINDOW_MS, healthRecompute } from '../src/health/recompute';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { HEALTH_SAMPLES_PATH, notifyOwnerHealthSamples, verifiedHealthSamples } from '../src/health/zone-change-route';
+import { welcomeBuild } from '../src/onboarding/welcome';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import type { ScheduleEntry } from '@waldo/contracts';
@@ -104,15 +105,17 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   [...state.storage.kv.list()],
 ]);
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
-const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload(): Promise<void>; pass(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
+const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload(): Promise<void>; needChanged(): Promise<void>; pass(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
   const doName = `health-recompute-do-${sequence++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7');
     const owner = new OwnerDO(state, config as never) as unknown as Owner;
-    const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
+    const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+    const upload = () => notifyOwnerHealthSamples(owners, SECRET, doName);
+    const needChanged = () => notifyOwnerHealthSamples(owners, SECRET, doName, 'settings');
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
-    try { await work({ owner, state, upload, pass }); } finally { await state.storage.deleteAlarm(); }
+    try { await work({ owner, state, upload, needChanged, pass }); } finally { await state.storage.deleteAlarm(); }
   });
 };
 const entry = (state: DurableObjectState, id = HEALTH_RECOMPUTE_ID) => state.storage.sql.exec<{ kind: string; due_at: number; status: string; attempts: number }>('SELECT kind, due_at, status, attempts FROM schedule WHERE id = ?', id).toArray()[0] ?? null;
@@ -127,9 +130,9 @@ const tableExists = (state: DurableObjectState, name: string) => state.storage.s
 const earlierToday = (day = '2026-10-21') => plane.rows.set(day, { recovery: { score: 20, zone: 'low', algorithm_version: 'recovery.candidate.v1' }, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } });
 
 describe('the readings-changed notice', () => {
-  const capture = async (doName = 'owner-a') => {
+  const capture = async (doName = 'owner-a', cause: 'readings' | 'settings' = 'readings') => {
     let sent!: Request;
-    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName);
+    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName, cause);
     return sent;
   };
   const resend = async (request: Request, over: { headers?: Record<string, string>; body?: unknown; method?: string } = {}) =>
@@ -140,7 +143,19 @@ describe('the readings-changed notice', () => {
     const request = await capture();
     expect(new URL(request.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     expect(await request.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe(true);
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('readings');
+  });
+
+  it('says a stated sleep need changed with one signed word, which a readings signature does not cover', async () => {
+    const request = await capture('owner-a', 'settings');
+    expect(await request.clone().json()).toEqual({ settings: true });
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('settings');
+    const readings = await capture();
+    const swapped = await resend(readings, { body: { settings: true } });
+    expect(await verifiedHealthSamples(swapped, SECRET, isOwnerA)).toBeNull();
+    for (const body of [{ settings: false }, { settings: 'yes' }, { settings: true, day: '2026-10-21' }]) {
+      expect(await verifiedHealthSamples(await resend(request, { body }), SECRET, isOwnerA), JSON.stringify(body)).toBeNull();
+    }
   });
 
   it('refuses a forged, re-addressed, padded, malformed or unsigned request', async () => {
@@ -154,8 +169,23 @@ describe('the readings-changed notice', () => {
       empty: await resend(await capture(), { body: null }),
       wrongMethod: await resend(await capture(), { method: 'GET' }),
     };
-    for (const [label, request] of Object.entries(cases)) expect([label, await verifiedHealthSamples(request, SECRET, isOwnerA)]).toEqual([label, false]);
-    expect(await verifiedHealthSamples(await capture(), undefined, isOwnerA)).toBe(false);
+    for (const [label, request] of Object.entries(cases)) expect([label, await verifiedHealthSamples(request, SECRET, isOwnerA)]).toEqual([label, null]);
+    expect(await verifiedHealthSamples(await capture(), undefined, isOwnerA)).toBeNull();
+  });
+});
+
+describe('a change of the stated sleep need', () => {
+  it('arms one recompute like new readings, and never spends the welcome\'s one retry for late health data', async () => {
+    vi.setSystemTime(NOW);
+    await withOwner(async ({ state, upload, needChanged }) => {
+      const welcome = () => welcomeBuild(state.storage.sql, Date.now);
+      welcome().start(); welcome().begin('health'); welcome().settle('health', 'empty', 0);
+      await needChanged();
+      expect(entry(state)).toMatchObject({ kind: 'provider_sync', status: 'armed', due_at: NOW + HEALTH_RECOMPUTE_WINDOW_MS });
+      expect(welcome().view().stages.health).toBe('empty');
+      await upload();
+      expect(welcome().view().stages.health).not.toBe('empty');
+    });
   });
 });
 

@@ -25,8 +25,43 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
 });
 
 describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
-  it('is declared off for production and staging until the gate turns it on', () => {
+  it('is on for staging and off for production', () => {
     expect(parsed.vars.HEALTH_SOLO_NOTICE).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('1');
+  });
+});
+
+describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
+  it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
+    expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('1');
+  });
+});
+
+describe('HEALTH_COACHING in the Worker config', () => {
+  it('is on for staging, which deploys with migrations 20261101000000 and 20261101020000, and off for production', () => {
+    expect(parsed.vars.HEALTH_COACHING).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('1');
+  });
+});
+
+describe('HEALTH_EASE_WORKOUT in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+    expect(parsed.vars.HEALTH_EASE_WORKOUT).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('0');
+  });
+});
+
+describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+    expect(parsed.vars.CALENDAR_UNDO_CANCEL).toBe('0');
+    expect(parsed.env.staging.vars.CALENDAR_UNDO_CANCEL).toBe('0');
+  });
+});
+
+describe('MEDICATIONS in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
+    expect(parsed.vars.MEDICATIONS).toBe('0');
+    expect(parsed.env.staging.vars.MEDICATIONS).toBe('0');
   });
 });

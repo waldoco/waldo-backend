@@ -3,6 +3,7 @@ import type { LLMToolCall, LLMToolTurn } from '@waldo/contracts';
 import type { TelegramWebhookEnv } from '../channels/telegram-webhook';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import type { LoopToolResult } from '../conversation/tool-loop';
+import { modelProviderSetting } from '../llm/owner-routes';
 import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
 import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
@@ -50,7 +51,7 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         report: (ticket, result, events, spend, outcomes) => owner.taskReport(ticket, result, events, spend, outcomes),
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
       };
-      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.health };
+      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health };
       outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';

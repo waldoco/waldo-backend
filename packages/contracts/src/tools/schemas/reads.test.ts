@@ -17,6 +17,7 @@ import {
   getTasksArgsSchema,
   readDriveArgsSchema,
   getHealthResultSchema,
+  HEALTH_READ_MAX_SESSIONS,
   calendarPageSchema, queryCalendarArgsSchema, googleCalendarListPageSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
@@ -110,8 +111,27 @@ describe('getHealthArgsSchema', () => {
       signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-01', value: 48 }, { day: '2026-10-02', value: null }] }] };
     expect(getHealthResultSchema.safeParse(available).success).toBe(true);
     expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(true);
-    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'kg' }] }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'lb' }] }).success).toBe(false);
     expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'stale' }).success).toBe(false);
+  });
+
+  it('asks for body composition and stand hours, and types kilograms', () => {
+    expect(getHealthArgsSchema.safeParse({ signals: ['body_mass', 'body_fat', 'lean_body_mass', 'stand_hours'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: ['body_weight'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('lists workout sessions with what the watch measured, bounded, and refuses one that cannot be a session', () => {
+    const base = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1,
+      signals: [{ signal: 'workouts', unit: 'minutes', source: 'apple', method: null, days: [{ day: '2026-10-01', value: 58 }] }] };
+    const run = { day: '2026-10-01', activity: 'running', minutes: 58, energy_kcal: 640, distance_m: 12400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181,
+      zone_minutes: [5, 15, 25, 10, 3], effort: { score: 7, method: 'rated' }, running: { power_w: 285, cadence_spm: 176 } };
+    expect(getHealthResultSchema.safeParse({ ...base, sessions: [run, { day: '2026-10-01', activity: 'swimming', minutes: 40, swimming: { strokes: 1480 } }] }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse(base).success).toBe(true);
+    for (const bad of [
+      { ...run, avg_hr_bpm: 190 }, { ...run, zone_minutes: [5, 15, 25, 10] }, { ...run, effort: { score: 11, method: 'rated' } }, { ...run, running: { pace: 4.5 } },
+      { ...run, origin: { read_api: 'healthkit' } }, { ...run, activity: '' }, { ...run, day: '2026-10-01T06:00:00Z' },
+    ]) expect(getHealthResultSchema.safeParse({ ...base, sessions: [bad] }).success, JSON.stringify(bad)).toBe(false);
+    expect(getHealthResultSchema.safeParse({ ...base, sessions: Array.from({ length: HEALTH_READ_MAX_SESSIONS + 1 }, () => run) }).success).toBe(false);
   });
 });
 
@@ -206,6 +226,13 @@ describe('readMemoryArgs', () => {
   it('rejects a non-hall and a query over 500 chars', () => {
     expect(readMemoryArgsSchema.safeParse({ hall: 'goals' }).success).toBe(false);
     expect(readMemoryArgsSchema.safeParse({ query: 'x'.repeat(501) }).success).toBe(false);
+  });
+
+  it('reads claims by id: one to twelve positive ids, which a hall or area may narrow but a query may not join', () => {
+    expect(readMemoryArgsSchema.safeParse({ ids: [12, 40] }).success).toBe(true);
+    expect(readMemoryArgsSchema.safeParse({ ids: [12], hall: 'facts', area: 'work' }).success).toBe(true);
+    for (const ids of [[], [0], [-3], [1.5], ['c12'], Array.from({ length: 13 }, (_, i) => i + 1)]) expect(readMemoryArgsSchema.safeParse({ ids }).success, JSON.stringify(ids)).toBe(false);
+    expect(readMemoryArgsSchema.safeParse({ ids: [12], query: 'dentist' }).success).toBe(false);
   });
 });
 

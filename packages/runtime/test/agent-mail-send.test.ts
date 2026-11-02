@@ -335,16 +335,16 @@ describe('a send as Waldo on the approval desk', () => {
 });
 
 describe('the app approvals list', () => {
-  it('shows a send as Waldo, with its sender, only to a build that reads approvals revision 6', async () => {
+  it('shows a send as Waldo, with its sender, only to a build that reads approvals revision 5', async () => {
     await owner('agent-mail-send-app-list', async state => {
       const f = harness(state);
       const mail = await f.desk.proposeAgentMailSend(await agentMailProposal());
       const calendar = await f.desk.propose({ action: 'create', title: 'Walk', start: new Date(Date.now() + 3_600_000).toISOString() as never, end: new Date(Date.now() + 5_400_000).toISOString() as never, reason: 'afternoon slot' });
       const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: f.desk };
       const list = async (contract?: string) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host)).json()).approvals;
-      for (const contract of [undefined, 'approvals=1', 'approvals=4', 'approvals=5', 'chat=6'])
+      for (const contract of [undefined, 'approvals=1', 'approvals=3', 'approvals=4', 'chat=5'])
         expect([contract, (await list(contract)).map(item => item.approval_id)]).toEqual([contract, [calendar]]);
-      const latest = await list('approvals=6');
+      const latest = await list('approvals=5');
       expect(latest.map(item => item.approval_id)).toEqual([calendar, mail]);
       expect(latest.find(item => item.approval_id === mail)!.exact.sender).toEqual({ name: "Waldo, Sam's assistant", address: 'sam@mail.example.test' });
     });

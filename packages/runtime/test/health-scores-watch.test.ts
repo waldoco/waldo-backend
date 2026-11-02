@@ -12,7 +12,7 @@ const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
 const hourly = (day: string, offset: number, energy: number | null = null): HourlyBucket[] =>
   [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(),
-    heartRate: 72 + wobble(h + offset, 2), hrv: 55, hrvMethod: 'rmssd', daylightMinutes: 20, movementMinutes: 12,
+    heartRate: 72 + wobble(h + offset, 2), hrvReadings: [{ value: 55, method: 'rmssd' }], daylightMinutes: 20, movementMinutes: 12,
     activeEnergyKcal: energy === null ? null : energy + wobble(h + offset, 3),
   }));
 const vitals = (i: number, over: Partial<DayVitals> = {}): DayVitals => ({
@@ -50,7 +50,7 @@ describe('Form v5: Recovery v2\'s inputs, and nothing else', () => {
   // An hour that holds only active energy is Weight's. Form's hour count, its data horizon and the hour still filling are
   // read from the hours Form reads, so adding such hours never moves Form.
   const energyHours = (day: string, hours: readonly number[]): HourlyBucket[] => hours.map(h => ({
-    startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(), heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null, activeEnergyKcal: 15,
+    startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(), heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: 15,
   }));
   it('never changes Form when hours holding only active energy are added, today or on earlier days', () => {
     const plain = month();

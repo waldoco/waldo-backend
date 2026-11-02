@@ -1,7 +1,7 @@
 import { routerSignature } from '../identity/owner-directory';
 
-// Worker-to-owner-DO only, two value-free health notices. "Today's derived row moved zone" carries the owner's local day;
-// "this owner's readings changed" carries nothing. Neither carries a pillar, zone word or reading. The router signature
+// Worker-to-owner-DO only, value-free health notices. "Today's derived row moved zone" carries the owner's local day;
+// "this owner's readings changed" carries nothing, and "their stated sleep need changed" carries only `settings: true`. None carries a pillar, zone word or reading. The router signature
 // binds the owner and the body; a replay marks a day already marked, or asks for a recompute that one already waiting covers.
 export const HEALTH_ZONE_CHANGE_PATH = '/app/v1/internal/health-zone-change';
 export const HEALTH_SAMPLES_PATH = '/app/v1/internal/health-samples';
@@ -19,8 +19,11 @@ const ZONE_CHANGE: Notice = {
 };
 const SAMPLES: Notice = {
   path: HEALTH_SAMPLES_PATH, header: 'x-waldo-samples-sig',
-  statement: (doName, body) => (Object.keys(body).length === 0 ? `healthsamples.${doName}` : null),
+  statement: (doName, body) => (Object.keys(body).length === 0 ? `healthsamples.${doName}`
+    : Object.keys(body).length === 1 && body.settings === true ? `healthsettings.${doName}` : null),
 };
+// Why the derived rows need a recompute: new readings, or a new stated sleep need with the same readings.
+export type HealthRecomputeCause = 'readings' | 'settings';
 
 const send = async (notice: Notice, owners: OwnerNamespace, secret: string, doName: string, body: Body): Promise<void> => {
   const statement = notice.statement(doName, body);
@@ -54,6 +57,9 @@ export const verifiedZoneChange = async (request: Request, secret: string | unde
   const body = await verified(ZONE_CHANGE, request, secret, addressesThisObject);
   return typeof body?.day === 'string' ? body.day : null;
 };
-export const notifyOwnerHealthSamples = (owners: OwnerNamespace, secret: string, doName: string): Promise<void> => send(SAMPLES, owners, secret, doName, {});
-export const verifiedHealthSamples = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<boolean> =>
-  (await verified(SAMPLES, request, secret, addressesThisObject)) !== null;
+export const notifyOwnerHealthSamples = (owners: OwnerNamespace, secret: string, doName: string, cause: HealthRecomputeCause = 'readings'): Promise<void> =>
+  send(SAMPLES, owners, secret, doName, cause === 'settings' ? { settings: true } : {});
+export const verifiedHealthSamples = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<HealthRecomputeCause | null> => {
+  const body = await verified(SAMPLES, request, secret, addressesThisObject);
+  return body === null ? null : body.settings === true ? 'settings' : 'readings';
+};

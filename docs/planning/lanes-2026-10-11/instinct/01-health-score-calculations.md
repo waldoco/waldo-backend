@@ -1,3 +1,5 @@
+> Superseded by [docs/foundation/WALDO_HEALTH_USE_CASES.md](../../../foundation/WALDO_HEALTH_USE_CASES.md) for use cases and status.
+
 # Brief 01: health score calculations as a pure module
 
 **Branch:** `instinct/health-score-calculations`. A draft PR to `beta-mvp`.

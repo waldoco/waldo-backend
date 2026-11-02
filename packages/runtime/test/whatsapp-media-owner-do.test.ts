@@ -4,6 +4,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const { modelInputs } = vi.hoisted(() => ({ modelInputs: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class {
@@ -47,7 +48,7 @@ const whatsappOwner = (name: string, run: (deliver: (message: Record<string, unk
         body: JSON.stringify({ messages: [{ from: SUBJECT, timestamp: String(Math.floor(Date.now() / 1000)), ...message }] }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     };
     try { await run(deliver, graph); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });

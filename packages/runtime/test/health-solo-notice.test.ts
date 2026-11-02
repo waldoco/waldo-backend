@@ -219,6 +219,12 @@ describe('the note prompt and its answer', () => {
     for (const leak of LEAKS) expect(prompt).not.toContain(leak);
   });
 
+  it('asks the note to lead with the change itself, under no fixed header', () => {
+    const prompt = healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['zone_change'] });
+    expect(prompt).toContain('lead with the change itself, in plain words');
+    expect(prompt).not.toContain('"Update"');
+  });
+
   it('names the signals outside usual only when a driver woke the run', () => {
     expect(healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['driver_appeared'] })).toContain('Signals outside the owner\'s usual range now: breathing rate above usual.');
     expect(healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['zone_change'] })).not.toContain('Signals outside');

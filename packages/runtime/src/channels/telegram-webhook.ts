@@ -32,6 +32,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  // The provider that runs the owner path: 'openai' or 'anthropic' (the default). The other provider is every route's
+  // fallback when its key is deployed; a chosen provider without a deployed key yields to the one that has it.
+  WALDO_MODEL_PROVIDER?: string;
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;
@@ -44,6 +47,17 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
+  HEALTH_TRAINING_LOAD?: string;
+  HEALTH_COACHING?: string;
+  // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
+  // renaming it; the connector-proxy function must be deployed with the rename first.
+  HEALTH_EASE_WORKOUT?: string;
+  // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
+  // the connector-proxy function must be deployed with restoreEvent first.
+  CALENDAR_UNDO_CANCEL?: string;
+  // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
+  // read. Off unless "1".
+  MEDICATIONS?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -76,6 +90,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   // Waldo's WhatsApp number as E.164 digits without the plus, for the one-tap wa.me link; unset or malformed links by code alone.
   WHATSAPP_WALDO_NUMBER?: string;
+  // Milliseconds of owner quiet before a WhatsApp text turn starts, so a thought typed across messages is one turn. Unset: 3000.
+  WHATSAPP_QUIET_MS?: string;
+  // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
+  WHATSAPP_REPLY_MERGE?: string;
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
@@ -86,14 +104,24 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   DRIVE_READS?: string;
   // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
   MEMORY_SEMANTIC_RECALL?: string;
+  // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.
+  MEMORY_SELECTION?: string;
   AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
   OWNER_LOOKUP?: string;
+  // "1" starts the owner look-up as a background job once the owner's yes and their name are both in (onboarding/lookup.ts);
+  // anything else leaves the look-up to the owner's own turns. It also needs OWNER_LOOKUP.
+  ONBOARDING_LOOKUP?: string;
+  // "1" runs the second welcome build: sources in order over the constellation so far, look-up findings as Waldo's read, and
+  // late sources read once; anything else keeps the first build.
+  WELCOME_V2?: string;
   // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
   OWNER_PROFILE?: string;
   MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
+  // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
+  MEMORY_DAYTIME_CONSOLIDATOR?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

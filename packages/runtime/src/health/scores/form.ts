@@ -3,7 +3,7 @@ import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBas
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
-import type { DayRecord, FormResult, HourlyBucket } from './types';
+import type { DayRecord, FormResult, HourlyBucket, HrvMethod } from './types';
 
 const FORM_WEIGHTS = { recovery: 0.4, midpoint: 0.1, daylight: 0.1, motion: 0.2, stress: 0.2 } as const;
 const HOUR_MS = 3_600_000;
@@ -29,11 +29,12 @@ const dayTotal = (day: DayRecord, pick: (bucket: HourlyBucket) => number | null)
   const readings = day.hourly.flatMap(bucket => { const value = pick(bucket); return value === null ? [] : [value]; });
   return day.hourly.length >= MIN_DAY_BUCKETS && readings.length > 0 ? readings.reduce((total, value) => total + value, 0) : null;
 };
+const hrvOf = (bucket: HourlyBucket, method: HrvMethod): number | null => bucket.hrvReadings.find(reading => reading.method === method)?.value ?? null;
 const stressReading = (day: DayRecord): Readonly<{ heartRate: number; hrv: number | null }> | null => {
   const buckets = awakeRestingBuckets(day);
   const heartRates = buckets.flatMap(bucket => (bucket.heartRate === null ? [] : [bucket.heartRate]));
   if (heartRates.length < MIN_STRESS_BUCKETS) return null;
-  const hrvs = buckets.flatMap(bucket => (bucket.hrv === null || bucket.hrvMethod !== 'rmssd' ? [] : [bucket.hrv]));
+  const hrvs = buckets.flatMap(bucket => { const value = hrvOf(bucket, 'rmssd'); return value === null ? [] : [value]; });
   return { heartRate: mean(heartRates), hrv: hrvs.length >= MIN_HRV_BUCKETS ? mean(hrvs) : null };
 };
 // The provisional stress part keeps hourly HRV of each method apart: a day is read against its own method's days only.
@@ -43,7 +44,7 @@ const stressReadingByMethod = (day: DayRecord): Readonly<{ heartRate: number; hr
   const heartRates = buckets.flatMap(bucket => (bucket.heartRate === null ? [] : [bucket.heartRate]));
   if (heartRates.length < MIN_STRESS_BUCKETS) return null;
   const meanOf = (method: (typeof HRV_METHODS)[number]) => {
-    const values = buckets.flatMap(bucket => (bucket.hrv === null || bucket.hrvMethod !== method ? [] : [bucket.hrv]));
+    const values = buckets.flatMap(bucket => { const value = hrvOf(bucket, method); return value === null ? [] : [value]; });
     return values.length >= MIN_HRV_BUCKETS ? mean(values) : null;
   };
   return { heartRate: mean(heartRates), hrv: { rmssd: meanOf('rmssd'), sdnn: meanOf('sdnn') } };
@@ -58,7 +59,7 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 // Form reads the hours that hold one of its own signals. An hour holding only active energy is Weight's, so it never counts
 // toward Form's hours, its data horizon or the hour still filling.
 const formHours = (day: DayRecord): DayRecord =>
-  ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrv !== null || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
+  ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
 
 export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult => {
   const target = formHours(record), prior = earlier.map(formHours);

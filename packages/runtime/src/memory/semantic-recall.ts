@@ -15,6 +15,11 @@ export type Embedder = Readonly<{ model: string; embed(texts: readonly string[])
 export type EmbeddingRunner = Readonly<{ run(model: typeof WORKERS_AI_BGE_M3_EMBEDDING_MODEL, input: { text: string[] }): Promise<unknown> }>;
 
 export const EMBED_TIMEOUT_MS = 1_500;
+// The sweep runs in the background, so it waits longer than a turn's query. After a failed sweep, no kick sends again until
+// SWEEP_RETRY_MS has passed: a provider that hangs or refuses is priced once per wait, not once per kick.
+export const SWEEP_TIMEOUT_MS = 10_000;
+export const SWEEP_RETRY_MS = 5 * 60_000;
+export const SWEEP_RETRY_KEY = 'memory_embed_retry_at_v1';
 // One embedding call per sweep batch; the backfill runs at most SYNC_ROUNDS batches per kick.
 export const SYNC_BATCH = 32;
 export const SYNC_ROUNDS = 8;
@@ -78,10 +83,16 @@ export type SemanticLog = (event: SemanticEvent) => void;
 export const semanticTraceEntry = (event: SemanticEvent): TurnLogEntry => ({ trace: 'memory:semantic', ms: 0, ...event });
 
 // Precondition: the claims table exists (claimStore has run on this sql).
-export const semanticRecall = ({ sql, transaction, embedder, defer, log }: Readonly<{
+export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = embedder, kv, now = Date.now, defer, log }: Readonly<{
   sql: Pick<SqlStorage, 'exec'>;
   transaction: <T>(work: () => T) => T;
+  // Queries use embedder; the background sweep uses sweepEmbedder, the same model with a longer wait.
   embedder: Embedder;
+  sweepEmbedder?: Embedder;
+  // Where a failed sweep's retry time is kept: the owner object's KV, which every runtime of that owner shares. Without one,
+  // this instance keeps it.
+  kv?: Pick<SyncKvStorage, 'get' | 'put' | 'delete'>;
+  now?: () => number;
   // Keeps a background sweep alive past the request that kicked it (ctx.waitUntil).
   defer?: (work: Promise<unknown>) => void;
   // Content-free: counts and a code, never a text.
@@ -101,7 +112,7 @@ export const semanticRecall = ({ sql, transaction, embedder, defer, log }: Reado
     const usage: TurnModelUsage = { model, input: estimatedTokens(texts), output: 0, cached: 0 };
     const call = (ok: boolean) => ({ hop: 'memory_embedding' as const, ok, ms: Date.now() - started, usage, ...(leg === 'sweep' ? { cost_kind: 'background' as const } : {}) });
     try {
-      return { vectors: await embedder.embed(texts), sent: call(true) };
+      return { vectors: await (leg === 'sweep' ? sweepEmbedder : embedder).embed(texts), sent: call(true) };
     } catch (error) {
       log?.({ ...call(false), code: 'embed_failed', detail: leg });
       throw error;
@@ -156,11 +167,24 @@ export const semanticRecall = ({ sql, transaction, embedder, defer, log }: Reado
   };
 
   let running: Promise<unknown> | undefined;
+  let localRetryAt: number | undefined;
+  const retryAt = (): number | undefined => (kv ? kv.get<number>(SWEEP_RETRY_KEY) : localRetryAt);
+  const setRetryAt = (at: number | undefined): void => {
+    if (!kv) localRetryAt = at;
+    else if (at === undefined) kv.delete(SWEEP_RETRY_KEY);
+    else kv.put(SWEEP_RETRY_KEY, at);
+  };
   const kick = (): void => {
-    if (running) return;
+    if (running || now() < (retryAt() ?? 0)) return;
     running = sync().then(
-      (done) => { if (done.embedded || done.withheld) log?.({ hop: 'memory_embed', ok: true, detail: `embedded=${done.embedded} withheld=${done.withheld}` }); },
-      () => log?.({ hop: 'memory_embed', ok: false, code: 'embed_failed', detail: 'sweep' }),
+      (done) => {
+        if (retryAt() !== undefined) setRetryAt(undefined);
+        if (done.embedded || done.withheld) log?.({ hop: 'memory_embed', ok: true, detail: `embedded=${done.embedded} withheld=${done.withheld}` });
+      },
+      () => {
+        setRetryAt(now() + SWEEP_RETRY_MS);
+        log?.({ hop: 'memory_embed', ok: false, code: 'embed_failed', detail: 'sweep' });
+      },
     ).finally(() => { running = undefined; });
     defer?.(running);
   };
@@ -187,5 +211,5 @@ export const semanticRecall = ({ sql, transaction, embedder, defer, log }: Reado
 export type SemanticRecall = ReturnType<typeof semanticRecall>;
 
 // Off unless the deploy sets MEMORY_SEMANTIC_RECALL=1 and binds Workers AI.
-export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_SEMANTIC_RECALL?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder'>): SemanticRecall | undefined =>
-  env.MEMORY_SEMANTIC_RECALL === '1' && env.AI ? semanticRecall({ ...deps, embedder: workersAiEmbedder(env.AI) }) : undefined;
+export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_SEMANTIC_RECALL?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder' | 'sweepEmbedder'>): SemanticRecall | undefined =>
+  env.MEMORY_SEMANTIC_RECALL === '1' && env.AI ? semanticRecall({ ...deps, embedder: workersAiEmbedder(env.AI), sweepEmbedder: workersAiEmbedder(env.AI, SWEEP_TIMEOUT_MS) }) : undefined;

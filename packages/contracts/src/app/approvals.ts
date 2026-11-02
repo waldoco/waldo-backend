@@ -86,9 +86,9 @@ export const appApprovalV1Schema = z.strictObject({
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
-// A send as Waldo from the owner's Waldo address, with its sender, is approvals revision 6; an older build is never shown one.
-export const APP_APPROVALS_AGENT_MAIL_REVISION = 6;
-export const APP_APPROVALS_CONTRACT_REVISION = 6;
+// A send as Waldo from the owner's Waldo address, with its sender, is approvals revision 5; an older build is never shown one.
+export const APP_APPROVALS_AGENT_MAIL_REVISION = 5;
+export const APP_APPROVALS_CONTRACT_REVISION = 5;
 // An approval as a build reading `revision` parses it: revision 3 is the shape before the health origin, revision 2 the
 // shape before the draft of a send, and revision 1 the shape before the calendar details too. An approval a revision
 // leaves whole is returned as it is.

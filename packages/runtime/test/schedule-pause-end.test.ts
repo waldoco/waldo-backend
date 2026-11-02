@@ -14,7 +14,11 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
     if (method === 'sendMessage') sent.push(payload.text);
     return { message_id: 1, chat: { id: payload.chat_id } };
   } }));
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('model unavailable'); } }; } }));
+// A request the provider refuses (400) is a failure of the reminder itself: a model outage would send the owner's note instead.
+vi.mock('openai', () => {
+  class APIError extends Error { status = 400; code = 'invalid_request_error'; param = null; }
+  return { default: class { static APIError = APIError; responses = { create: async () => { throw new APIError('request refused'); } }; } };
+});
 
 afterEach(() => { vi.useRealTimers(); });
 

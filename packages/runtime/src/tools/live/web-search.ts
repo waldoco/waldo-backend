@@ -1,6 +1,6 @@
 import {
-  TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema,
-  type ToolHandler, type ToolName, type WebSearchArgs,
+  OPENAI_PROVIDER, TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema,
+  type ModelProvider, type ToolHandler, type ToolName, type WebSearchArgs,
 } from '@waldo/contracts';
 import { searchLocation } from './search-location';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -9,6 +9,10 @@ import { effectSignal } from '../../channels/run-effect-scope';
 const SEARCH_CEILING_MS = 15_000;
 
 export type SearchHit = Readonly<{ title: string; url: string; snippet: string }>;
+
+// The owner path offers this tool when its search key is deployed, and otherwise only where OpenAI runs the path, whose
+// hosted search stands in. A Claude turn without the key has no web search, so it is not offered one that cannot run.
+export const webSearchOffered = (apiKey: string | undefined, provider: ModelProvider): boolean => Boolean(apiKey) || provider === OPENAI_PROVIDER;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 

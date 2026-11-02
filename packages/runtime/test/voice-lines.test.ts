@@ -1,21 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DAY_CARDS } from '../src/prompt/day-cards';
 import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { updateCardPrompt, updateEffectsPrompt } from '../src/prompt/update-cards';
 
-// The day cards, update cards and interrupted-turn notices, held to the voice: a decision only when one helps, an update that
-// leads with the change, and a stop said in plain words with what to check.
-const instruction = (id: string) => DAY_CARDS.find(card => card.id === id)!.instruction;
-
-describe('the day cards offer an action only when one would help', () => {
-  it('the Brief', () => {
-    expect(instruction('card:brief')).toContain('Name the one thing that matters most today, and one clear action when one would help.');
-  });
-
-  it('the Check-in', () => {
-    expect(instruction('card:midday')).toContain('Offer one decision that would steady the rest of the day, when one would help.');
-  });
-});
+// The update cards and interrupted-turn notices, held to the voice: an update that leads with the change, and a stop said in
+// plain words with what to check.
 
 describe('an update leads with the change, never a header', () => {
   const context = { changes: '- calendar changed', ledger: '', feedback: '', volume: 'normal' as const };

@@ -124,6 +124,7 @@ const phrasing = (files: readonly MediaFile[]) => {
 // Fixed copy: each states what Waldo could not do with what it received, and where it can be done instead.
 export const IMESSAGE_MEDIA_REPLIES = {
   voice: "I can't listen to voice notes here yet; type it out or send it in the app.",
+  unreadable: "I couldn't read your last message: it reached me with nothing I can open. If it was a long paste, send it in a few shorter parts.",
   unopened: (files: readonly MediaFile[]) => { const s = phrasing(files); return `I got your ${s.what} but couldn't open ${s.it} here; send ${s.it} in the app.`; },
   format: (files: readonly MediaFile[]) => { const s = phrasing(files); return `I got your ${s.what} but can't read that format here; send ${s.it} in the app.`; },
   size: (files: readonly MediaFile[]) => { const s = phrasing(files); return `I got your ${s.what} but ${s.is} too large to open here; send ${s.it} in the app.`; },

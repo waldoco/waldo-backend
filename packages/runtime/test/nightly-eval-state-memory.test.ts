@@ -163,6 +163,15 @@ describe('memory: supersession, stale premises and over-personalisation', () => 
     ] }])).toEqual(['the switch to football is still remembered, and no later claim replaced it']);
   });
 
+  it('holds m03 and m04 with memory selection on: the pins still reach the model, and the unrelated ask changes nothing', async () => {
+    for (const [id, rule] of [['m03-unrelated-memory', say(/Slack channel/, '#q4-planning, #q4-plan or #planning-q4.')], ['m04-no-context-ask', say(/pasta recipe/, 'Aglio e olio: spaghetti, garlic, olive oil, chilli.')]] as const) {
+      const trial = await runTrial(scenario(id), { gateway: scriptedGateway({ rules: [rule], unmatchedText: 'ok' }), budget: callBudget(80), memorySelection: true });
+      expect(trial.status, id).toBe('ran');
+      expect(failedReceipts([...STATE_INVARIANTS, ...scenario(id).receipts!], trial), id).toEqual([]);
+      expect(trial.model_inputs[0]!.text, id).toMatch(/owner_(profile|facts)/);
+    }
+  });
+
   it('holds a no-context ask to no change in memory: nothing written, nothing retired, nothing set', async () => {
     const slack = say(/Slack channel/, '#q4-planning, #q4-plan or #planning-q4.');
     const pasta = say(/pasta recipe/, 'Aglio e olio: spaghetti, garlic, olive oil, chilli.');

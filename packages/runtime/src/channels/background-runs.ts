@@ -6,8 +6,9 @@ import type { OwnerClock } from '../tools/live/get-context';
 // fire, a proactive beat - records one row. parent_id carries the trace hop: a child run
 // points at the turn or run that spawned it, so the console can show what came from what.
 // Summaries are one-line outcomes written by the runner itself, never provider text.
-// nightly is the night's memory pass and its catch-ups; health_trigger is the health check that may raise one change.
-export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event', 'nightly', 'health_trigger'] as const;
+// nightly is the night's memory pass and its catch-ups; memory_daytime is the daytime pass over mail and calendar changes;
+// health_trigger is the health check that may raise one change.
+export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event', 'nightly', 'memory_daytime', 'health_trigger'] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 export const RUN_STATUSES = ['running', 'completed', 'failed', 'stopped'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
@@ -100,6 +101,18 @@ export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
     more: { status: 'completed', summary: 'memory pass read part of the backlog; a catch-up follows' },
     capped: { status: 'completed', summary: 'memory pass stopped at the day\'s limit; the rest waits' },
     failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
+  } as const)[outcome],
+};
+// A daytime pass is recorded only when it asked the model or failed, so passes that found nothing new do not fill the
+// night's run history.
+export const DAYTIME_RUN: RunSummary<'empty' | 'consolidated' | 'more' | 'raced' | 'failed'> = {
+  threw: 'daytime memory pass failed',
+  settled: outcome => ({
+    empty: { status: 'completed', summary: 'nothing new from mail or calendar' },
+    consolidated: { status: 'completed', summary: 'read the new mail and calendar changes' },
+    more: { status: 'completed', summary: 'read part of the new changes; the rest waits' },
+    raced: { status: 'completed', summary: 'another memory pass had already read these changes' },
+    failed: { status: 'failed', summary: 'daytime memory pass did not finish; the changes wait' },
   } as const)[outcome],
 };
 // One fixed line per health-trigger outcome: codes become words here, never zone words or values. A new outcome has no

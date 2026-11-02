@@ -12,7 +12,7 @@ const USUAL = { pulse: 72, variability: 55, daylight: 20, movement: 12, energy: 
 const hourly = (day: string, offset: number, hrvMethod: 'rmssd' | 'sdnn' = 'rmssd'): HourlyBucket[] =>
   [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(),
-    heartRate: USUAL.pulse + wobble(h + offset, 2), hrv: USUAL.variability + wobble(h + offset, 3), hrvMethod,
+    heartRate: USUAL.pulse + wobble(h + offset, 2), hrvReadings: [{ value: USUAL.variability + wobble(h + offset, 3), method: hrvMethod }],
     daylightMinutes: USUAL.daylight + wobble(h + offset, 2), movementMinutes: USUAL.movement + wobble(h + offset, 2), activeEnergyKcal: USUAL.energy + wobble(h + offset, 5),
   }));
 const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {

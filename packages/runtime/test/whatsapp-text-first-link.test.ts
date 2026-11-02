@@ -2,11 +2,11 @@
 // The database half (single use, expiry, sender and owner binding, claim races) is pgTAP:
 // supabase/tests/waldo_whatsapp_text_first_link.sql.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handleWhatsAppWebhook, type WhatsAppTextFirst } from '../src/channels/whatsapp-webhook';
+import { handleWhatsAppWebhook, LINK_REPLIES, type WhatsAppTextFirst } from '../src/channels/whatsapp-webhook';
 import { consoleReturnTarget, handleConsole } from '../src/channels/console-signin';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from '../src/channels/whatsapp-link-console';
 import { whatsappLinkDirectory, whatsappLinkToken, whatsappLinkTokenHash, type WhatsAppLinkDirectory } from '../src/identity/whatsapp-link';
-import type { OwnerDirectory } from '../src/identity/owner-directory';
+import { OwnerDirectoryError, type OwnerDirectory } from '../src/identity/owner-directory';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 import { chatChannelLinks } from '../src/channels/chat-channel-links';
 
@@ -390,5 +390,36 @@ describe('Waldo\'s contact card after a link', () => {
     expect(card[0]).toContain('"ok":false');
     expect(card.join('\n')).not.toContain(SENDER);
     expect(logs.some(line => line.includes('"hop":"whatsapp_link_code","ok":false'))).toBe(false);
+  });
+});
+
+// A refused link says why, so a sender is never told their working code failed. The database refuses in its own words
+// (supabase/tests/waldo_whatsapp_verify_by_link.sql); the reason is logged, never the number.
+describe('why a "waldo CODE" did not link', () => {
+  const answer = async (redeem: OwnerDirectory['redeem']) => {
+    const { sent, logs } = await run(await inbound('waldo ABCDEFGH23'), { byPresence: async () => null, redeem }, { links: links(async () => 'opened'), throttle: async () => true });
+    return { reply: sent.map(body => body.text?.body), outcome: logs.filter(line => line.includes('whatsapp_link_redeem')) };
+  };
+  const refused = (status: number, sqlState: string | null, message: string | null) => async () => { throw new OwnerDirectoryError(status, sqlState, message); };
+
+  it('names each outcome: linked, a dead code, a number linked or held elsewhere, and a link that could not be confirmed', async () => {
+    const cases: [OwnerDirectory['redeem'], keyof typeof LINK_REPLIES][] = [
+      [async () => ({ doName: 'do-a', subject: SENDER, timezone: null }), 'linked'],
+      [async () => null, 'rejected'],
+      [refused(409, '23505', 'presence already linked to another owner'), 'claimed'],
+      [refused(409, '23505', 'phone number held by another owner'), 'number_held'],
+      [refused(409, '23505', 'duplicate key value violates unique constraint'), 'uncertain'],
+      [async () => { throw new Error('network down'); }, 'uncertain'],
+    ];
+    for (const [redeem, outcome] of cases) {
+      const { reply, outcome: logged } = await answer(redeem);
+      expect(reply[0], outcome).toBe(LINK_REPLIES[outcome]);
+      expect(logged, outcome).toEqual([JSON.stringify({ hop: 'whatsapp_link_redeem', ok: outcome === 'linked', outcome })]);
+    }
+  });
+
+  it('only a dead code is told to get a new one; a refusal for the number keeps the code', () => {
+    expect(LINK_REPLIES.rejected).toContain('Get a new one');
+    for (const outcome of ['claimed', 'number_held'] as const) expect(LINK_REPLIES[outcome]).toContain('send the code again');
   });
 });

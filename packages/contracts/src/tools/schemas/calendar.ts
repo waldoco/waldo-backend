@@ -8,6 +8,7 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
   action: z.enum(['create', 'move', 'cancel']),
   event_id: z.string().min(1).max(200).optional().describe('Required for move and cancel; from query_calendar.'),
   title: z.string().min(1).max(200).optional(),
+  rename_to: z.string().min(1).max(200).optional().describe('Move only: a new title for the event, to swap it for something else in the same slot (a hard session for an easy one). Keep the times as they are to only rename it. title still names the event as it is now.'),
   start: iso8601Schema.optional(),
   end: iso8601Schema.optional(),
   reason: z.string().min(1).max(300).describe('Why, in a few words, for the owner.'),
@@ -20,7 +21,7 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
   block: z.enum(['rest', 'deep_work']).optional().describe('Create only, for a block of protected time: rest (a break, recovery or a lighter stretch) or deep_work (focused work). Leave it out for any other event.'),
 }).refine((args) => args.action === 'create' ? Boolean(args.title && args.start && args.end) : Boolean(args.event_id), {
   error: 'create needs title, start and end; move and cancel need event_id',
-}).refine((args) => args.action !== 'move' || Boolean(args.start && args.end), { error: 'move needs start and end' })
+}).refine((args) => args.action === 'move' || args.rename_to === undefined, { error: 'rename_to is for move only' }).refine((args) => args.action !== 'move' || Boolean(args.start && args.end), { error: 'move needs start and end' })
   .refine((args) => args.action === 'create' || (args.attendees === undefined && args.description === undefined && args.location === undefined && args.add_meet_link === undefined && args.block === undefined), {
     error: 'attendees, description, location, add_meet_link and block are for create only',
   })

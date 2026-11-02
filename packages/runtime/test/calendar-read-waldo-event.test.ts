@@ -63,4 +63,13 @@ describe('reading an event with every field the connector reads', () => {
     expect(result.ok).toBe(true);
     expect(result.data!.events[0]).toMatchObject({ id: 'qa1', location: 'Room 4', attendees: 2, recurring_event_id: 'series1', conference_url: 'https://meet.example.test/abc-defg-hij', attachments: [{ title: 'Plan', file_id: 'f1' }] });
   });
+
+  it('names the other people in the meeting, never the owner, as the guest emails do', async () => {
+    const meeting = { ...created, attendees: [{ self: true, displayName: 'Owner Fixture', email: 'owner@example.test', responseStatus: 'accepted' },
+      { displayName: 'Pat Fixture', email: 'pat@example.test', responseStatus: 'accepted' }, { displayName: 'Lee Fixture', email: 'lee@example.test', responseStatus: 'declined' }] };
+    const result = await read({}, [meeting]);
+    expect(result.data!.events[0]).toMatchObject({ attendee_names: ['Pat Fixture'], attendee_emails: ['pat@example.test'] });
+    const alone = await read({}, [{ ...created, attendees: [{ self: true, displayName: 'Owner Fixture', email: 'owner@example.test', responseStatus: 'accepted' }] }]);
+    expect(alone.data!.events[0]).not.toHaveProperty('attendee_names');
+  });
 });

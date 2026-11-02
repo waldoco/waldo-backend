@@ -9,6 +9,10 @@ import {
 } from '@waldo/contracts';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { CLAIM_OPS_SCHEMA, PROMOTION_SCHEMA, SOURCE_CLAIMS_SCHEMA } from '../src/memory/claims';
+import { DAY_PLAN_SCHEMA } from '../src/prompt/day-cards';
+import { WELCOME_SCHEMA } from '../src/onboarding/welcome';
+import { reactionSchema } from '../src/channels/reactions';
 
 // What the Messages API wants that the seam does not say: alternating roles, no sampling parameters on current
 // models, tool definitions whenever tool blocks are replayed, and its own reasoning never edited, so never replayed.
@@ -391,5 +395,229 @@ describe('AnthropicMessagesAdapter cache breakpoints', () => {
     expect((bodies[0]!.messages as Array<{ content: unknown[] }>)[1]!.content).toEqual([search, found, { ...use, cache_control: EPHEMERAL }, search, found]);
     expect(use).not.toHaveProperty('cache_control');
     expect((bodies[0]!.tools as Array<Record<string, unknown>>).some((tool) => 'cache_control' in tool)).toBe(false);
+  });
+});
+
+describe('AnthropicMessagesAdapter as the primary provider', () => {
+  it('refuses a request it cannot send as unsendable, so the route can move to a provider that can', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Read it.' }])]);
+    const base = gatewayRequest();
+    const docx = { kind: 'file' as const, mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: 'notes.docx', data_base64: 'UEsDBA==' };
+    await expect(adapter.complete({ ...base, request: { ...base.request, attachments: [docx] } })).resolves.toMatchObject({ ok: false, code: 'invalid_args', unsendable: true });
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('sends a text file as a plain-text document, its bytes read as UTF-8', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Read it.' }])]);
+    const base = gatewayRequest();
+    const text = 'name,city\nAsha,Pune — ok\n';
+    const data_base64 = Buffer.from(text, 'utf8').toString('base64');
+    for (const mime_type of ['text/plain', 'text/csv', 'text/markdown', 'text/html', 'application/json', 'application/xml']) {
+      await adapter.complete({ ...base, request: { ...base.request, attachments: [{ kind: 'file', mime_type, filename: 'f', data_base64 }] } });
+      expect((bodies.at(-1)!.messages as Array<{ content: unknown[] }>)[0]!.content.at(-1), mime_type).toEqual({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: text }, title: 'f' });
+    }
+  });
+
+  it('fails a refusal that wrote some text before declining, so none of it reaches the owner', async () => {
+    const { adapter } = recording([reply([{ type: 'text', text: 'Sure, here is' }], 'refusal', { stop_details: { type: 'refusal', category: 'general_harms', explanation: 'secret explanation' } })]);
+    const result = await adapter.complete(gatewayRequest());
+    expect(result).toMatchObject({ ok: false, code: 'rejected', error: 'Anthropic refused the request (general_harms)', spent: { input_tokens: 10, output_tokens: 3 } });
+    expect(JSON.stringify(result)).not.toContain('Sure, here is');
+  });
+});
+
+// A scripted Messages stream: the raw events in order, each after its delay, then the final message. Aborting the call's
+// signal ends it the way the SDK does.
+type Timed = Readonly<{ after?: number; event: Record<string, unknown> }>;
+const streamingClient = (events: readonly Timed[], final: unknown) => {
+  const calls: Array<{ body: Record<string, unknown> }> = [];
+  const client = { messages: {
+    create: async () => { throw new Error('the unstreamed call ran'); },
+    stream: (body: Record<string, unknown>, options: { signal?: AbortSignal }) => {
+      calls.push({ body });
+      const run = (async function* () {
+        for (const { after = 0, event } of events) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, after);
+            options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true });
+          });
+          yield event;
+        }
+      })();
+      return { [Symbol.asyncIterator]: () => run, finalMessage: async () => { for await (const _event of run) { /* drain */ } return final; } };
+    },
+  } };
+  return { client, calls };
+};
+const textStart = (index: number) => ({ event: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } } });
+const textDelta = (index: number, text: string, after = 0) => ({ after, event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } } });
+const sink = () => {
+  const seen: string[] = [];
+  return { seen, deltas: { delta: (text: string) => seen.push(text), retract: () => seen.push('<retract>') } };
+};
+
+describe('AnthropicMessagesAdapter streaming', () => {
+  it('streams the answer text as it is written and returns what the unstreamed call would, with the first-token time', async () => {
+    const { client, calls } = streamingClient([{ event: { type: 'message_start' } }, textStart(0), textDelta(0, 'Your day '), textDelta(0, 'is clear.')], reply([{ type: 'text', text: 'Your day is clear.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never });
+    const { seen, deltas } = sink();
+    const result = await adapter.complete({ ...gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native'), stream: deltas });
+    expect(seen).toEqual(['Your day ', 'is clear.']);
+    expect(result).toMatchObject({ ok: true, data: { text: 'Your day is clear.', ttft_ms: expect.any(Number) } });
+    expect(calls[0]!.body).toMatchObject({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, system: [{ type: 'text', text: 'Be concise.', cache_control: { type: 'ephemeral' } }] });
+    expect(calls[0]!.body).not.toHaveProperty('stream');
+  });
+
+  it('takes back text it streamed when the response goes on to call a tool, and streams nothing from thinking', async () => {
+    const tool = { type: 'tool_use', id: 'c1', name: 'get_context', input: {} };
+    const { client } = streamingClient([
+      { event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } },
+      { event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hidden' } } },
+      textStart(1), textDelta(1, 'Let me check.'),
+      { event: { type: 'content_block_start', index: 2, content_block: tool } },
+    ], reply([{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: 'Let me check.' }, tool], 'tool_use'));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never });
+    const { seen, deltas } = sink();
+    const result = await adapter.complete({ ...gatewayRequest(), stream: deltas });
+    expect(seen).toEqual(['Let me check.', '<retract>']);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'get_context' }] } });
+  });
+
+  it('streams a second text block after a break, so the shown text stays a prefix of the reply', async () => {
+    const { client } = streamingClient([textStart(0), textDelta(0, 'One.'), textStart(1), textDelta(1, 'Two.')], reply([{ type: 'text', text: 'One.' }, { type: 'text', text: 'Two.' }]));
+    const { seen, deltas } = sink();
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never }).complete({ ...gatewayRequest(), stream: deltas });
+    expect(seen.join('')).toBe('One.\nTwo.');
+    expect(result).toMatchObject({ ok: true, data: { text: 'One.\nTwo.' } });
+  });
+
+  it('with a provider ahead, abandons a call that shows nothing in the first-token window, without counting against the provider', async () => {
+    const { client } = streamingClient([{ event: { type: 'message_start' } }, { after: 200, ...textStart(0) }], reply([{ type: 'text', text: 'late' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 20 });
+    const result = await adapter.complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true });
+    expect(result).toMatchObject({ ok: false, code: 'transient', firstTokenLate: true, retry: { allowed: false } });
+  });
+
+  it('counts a thinking block as the first token, so a model that reasons first is not abandoned', async () => {
+    const { client } = streamingClient([
+      { after: 5, event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } },
+      { after: 60, ...textStart(1) }, textDelta(1, 'Thought it through.'),
+    ], reply([{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: 'Thought it through.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 30 });
+    await expect(adapter.complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true })).resolves.toMatchObject({ ok: true, data: { text: 'Thought it through.' } });
+  });
+
+  it('without a provider ahead, keeps waiting past the first-token window', async () => {
+    const { client } = streamingClient([{ after: 60, ...textStart(0) }, textDelta(0, 'Slow but here.')], reply([{ type: 'text', text: 'Slow but here.' }]));
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: client as never, firstTokenTimeoutMs: 10 });
+    await expect(adapter.complete({ ...gatewayRequest(), stream: sink().deltas })).resolves.toMatchObject({ ok: true, data: { text: 'Slow but here.' } });
+  });
+});
+
+describe('AnthropicMessagesAdapter structured output', () => {
+  // The Messages API refuses a raw output schema with numeric, length or item-count bounds (a 400 on the whole call).
+  const REFUSED = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', 'uniqueItems'];
+  const refusedIn = (node: unknown, path = '$'): string[] => {
+    if (Array.isArray(node)) return node.flatMap((child, index) => refusedIn(child, `${path}[${index}]`));
+    if (node === null || typeof node !== 'object') return [];
+    const record = node as Record<string, unknown>;
+    return [
+      ...REFUSED.filter((key) => key in record).map((key) => `${path}.${key}`),
+      ...(typeof record.minItems === 'number' && record.minItems > 1 ? [`${path}.minItems`] : []),
+      ...Object.entries(record).filter(([key]) => key !== 'enum' && key !== 'const').flatMap(([key, child]) => refusedIn(child, `${path}.${key}`)),
+    ];
+  };
+  const sentSchema = async (schema: Record<string, unknown>) => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: '{}' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL);
+    await adapter.complete({ ...base, request: { ...base.request, response_format: { name: 'x', schema } } });
+    return (bodies[0]!.output_config as { format: { schema: Record<string, unknown> } }).format.schema;
+  };
+
+  it('moves bounds the API refuses into the field description, and keeps enums, required and the object rules', async () => {
+    const sent = await sentSchema({ type: 'object', additionalProperties: false, required: ['aliases', 'kind'], properties: {
+      aliases: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 40 } },
+      kind: { type: 'string', enum: ['a', 'b'], description: 'Which one.' },
+      count: { type: 'integer', minimum: 0, maximum: 9 },
+      maximum: { type: 'integer' },
+    } });
+    expect(sent).toEqual({ type: 'object', additionalProperties: false, required: ['aliases', 'kind'], properties: {
+      aliases: { type: 'array', description: '{maxItems: 5}', items: { type: 'string', description: '{maxLength: 40}' } },
+      kind: { type: 'string', enum: ['a', 'b'], description: 'Which one.' },
+      count: { type: 'integer', description: '{minimum: 0, maximum: 9}' },
+      maximum: { type: 'integer' },
+    } });
+  });
+
+  it('sends every owner-path output schema in a shape the API accepts', async () => {
+    for (const [name, schema] of Object.entries({ CLAIM_OPS_SCHEMA, SOURCE_CLAIMS_SCHEMA, PROMOTION_SCHEMA, DAY_PLAN_SCHEMA, WELCOME_SCHEMA, reaction: reactionSchema(['👍', '🙏']) })) {
+      expect(refusedIn(schema as Record<string, unknown>).length > 0 || name !== 'CLAIM_OPS_SCHEMA', `${name} no longer carries a refused bound; the scan below proves nothing for it`).toBe(true);
+      expect(refusedIn(await sentSchema(schema as Record<string, unknown>)), name).toEqual([]);
+    }
+  });
+});
+
+// The same calls through the installed SDK's own MessageStream, over a scripted SSE response: event parsing, the final
+// message after the last event, and an abort while the response is open.
+describe('AnthropicMessagesAdapter streaming through the SDK', () => {
+  const sse = (events: ReadonlyArray<Record<string, unknown>>) => events.map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+  const head = { type: 'message_start', message: { id: 'msg_s', type: 'message', role: 'assistant', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+  const sdk = (fetch: typeof globalThis.fetch) => new Anthropic({ apiKey: 'test-key', maxRetries: 0, fetch });
+
+  it('streams text, takes it back at the tool call, and returns the final message the SDK assembled', async () => {
+    const body = sse([head,
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Checking ' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'now.' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_context', input: {} } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"n":1}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 20 } },
+      { type: 'message_stop' },
+    ]);
+    const client = sdk(async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { seen, deltas } = sink();
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client }).complete({ ...gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL), stream: deltas });
+    expect(seen).toEqual(['Checking ', 'now.', '<retract>']);
+    expect(result).toMatchObject({ ok: true, data: { model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, text: 'Checking now.', tool_calls: [{ call_id: 'toolu_1', name: 'get_context', arguments: '{"n":1}' }], input_tokens: 12, output_tokens: 20, ttft_ms: expect.any(Number) } });
+  });
+
+  it('abandons an open response that writes no content block in the first-token window, as a late first token', async () => {
+    const encoder = new TextEncoder();
+    const client = sdk(async (_url, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse([head])));
+        init?.signal?.addEventListener('abort', () => controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const result = await new AnthropicMessagesAdapter({ apiKey: 'test-key', client, firstTokenTimeoutMs: 30 }).complete({ ...gatewayRequest(), stream: sink().deltas, failoverAhead: true });
+    expect(result).toMatchObject({ ok: false, code: 'transient', firstTokenLate: true });
+  });
+});
+
+describe('AnthropicMessagesAdapter requests the API would refuse', () => {
+  it('sends no empty text block, so none carries a cache marker', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Hi.' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native');
+    await adapter.complete({ ...base, request: { ...base.request, messages: [
+      { role: 'user', content: 'Plan my day' }, { role: 'assistant', content: '' }, { role: 'user', content: '  ' }, { role: 'user', content: 'and lunch' },
+    ] } });
+    const blocks = (bodies[0]!.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>).flatMap((message) => message.content);
+    expect(blocks.filter((block) => block.type === 'text' && !block.text?.trim())).toEqual([]);
+    expect(bodies[0]!.messages).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'Plan my day' },
+      { type: 'text', text: 'and lunch', cache_control: { type: 'ephemeral' } },
+    ] }]);
+  });
+
+  it('marks a 400 as the provider refusing the request shape, and no other failure', async () => {
+    const failing = (status: number) => new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      throw Anthropic.APIError.generate(status, { type: 'error', error: { type: status === 400 ? 'invalid_request_error' : 'authentication_error', message: 'quoted request text' } }, undefined, new Headers());
+    } } } as never });
+    const refused = await failing(400).complete(gatewayRequest());
+    expect(refused).toMatchObject({ ok: false, code: 'invalid_args', wireRejected: true });
+    expect(JSON.stringify(refused)).not.toContain('quoted request text');
+    expect(await failing(401).complete(gatewayRequest())).not.toHaveProperty('wireRejected');
   });
 });

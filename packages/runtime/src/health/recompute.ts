@@ -1,6 +1,6 @@
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from '../channels/reminders';
-import { produceHealthScores, type ProducerDeps, type ProducerOutcome } from './producer';
+import { produceHealthScores, statedNeedOf, type ProducerDeps, type ProducerOutcome } from './producer';
 import { detectHealthWakes, healthSnapshot, type HealthSnapshot, type HealthWakeReason } from './wakes';
 
 // The owner's derived rows are recomputed in the owner's own object, one recompute at a time. Every upload that changed a
@@ -40,7 +40,10 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     try {
       const after = await read(wakes.readContext);
       if (!after || after.day !== today) return;
-      const reasons = await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day) });
+      const { readSettings } = deps.producer;
+      const stated = readSettings ? statedNeedOf(await readSettings().catch(() => null)) : null;
+      const needChangedAt = readSettings ? stated?.changedAt ?? (stated ? null : 'unknown') : null;
+      const reasons = await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day), needChangedAt });
       if (reasons.length) await wakes.woken(today, reasons);
     } catch { console.error('health wake check failed'); }
   };

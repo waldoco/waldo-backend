@@ -6,6 +6,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 import { toolOutput } from './fixtures/tool-output';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { instructions?: string; tools?: { name?: string }[]; input: string | { type?: string; call_id?: string; output?: string }[]; text?: { format?: { name?: string } } };
 type Call = { type: 'function_call'; call_id: string; name: string; arguments: string };
@@ -85,7 +86,7 @@ const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => voi
         body: JSON.stringify({ messages: [{ from: SUBJECT, id: 'wamid.ask', timestamp: String(Math.floor((Date.now() - ageMs) / 1000)), type: 'text', text: { body: 'Write up the plan and send me the file.' } }] }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
       expect(outputOf('attach')).toMatchObject({ ok: true, data: { queued: true, filename: 'plan.txt' } });
       check({ state, graph, attachEffects: () => [...state.storage.kv.list<{ tool: string; state: string; receipt?: { provider_id: string } }>({ prefix: 'owner:effect:' })].map(([, row]) => row).filter(row => row.tool === 'attach_file') });
     } finally { network.mockRestore(); await state.storage.deleteAlarm(); }

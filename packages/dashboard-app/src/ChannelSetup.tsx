@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { encode } from 'uqr';
-import type { ActionReveal, ControlAction, ControlFields, DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
+import type { ActionReveal, AgentMailRecord, ControlAction, ControlFields, DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 
@@ -191,4 +191,59 @@ export function PhoneControls({ record, busy, onAction }: { record: PhoneRecord 
       </form>}
     </>}
   </section>;
+}
+
+// The directory's handle grammar and reserved names, checked as the owner types so they hear why before they claim. The
+// server checks again and is the authority.
+const HANDLE = /^[a-z0-9][a-z0-9.-]{1,30}[a-z0-9]$/;
+const RESERVED = ['postmaster', 'abuse', 'hostmaster', 'webmaster', 'admin', 'support', 'info', 'security', 'noreply', 'waldo'];
+export const handleProblem = (typed: string): string | null => {
+  const handle = typed.trim().toLowerCase();
+  if (!handle) return null;
+  if (!HANDLE.test(handle) || handle.includes('..')) return 'Use 3 to 32 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit.';
+  return RESERVED.includes(handle) ? 'That address is reserved. Try another.' : null;
+};
+type Rule = NonNullable<AgentMailRecord['data']['rule']>;
+const RULE_LABEL: Record<Rule, string> = { pending: 'Setting up', live: 'Receiving mail', failed: 'Not set up', unknown: 'Not confirmed' };
+const RULE_WORDS: Record<Rule, string> = {
+  pending: 'Waldo is setting up this address. Mail sent to it may not arrive until that finishes.',
+  live: 'Mail sent to this address reaches your Waldo.',
+  failed: 'Waldo could not set up this address, so it receives no mail. Try again, or choose another.',
+  unknown: 'Waldo could not confirm this address is set up, so mail may not reach it. Try again to check.',
+};
+const NOT_CONFIGURED = 'Mail routing isn’t switched on for this server yet, so this address can’t receive mail until it is. Waldo sets it up then, with nothing more from you.';
+const RELEASE_EFFECT = 'stops its mail at once. Mail Waldo hasn’t read yet is discarded unread, and no one, you included, can claim that address for 180 days.';
+export function AgentMailControls({ record, busy, onAction }: { record: AgentMailRecord } & Actions) {
+  const { data } = record;
+  const [typed, setTyped] = useState('');
+  const [copy, setCopy] = useState<'idle' | 'copied' | 'refused'>('idle');
+  if (!data.enabled || !data.notice) return <section className="panel"><h2>Waldo addresses aren’t enabled on this server.</h2><p>Nothing here can claim an address until they are.</p></section>;
+  const notice = data.notice, handle = typed.trim().toLowerCase(), problem = handleProblem(typed);
+  const claim = (value: string) => onAction('agent_mail.claim', { value, notice: notice.version });
+  const onCopy = async () => { try { await navigator.clipboard.writeText(data.address!); setCopy('copied'); } catch { setCopy('refused'); } };
+  return <>
+    {data.handle && data.rule && <section className="tile" aria-labelledby="agent-mail-address-title">
+      <div className="chart-head"><h2 id="agent-mail-address-title">Your Waldo address</h2><span className={`access-label${data.rule === 'live' ? ' done' : ' needs'}`}>{RULE_LABEL[data.rule]}</span></div>
+      <p className="revealed-value">{data.address}</p>
+      <p>{data.rule === 'pending' && data.rule_reason === 'not_configured' ? NOT_CONFIGURED : RULE_WORDS[data.rule]}</p>
+      <div className="control-actions">
+        {data.rule === 'live' && <button type="button" onClick={() => void onCopy()}>{copy === 'copied' ? 'Copied' : 'Copy address'}</button>}
+        {(data.rule === 'failed' || data.rule === 'unknown') && data.actions.includes('agent_mail.claim') && <button className="primary" disabled={busy} onClick={() => claim(data.handle!)}>Try again</button>}
+        {data.actions.includes('agent_mail.release') && <button disabled={busy} onClick={() => { if (window.confirm(`Releasing ${data.address} ${RELEASE_EFFECT} Release it?`)) onAction('agent_mail.release'); }}>Release this address</button>}
+      </div>
+      {copy === 'refused' && <p className="meta">Copying was blocked. Select the address above to copy it.</p>}
+      <p className="meta">Releasing {data.address} {RELEASE_EFFECT}</p>
+    </section>}
+    {data.actions.includes('agent_mail.claim') && <section className="tile" aria-labelledby="agent-mail-claim-title">
+      <div className="chart-head"><h2 id="agent-mail-claim-title">{data.handle ? 'Change your address' : 'Choose your Waldo address'}</h2></div>
+      <div className="agent-mail-notice">{notice.text.split('\n\n').map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
+      <p className="meta">Notice version {notice.version}. Claiming an address means you accept it.</p>
+      <form className="control-form" onSubmit={event => { event.preventDefault(); if (handle && !problem) claim(handle); }}>
+        <label>Address<span className="control-fields"><input autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={64} value={typed} disabled={busy} onChange={event => setTyped(event.target.value)} aria-describedby="agent-mail-handle-help" required/><span>@{data.domain}</span></span></label>
+        <p id="agent-mail-handle-help" className="meta" role="status">{problem ?? (handle ? `Your address would be ${handle}@${data.domain}.` : 'Letters, digits, dots or hyphens.')}</p>
+        {data.handle && <p className="meta">Changing it releases {data.address}, which {RELEASE_EFFECT}</p>}
+        <div className="control-actions"><button className="primary" disabled={busy || !handle || !!problem || handle === data.handle}>{data.handle ? 'Accept and change' : 'Accept and claim'}</button></div>
+      </form>
+    </section>}
+  </>;
 }

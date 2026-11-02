@@ -43,7 +43,7 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'Disagree as an equal, once', scenarios: ['v04-unwise-late-call', 'v07-time-request'] },
   { anchor: 'Never congratulate yourself', scenarios: VOICE },
   { anchor: 'Never sound like a productivity app', scenarios: VOICE },
-  { anchor: 'Silence is the default', scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },
+  { anchor: "Own what's open for them", scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },
   { anchor: 'Ask almost nothing', scenarios: ['v03-week-one-preference', 'e1-look-before-asking'] },
   { anchor: 'Use what you know about them without announcing it', scenarios: ['r1-recall-across-day', 'v06-does-not-know'] },
   { anchor: 'An approval card always shows the exact recipient', boundary: 'auth: an approval shows what it authorises' },

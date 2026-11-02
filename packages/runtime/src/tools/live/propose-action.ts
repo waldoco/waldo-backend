@@ -6,7 +6,7 @@ import {
 import type { z } from 'zod';
 import type { RunEffectScope } from '../../channels/run-effect-scope';
 import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
-import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval } from '../../hooks/registry';
+import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 
 export type TaintedActionDesk = Readonly<{
@@ -54,6 +54,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
+    if (taintedCallRefused(tool.data, 'external')) return { ok: false, error: `${tool.data} is never put on a card. ${TAINT_REFUSED_CAUSE}`, code: 'rejected' };
     // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted.
     if (!(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };

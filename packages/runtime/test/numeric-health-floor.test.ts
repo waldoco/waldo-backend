@@ -163,7 +163,18 @@ describe('the numeric health floor', () => {
     steps: ['8,500 steps', 'steps 8500', '8.5k steps'],
     active_energy: ['active energy 540 kcal', '540 kcal of active energy', 'active energy 540', 'burned 540 active kcal', '540 active kcal', 'active calories 540', 'active kcal 540', '540 kcal active', 'Move 540 kcal'],
     mindful: ['mindful minutes 15', '15 minutes of mindfulness', '15 mindful minutes', '15 min mindfulness', 'mindfulness 15 min'],
+    body_mass: ['body mass 72.4 kg', 'weighed 72.4 kg', 'weight: 72.4', 'body mass 72.4'],
+    body_fat: ['body fat 14.2%', 'body fat percentage 14.2', '14% body fat', 'body fat was 14.2 percent'],
+    lean_body_mass: ['lean body mass 61.9 kg', 'lean mass 61.9 kg', 'lean mass was 62'],
+    stand_hours: ['stand hours 9', '9 stand hours', 'stood in 9 of 12 hours'],
   };
+  // A workout session as get_health lists it, relayed: its heart rate and its minutes in each zone.
+  it.each(['average heart rate 152 bpm on the run', 'avg HR 152', 'max HR 181', 'peak heart rate 181', '25 minutes in zone 3', 'zone 2: 15 min', '15 min in heart rate zone 2'])('holds a workout session reading: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it.each(['stood in line for 2 hours', 'stand-up at 9', 'zone 3 meeting room at 10', 'the max HR headcount is 12', 'lean startup chapter 3', 'body fat jokes'])('leaves an ordinary sentence alone: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
   it('covers every signal get_health returns', () => {
     expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());
   });

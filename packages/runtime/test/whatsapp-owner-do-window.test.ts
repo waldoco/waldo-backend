@@ -4,6 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { whatsappHeld } from '../src/channels/whatsapp-window';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -28,7 +29,7 @@ it('outside the window a proactive text becomes one template knock; the reply de
         method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
         body: JSON.stringify({ messages: [{ from: '15550001111', id, timestamp: String(Math.floor(sentAt / 1000)), type: 'text', text: { body: 'hi' } }] }),
       }));
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
       return response;
     };
     try {

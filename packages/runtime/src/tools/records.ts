@@ -11,6 +11,7 @@ export const BRAIN_NAMESPACES = {
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, read_tool_output for stored tool output, and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
+  medicines: "The owner's medicines: track_medication for reminder times and the count on hand, log_medication when they say taken or skipped, list_medications, and stop_medication.",
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
   skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
@@ -58,10 +59,11 @@ export type ToolReplayRow = { readonly replay: ToolReplayClass; readonly basis: 
 //  replay  what a crash between its effect and the turn's persisted completion means, and why (`basis`).
 //  tainted why a tool with a claim needs no owner card in a turn that has read outside text. Absent, it needs one: the
 //          owner ruled that such a turn sends every change to their card (hooks/registry.ts taintedCallNeedsOwnerApproval),
-//          so a new write tool is carded until its record names a reason here.
+//          so a new write tool is carded until its record names a reason here. A record may instead name a refusal: such a
+//          turn never runs or cards the call, because a card keeps its arguments in the owner's ledger.
 export type ToolRecord = Readonly<{
   brain: BrainPlacement; scope: 'deny' | 'allow'; concurrent: boolean; probe: 'strip' | 'keep'; paid: boolean; ownerTurnOnly: boolean;
-  claim: string | null; replay: ToolReplayRow; tainted?: TaintedWriteExemption;
+  claim: string | null; replay: ToolReplayRow; tainted?: TaintedWriteExemption | TaintedWriteRefusal;
 }>;
 // The kinds of reason, each with the record's own words for it:
 //  draft          it sends and commits nothing; the owner reviews the result before anything leaves.
@@ -72,6 +74,9 @@ export type ToolRecord = Readonly<{
 //  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
 //                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
 //                 Any other operation, or a call with no typed command, is carded.
+// owner_statement  the tool takes only what the owner says to Waldo directly, and its arguments are a figure no card may hold
+//                 (the owner's stated sleep need, a health value): a turn that has read outside text is refused the call.
+export type TaintedWriteRefusal = Readonly<{ refused: 'owner_statement'; reason: string }>;
 export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
@@ -158,6 +163,11 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   set_schedule_preference: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
   log_meal: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
   log_workout: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
+  set_sleep_need: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
+  track_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'medication_tracked', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
+  log_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'medication_logged', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
+  list_medications: { brain: 'medicines', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: read() },
+  stop_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: 'medication_stopped', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
@@ -225,7 +235,8 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.
   read_mcp_tool: 'working', search_mcp_tools: 'working', call_mcp_tool: 'working', search_connector: 'working',
   read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files',
-  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health',
+  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health', set_sleep_need: 'health',
+  track_medication: 'health', log_medication: 'health', list_medications: 'health', stop_medication: 'health',
   read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',

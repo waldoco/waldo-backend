@@ -10,6 +10,7 @@ import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from '../src/channels/episodes';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { DAY_CARDS } from '../src/prompt/day-cards';
+import { MEMORY_DAYTIME_ID } from '../src/memory/consolidator';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
@@ -141,23 +142,23 @@ describe('schedule preferences survive an interrupt between the save and the can
     });
   }
 
-  it('a nightly catch-up follows the nightly preference: off clears a due one unrun, and turning nightly off cancels it', async () => {
+  it.each([['a nightly catch-up', NIGHTLY_CATCH_UP_ID], ['a daytime memory pass', MEMORY_DAYTIME_ID]])('%s follows the nightly preference: off clears a due one unrun, and turning nightly off cancels it', async (_label, id) => {
     await withOwner(async ({ scheduler, prefs, ctx }) => {
-      const catchUp = () => scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: NOW, dueAt: NOW, recurrence: null });
+      const catchUp = () => scheduler.schedule({ id, kind: 'dreaming', payloadRefs: { id }, occurrenceAt: NOW, dueAt: NOW, recurrence: null });
       const ran: string[] = [];
       const executors = gateScheduleExecutors({ dreaming: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler);
       prefs.set('nightly', false);
       await catchUp();
       await scheduler.dispatchDue(executors);
-      expect([ran, scheduler.read(NIGHTLY_CATCH_UP_ID)]).toEqual([[], null]);
+      expect([ran, scheduler.read(id)]).toEqual([[], null]);
       await catchUp();
       await reconcileSchedulePreferences(prefs.all(), ctx);
-      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+      expect(scheduler.read(id)).toBeNull();
       prefs.set('nightly', true);
       await catchUp();
       prefs.set('nightly', false);
       await applySchedulePreferences(prefs.all(), ctx, 'nightly');
-      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+      expect(scheduler.read(id)).toBeNull();
     });
   });
 

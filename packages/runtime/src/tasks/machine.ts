@@ -1,8 +1,8 @@
-import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type TaskResult } from '@waldo/contracts';
+import type { TaskResult } from '@waldo/contracts';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { md5Hex } from '../channels/md5';
-import { ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
@@ -23,10 +23,12 @@ const keptItem = (item: MachineItem): MachineItem => numericHealthIn(item.detail
 export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;
   text: Readonly<{ title: string; goal: string; done_when: string }>;
-  items: readonly MachineItem[]; timezone: string; now: number; deadlineAt: number;
+  items: readonly MachineItem[]; timezone?: string; now: number; deadlineAt: number;
   source?: MachineBrief['source']; runId?: string; recordId?: number;
   // The job's own digest of its inputs, where it already has one its apply compares against (meeting prep's event digest).
   inputDigest?: string;
+  // When the worker may start, if later than now; and the tool rounds its whole run gets, if fewer than a task's.
+  dueAt?: number; maxRounds?: number;
 }>;
 export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }> | Readonly<{ code: 'held_topic' }>;
 
@@ -43,18 +45,18 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly 
   const brief: TaskBrief = {
     ...spec.text,
     context: fenced('Data fetched for this job', items.map(({ ref, detail }) => `- [${ref}] ${detail}`).join('\n')).trim(),
-    effort: 'standard', timezone: spec.timezone, started_at: spec.now,
+    effort: 'standard', ...(spec.timezone === undefined ? {} : { timezone: spec.timezone }), started_at: spec.now,
     // A change detector over the data the job was started on, not a guard against an adversary, so MD5 is enough.
     machine: {
       job: spec.job, input_digest: spec.inputDigest ?? md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
       ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}), ...(spec.recordId === undefined ? {} : { record_id: spec.recordId }),
-      ...(withheld.length ? { withheld } : {}),
+      ...(withheld.length ? { withheld } : {}), ...(spec.maxRounds === undefined ? {} : { max_rounds: spec.maxRounds }),
     },
   };
   if (carriesForgotten(held, [JSON.stringify(brief), ...spec.items.flatMap(({ ref, detail }) => [ref, detail])])) return { code: 'held_topic' };
   const { job, created } = book.create({
     kind: 'task', profile: 'reader', idempotencyKey: spec.key, origin: `${MACHINE_ORIGIN}${spec.job}`, surface: spec.surface,
-    brief, dueAt: spec.now, deadlineAt: spec.deadlineAt, taint: 'external',
+    brief, dueAt: spec.dueAt ?? spec.now, deadlineAt: spec.deadlineAt, taint: 'external',
   });
   return { code: created ? 'enqueued' : 'existing', job };
 };
@@ -64,7 +66,8 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly 
 export const workerRouteDown = (access: OwnerModelAccess): boolean => {
   const { health } = access;
   if (!health) return false;
-  const route = ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access).routes[0]!;
+  const { chat, auxiliary } = ownerModels(access);
+  const route = ownerRoutePolicy(auxiliary, chat, access).routes[0]!;
   return [route.primary, ...route.fallback].every((step) => health.isOpen(step.provider));
 };
 
@@ -82,6 +85,8 @@ export type MachineHandler = Readonly<{
   noNews?(row: JobRow, settle: () => void): void | Promise<void>;
   // The apply runs on an empty result too: the job's judgment does not rest on the worker's findings alone.
   decidesOnEmpty?: boolean;
+  // The job left the lane, however it ended (applied, parked, dropped): for work waiting on it, never for a message.
+  ended?(row: JobRow): void;
 }>;
 export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler>>>;
 
@@ -93,6 +98,14 @@ export const APPLY_RETRY_MS = 60 * 60_000;
 export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void;
 }>): Promise<void> => {
+  try { await applyOnce(row, deps); } finally {
+    const after = deps.book.get(row.id);
+    // Work waiting on the job is the waiter's to carry; a failure there never stands in for the apply's own outcome.
+    if (after && SETTLED.has(after.status)) try { deps.appliers[taskBrief(row).machine!.job]?.ended?.(after); } catch { deps.hop(after, 'machine_ended_failed', { ok: false }); }
+  }
+};
+const SETTLED: ReadonlySet<string> = new Set(['applied', 'parked', 'cancelled']);
+const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1]): Promise<void> => {
   const { book } = deps;
   const job = taskBrief(row).machine!.job;
   const settle = () => { if (!book.settle(row.id)) throw new ClosedRunError(); };

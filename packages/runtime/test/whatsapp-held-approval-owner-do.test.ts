@@ -15,6 +15,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const REPORT = 'Drafted the weekly numbers email to Sam for your approval.';
 const OWNER_SAYS = 'Morning, Waldo.';
@@ -121,7 +122,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     let seq = 0;
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
-    const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>; whatsappInflight: Set<Promise<void>>;
+    const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>;
       setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const replyFrom = async (subject: string, text: string) => {
       seq += 1;
@@ -130,7 +131,7 @@ const owned = async (name: string, script: (steps: Readonly<{
         body: JSON.stringify({ messages: [{ from: subject, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...internals.whatsappInflight]);
+      await drainWhatsAppTurns(owner);
     };
     try {
       await script({

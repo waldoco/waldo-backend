@@ -95,11 +95,13 @@ export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
 
 export const GOOGLE_AUTH_ORIGIN = 'https://accounts.google.com';
-export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
+// loginHint is the subject of the Google identity the owner signs in with: Google goes to that account (or asks it to sign in)
+// instead of showing the account chooser, and still shows its consent. Without one, the chooser lets the owner pick any account.
+export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string, loginHint?: string): string {
   const url = new URL('/o/oauth2/v2/auth', GOOGLE_AUTH_ORIGIN);
   url.search = new URLSearchParams({
     client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_CONSENT_SCOPES.join(' '),
-    access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
+    access_type: 'offline', prompt: loginHint ? 'consent' : 'consent select_account', ...(loginHint ? { login_hint: loginHint } : {}), include_granted_scopes: 'true', state,
     code_challenge: codeChallenge, code_challenge_method: 'S256',
   }).toString();
   return url.toString();
@@ -195,6 +197,8 @@ export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
 export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?: CalendarSendUpdates }>;
+// A move can also rename the event in its slot.
+export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: string }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
@@ -431,8 +435,11 @@ export type GoogleClient = Readonly<{
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
-  cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarMoveOptions): Promise<CalendarItem>;
+  // With a marker, answers the cancelled version it left, which a restore is fenced on.
+  cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem | void>;
+  // Puts a cancelled event back, only while it is still the version etag names.
+  restoreEvent(id: string, etag: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
@@ -447,7 +454,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'restoreEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -895,14 +902,15 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
-    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
+    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...(options?.title ? { summary: options.title } : {}), ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
     async cancelEvent(id, etag, operationMarker, options) {
       const url = events(options?.calendarId, id, { sendUpdates: options?.sendUpdates });
       // Put cancellation and its marker in one version-fenced mutation. A missing tombstone
       // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
-      if (operationMarker) await send(url, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
-      else await call(url, { method: 'DELETE', headers: match(etag) });
+      if (operationMarker) return send(url, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
+      await call(url, { method: 'DELETE', headers: match(etag) });
     },
+    restoreEvent: async (id, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { status: 'confirmed', ...calendarMarker(operationMarker) }, etag),
     async searchContacts(query, limit) {
       if (typeof query !== 'string' || !query || query.length > 100 || !validPageLimit(limit, 10)) throw new Error('invalid contacts search');
       // Google asks for an empty-query request before each search so the contact cache is current.
@@ -1143,7 +1151,8 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
-  ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
+  // The other people in the meeting, like attendee_emails: the owner's own entry (self) is never one of them.
+  ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
   ...(details ? detailsOf(event) : {}),
   ...(ownerStatus ? ownerStatusOf(event) : {}),
 });

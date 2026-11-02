@@ -48,13 +48,13 @@ const prune = (flows: Record<string, ConsentFlow>, now: number) =>
   Object.fromEntries(Object.entries(flows).filter(([, flow]) => (flow.settled ? (flow.settled_at ?? 0) + KEEP_SETTLED_MS : flow.expires) > now));
 
 // hold keeps the Google address in the attempt for takeStart, so it is handed out only by a start link the caller guards.
-export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface; hold?: boolean }>): Promise<Readonly<{ url: string; nonce: string }>> {
+export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface; hold?: boolean; loginHint?: string }>): Promise<Readonly<{ url: string; nonce: string }>> {
   const random = deps.random ?? randomBytes;
   const nonce = b64url(random(32));
   const verifier = b64url(random(32));
   const now = deps.now();
   const flows = prune(await deps.store.read(), now);
-  const url = googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier));
+  const url = googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier), opts?.loginHint);
   await deps.store.write({ ...flows, [nonce]: { expires: now + CONSENT_TTL_MS, verifier, redirect_uri: app.redirectUri, ...(opts?.session ? { session: opts.session } : {}), ...(opts?.hold ? { start: url } : {}) } });
   return { url, nonce };
 }

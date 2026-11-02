@@ -351,18 +351,20 @@ describe('what the flush keeps', () => {
 });
 
 describe('the memory notice', () => {
+  const LINE = 'I kept a note about your health from earlier. Say if you want it changed or gone, or turn health notes off in settings.';
+  const NOTICE = { line: LINE, modelLine: `${LINE}\n[Not shown to the owner: the notes are c1. forget_memory takes them as claim_ids; remember takes one as replaces_id.]` };
   it('rides the owner\'s next reply after its receipts, once, and never a machine turn\'s', async () => {
     const storage = memoryStorage();
-    const notices = ['Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).'];
+    const notices = [NOTICE];
     await inOwner('memory-notice', async () => {
       const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
       const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
-      args[21] = { memoryNotice: () => notices.length ? { line: notices[0]!, taken: () => { notices.shift(); } } : null };
+      args[21] = { memoryNotice: () => notices.length ? { ...notices[0]!, taken: () => { notices.shift(); } } : null };
       const responder = createOwnerResponder(...args);
       const job = await responder.prompt('job-1', 'owner', '[Reminder] stretch', (_name, work) => work());
-      expect(job).not.toContain('Saved to memory');
+      expect(job).not.toContain(LINE);
       const first = await responder.respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello' }), (_name, work) => work());
-      expect(first).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
+      expect(first).toBe(`Noted.\n\n${LINE}`);
       const second = await responder.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'and now?' }), (_name, work) => work());
       expect(second).toBe('Noted.');
     });
@@ -379,16 +381,41 @@ describe('the memory notice', () => {
       admit() { if (!live) throw new ClosedRunError(); }, commit(work) { this.admit(); return work(); } };
     await inOwner('memory-notice-closed', async () => {
       const args: Parameters<typeof createOwnerResponder> = ['fixture', { load: async () => ({ entries: [], leafId: null }), save: async () => { saved += 1; live = false; } }];
-      args[21] = { memoryNotice: () => { read += 1; return { line: 'Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).', taken: () => { taken += 1; } }; } };
+      args[21] = { memoryNotice: () => { read += 1; return { ...NOTICE, taken: () => { taken += 1; } }; } };
       await expect(createOwnerResponder(...args).respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello', runScope: scope }), (_name, work) => work())).rejects.toBeInstanceOf(ClosedRunError);
       expect([read, saved, taken]).toEqual([1, 1, 0]);
     });
   });
 
+  // The owner sees how many notes were kept; the model, reading that reply back, also sees which, so "forget that" can
+  // name them by id. The same holds for a responder that loads the saved history.
+  it('gives the model the ids behind the line in that reply\'s history, while the owner sees the line alone', async () => {
+    const storage = memoryStorage();
+    const notices = [NOTICE];
+    const integration = { memoryNotice: () => notices.length ? { ...notices[0]!, taken: () => { notices.shift(); } } : null };
+    await inOwner('memory-notice-model-ids', async () => {
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const responder = (): ReturnType<typeof createOwnerResponder> => {
+        const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
+        args[21] = integration;
+        return createOwnerResponder(...args);
+      };
+      const live = responder();
+      const first = await live.respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello' }), (_name, work) => work());
+      expect(first).toBe(`Noted.\n\n${LINE}`);
+      await live.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'forget that' }), (_name, work) => work());
+      expect(JSON.stringify(fake.bodies.at(-1)!.input)).toContain('the notes are c1.');
+      await responder().respond(ownerTyped({ traceId: 'app-3', conversationRef: 'owner', surface: 'app', text: 'and now?' }), (_name, work) => work());
+      expect(JSON.stringify(fake.bodies.at(-1)!.input)).toContain('the notes are c1.');
+      expect(first).not.toMatch(/c1\b/);
+      expect((await store.load()).entries.find((entry) => entry.id === 'app-1-reply')!.modelPayload).toBe(`Noted.\n\n${NOTICE.modelLine}`);
+    });
+  });
+
   it('stays for the next reply when the reply carrying it is never saved', async () => {
     const storage = memoryStorage();
-    const notices = ['Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).'];
-    const integration = { memoryNotice: () => notices.length ? { line: notices[0]!, taken: () => { notices.shift(); } } : null };
+    const notices = [NOTICE];
+    const integration = { memoryNotice: () => notices.length ? { ...notices[0]!, taken: () => { notices.shift(); } } : null };
     await inOwner('memory-notice-unsaved', async () => {
       const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
       const closing: Parameters<typeof createOwnerResponder> = ['fixture', { ...store, save: async () => { throw new Error('run closed'); } }];
@@ -397,7 +424,7 @@ describe('the memory notice', () => {
       const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
       args[21] = integration;
       const next = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'hello again' }), (_name, work) => work());
-      expect(next).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
+      expect(next).toBe(`Noted.\n\n${LINE}`);
     });
   });
 });

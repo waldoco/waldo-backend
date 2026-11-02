@@ -8,6 +8,7 @@ import { IMessageBridgeDO, iMessageBridgeName } from '../src/channels/imessage/b
 import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { IMESSAGE_MEDIA_REPLIES } from '../src/channels/imessage/photon-media';
 import { ProgressPacer } from '../src/channels/progress-pacer';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
@@ -718,6 +719,28 @@ it('groups, SMS/RCS, echoes, reactions, receipts and unknown senders are retaine
   expect(counts).toMatchObject({ pending: 0, handed: 0 });
   expect((counts.acknowledged ?? 0) + (counts.held ?? 0)).toBe(events.length + 1); // + the setup challenge
   expect(w.fx.calls.filter(c => c === 'route_presence')).toHaveLength(0); // unknown senders never reach directory lookup
+});
+
+// Never drop an owner message silently: one that reached the host with nothing Waldo can read (no text, a file that could
+// not be fetched, an iMessage app's card) gets one honest reply, with no model turn. A stranger's still reaches nobody.
+it('an owner message the host could not read gets one honest reply and no model turn; a stranger\'s gets nothing', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const unreadable = (from: Record<string, unknown>) => {
+    const event: any = { ...w.host.message('x', from), kind: 'unsupported', bundleId: 'waldo.attachment_unavailable' };
+    event.eventId = `unsupported:${event.messageGuid}`;
+    delete event.text; delete event.attachments;
+    return event;
+  };
+  expect((await w.host.send(unreadable({ senderHandle: 'stranger@example.invalid' }))).status).toBe(200);
+  expect((await w.host.send(unreadable({}))).status).toBe(200);
+  await w.pump(2);
+  expect(proof.turns).toHaveLength(0);
+  const { delivery } = await w.host.pull();
+  expect(JSON.parse(delivery!.body).text).toBe(IMESSAGE_MEDIA_REPLIES.unreadable);
+  expect((await w.host.postResult(delivery!, await w.host.execute(delivery!))).status).toBe(200);
+  await w.pump(2);
+  expect((await w.host.pull()).delivery).toBeNull();
 });
 
 it('authentication: wrong key, foreign account, replay, stale and future signatures and malformed headers are refused before state', async () => {

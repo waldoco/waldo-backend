@@ -36,6 +36,9 @@ const SAFE_DETAIL_HOPS = new Set([
 // code or detail. Never promote raw claim text or provider payload into a safe hop.
 const MEMORY_EVIDENCE = /^(?:admitted:supported|held:(?:same_day|too_few_claims|untrusted_or_missing)):owner_observation_pattern:1$/;
 const HEALTH_READ = /^(?:present|absent|read_failed)$/;
+// Semantic recall's details are counts and its leg name (semantic-recall.ts), checked here rather than trusted.
+const SEMANTIC_COUNTS = /^(?:sweep texts=\d{1,9}|query rows=\d{1,9} scan_ms=\d{1,9}|embedded=\d{1,9} withheld=\d{1,9}|sweep|query)$/;
+const SEMANTIC_HOPS = new Set(['memory_embedding', 'memory_embed']);
 
 // Gates one turn-log entry for every sink that consumes it (the DO trace table, the wrangler
 // console JSON line and the OTLP exporter): with capture off, detail survives only for hops
@@ -84,7 +87,7 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
   }
   return {
     ...entry,
-    detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : entry.code,
+    detail: SAFE_DETAIL_HOPS.has(entry.hop) || (SEMANTIC_HOPS.has(entry.hop) && typeof entry.detail === 'string' && SEMANTIC_COUNTS.test(entry.detail)) ? entry.detail : entry.code,
     error: undefined,
     // The guard diagnostic is enum-only and validated HERE at the gate, not trusted from the
     // producer: an invalid value is dropped before any sink sees it.

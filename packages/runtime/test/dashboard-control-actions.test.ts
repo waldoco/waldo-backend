@@ -14,6 +14,20 @@ describe('modern control actions',()=>{
  it('rejects a WhatsApp link when no code could be issued, and reveals the code without a number when none is configured',()=>{expect(whatsappLinkReceipt(null,'919226067544')).toMatchObject({state:'rejected'});expect(JSON.stringify(whatsappLinkReceipt(null,'919226067544'))).not.toContain('waldo ');for(const number of [undefined,'','+919226067544','12345'])expect(whatsappLinkReceipt('ABCDEFGHJK',number)).toEqual({receipt:{state:'recorded',message:expect.not.stringContaining('ABCDEFGHJK')},reveal:{kind:'link_code',value:'waldo ABCDEFGHJK'}});});
  it('does not present an unknown executor outcome as recorded success',async()=>{const {act,deps}=setup();act.mockResolvedValueOnce('unknown');const result=await controlAction(form(await controlRevision(day)),deps);expect(result.status).toBe(503);expect(await result.json()).toMatchObject({receipt:{state:'unconfirmed'}});});
  it('refuses new requests at the receipt capacity without forgetting replay protection',async()=>{const {act,deps}=setup();for(let i=0;i<100;i++)await controlAction(form(await controlRevision(day),'timezone.set','request-'+String(i).padStart(4,'0')),deps);const denied=await controlAction(form(await controlRevision(day),'timezone.set','request-overflow'),deps);expect(denied.status).toBe(429);expect(act).toHaveBeenCalledTimes(100);});
+ it('fingerprints account on google.connect, and a connections action without it keeps the fingerprint it always had',async()=>{
+  const {act,deps}=setup();const connections={...day,view:'connections'};
+  const google={...deps,projection:async()=>connections,view:async()=>({google:{connectAvailable:true,accounts:[]}} as unknown as ConsoleView)};
+  const connect=async(id:string,account?:string)=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision:await controlRevision(connections),view:'connections',request_id:id,action:'google.connect',value:'calendar',...(account?{account}:{})}))f.set(k,v);return f;};
+  expect((await controlAction(await connect('connect-0001'),google)).status).toBe(200);
+  const book=await google.store.get<Record<string,{fingerprint:string}>>(RECEIPT_BOOK_KEY);
+  expect(Object.values(book!)[0]!.fingerprint).toBe(await controlRevision({view:'connections',action:{action:'google.connect',id:'',value:'calendar'},revision:await controlRevision(connections)}));
+  expect(act).toHaveBeenLastCalledWith(expect.objectContaining({action:'google.connect'}),{request_id:'connect-0001'});
+  expect((await controlAction(await connect('connect-0002','signin'),google)).status).toBe(200);
+  expect(act).toHaveBeenLastCalledWith(expect.objectContaining({action:'google.connect'}),{account:'signin',request_id:'connect-0002'});
+  const reused=await controlAction(await connect('connect-0002'),google);
+  expect([reused.status,(await reused.json() as {error:string}).error]).toEqual([409,'request_reused']);
+  expect(act).toHaveBeenCalledTimes(2);
+ });
  it('preserves partial results and makes uncertain exceptions explicit',async()=>{const {act,deps}=setup();act.mockRejectedValueOnce(new Error('secret'));const result=await controlAction(form(await controlRevision(day)),deps);expect(result.status).toBe(503);const body=JSON.stringify(await result.json());expect(body).toContain('unconfirmed');expect(body).not.toContain('secret');});
 });
 

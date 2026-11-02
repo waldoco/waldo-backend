@@ -1,3 +1,5 @@
+> Superseded by [docs/foundation/WALDO_HEALTH_USE_CASES.md](../../foundation/WALDO_HEALTH_USE_CASES.md) for use cases and status.
+
 # Waldo Health Lane - Workflows & Coaching Spec (owner verification draft)
 
 Status: DRAFT for owner verification. No code in this PR. Origin: owner steer 2026-09-27 10:21am ("we are going health first... define various workflows and out of the box flows and intelligence around that and the overall coaching and planning... an assistant who is going to be health aware").

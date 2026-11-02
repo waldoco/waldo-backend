@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -99,6 +99,12 @@ describe('app sign-in requests', () => {
 describe('app sign-in with an Apple or Google identity token', () => {
   const apple = { provider: 'apple', id_token: 'fixture-header.fixture-payload.fixture-signature', nonce: 'raw-nonce-0123456789abcdef', request_id: 'signin-0001' } as const;
   const google = { provider: 'google', id_token: 'fixture-header.fixture-payload.fixture-signature', nonce: 'raw-nonce-0123456789abcdef', request_id: 'signin-0002' } as const;
+
+  it('says before sign-in whether a new account needs an invite', () => {
+    expect(appAuthOptionsV1Schema.parse({ open_signup: true })).toEqual({ open_signup: true });
+    for (const invalid of [{}, { open_signup: 'yes' }, { open_signup: false, cap: 10 }]) expect(appAuthOptionsV1Schema.safeParse(invalid).success).toBe(false);
+    expect(appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/options')).toMatchObject({ method: 'GET', response: appAuthOptionsV1Schema, authenticated: false, success_status: 200 });
+  });
 
   it('accepts the fixture requests and answers, and adds the route without touching /auth/verify', async () => {
     const fixture = (await import('./fixtures/app-auth-id-token.v1.json')).default;

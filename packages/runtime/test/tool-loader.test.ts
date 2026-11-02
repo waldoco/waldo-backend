@@ -133,6 +133,14 @@ describe('the harness tool loader', () => {
     expect(parsed(events[1]!)).toMatchObject({ ok: false, error_code: 'repeat_refusal' });
   });
 
+  it('a deferred tool called by name with arguments that miss the schema gets its definition back; a core tool does not', async () => {
+    const { events } = await turn([[call('d', 'set_proactivity', { volume: 'loud' }), call('m', 'search_communication', { query: 7 })]]);
+    expect(parsed(events[0]!)).toMatchObject({ ok: false, error_code: 'invalid_args', tool_definition: toolDefinitions([proactivity])[0] });
+    expect(parsed(events[1]!)).toMatchObject({ ok: false, error_code: 'invalid_args' });
+    expect(parsed(events[1]!)).not.toHaveProperty('tool_definition');
+    expect(ran).toEqual([]);
+  });
+
   it('arguments that miss the schema come back with the tool definition, so the next call can be right', async () => {
     const { events } = await turn([[via('u', 'set_proactivity', { volume: 'loud' })]]);
     expect(parsed(events[0]!)).toMatchObject({ ok: false, error_code: 'invalid_args', tool_definition: toolDefinitions([proactivity])[0] });

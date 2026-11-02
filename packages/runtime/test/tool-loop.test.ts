@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_ERRORS, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { buildSessionState, getContextArgsSchema, listRemindersArgsSchema, searchCommunicationArgsSchema, sendMessageArgsSchema, TOOL_ERRORS, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
+import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
@@ -16,6 +17,7 @@ const ctx = {
 };
 const handlers = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-09-23T08:20:00Z') })];
 const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+const allowlistFor = (tool: ToolName): TriggerType[] => (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) => TOOL_PERMISSIONS[trigger].includes(tool));
 
 describe('runToolLoop', () => {
   it('runs a tool through the dispatcher and hands its result back to the model', async () => {
@@ -298,6 +300,49 @@ describe('warn-first budget notice and distinct read identities', () => {
     });
     expect(text).toBe('done.');
     expect(fetched).toBe(5);
+  });
+});
+
+describe('an exact call that keeps returning the same result', () => {
+  const reads = (results: { reminders: () => unknown; mail: (query: string) => unknown }): ToolHandler<unknown, unknown, ToolDispatcherContext>[] => [
+    { name: 'list_reminders', description: 'List reminders.', schema: listRemindersArgsSchema, trigger_allowlist: allowlistFor('list_reminders'), autonomy_gated: false,
+      handle: async () => ({ ok: true, data: results.reminders(), source_taint: null }) },
+    { name: 'search_communication', description: 'Search mail.', schema: searchCommunicationArgsSchema, trigger_allowlist: allowlistFor('search_communication'), autonomy_gated: false,
+      handle: async (args) => ({ ok: true, data: results.mail((args as { query: string }).query), source_taint: 'external' }) },
+  ];
+  const script = async (list: ToolHandler<unknown, unknown, ToolDispatcherContext>[], calls: readonly { name: string; args: unknown }[]) => {
+    const outputs: string[] = [];
+    let n = 0;
+    await runToolLoop({
+      handlers: list, ctx, maxSteps: 25, onTool: (event) => outputs.push(event.output),
+      step: async (tools) => {
+        const next = calls[n++];
+        return tools && next ? { text: '', tool_calls: [{ call_id: `c${n}`, name: next.name, arguments: JSON.stringify(next.args) }] } : { text: 'done' };
+      },
+    });
+    return outputs;
+  };
+  const reminders = { name: 'list_reminders', args: {} };
+  const mail = (query: string) => ({ name: 'search_communication', args: { query } });
+
+  it('tells the model, as a fact, how many times the exact call came back unchanged; nothing is refused', async () => {
+    const outputs = await script(reads({ reminders: () => ({ reminders: [] }), mail: () => ({ messages: [] }) }), [reminders, mail('dentist'), reminders, mail('dentist'), reminders]);
+    expect(outputs.map((output) => JSON.parse(output.split('\n[')[0]!).ok)).toEqual([true, true, true, true, true]);
+    expect(outputs[0]).not.toContain('[unchanged');
+    expect(outputs[1]).not.toContain('[unchanged');
+    expect(outputs[2]).toContain('\n[unchanged: this exact call has returned the same result 2 times this turn]');
+    expect(outputs[3]).toContain('\n[unchanged: this exact call has returned the same result 2 times this turn]');
+    expect(outputs[4]).toContain('\n[unchanged: this exact call has returned the same result 3 times this turn]');
+  });
+
+  it('distinct calls with alike results, and an exact call whose result changed, get no note', async () => {
+    let listed = 0;
+    const outputs = await script(
+      reads({ reminders: () => ({ reminders: [`r${listed++}`] }), mail: () => ({ messages: [] }) }),
+      [mail('dentist'), mail('dentist appointment'), reminders, mail('dentist next week'), reminders],
+    );
+    expect(outputs).toHaveLength(5);
+    expect(outputs.every((output) => !output.includes('[unchanged'))).toBe(true);
   });
 });
 

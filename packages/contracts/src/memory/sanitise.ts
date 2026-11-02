@@ -215,6 +215,8 @@ export const redactionKindSchema = z.enum([
   'credit_card',
   'instruction_pattern',
   'health_value',
+  // External content still decodable past the scribe's decode limit, withheld in place on reads into the model.
+  'deep_encoding',
 ]);
 export type RedactionKind = z.infer<typeof redactionKindSchema>;
 

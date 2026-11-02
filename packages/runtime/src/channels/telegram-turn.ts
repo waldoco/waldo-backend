@@ -1,5 +1,5 @@
 import { createOwnerResponder, ownerToolApproval, type OwnerContextIntegration, type OwnerSkillHost } from './owner-turn';
-import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
+import { ownerTurnTrace, type OwnerTurnEnvelope, type ReminderTiming } from './owner-turn-envelope';
 import type { TelegramInboundTurn } from './telegram-polling';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { TelegramOwnerListenerOptions, TurnTimer } from './telegram-listener';
@@ -40,7 +40,7 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   return {
     ...core, respond,
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
-    remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface),
+    remind: (id: string, chatId: number, note: string, time: TurnTimer, timing?: ReminderTiming) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface, timing),
     prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9], ownerModel?: boolean, attachments?: Parameters<typeof core.prompt>[11]) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments),
   };
 };

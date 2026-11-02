@@ -5,7 +5,7 @@ const shaped = (code: keyof typeof TOOL_ERRORS, cause = TOOL_ERRORS[code].cause)
 
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
-import { webSearchHandler } from '../src/tools/live/web-search';
+import { webSearchHandler, webSearchOffered } from '../src/tools/live/web-search';
 
 const ctx = {} as never;
 
@@ -221,5 +221,16 @@ describe('web_search turn bound', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(seen.signal).toBeDefined();
     expect(seen.signal!.aborted).toBe(false);
+  });
+});
+
+// Search reaches a Claude turn only through this tool; an OpenAI turn also has the provider's hosted search.
+describe('whether the owner path offers web_search', () => {
+  it('offers it with a search key on either provider, and without one only where OpenAI runs the owner path', () => {
+    expect(webSearchOffered('brave-key', 'anthropic')).toBe(true);
+    expect(webSearchOffered('brave-key', 'openai')).toBe(true);
+    expect(webSearchOffered(undefined, 'openai')).toBe(true);
+    expect(webSearchOffered(undefined, 'anthropic')).toBe(false);
+    expect(webSearchOffered('', 'anthropic')).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import { WA_UPDATE_BASE, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // Runtime initialization can start a background day-plan call. It is outside this ingress proof.
 vi.mock('openai', () => ({ default: class {
@@ -57,7 +58,7 @@ describe('WhatsApp owner DO replay', () => {
         const response = await instance.fetch(new Request(url, init));
         expect(response.status).toBe(200);
         // Admission acks first; the turns run after, so wait for them before the test inspects effects.
-        await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+        await drainWhatsAppTurns(instance);
         return response;
       });
       const directory: OwnerDirectory = {

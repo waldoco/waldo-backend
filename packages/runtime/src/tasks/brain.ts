@@ -25,7 +25,8 @@ export type TaskHostDeps = Readonly<{
   book: JobBook;
   now(): number;
   // The owner's tool handlers on the surface the job started from, and the dispatch context they run under.
-  handlers(surface: string): Handlers;
+  // The tool set a job's calls run against, by its surface; the job is passed for the few that run a narrower variant.
+  handlers(surface: string, row: JobRow): Handlers;
   context(surface: string): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
   // Browser calls run in the brain's serial lane with the job's scope as the active run, because the owner's browser host
   // serves one active scope at a time.
@@ -44,6 +45,9 @@ export type TaskHostDeps = Readonly<{
   // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
   // checkpoint that carries one cancels its job rather than write it back.
   heldTopics?(): readonly string[];
+  // Whether a job's own reason to run is gone (the owner look-up's yes no longer counts). Asked at the claim and before each
+  // worker call; a lapsed job is cancelled and fenced, so nothing more leaves for it.
+  lapsed?(row: JobRow): boolean;
   // Whether the directory still admits the owner, asked before each worker call as an owner job asks before each effect.
   // Without it (no directory on this deploy) the owner stands.
   admitted?(): Promise<'admitted' | 'dormant' | 'retry'>;
@@ -164,16 +168,24 @@ export const taskHost = (deps: TaskHostDeps) => {
   // The owner's handlers, with read_tool_output bound to the attempt's own store in place of any the owner holds.
   const profileHandlers = async (row: JobRow, outputs: ToolOutputStore) => {
     const tools = jobTools(row);
-    const allowed = deps.handlers(row.surface).filter((handler) => tools.includes(handler.name as never) && handler.name !== 'read_tool_output');
+    const allowed = deps.handlers(row.surface, row).filter((handler) => tools.includes(handler.name as never) && handler.name !== 'read_tool_output');
     const own: Handlers = tools.includes('read_tool_output') ? [...allowed, readToolOutputHandler(outputs)] : allowed;
     return (await eligibleHandlers(own)).handlers;
   };
 
+  const stopLapsed = (row: JobRow): boolean => {
+    if (!deps.lapsed?.(row)) return false;
+    deps.book.cancel(row.id, 'owner');
+    fence(row.id);
+    hop(row, 'task_cancelled', { ok: false, code: 'lapsed' });
+    return true;
+  };
   // One worker tool call's work, once the call holds its attempt busy.
   const serve = async (ticket: TaskTicket, row: JobRow, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> => {
     const started = deps.now();
     const allowed = jobTools(row).includes(call.name as never);
     const { scope, outputs } = attemptFor(ticket, row);
+    if (stopLapsed(row)) return 'fenced';
     // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
     const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
     if (admission === 'dormant') {
@@ -288,6 +300,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         hop(row, 'task_parked', { ok: false, code: 'brief_changed' });
         return 'fenced';
       }
+      if (stopLapsed(row)) return 'fenced';
       const handlers = await profileHandlers(row, attemptFor(ticket, row).outputs);
       const spend = ownerSpend();
       const { conversation_ref: _replyChain, ...brief } = taskBrief(row);

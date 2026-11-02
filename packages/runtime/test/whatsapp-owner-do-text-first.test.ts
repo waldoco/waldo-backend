@@ -4,6 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -54,7 +55,7 @@ it('a confirmed text-first link rebinds the WhatsApp subject; GET and a forged c
       expect(state.storage.kv.get('whatsapp_subject')).toBe(NEW);
       expect((await admit(OLD)).status).toBe(403);
       expect((await admit(NEW)).status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 });
@@ -104,7 +105,7 @@ it('confirming a new number clears what was held for the old one, so nothing hel
         method: 'POST', headers: { 'x-waldo-whatsapp-subject': NEW },
         body: JSON.stringify({ messages: [{ from: NEW, id: 'wamid.new', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
       }));
-      const inflight = () => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      const inflight = () => drainWhatsAppTurns(instance);
       expect((await admitB()).status).toBe(200);
       await inflight();
       const turns = turn.mock.calls.length;
@@ -169,7 +170,7 @@ const reconcileHarness = async (name: string, presence: (subject: string) => Pro
     };
     try {
       await work({ instance, kv, sent, turn: turn as never, admit, confirm });
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); net.mockRestore(); log.mockRestore(); }
   });
 };
@@ -220,7 +221,7 @@ it('link A text-first, then redeem a console code from B: B is admitted, A\'s he
     expect((await confirm(OLD)).status).toBe(200);
     expect(kv.get('whatsapp_subject')).toBe(OLD);
     expect((await admit(OLD, 'wamid.a0')).status).toBe(200);
-    await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    await drainWhatsAppTurns(instance);
     // Waldo then holds text for A and knocks, as it does once A's window closes.
     kv.put('wa_held:000000000001', { heldAt: Date.now(), body: { chat_id: Number(OLD), text: 'held for A only' } });
     kv.put('wa_knocked_for', kv.get<number>('wa_last_inbound_ms'));
@@ -230,7 +231,7 @@ it('link A text-first, then redeem a console code from B: B is admitted, A\'s he
     expect(kv.get('whatsapp_subject')).toBe(NEW);
     expect([...kv.list({ prefix: 'wa_held:' })]).toEqual([]);
     expect(kv.get('wa_knocked_for')).toBeUndefined();
-    await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    await drainWhatsAppTurns(instance);
     expect(turn.mock.calls.length).toBe(turns + 1);
     expect(sent.filter(body => body.includes('for A only'))).toEqual([]);
     expect((await admit(OLD, 'wamid.a1')).status).toBe(403);
@@ -281,7 +282,7 @@ it('a concurrent redelivery from the new number does not wipe the window the fir
       expect(reads).toBe(2);
       expect(kv.get('whatsapp_subject')).toBe(NEW);
       expect(kv.get('wa_last_inbound_ms')).toBeGreaterThan(Date.now() - 60_000);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
       expect(turn).toHaveBeenCalledTimes(1);
     });
 });

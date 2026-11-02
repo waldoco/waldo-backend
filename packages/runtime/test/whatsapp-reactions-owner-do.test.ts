@@ -5,6 +5,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { tools?: { name?: string }[]; input: string | { type?: string; call_id?: string }[]; text?: { format?: { name?: string } } };
 const model = vi.hoisted(() => ({ requests: [] as RequestBody[], react: null as string | null }));
@@ -66,7 +67,7 @@ const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string,
         body: JSON.stringify({ messages: messages.map(message => ({ from: SUBJECT, timestamp: String(Math.floor(Date.now() / 1000)), ...message })) }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(instance);
     };
     try { await run(deliver, graph, instance); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
@@ -131,7 +132,8 @@ it.each([['🎉', '🎉'], ['love', '❤️']])('Waldo\'s reaction %s goes out a
 
 it('a reply quotes the owner\'s message only when another came in after it', async () => {
   await whatsappOwner('wa-quote-out', async (deliver, graph) => {
-    await deliver(text('first question', 'wamid.first'), text('second question', 'wamid.second'));
+    // Two texts in a row would be one turn, so the later message is a photo: two turns, two replies.
+    await deliver(text('first question', 'wamid.first'), { id: 'wamid.second', type: 'sticker', sticker: { id: 'media-sticker', mime_type: 'image/webp', animated: false } });
     const replies = sends(graph).filter(call => call.type === 'text');
     expect(replies).toHaveLength(2);
     expect(replies[0]!.context).toEqual({ message_id: 'wamid.first' });

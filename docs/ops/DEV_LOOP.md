@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
 
-Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `WALDO_OWNER_TELEGRAM_ID` and, for the second model provider the owner path falls back to, `ANTHROPIC_API_KEY`.
+Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `WALDO_OWNER_TELEGRAM_ID` and `ANTHROPIC_API_KEY`. `WALDO_MODEL_PROVIDER` (`anthropic`, the default, or `openai`) picks which of the two runs the owner path; the other is its fallback.
 
 Use a separate checkout for this loop, so your other branches and local edits stay untouched.
 

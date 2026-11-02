@@ -28,6 +28,9 @@ export type AppOnboardingHost = Readonly<{
   signedInRecently(): Promise<boolean>;
   // Setup is done: the first-run complete action or the setup answers landed. Starts the owner's one welcome build; a repeat starts nothing.
   setupDone?(): void;
+  // The owner's look-up yes may have changed (granted, accepted with the agreements, or withdrawn): the owner object starts
+  // the look-up for a live yes, or stops the one running.
+  lookupChanged?(): void;
   // The owner's proactive-surface setting (the console's own).
   proactiveSurface(): AppProactiveSurfaceV1;
   now(): number;
@@ -124,6 +127,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const error = await host.firstRun.act(action);
     if (error) return problem(error);
     if (action.action === 'complete') host.setupDone?.();
+    if (action.action === 'agreements.accept') host.lookupChanged?.();
     return record(appOnboardingResultV1Schema.parse({ request_id: action.request_id, onboarding: await host.firstRun.view(), replayed: false }));
   }
   if (path === ANSWERS_PATH) {
@@ -144,11 +148,13 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     if (result === 'stale_version' || result === 'not_offered') return problem(result);
     // The look-up is disclosed in the privacy notice, so it waits for the notice.
     if (result === 'notice_required') return problem('agreements_required');
+    if (grant.purpose === 'owner_lookup') host.lookupChanged?.();
     return record(appConsentChangeV1Schema.parse({ consent: result.state, replayed: false, findings_erased: 0 }));
   }
   if (path === '/app/v1/consents/withdraw') {
     // The withdrawal and the erasure commit together: no finding outlives the consent it was kept under.
     const result = await host.withdrawLookup();
+    host.lookupChanged?.();
     return record(appConsentChangeV1Schema.parse({ consent: result.state, replayed: false, findings_erased: result.erased }));
   }
   const action = appFindingActionV1Schema.parse(body);
@@ -174,6 +180,7 @@ export type OwnerOnboardingDeps = Readonly<{
   chat: ChatChannels;
   signedInRecently(): Promise<boolean>;
   setupDone?(): void;
+  lookupChanged?(): void;
   // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
   // discloses it is published.
   agreementsOffered: boolean;
@@ -245,7 +252,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     withdrawLookup,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
+    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), ...(deps.lookupChanged ? { lookupChanged: deps.lookupChanged } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
   };
 };

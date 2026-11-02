@@ -74,7 +74,7 @@ describe('the day state: what an event was', () => {
   it('reads two weeks ahead and one day back, and seeds what it saw once a day', async () => {
     await withDay(async (h) => {
       await h.check(true);
-      expect(h.reads.changed).toEqual([[T0 - 600_000, T0 - DAY_MS, T0 + 14 * DAY_MS], [T0 - 600_000, T0 + 14 * DAY_MS, T0 + 380 * DAY_MS]]);
+      expect(h.reads.changed).toEqual([[T0 - 600_000, T0 - DAY_MS, T0 + 14 * DAY_MS], [T0 - 600_000, T0 - 367 * DAY_MS, T0 + 380 * DAY_MS]]);
       expect(h.reads.events).toEqual([[new Date(T0 - DAY_MS).toISOString(), new Date(T0 + 14 * DAY_MS).toISOString()]]);
       h.listed.push(SYNC);
       h.clock.at += 10 * 60_000;
@@ -130,6 +130,45 @@ describe('the day state: what an event was', () => {
       expect(touchesDay(changes[0]!, '2026-10-20', 'UTC')).toBe(true);
       expect(h.dayChanges).toEqual([h.clock.at]);
       expect(h.seen()).toEqual(['e-sync']);
+    });
+  });
+
+  it('a meeting moved into the past registers with the times it left, so today\'s card can drop it', async () => {
+    await withDay(async (h) => {
+      h.listed.push(SYNC);
+      await h.check(true);
+      h.clock.at += 10 * 60_000;
+      h.changed.push(moved({ start: '2026-10-17T10:00:00Z', end: '2026-10-17T10:30:00Z' }));
+      await h.check(true);
+      const changes = h.recorded().at(-1)!;
+      expect(changes.map(change => change.ref)).toEqual(['event:e-sync']);
+      expect(changes[0]!.before).toMatchObject({ start: SYNC.start, end: SYNC.end });
+      expect(touchesDay(changes[0]!, '2026-10-20', 'UTC')).toBe(true);
+      expect(h.dayChanges).toEqual([h.clock.at]);
+    });
+  });
+
+  it('a meeting that aged out of the window and then changed is not news', async () => {
+    await withDay(async (h) => {
+      const old = { ...SYNC, id: 'e-old', start: '2026-10-19T12:00:00Z', end: '2026-10-19T12:30:00Z' };
+      h.listed.push(old);
+      await h.check(true);
+      h.clock.at += 2 * DAY_MS;
+      h.changed.push(moved({ id: 'e-old', start: old.start, end: old.end, attendees: 3 }));
+      await h.check(true, '2026-10-22');
+      expect(h.recorded().flat().map(change => change.ref)).not.toContain('event:e-old');
+      expect(h.dayChanges).toEqual([]);
+    });
+  });
+
+  it('a move more than a year either side of the window is not seen', async () => {
+    for (const start of ['2025-10-01T10:00:00Z', '2027-11-24T10:00:00Z']) await withDay(async (h) => {
+      h.listed.push(SYNC);
+      await h.check(true);
+      h.clock.at += 10 * 60_000;
+      h.changed.push(moved({ start, end: new Date(Date.parse(start) + 30 * 60_000).toISOString() }));
+      await h.check(true);
+      expect(h.recorded().flat().map(change => change.ref)).not.toContain('event:e-sync');
     });
   });
 

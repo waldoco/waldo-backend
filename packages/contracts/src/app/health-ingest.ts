@@ -212,12 +212,15 @@ const stagesMatchContext = (sample: { method?: string | undefined; value: number
 // A workout's type is `activity` and its minutes are `value`, as before; every key below is optional, so a type-minutes-energy
 // workout is unchanged. Pace and speed are distance over minutes, so neither is sent.
 export const HEALTH_COACH_REVISION_V1 = 5;
+// Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, rather than a measured or entered
+// maximum, name the basis observed_workout_peak, so the model can call them approximate. An older build never sends it.
+export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
 const zoneSeconds = z.int().min(0).max(86_400);
 export const healthWorkoutZonesV1Schema = z.strictObject({
-  basis: z.enum(['heart_rate_reserve', 'max_heart_rate', 'provider']),
+  basis: z.enum(['heart_rate_reserve', 'max_heart_rate', 'provider', 'observed_workout_peak']),
   lower_bounds_bpm: z.tuple([bpm, bpm, bpm, bpm]).nullable(),
   seconds: z.tuple([zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds, zoneSeconds]),
 }).refine(zones => zones.lower_bounds_bpm === null ? zones.basis === 'provider' : zones.lower_bounds_bpm.every((bound, i, all) => i === 0 || all[i - 1]! < bound),
@@ -476,6 +479,15 @@ export const healthScoresHistoryV1Schema = z.strictObject({
 export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
 export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
 
+// The owner's own sleep need, when they have stated one, in whole minutes and inside the range the score engine trusts (six to
+// ten hours). null clears it, and the engine goes back to the owner's own nights. It is the owner's statement, not a reading:
+// no source holds it, so one source's withdrawal leaves it, and account deletion removes it. The app reads it with GET and
+// replaces it whole with PUT, which answers with what is now stored.
+export const HEALTH_SLEEP_NEED_MIN_MINUTES_V1 = 360;
+export const HEALTH_SLEEP_NEED_MAX_MINUTES_V1 = 600;
+export const healthSleepNeedMinutesV1Schema = z.int().min(HEALTH_SLEEP_NEED_MIN_MINUTES_V1).max(HEALTH_SLEEP_NEED_MAX_MINUTES_V1);
+export const healthSettingsV1Schema = z.strictObject({ sleep_need_minutes: healthSleepNeedMinutesV1Schema.nullable() });
+
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
@@ -489,9 +501,12 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/settings', response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/health/settings', request: healthSettingsV1Schema, response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;
 export type HealthSampleV1 = z.infer<typeof healthSampleV1Schema>;
 export type HealthScoresV1 = z.infer<typeof healthScoresV1Schema>;
 export type HealthScoresResponseV1 = z.infer<typeof healthScoresResponseV1Schema>;
+export type HealthSettingsV1 = z.infer<typeof healthSettingsV1Schema>;

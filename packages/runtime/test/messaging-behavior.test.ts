@@ -31,7 +31,7 @@ describe('messagingSystemPrompt', () => {
   // The model's function list names the callable tools each round, and narrows when a round withholds some; a copy here
   // would only go stale. A turn with no tools says so, because an empty function list says nothing.
   it('leaves tool names to the function list and says so only when there are none', () => {
-    const prompt = messagingSystemPrompt(['get_context', 'calendar_read']);
+    const prompt = messagingSystemPrompt(['get_context', 'calendar_read', 'web_search']);
     expect(prompt).not.toContain('Tools available in this chat');
     expect(prompt).not.toMatch(/\bcalendar_read\b/);
     expect(prompt.endsWith(MESSAGING_BEHAVIOR)).toBe(true);
@@ -209,9 +209,13 @@ describe('the rules that pulled against each other are gone', () => {
   // 2,500 bytes), to 18,803. The cheapest-rung lines (which way to try first, and what a blocked refusal means) add
   // about 230 bytes net of the line they replace, to 19,033. The label read-back rule adds about 280 bytes beside the dose
   // boundary, to about 19,320. A greeting that keeps the conversation going, from the turn context, adds about 130 bytes
-  // to the greeting rule, to about 19,470. Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 19,480 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_480);
+  // to the greeting rule, to about 19,470. The sleep-need memory rule adds about 90 bytes to Remembering, to about 19,560:
+  // remember's description is at its cap, and every owner turn must read that memory keeps no figure for the stated need.
+  // The tracked-medicine memory rule adds about 100 bytes beside it, to about 19,655, for the same reason.
+  // The test-site line (a staging copy can carry dummy details) adds about 140 bytes to Looking things up, to about 19,820.
+  // Rule pruning against the eval gate is where the next cuts come from.
+  it('keeps every delivered behaviour text under 19,850 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_850);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -220,7 +224,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_480 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_850 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
@@ -235,6 +239,7 @@ describe('the rules that pulled against each other are gone', () => {
 // The voice is a contract: a change to it is deliberate, versioned and in the changelog, never drift between releases.
 const VOICE_DIGESTS: Readonly<Record<number, string>> = {
   2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',
+  3: '02f4223ef59fee1bcc85e1e510fe49a10d3f54d474b11d0ed4c73db6163908f8',
 };
 const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
@@ -360,4 +365,17 @@ describe('ownerClockLine', () => {
 it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
   expect(MESSAGING_BEHAVIOR).toContain('a bare "today" usually means the day that just ended');
   expect(MESSAGING_BEHAVIOR).toContain('"tomorrow" means exactly that day');
+});
+
+// A turn with no web search on offer (Claude with no search key deployed) is not pointed at one.
+describe('the tool ladder', () => {
+  const ladder = (prompt: string) => prompt.split('\n').find((line) => line.startsWith('- Use the cheapest way')) ?? '';
+  it('names web_search only when the turn offers it', () => {
+    for (const shown of SURFACES) {
+      expect(ladder(messagingSystemPrompt(['get_context', 'web_search', 'browse_page'], shown)), shown.surface).toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).not.toContain('web_search');
+      expect(ladder(messagingSystemPrompt(['get_context', 'browse_page'], shown)), shown.surface).toContain('browse_page');
+    }
+    expect(ladder(messagingSystemPrompt(['get_context', 'browse_page']))).not.toContain('web_search');
+  });
 });
