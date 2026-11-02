@@ -1,4 +1,6 @@
-import { OWNER_SIGNAL_SECRET_HEADER, ownerSignalSchema, type OwnerSignal } from '@waldo/contracts';
+import {
+  isHealthSignal, OWNER_SIGNAL_SECRET_HEADER, ownerSignalSchema, type HealthSignalEvent, type OwnerSignal,
+} from '@waldo/contracts';
 import { sameSecret } from './telegram-webhook';
 
 export const OWNER_SIGNAL_PATH = '/signals';
@@ -12,9 +14,13 @@ export type OwnerSignalEnv = Readonly<{
   WALDO_SIGNAL_SECRET?: string;
 }>;
 
-// A proactive turn is either a device signal or Waldo's own morning deadline firing because no
-// wake-up signal arrived. The deadline is a fallback, not the schedule.
-export type ProactiveTrigger = OwnerSignal | Readonly<{ kind: 'morning_deadline' }>;
+// A proactive turn starts from a device signal, from Waldo's own morning deadline when no
+// wake-up arrived (a fallback, not the schedule), or from a check-back the model asked for in an
+// earlier proactive turn.
+export type ProactiveTrigger =
+  | Readonly<{ origin: 'signal'; signal: OwnerSignal }>
+  | Readonly<{ origin: 'morning_deadline' }>
+  | Readonly<{ origin: 'check_back'; id: string; why: string }>;
 
 export const handleOwnerSignal = async (
   request: Request,
@@ -83,17 +89,23 @@ export type ProactiveLedger = Readonly<{ date: string; done: readonly string[]; 
 export const ledgerFor = (stored: ProactiveLedger | undefined, date: string): ProactiveLedger =>
   stored?.date === date ? stored : { date, done: [], count: 0 };
 
+// Idempotency, not judgment: the same moment never runs twice. Waking up and winding down are
+// once-a-day moments; the morning deadline shares the wake-up key so a late wake-up after the
+// fallback brief stays quiet. Other signals dedupe by the sender's id, or else by content within
+// the hour, which absorbs automation retries.
 export const triggerKey = async (trigger: ProactiveTrigger, clock: LocalClock): Promise<string> => {
-  switch (trigger.kind) {
-    case 'woke_up':
+  switch (trigger.origin) {
     case 'morning_deadline':
       return 'morning';
-    case 'winding_down':
-      return 'evening';
-    case 'workout_ended':
-      return `workout:${clock.time.slice(0, 2)}`;
-    case 'meeting_notes':
-      return `meeting:${trigger.id ?? await digest(trigger.notes)}`;
+    case 'check_back':
+      return `check:${trigger.id}`;
+    case 'signal': {
+      const { signal } = trigger;
+      if (signal.source === 'health' && signal.event === 'woke_up') return 'morning';
+      if (signal.source === 'health' && signal.event === 'wind_down') return 'evening';
+      if (signal.id !== undefined) return `id:${signal.source}:${signal.id}`;
+      return `signal:${await digest(JSON.stringify(signal))}:${clock.time.slice(0, 2)}`;
+    }
   }
 };
 
@@ -111,56 +123,62 @@ export const settle = (ledger: ProactiveLedger, key: string): ProactiveLedger =>
   count: ledger.count + 1,
 });
 
-const SOURCE = '[Not written by the owner. This turn was started by';
-
-// The persisted conversation entry: what happened and the context the device sent. It carries no
-// clock time, so the transcript does not record when the owner woke or trained.
+// The persisted conversation entry: what happened and the context the sender attached. It
+// carries no clock time, so the transcript does not record when the owner woke or trained.
 export const triggerEntry = (trigger: ProactiveTrigger): string => {
-  const lines = [headline(trigger)];
-  if (trigger.kind === 'meeting_notes') lines.push('', 'Meeting notes:', trigger.notes);
-  const context = 'context' in trigger ? trigger.context : undefined;
-  if (context?.weather) lines.push('', `Weather now: ${context.weather}`);
-  if (context?.calendar) lines.push('', "Today's calendar from the owner's iPhone:", context.calendar);
-  return lines.join('\n');
-};
-
-const headline = (trigger: ProactiveTrigger): string => {
-  switch (trigger.kind) {
-    case 'woke_up':
-      return `${SOURCE} the owner's iPhone.] Their Apple Watch reports they just woke up.`;
+  switch (trigger.origin) {
     case 'morning_deadline':
-      return `${SOURCE} Waldo's own morning check-in.] No wake-up signal arrived from the owner's devices this morning.`;
-    case 'winding_down':
-      return `${SOURCE} the owner's iPhone.] Their wind-down for sleep has just started.`;
-    case 'workout_ended':
-      return `${SOURCE} the owner's Apple Watch.] They just finished a workout${trigger.activity ? `: ${trigger.activity}` : ''}.`;
-    case 'meeting_notes':
-      return `${SOURCE} the owner's meeting-notes app.] A meeting note just finished${trigger.title ? `: ${trigger.title}` : ''}.`;
+      return "[Not written by the owner. Waldo's own morning check-in.] No wake-up signal arrived from the owner's devices this morning.";
+    case 'check_back':
+      return `[Not written by the owner. A check-back you scheduled earlier.] You wanted to look again: ${trigger.why}`;
+    case 'signal': {
+      const { signal } = trigger;
+      const lines = [`[Not written by the owner. Signal from ${signal.source}: ${signal.event}.]`];
+      if (isHealthSignal(signal)) {
+        lines.push(HEALTH_EVENT[signal.event] + (signal.activity ? ` Activity: ${signal.activity}.` : ''));
+      } else if (signal.detail !== undefined) {
+        lines.push(signal.detail);
+      }
+      for (const [key, value] of Object.entries(signal.context ?? {})) lines.push('', `${key}:`, value);
+      return lines.join('\n');
+    }
   }
 };
 
-// Situation framing for the model. It describes the moment and what tends to help; whether to
-// speak, and what to say, stays the model's call.
-export const proactiveInstruction = (trigger: ProactiveTrigger, clock: LocalClock): string => [
+const HEALTH_EVENT: Readonly<Record<HealthSignalEvent, string>> = {
+  woke_up: "The owner's watch reports they just woke up.",
+  wind_down: "The owner's wind-down for sleep has started.",
+  workout_started: 'The owner just started a workout.',
+  workout_ended: 'The owner just finished a workout.',
+};
+
+export const CHECK_BACK = 'CHECK_BACK';
+
+// One frame for every moment. It says what spontaneity is for and what tends to help; which
+// moments matter, whether to speak and whether to look again later stay the model's call.
+export const proactiveInstruction = (clock: LocalClock): string => [
   `Owner's local time now: ${clock.label} (${clock.timeZone}).`,
-  'This turn was started by a signal from the owner\'s devices or by your own check-in, not by a message from the owner.',
-  'Decide whether messaging the owner right now would genuinely help them. If it would, reply with exactly the message to send: short, warm, specific, plain text, bullets written as "• ". Use the calendar, weather, conversation and memory you have; never invent events or facts you were not given.',
-  `If there is nothing worth saying right now, reply with exactly ${NO_MESSAGE} and nothing else.`,
-  situation(trigger),
+  "This turn was started by something happening in the owner's day, reported by their devices or apps, or by your own check-in. It was not a message from the owner.",
+  'Work out what this moment changes for them: the next few hours, commitments that moved, things to prepare, loops to close, energy and recovery. Life is not on a fixed schedule; respond to what actually happened.',
+  'If a message would genuinely help now, reply with exactly the message to send: short, warm, specific, plain text, bullets written as "• ". Use the calendar, notes, conversation and memory you have. Never invent events or facts you were not given, and never quote health measurements.',
+  `If nothing is worth saying right now, reply with exactly ${NO_MESSAGE}.`,
+  `If it would help to look again later (when a meeting should be over, before they need to leave, to see whether something arrived), add a final line "${CHECK_BACK} HH:MM <what to look at>" using the owner's local time within the next 24 hours. You may do this with or without a message.`,
 ].join('\n');
 
-const situation = (trigger: ProactiveTrigger): string => {
-  switch (trigger.kind) {
-    case 'woke_up':
-    case 'morning_deadline':
-      return 'This is the good-morning moment: how the day is shaped, what to get ready for first, and anything from memory or open follow-ups worth surfacing today.';
-    case 'winding_down':
-      return 'This is the end-of-day close: what got done or moved today if you know, anything still open, and what tomorrow starts with. Keep it light; they are heading to bed.';
-    case 'workout_ended':
-      return 'They just came out of a workout. A practical, everyday suggestion for eating and recovering that fits around their next commitments can help. No calorie, macro or dose numbers, and nothing clinical.';
-    case 'meeting_notes':
-      return 'Turn the notes into a few bullet action items, naming who owns each when the notes say so. If the calendar shows this meeting at a different time than when the note was taken, mention that it seems to have moved.';
+export type CheckBackRequest = Readonly<{ at: string; why: string }>;
+export type ParsedReply = Readonly<{ message: string | null; checkBacks: readonly CheckBackRequest[] }>;
+
+// Separates the protocol lines the instruction defines from the message itself.
+export const parseReply = (raw: string): ParsedReply => {
+  const checkBacks: CheckBackRequest[] = [];
+  const kept: string[] = [];
+  for (const line of raw.split('\n')) {
+    const match = /^\s*CHECK_BACK:?\s+([01]\d|2[0-3]):([0-5]\d)\s+(.+?)\s*$/.exec(line);
+    if (match) checkBacks.push({ at: `${match[1]}:${match[2]}`, why: match[3]!.slice(0, 500) });
+    else kept.push(line);
   }
+  const message = kept.join('\n').trim();
+  return { message: message.length === 0 || message === NO_MESSAGE ? null : message, checkBacks };
 };
 
 const pad = (value: number) => String(value).padStart(2, '0');

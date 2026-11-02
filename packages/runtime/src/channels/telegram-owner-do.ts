@@ -26,7 +26,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const runtime = this.ensureRuntime();
       await runtime.proactive.ensureArmed();
       if (signal) {
-        await runtime.proactive.handle(ownerSignalSchema.parse(JSON.parse(body)));
+        await runtime.proactive.handle({ origin: 'signal', signal: ownerSignalSchema.parse(JSON.parse(body)) });
         return;
       }
       const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
@@ -72,7 +72,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         send: (text) => api.sendMessage({ chat_id: ownerChatId, text }),
         ownerChatId,
         timeZone: this.env.WALDO_OWNER_TIMEZONE || null,
-        morningDeadline: this.env.WALDO_MORNING_DEADLINE || DEFAULT_MORNING_DEADLINE,
+        morningDeadline: this.env.WALDO_MORNING_DEADLINE === 'off' ? null : this.env.WALDO_MORNING_DEADLINE || DEFAULT_MORNING_DEADLINE,
         now: Date.now,
         log,
       }),

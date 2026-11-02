@@ -6,7 +6,7 @@ Two tiers.
 
 Every owner turn writes one JSON line per hop, all with the same trace id (`tg-<update_id>`), a duration in ms, `ok`, and the error message when a hop fails. Hops: `pickup`, `receipt`, `typing`, `choose_reaction`, `joined_path`, `respond`, `send`, `resolved` or `failed`, `turn`. Source: `packages/runtime/src/channels/telegram-listener.ts`.
 
-Each proactive turn writes one line with `hop: "proactive"`, the signal `kind` and an `outcome`: `sent`, `quiet` (the model chose not to message), `already_handled`, `daily_cap` or `failed` with its error. Source: `packages/runtime/src/channels/proactive-owner.ts`.
+Each proactive turn writes one line with `hop: "proactive"`, a `kind` (`<source>:<event>`, `morning_deadline` or `check_back`), an `outcome` (`sent`, `quiet` when the model chose not to message, `already_handled`, `daily_cap`, or `failed` with its error) and `check_backs`, the number it scheduled. A dropped check-back logs `check_back_dropped` with a reason. Source: `packages/runtime/src/channels/proactive-owner.ts`.
 
 Where to read them:
 

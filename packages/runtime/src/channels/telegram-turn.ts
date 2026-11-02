@@ -8,7 +8,6 @@ import { RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
-import { NO_MESSAGE } from './owner-signals';
 import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions } from './telegram-listener';
 
@@ -22,9 +21,9 @@ export type ProactiveTurn = Readonly<{
 }>;
 
 export type TelegramResponder = Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & Readonly<{
-  // Resolves to the message to send, or null when the model decided nothing is worth saying.
-  // The caller must persist the result with `commit` only after the message is delivered.
-  proactive(turn: ProactiveTurn): Promise<Readonly<{ text: string; commit(): Promise<void> }> | null>;
+  // Resolves to the model's raw reply. `commit` saves the turn into the conversation and must be
+  // called only after a message from it was delivered.
+  proactive(turn: ProactiveTurn): Promise<Readonly<{ text: string; commit(): Promise<void> }>>;
 }>;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
@@ -108,11 +107,9 @@ export const createTelegramResponder = (
       } finally {
         turnInstruction = null;
       }
-      const text = publication.text.trim();
-      if (text === NO_MESSAGE) return null;
       const leafId = publication.leafId;
       return {
-        text,
+        text: publication.text,
         async commit() {
           await store?.save([tree.get(id)!, tree.get(leafId)!], leafId);
           parentId = leafId;

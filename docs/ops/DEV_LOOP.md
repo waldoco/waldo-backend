@@ -96,7 +96,7 @@ Remote access from the Codespace:
 ## 5. Built today
 
 - Telegram owner chat on the staging Worker. Updates arrive by webhook, go to a Durable Object, then to the model. It has the receipt, typing and final reactions, per-hop tracing, and honest replies for unsupported messages.
-- Proactive messages: the iPhone posts wake-up, wind-down, workout and meeting-note signals to `POST /signals`, and the model decides whether to message. A morning deadline alarm covers days with no wake-up signal. Setup is in [PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md).
+- Proactive messages: devices and apps post moments to `POST /signals`, the model decides whether to message, and it can schedule its own check-backs. An optional morning deadline covers days with no wake-up signal. Setup is in [PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md).
 - Staging still uses fixture admission instead of real per-user sign-in. No tools are granted to the model. See [#144](https://github.com/waldoco/waldo-backend/issues/144).
 
 ## 6. Forward map

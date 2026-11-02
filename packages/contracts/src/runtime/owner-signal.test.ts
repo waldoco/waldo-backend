@@ -2,31 +2,37 @@ import { describe, expect, it } from 'vitest';
 import { ownerSignalSchema } from './owner-signal';
 
 describe('ownerSignalSchema', () => {
-  it('accepts each signal kind with optional device context', () => {
-    expect(ownerSignalSchema.parse({ kind: 'woke_up' })).toEqual({ kind: 'woke_up' });
+  it('accepts body-state moments from the closed health branch', () => {
+    expect(ownerSignalSchema.parse({ source: 'health', event: 'woke_up' })).toEqual({ source: 'health', event: 'woke_up' });
     expect(ownerSignalSchema.parse({
-      kind: 'woke_up',
-      context: { weather: 'Light rain, 14°C', calendar: '10:00 Design review\n15:00 Investor call' },
-    }).kind).toBe('woke_up');
-    expect(ownerSignalSchema.parse({ kind: 'winding_down' }).kind).toBe('winding_down');
-    expect(ownerSignalSchema.parse({ kind: 'workout_ended', activity: 'Outdoor Run' })).toEqual({
-      kind: 'workout_ended', activity: 'Outdoor Run',
+      source: 'health', event: 'workout_ended', activity: 'Outdoor Run', context: { calendar: '14:00 Client call' },
+    })).toMatchObject({ activity: 'Outdoor Run' });
+  });
+
+  it('accepts any named moment from any other source, normalising names', () => {
+    expect(ownerSignalSchema.parse({ source: 'Location', event: 'arrived', detail: 'Arrived at St Mary School' })).toEqual({
+      source: 'location', event: 'arrived', detail: 'Arrived at St Mary School',
     });
     expect(ownerSignalSchema.parse({
-      kind: 'meeting_notes', id: 'not_8f2a', title: 'Investor call', notes: '- Send deck by Friday',
-    }).kind).toBe('meeting_notes');
+      source: 'granola', event: 'note_ready', id: 'not_8f2a', detail: '- Send deck by Friday',
+      context: { calendar: '15:00 Investor call', weather: 'Rain' },
+    }).event).toBe('note_ready');
+    expect(ownerSignalSchema.parse({ source: 'shift', event: 'handover_done' }).source).toBe('shift');
   });
 
-  it('rejects unknown kinds, empty notes and missing kind', () => {
-    expect(ownerSignalSchema.safeParse({ kind: 'heartbeat' }).success).toBe(false);
-    expect(ownerSignalSchema.safeParse({ kind: 'meeting_notes', notes: '   ' }).success).toBe(false);
-    expect(ownerSignalSchema.safeParse({}).success).toBe(false);
+  it('rejects malformed names, empty detail and oversized context', () => {
+    expect(ownerSignalSchema.safeParse({ source: 'calendar' }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'my source', event: 'x' }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'mail', event: 'received', detail: '   ' }).success).toBe(false);
+    const context = Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`k${i}`, 'v']));
+    expect(ownerSignalSchema.safeParse({ source: 'mail', event: 'received', context }).success).toBe(false);
   });
 
-  it('refuses physiological readings in any shape', () => {
-    expect(ownerSignalSchema.safeParse({ kind: 'workout_ended', calories: 420 }).success).toBe(false);
-    expect(ownerSignalSchema.safeParse({ kind: 'woke_up', sleep_minutes: 412 }).success).toBe(false);
-    expect(ownerSignalSchema.safeParse({ kind: 'workout_ended', activity: 'Run 5km 420kcal' }).success).toBe(false);
-    expect(ownerSignalSchema.safeParse({ kind: 'woke_up', context: { heart_rate: '52' } }).success).toBe(false);
+  it('refuses physiological readings and free-text health moments', () => {
+    expect(ownerSignalSchema.safeParse({ source: 'health', event: 'workout_ended', calories: 420 }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'health', event: 'woke_up', detail: 'slept 6.5h' }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'health', event: 'workout_ended', activity: 'Run 5km 420kcal' }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'health', event: 'heart_rate_high' }).success).toBe(false);
+    expect(ownerSignalSchema.safeParse({ source: 'HEALTH', event: 'woke_up', detail: 'x' }).success).toBe(false);
   });
 });
