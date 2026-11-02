@@ -65,7 +65,7 @@ The contract checks three things:
   - A point covers from its time until that device's next sample, at most **10 minutes**.
   - Every interval is clipped to the hour's bucket.
 - **Then one union, with precedence.** Two devices can write the same seconds, for example a watch and a chest-strap app. So in each hour:
-  - The **primary** device is the one whose intervals cover the most seconds. A tie goes to the lower bundle id, so the choice is deterministic.
+  - The **primary** device is the one whose intervals cover the most seconds. A tie goes to the lower device id, then to the earlier first sample, then to the lower bundle id. The bundle id cannot settle a tie alone: Health Connect names writers by package, and Samsung Health writes for every Galaxy device under one package.
   - Its intervals count in full.
   - Another device's intervals count only for seconds no device before it in that order has covered.
   - Within one device, overlapping spans are cut the same way: the earlier-starting span keeps its seconds.
@@ -136,7 +136,7 @@ If zone 1's start reaches zone 2's (60 % of the maximum), the observed maximum c
 **A low observed maximum also squeezes the upper zones.** With a maximum of 130:
 - zones 2 to 5 start at 78, 91, 104 and 117;
 - every hard effort above 117 counts as zone 5;
-- a brisk walk can reach zone 3.
+- a brisk walk at 105 bpm is already zone 4.
 
 So that owner's load runs high per minute. It still runs high against their own band, and `approximate` says why. The cheap guard is the `zone_basis_low` rule above. No other guard is added, because any second floor on the maximum would be a population number. §10 has the falsifier.
 
