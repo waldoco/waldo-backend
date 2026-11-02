@@ -54,7 +54,7 @@ const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
     let messageSeq = 0;
     return run({ desk, sql: state.storage.sql, calls, retired, sends, creates, clock, holds, telegram, writesFirst, app,
       tool: async args => (await handler.handle(handler.schema.parse(args) as never) as { data: Record<string, unknown> }).data,
-      list: async (revision = 7) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://owner/app/v1/approvals', { headers: { [APP_CONTRACT_HEADER]: `approvals=${revision}` } }), host)).json()).approvals,
+      list: async (revision = 6) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://owner/app/v1/approvals', { headers: { [APP_CONTRACT_HEADER]: `approvals=${revision}` } }), host)).json()).approvals,
       decideInApp: (id, digest) => appApprovalsRequest(new Request('https://owner/app/v1/approvals/decisions', { method: 'POST', body: JSON.stringify({ approval_id: id, action: 'approve', expected_digest: digest, request_id: `decision-${id}` }) }), host),
       email: async (subject, extra = {}, replaces) => {
         clock.at += 60_000;

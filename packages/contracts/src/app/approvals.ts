@@ -67,7 +67,7 @@ const EXACT_BY_KIND = {
 // An approval the health trigger raised carries the model's one-line reason for it, approvals revision 4. Only the
 // reason is in it, never a reading or a zone of its own: the bound is the longest a proposal's reason can be.
 export const appApprovalHealthV1Schema = z.strictObject({ reason: z.string().min(1).max(300) });
-// A card Waldo withdrew while it still waited on the owner, approvals revision 7: its state is superseded, the reason is the one
+// A card Waldo withdrew while it still waited on the owner, approvals revision 6: its state is superseded, the reason is the one
 // line the owner reads on the closed card, and replaced_by names the newer card that closed it, when one did.
 export const appApprovalWithdrawalV1Schema = z.strictObject({ reason: z.string().min(1).max(200).regex(/^[^\r\n]*$/), replaced_by: approvalIdV1Schema.optional() });
 
@@ -92,10 +92,10 @@ export const appApprovalV1Schema = z.strictObject({
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
 // A send as Waldo from the owner's Waldo address, with its sender, is approvals revision 5; an older build is never shown one.
 export const APP_APPROVALS_AGENT_MAIL_REVISION = 5;
-// Revision 6 is held for the autonomy contract; a build that predates revision 7 reads a withdrawn card as superseded alone.
-export const APP_APPROVALS_WITHDRAWAL_REVISION = 7;
-export const APP_APPROVALS_CONTRACT_REVISION = 7;
-// An approval as a build reading `revision` parses it: revision 6 is the shape before the withdrawal, revision 3 the shape
+// A build that predates revision 6 reads a withdrawn card as superseded alone.
+export const APP_APPROVALS_WITHDRAWAL_REVISION = 6;
+export const APP_APPROVALS_CONTRACT_REVISION = 6;
+// An approval as a build reading `revision` parses it: revision 5 is the shape before the withdrawal, revision 3 the shape
 // before the health origin, revision 2 the shape before the draft of a send, and revision 1 the shape before the calendar
 // details too. An approval a revision leaves whole is returned as it is.
 export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
