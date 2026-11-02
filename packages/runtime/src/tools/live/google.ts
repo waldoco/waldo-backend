@@ -12,7 +12,7 @@ import {
 import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
 import { agentMailFirstName } from '../../channels/agent-mail/handles';
 import { renderOwnerMail } from '../../channels/agent-mail/render';
-import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
@@ -24,10 +24,11 @@ export type GoogleAccess = Readonly<{
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string, options?: ProposeOptions): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal, options?: ProposeOptions): Promise<string>;
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   placement?(id: string): CardPlacement;
+  replacement?(id: string): Replacement | null;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -542,10 +543,19 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      // replaces is the desk's to act on, never part of the change the owner approves.
+      const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {
-        const proposal_id = await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx));
-        return { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.'), applied: false };
+        try {
+          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx) });
+          return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
+        } catch (error) {
+          if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(replaces!, error) };
+          throw error;
+        }
       }, args.account);
+      const refused = result.ok && 'refused' in result.data ? result.data.refused : undefined;
+      if (refused !== undefined) return { ok: false, code: 'rejected', error: refused, source_taint: null };
       return result.ok ? {...result, source_taint:null} : result;
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
@@ -618,9 +628,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
           ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
-        });
-        return { ok: true, data: { account: gate.data.account, proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
+        }, { replaces: args.replaces, outside: turnReadOutside(ctx) });
+        return { ok: true, data: { account: gate.data.account, proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
       } catch (error) {
+        if (error instanceof ApprovalReplaceError) return { ok: false, code: 'rejected', error: replaceRefusal(args.replaces!, error), source_taint: null };
         // A channel timeout may have delivered the card, but no email was sent and the
         // proposal remains blocked. Database/other faults are not card-delivery evidence.
         if (!(error instanceof EmailProposalError)) return { ok: false, code: 'transient', error: 'The email proposal could not be prepared. No email was sent; check chat before retrying.', source_taint: 'external' };
