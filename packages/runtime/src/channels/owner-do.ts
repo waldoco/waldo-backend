@@ -67,7 +67,7 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {agentMailRoute, ownerDirectory} from '../identity/owner-directory';
 import { AGENT_MAIL_DUE_KEY, agentMailInbox, type AgentMailAdmission, type AgentMailDelivery } from './agent-mail/inbox';
 import { AGENT_MAIL_TURN_TOOLS, drainAgentMail } from './agent-mail/turn';
-import { AGENT_MAIL_RULE_DUE_KEY, agentMailRouting, deferAgentMailRules, reconcileAgentMailRules } from './agent-mail/rules';
+import { agentMailRouting, agentMailRulesDue, deferAgentMailRules, reconcileAgentMailRules } from './agent-mail/rules';
 import { agentMailDirectory } from './agent-mail/handles';
 import { agentMailDeskDep } from './agent-mail/send';
 import type { AgentMailControlsDeps } from './agent-mail/controls';
@@ -3113,9 +3113,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The Email Routing rules of this owner's handles: nothing is called while agent mail is off or its rule API unconfigured.
   private async reconcileAgentMailRules(): Promise<void> {
-    const kv = this.ctx.storage.kv, due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY), doName = kv.get<string>('do_name');
-    if (due == null || due > Date.now()) return;
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
     const setup = agentMailRouting(this.env), directory = doName === undefined ? null : agentMailDirectory(this.env, doName);
+    if (!agentMailRulesDue(kv, setup !== null && directory !== null)) return;
     if (!setup || !directory) deferAgentMailRules(kv);
     else await reconcileAgentMailRules({ kv, setup, directory, now: Date.now,
       log: (code, cloudflare = []) => console.log(JSON.stringify({ hop: 'agent_mail_rule', code, ...(cloudflare.length ? { cloudflare } : {}) })) });
