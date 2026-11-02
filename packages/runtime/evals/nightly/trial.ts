@@ -25,7 +25,7 @@ import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
-import { welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
+import { constellationSoFar, welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -203,7 +203,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('welcome' in step) {
         const { stage, sources, text } = step.welcome;
         transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
-        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, 'The constellation is empty so far.', text), 2);
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
         const nodes = (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes ?? [];
         transcript.push({ role: 'waldo', text: nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
       } else if ('mail_arrives' in step) {

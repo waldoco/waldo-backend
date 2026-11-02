@@ -342,7 +342,7 @@ export const runWelcome = async (deps: WelcomeDeps): Promise<void> => {
 // The second build reads every due source at once, then asks the model one source at a time in this order, each over the
 // constellation the sources before it wrote. The model calls share the owner's queue either way, so the order costs no time.
 const ORDER: readonly WelcomeStage[] = ['health', 'setup', 'calendar', 'mail', 'web'];
-const constellationSoFar = (claims: ClaimStore): string => {
+export const constellationSoFar = (claims: Pick<ClaimStore, 'allClaims' | 'nodes'>): string => {
   const all = claims.allClaims(), active = claims.nodes().filter((node) => node.status === 'active');
   const health = active.some((node) => nodeSources(all, node).some((source) => HEALTH_SOURCES.includes(source)));
   const lines = active.map((node) => `- [${node.id}] ${node.label}: ${node.summary}`);
