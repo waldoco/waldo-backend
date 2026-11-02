@@ -6,7 +6,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import PostalMime from 'postal-mime';
 import { describe, expect, it } from 'vitest';
 import { WALDO_MARK_PNG_BASE64 } from '../src/channels/agent-mail/mark';
-import { WALDO_SITE, ownerMailText, renderOwnerMail, signerFirstName } from '../src/channels/agent-mail/render';
+import { agentMailFirstName } from '../src/channels/agent-mail/handles';
+import { WALDO_SITE, ownerMailText, renderOwnerMail } from '../src/channels/agent-mail/render';
 import { approvalDesk } from '../src/channels/approvals';
 import type { GoogleClient } from '../src/connectors/google';
 import { googleHandlers } from '../src/tools/live/google';
@@ -52,9 +53,10 @@ describe('renderOwnerMail', () => {
     const mail = await PostalMime.parse(result.mime);
     expect(mail.html).not.toContain('personal assistant');
     expect(mail.html).toContain('>Waldo</a></p><img src="cid:');
-    expect(signerFirstName(null)).toBeNull();
-    expect(signerFirstName('  \r\n ')).toBeNull();
-    expect(signerFirstName('Shivansh Fulper')).toBe('Shivansh');
+    // The same first name agent mail signs with.
+    expect(agentMailFirstName(null)).toBeNull();
+    expect(agentMailFirstName('  \r\n ')).toBeNull();
+    expect(agentMailFirstName('Shivansh Fulper')).toBe('Shivansh');
   });
 
   it('renders a long table whole: an owner\'s mail is not refused for HTML Gmail would only clip', () => {

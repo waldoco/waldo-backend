@@ -265,9 +265,6 @@ const signatureHtml = (first: string | null, contentId: string) => {
 };
 // The model's words, then the signature: the plain text a client shows, and what an approval card shows.
 const signedText = (bodyText: string, first: string | null) => `${bodyText}\n\n${signatureText(first)}`;
-// The owner's first name as a signature uses it: one line, its first word, bounded.
-export const signerFirstName = (ownerName: string | null | undefined): string | null =>
-  [...oneLine(wellFormed(ownerName ?? '')).split(' ')[0] ?? ''].slice(0, NAME_MAX).join('') || null;
 
 const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ caption: string; href: string }> | null, first: string | null, contentId: string) => {
   const calloutHtml = callout ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0"><tr><td style="background-color:${ACCENT_SUBTLE};border-radius:12px;padding:14px 16px">${htmlInline(callout)}</td></tr></table>` : '';

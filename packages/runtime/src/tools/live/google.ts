@@ -10,7 +10,8 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
-import { renderOwnerMail, signerFirstName } from '../../channels/agent-mail/render';
+import { agentMailFirstName } from '../../channels/agent-mail/handles';
+import { renderOwnerMail } from '../../channels/agent-mail/render';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -604,7 +605,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
       // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME, the draft and Waldo's signature.
       // (messages/send rejects MIME text unencoded - google 400 "Base64 decoding failed" on the approved send path.)
-      const signature = { first_name: signerFirstName(ownerName()) };
+      const signature = { first_name: agentMailFirstName(ownerName()) };
       const rendered = renderOwnerMail({ subject: args.subject, body_markdown: args.body_markdown }, signature.first_name,
         { to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}) }, { messageId: message_id, ...gate.data.reply });
       if (!rendered.ok) return { ok: false, code: 'invalid_args', error: `The email could not be prepared (${rendered.code}), so nothing was proposed. Fix it and propose it again.`, source_taint: null };
