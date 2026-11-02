@@ -37,27 +37,29 @@ const overlapsWorkout = (record: DayRecord, startMs: number): boolean =>
 const restingBucket = (record: DayRecord, bucket: HourlyBucket): boolean =>
   bucket.heartRate !== null && bucket.movementMinutes !== null && bucket.movementMinutes < RESTING_MOVEMENT_MINUTES && !overlapsWorkout(record, Date.parse(bucket.startAt));
 
-type History = Readonly<{ heartRate: number[]; hrv: Readonly<Record<HrvMethod, number[]>> }>;
+type History = Readonly<{ heartRate: readonly number[]; hrv: Readonly<Record<HrvMethod, readonly number[]>> }>;
+const empty: History = { heartRate: [], hrv: { rmssd: [], sdnn: [] } };
+const joined = (before: History | undefined, rate: number, logs: readonly (readonly [HrvMethod, number])[]): History => {
+  const known = before ?? empty;
+  return {
+    heartRate: [...known.heartRate, rate],
+    hrv: { rmssd: [...known.hrv.rmssd, ...logs.filter(([method]) => method === 'rmssd').map(([, value]) => value)], sdnn: [...known.hrv.sdnn, ...logs.filter(([method]) => method === 'sdnn').map(([, value]) => value)] },
+  };
+};
 // The owner's earlier days' resting hours at each wall-clock hour, from the day's wake to the sleep that follows it.
-const historyByHour = (earlier: readonly DayRecord[], byDay: ReadonlyMap<string, DayRecord>): ReadonlyMap<number, History> => {
-  const byHour = new Map<number, { heartRate: number[]; hrv: Record<HrvMethod, number[]> }>();
-  for (const record of earlier) {
-    if (!record.sleep) continue;
+const historyByHour = (earlier: readonly DayRecord[], byDay: ReadonlyMap<string, DayRecord>): ReadonlyMap<number, History> =>
+  earlier.flatMap(record => {
+    if (!record.sleep) return [];
     const wake = Date.parse(record.sleep.endAt);
     const nextDay = [...byDay.values()].find(other => Date.parse(`${other.day}T00:00:00Z`) - Date.parse(`${record.day}T00:00:00Z`) === 24 * HOUR_MS);
     const nextSleep = nextDay?.sleep ? Date.parse(nextDay.sleep.startAt) : null;
-    for (const bucket of record.hourly) {
+    return record.hourly.flatMap(bucket => {
       const start = Date.parse(bucket.startAt);
-      if (!restingBucket(record, bucket) || start < wake || (nextSleep !== null && start + HOUR_MS > nextSleep)) continue;
-      const hour = wallHour(start, record.timezone);
-      const entry = byHour.get(hour) ?? { heartRate: [], hrv: { rmssd: [], sdnn: [] } };
-      entry.heartRate.push(bucket.heartRate!);
-      for (const reading of bucket.hrvReadings) if (reading.value > 0) entry.hrv[reading.method].push(Math.log(reading.value));
-      byHour.set(hour, entry);
-    }
-  }
-  return byHour;
-};
+      if (!restingBucket(record, bucket) || start < wake || (nextSleep !== null && start + HOUR_MS > nextSleep)) return [];
+      const logs = bucket.hrvReadings.filter(reading => reading.value > 0).map((reading): readonly [HrvMethod, number] => [reading.method, Math.log(reading.value)]);
+      return [{ hour: wallHour(start, record.timezone), rate: bucket.heartRate!, logs }];
+    });
+  }).reduce((byHour, { hour, rate, logs }) => new Map(byHour).set(hour, joined(byHour.get(hour), rate, logs)), new Map<number, History>());
 
 const spreadOf = (values: readonly number[], floor: number): number => {
   const centre = mean(values);
@@ -75,30 +77,25 @@ export const stressCurve = (input: Readonly<{ targetDay: string; days: readonly 
   const wake = Math.max(Date.parse(target.sleep.endAt), dayStart);
   const settledBy = input.asOf === null ? dayEnd : Math.min(dayEnd, Date.parse(input.asOf));
 
-  const hours: StressHour[] = [];
-  for (let start = dayStart + Math.ceil((wake - dayStart) / HOUR_MS) * HOUR_MS; start + HOUR_MS <= settledBy; start += HOUR_MS) {
+  const hourAt = (start: number): StressHour => {
     const at = new Date(start).toISOString();
     const missing = (reason: StressHourReason): StressHour => ({ at, value: null, band: null, reason });
     const bucket = buckets.get(start);
-    if (overlapsWorkout(target, start)) { hours.push(missing('workout')); continue; }
-    if (!bucket || bucket.heartRate === null || bucket.movementMinutes === null) { hours.push(missing('no_reading')); continue; }
-    if (bucket.movementMinutes >= RESTING_MOVEMENT_MINUTES) { hours.push(missing('moving')); continue; }
+    if (overlapsWorkout(target, start)) return missing('workout');
+    if (!bucket || bucket.heartRate === null || bucket.movementMinutes === null) return missing('no_reading');
+    if (bucket.movementMinutes >= RESTING_MOVEMENT_MINUTES) return missing('moving');
     const same = history.get(wallHour(start, target.timezone));
-    if (!same || same.heartRate.length < MIN_DAYS_PER_HOUR) { hours.push(missing('baseline_immature')); continue; }
-    const heartRate = clampScore(50 + POINTS_PER_SPREAD * (bucket.heartRate - mean(same.heartRate)) / spreadOf(same.heartRate, HEART_RATE_SPREAD_FLOOR));
-    const parts = [heartRate];
+    if (!same || same.heartRate.length < MIN_DAYS_PER_HOUR) return missing('baseline_immature');
+    const strain = [clampScore(50 + POINTS_PER_SPREAD * (bucket.heartRate - mean(same.heartRate)) / spreadOf(same.heartRate, HEART_RATE_SPREAD_FLOOR))];
     // The hour's HRV, in the first method that has enough same-hour days of its own: methods are never mixed.
-    for (const method of HRV_ORDER) {
-      const reading = bucket.hrvReadings.find(entry => entry.method === method);
-      const own = same.hrv[method];
-      if (reading && reading.value > 0 && own.length >= MIN_DAYS_PER_HOUR) {
-        parts.push(clampScore(50 - POINTS_PER_SPREAD * (Math.log(reading.value) - mean(own)) / spreadOf(own, HRV_SPREAD_FLOOR)));
-        break;
-      }
-    }
+    const method = HRV_ORDER.find(candidate => bucket.hrvReadings.some(entry => entry.method === candidate && entry.value > 0) && same.hrv[candidate].length >= MIN_DAYS_PER_HOUR);
+    const reading = bucket.hrvReadings.find(entry => entry.method === method);
+    const parts = method && reading ? [...strain, clampScore(50 - POINTS_PER_SPREAD * (Math.log(reading.value) - mean(same.hrv[method])) / spreadOf(same.hrv[method], HRV_SPREAD_FLOOR))] : strain;
     const value = round1(mean(parts));
-    hours.push({ at, value, band: stressBandOf(value) });
-  }
+    return { at, value, band: stressBandOf(value) };
+  };
+  const first = dayStart + Math.ceil((wake - dayStart) / HOUR_MS) * HOUR_MS;
+  const hours = Array.from({ length: Math.max(0, Math.floor((settledBy - first) / HOUR_MS)) }, (_, k) => hourAt(first + k * HOUR_MS));
   const shown = hours.slice(-MAX_HOURS);
   return shown.some(hour => hour.value !== null) ? { version: STRESS_CURVE_VERSION, hours: shown } : null;
 };
