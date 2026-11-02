@@ -31,7 +31,7 @@ export type ProposalState = (id: string) => Promise<Readonly<{ kind: string; sta
 
 // The tools whose output reports an approval on the desk, and the field that names it. No other tool's output links.
 const APPROVAL_FIELD: Readonly<Record<string, string>> = {
-  send_email: 'proposal_id', send_message: 'proposal_id', propose_calendar_change: 'proposal_id', call_mcp_tool: 'proposal_id',
+  send_email: 'proposal_id', send_agent_mail: 'proposal_id', send_message: 'proposal_id', propose_calendar_change: 'proposal_id', call_mcp_tool: 'proposal_id',
   browse_act: 'proposal_id', propose_google_task_change: 'approval_ref', raise_approval: 'approval_id',
 };
 
