@@ -9,7 +9,7 @@ import { PUSHES, pushTitle } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
-import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type Change, type TitleDigest, type UpdateBook } from './update-cards';
+import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, readChanges, touchesDay, writeChanges, type Change, type DeltaCode, type DeltaSource, type TitleDigest, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
 // it for the next main card. When an update card could go out now and something changed, it writes a reader job in the
@@ -19,7 +19,7 @@ import { changeDetail, changeLines, readChanges, touchesDay, writeChanges, type 
 // Why an update card cannot go out now: the owner turned follow-ups off, the day's last card went, volume is low, quiet
 // hours, or the owner's surface would only hold it. The changes still wait for the next main card.
 export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window';
-export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | SweepGate | MachineEnqueued['code'];
+export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | 'held_cursor_moved' | SweepGate | MachineEnqueued['code'];
 
 // An update card is worth reading only soon: one still waiting after half an hour is dropped, its changes left for the next card.
 export const UPDATE_CARD_FRESH_MS = 30 * 60_000;
@@ -33,7 +33,9 @@ export const UPDATE_JUDGE_WAKE_KEY = 'update_judge_wake_v1';
 const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 
 export type SweepCheckDeps = Readonly<{
-  updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events'>;
+  updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
+  // GOOGLE_REALTIME_TRIAGE: read exact deltas from the mail history and these calendars' sync tokens.
+  delta?: DeltaSource;
   now: number; day: string; timezone: string; surface: string; sourceFollowups: boolean;
   // The day state: what each event was is kept, and two weeks ahead are read. titleDigest keys what is kept of a title.
   dayState?: Readonly<{ titleDigest: TitleDigest }>;
@@ -54,7 +56,7 @@ export type SweepCheckDeps = Readonly<{
 // wakeAt: when a debounced tick's changes can next be judged. recorded: the update record this tick committed with changes,
 // and the sources they came from. seedCapped: the day's read of events was cut at its cap.
 type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow; wakeAt?: number;
-  recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true }>;
+  recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true; delta?: readonly DeltaCode[] }>;
 export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
   // A sweep still open holds the window: nothing is read, so the next tick after it settles reads everything since.
@@ -65,7 +67,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   if (lastJob !== null && deps.now < lastJob + UPDATE_JUDGE_GAP_MS) return { code: 'held_debounce', changes: 0, analysis: 0, wakeAt: lastJob + UPDATE_JUDGE_GAP_MS };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
   const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups, deps.dayState
-    ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined), titleDigest: deps.dayState.titleDigest } : undefined);
+    ? { day: deps.day, events: (from, to, limit, includeDeclined) => deps.google.events(from, to, limit, includeDeclined), titleDigest: deps.dayState.titleDigest } : undefined, deps.delta);
   // A job held for a topic the owner is forgetting rolls the whole write back: the record, the observed mail and the
   // watermarks stay as they were, so the tick after the forget settles reads the same window.
   const heldTopic = new Error('held_topic');
@@ -80,20 +82,22 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     const counts = { changes: changes.length, analysis: analysis.length,
       ...(recordId === null ? {} : { recorded: { id: recordId, sources: [...new Set(changes.map(change => change.source))] } }) };
     if (gate !== null) return { code: gate, ...counts };
-    if (!analysis.length) return { code: 'unchanged', ...counts };
+    if (!analysis.some(change => !CONTEXT_KINDS.includes(change.kind))) return { code: 'unchanged', ...counts };
     recordId ??= updates.record(deps.day, deps.now, [], null);
     const made = enqueueMachine(deps.jobs, updateSweepSpec(analysis, { key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now }), deps.held());
     if (made.code === 'held_topic') throw heldTopic;
     if (made.code === 'enqueued') deps.enqueued(made.job);
     return { code: made.code, ...counts, job: made.job };
   }); } catch (error) {
-    if (error !== heldTopic) throw error;
-    checked = { code: 'held_topic', changes: read.changes.length, analysis: 0 };
+    if (error instanceof CursorMovedError) checked = { code: 'held_cursor_moved', changes: 0, analysis: 0 };
+    else if (error === heldTopic) checked = { code: 'held_topic', changes: read.changes.length, analysis: 0 };
+    else throw error;
   }
   // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
   // recorded. A failed ask never costs the update.
   if (changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
-  return read.seen?.seedCapped ? { ...checked, seedCapped: true } : checked;
+  const coded = read.delta?.codes.length ? { ...checked, delta: read.delta.codes } : checked;
+  return read.seen?.seedCapped ? { ...coded, seedCapped: true } : coded;
 };
 
 // The harness's wake hint after an ingestion commits: ids only, never text, emitted outside the transaction. Each consumer
