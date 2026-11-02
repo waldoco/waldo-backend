@@ -1,6 +1,6 @@
 # Passive load: a busy day on foot counts (addendum to B20)
 
-**Date:** 2 November 2026 · **Issue:** waldoco/waldo-backend#1820 · **Status:** design only. Nothing here runs before the gate reviews it and the owner says yes.
+**Date:** 2 November 2026 · **Issue:** waldoco/waldo-backend#1820 · **Status:** accepted. The gate re-review found it SOUND (backend `609d8005`, brain `c7265a9`). On 2 November 2026 the owner answered the four §9 decisions with "Accept all four". The build is gated by `HEALTH_PASSIVE_LOAD`, default `"0"`.
 
 **Read at:**
 - backend `beta-mvp` `561d7171`, and #1822 (`docs/proposals/HEALTH_BODY_PARITY_CONTRACT_2026-11-02.md`) at `1267e3b8`;
