@@ -92,15 +92,15 @@ describe('producer: day load, Form curve and stress curve behind their switches'
       // score 78.4 and the 12 odd ones are rest days at 0: mean 39.2, spread 39.2.
       expect(load).toEqual({
         state: 'available', version: 'day-load.candidate.v1', activation: 'candidate_unaccepted', score: 78.4, method: 'hr_zones', approximate: false, window_days: 28,
-        band: { state: 'personal', low: 0, centre: 39.2, high: 78.4, own_days: 24, days_until_personal: 0 }, direction: 'usual',
+        band: { state: 'personal', low: 0, centre: 39.2, high: 78.4, own_days: 24, days_until_personal: 0 },
       });
     });
     it('reads yesterday\'s rest day as 0 against its own earlier days', async () => {
       const load = yesterdayOf((await rowsOf(evenDays, { dayLoad: true })).rows).day_load;
       expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
       // 23 earlier observed days: 12 even ones at 78.4 and 11 odd ones at 0, so the mean is 12 x 78.4 / 23 = 40.9 and the spread is
-      // 78.4 x sqrt(12/23 x 11/23) = 39.2, which puts the band's low edge at 1.7, above a rest day's 0.
-      expect(load).toMatchObject({ score: 0, band: { state: 'personal', low: 1.7, centre: 40.9, high: 80.1, own_days: 23 }, direction: 'below_usual' });
+      // 78.4 x sqrt(12/23 x 11/23) = 39.2, which puts the band's low edge at 1.7 and its high edge at 80.1.
+      expect(load).toMatchObject({ score: 0, band: { state: 'personal', low: 1.7, centre: 40.9, high: 80.1, own_days: 23 } });
     });
     it('counts a session once when two apps hold a copy of it', async () => {
       const copy = (d: string) => [workout(d, 12), workout(d, 12, { hr_zones: { seconds: [0, 1800, 1800, 0, 0] } }, { start_at: at(d, 12), end_at: at(d, 13) })];
@@ -115,7 +115,7 @@ describe('producer: day load, Form curve and stress curve behind their switches'
     });
     it('scores a worn day with no workout as 0, and has no band until fourteen observed days', async () => {
       const { rows } = await rowsOf({ nights: 6 }, { dayLoad: true });
-      expect(todayOf(rows).day_load).toMatchObject({ score: 0, band: { state: 'provisional', own_days: 5, days_until_personal: 9 }, direction: null });
+      expect(todayOf(rows).day_load).toMatchObject({ score: 0, band: { state: 'provisional', own_days: 5, days_until_personal: 9 } });
     });
     it('has no load for a day no worn sensor saw, and is never a low score', async () => {
       const { rows } = await rowsOf({ nights: 25, worn: false }, { dayLoad: true });

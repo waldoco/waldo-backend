@@ -798,19 +798,16 @@ describe('health revision 10: the day load, today\'s Form curve and the hourly s
   describe('day_load', () => {
     it('reads a load with a personal band, a provisional one with none, and an unobserved day with its reason', () => {
       expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
-      expect(healthDayLoadV1Schema.safeParse({ ...load, band: { state: 'provisional', own_days: 9, days_until_personal: 5 }, direction: null }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, band: { state: 'provisional', own_days: 9, days_until_personal: 5 } }).success).toBe(true);
       expect(healthDayLoadV1Schema.safeParse({ ...load, method: 'hr_zones_observed_peak', approximate: true }).success).toBe(true);
-      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0, direction: 'below_usual' }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0 }).success).toBe(true);
       expect(healthDayLoadV1Schema.safeParse({ state: 'unavailable', reason: 'no_readings' }).success).toBe(true);
       expect(healthDayLoadBandV1Schema.safeParse(band).success).toBe(true);
     });
-    it('names which way the score stands against the band, and refuses a direction that is not that', () => {
-      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 80, direction: 'above_usual' }).success).toBe(true);
-      expect(healthDayLoadV1Schema.safeParse({ ...load, score: band.high, direction: 'usual' }).success).toBe(true);
-      rejected(healthDayLoadV1Schema, [
-        { ...load, direction: 'above_usual' }, { ...load, score: 80 }, { ...load, score: 5 }, { ...load, direction: null }, { ...load, direction: undefined },
-        { ...load, band: { state: 'provisional', own_days: 9, days_until_personal: 5 } },
-      ]);
+    it('serves no direction of the score against the band, because today\'s score is the load so far', () => {
+      rejected(healthDayLoadV1Schema, [{ ...load, direction: 'usual' }, { ...load, direction: null }, { ...load, direction: 'above_usual' }]);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 5 }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 99 }).success).toBe(true);
     });
     it('refuses a load that is out of range, an unnamed method or version, a mislabelled approximation, and extra keys', () => {
       rejected(healthDayLoadV1Schema, [

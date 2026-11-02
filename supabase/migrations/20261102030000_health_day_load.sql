@@ -7,8 +7,8 @@
 --   Row-level security on the table is unchanged.
 -- - waldo.health_day_load_valid is the closed shape: an unavailable load with its one reason, or an available one of the
 --   candidate version with a score of 0 to 100, one of four methods (the approximate label exactly for the observed-peak
---   method), the 28-day window, the owner's usual band (from fourteen observed days, in order, in the score's scale, or none and
---   the days still needed), and the direction of the score against that band, which the writer recomputes and must match.
+--   method), the 28-day window, and the owner's usual band (from fourteen observed days, in order, in the score's scale, or none and
+--   the days still needed). No direction of the score against the band is stored: today's score is the load so far.
 -- - waldo.health_context_write is re-created whole from its last definition (20261102010000), admits the key through that
 --   function, and never on a backfilled row. waldo.health_scores_read is re-created whole from its last definition
 --   (20261102010000) and returns the column when set. waldo.health_scores_history and the model's read are not changed and
@@ -18,7 +18,7 @@ alter table public.health_context_daily add column day_load jsonb;
 
 create function waldo.health_day_load_valid(p_load jsonb) returns boolean
 language plpgsql immutable set search_path = '' as $$
-declare v_band jsonb; v_score numeric; v_method text; v_days integer; v_expect text;
+declare v_band jsonb;
 begin
   if jsonb_typeof(p_load) is distinct from 'object' or jsonb_typeof(p_load->'state') is distinct from 'string' then return false; end if;
   if p_load->>'state' = 'unavailable' then
@@ -26,14 +26,14 @@ begin
     return coalesce((select array_agg(k order by k) from jsonb_object_keys(p_load) k) = array['reason','state'] and p_load->'reason' = '"no_readings"'::jsonb, false);
   end if;
   if p_load->>'state' <> 'available'
-    or (select array_agg(k order by k) from jsonb_object_keys(p_load) k) is distinct from array['activation','approximate','band','direction','method','score','state','version','window_days']
+    or (select array_agg(k order by k) from jsonb_object_keys(p_load) k) is distinct from array['activation','approximate','band','method','score','state','version','window_days']
     or p_load->'version' is distinct from '"day-load.candidate.v1"'::jsonb or p_load->'activation' is distinct from '"candidate_unaccepted"'::jsonb
     or p_load->'window_days' is distinct from '28'::jsonb
     or jsonb_typeof(p_load->'score') is distinct from 'number' or (p_load->>'score')::numeric not between 0 and 100
     or jsonb_typeof(p_load->'method') is distinct from 'string' or p_load->>'method' not in ('hr_zones','hr_zones_observed_peak','effort','minutes')
     or jsonb_typeof(p_load->'approximate') is distinct from 'boolean' or (p_load->>'approximate')::boolean is distinct from (p_load->>'method' = 'hr_zones_observed_peak')
     or jsonb_typeof(p_load->'band') is distinct from 'object' or jsonb_typeof(p_load->'band'->'state') is distinct from 'string' then return false; end if;
-  v_score := (p_load->>'score')::numeric; v_band := p_load->'band';
+  v_band := p_load->'band';
   if v_band->>'state' = 'personal' then
     -- The owner's own usual: from fourteen observed days, one spread either side of the mean, in the score's own scale and in order.
     if (select array_agg(k order by k) from jsonb_object_keys(v_band) k) is distinct from array['centre','days_until_personal','high','low','own_days','state']
@@ -42,15 +42,14 @@ begin
       or jsonb_typeof(v_band->'low') is distinct from 'number' or jsonb_typeof(v_band->'centre') is distinct from 'number' or jsonb_typeof(v_band->'high') is distinct from 'number'
       or (v_band->>'low')::numeric < 0 or (v_band->>'high')::numeric > 100
       or not ((v_band->>'low')::numeric <= (v_band->>'centre')::numeric and (v_band->>'centre')::numeric <= (v_band->>'high')::numeric) then return false; end if;
-    v_expect := case when v_score > (v_band->>'high')::numeric then 'above_usual' when v_score < (v_band->>'low')::numeric then 'below_usual' else 'usual' end;
-    return p_load->'direction' = to_jsonb(v_expect);
+    return true;
   elsif v_band->>'state' = 'provisional' then
-    -- Below fourteen there is no band, only the days still needed, and no direction to give.
+    -- Below fourteen there is no band, only the days still needed.
     if (select array_agg(k order by k) from jsonb_object_keys(v_band) k) is distinct from array['days_until_personal','own_days','state']
       or jsonb_typeof(v_band->'own_days') is distinct from 'number' or (v_band->>'own_days') !~ '^[0-9]{1,2}$' or (v_band->>'own_days')::int not between 0 and 13
       or jsonb_typeof(v_band->'days_until_personal') is distinct from 'number' or (v_band->>'days_until_personal') !~ '^[0-9]{1,2}$'
       or (v_band->>'days_until_personal')::int <> 14 - (v_band->>'own_days')::int then return false; end if;
-    return p_load->'direction' = 'null'::jsonb;
+    return true;
   end if;
   return false;
 end $$;
