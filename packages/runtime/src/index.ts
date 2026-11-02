@@ -30,6 +30,7 @@ import type { GatewaySecretBinding } from './llm/gateway';
 import { receiveAgentMail } from './channels/agent-mail/ingress';
 import { agentMailRouting, sweepAgentMailRules } from './channels/agent-mail/rules';
 import { agentMailHeldHandles } from './channels/agent-mail/handles';
+import type { AgentMailSenderBinding } from './channels/agent-mail/send';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -89,6 +90,9 @@ declare global {
       AGENT_MAIL_DOMAIN?: string;
       AGENT_MAIL_ZONE_ID?: string;
       CLOUDFLARE_EMAIL_ROUTING_TOKEN?: string;
+      AGENT_MAIL_SEND?: string;
+      // The Email Service send binding; sending as Waldo stays off without it.
+      AGENT_MAIL_SENDER?: AgentMailSenderBinding;
       LANGFUSE_PUBLIC_KEY?: string;
       LANGFUSE_SECRET_KEY?: string;
       LANGFUSE_BASE_URL?: string;

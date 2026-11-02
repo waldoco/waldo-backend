@@ -212,6 +212,15 @@ describe('agent mail inbound', () => {
     });
   });
 
+  it('a mail turn is offered send_agent_mail while sending as Waldo is on', async () => {
+    await withOwner(async ({ passes }) => {
+      proof.replies.push('Noted.');
+      expect(await deliver({ messageId: 'root3@owner.test.invalid', body: 'Please reply to Sam for me.' })).toBe('admitted');
+      await passes();
+      expect(offeredTools()).toContain('send_agent_mail');
+    }, { AGENT_MAIL_INBOUND: '1', AGENT_MAIL_SEND: '1', AGENT_MAIL_SENDER: { send: async () => ({ messageId: '<never@x.test>' }) } as never });
+  });
+
   it('a code or a health reading in the subject or a file name never reaches the model or storage', async () => {
     await withOwner(async ({ state, passes }) => {
       proof.replies.push('A mail with a code arrived.');
@@ -258,6 +267,10 @@ describe('agent mail inbound', () => {
       expect(await deliver({ from: 'Sam <sam@else.test.invalid>', inReplyTo: '<root@owner.test.invalid>', references: '<root@owner.test.invalid>', messageId: 'reply@else.test.invalid', body: '1pm works for me.' })).toBe('admitted');
       await passes();
       expect(proof.requests.some(request => request.includes('1pm works for me.') && request.includes('It replies in a mail thread Waldo was copied on.'))).toBe(true);
+      // The mail's own Message-ID reaches the model whole, so a reply can name it in in_reply_to.
+      expect(proof.requests.some(request => request.includes('1pm works for me.') && request.includes('message_id') && request.includes('<reply@else.test.invalid>'))).toBe(true);
+      // Sending as Waldo is off here, so the reply tool is not offered.
+      expect(offeredTools()).not.toContain('send_agent_mail');
       expect(sends().some(entry => entry.body.text === 'Sam says 1pm works for them.')).toBe(true);
       // The thread map holds ids, direction, time and thread only.
       expect(state.storage.sql.exec('SELECT * FROM agent_mail_threads ORDER BY at').toArray().map(({ at, ...row }) => ({ ...row, timed: typeof at === 'number' }))).toEqual([
