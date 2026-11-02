@@ -5,6 +5,7 @@ import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
+import { ownerMailText, renderOwnerMail } from './agent-mail/render';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
@@ -74,19 +75,29 @@ export type EmailSendProposal = Readonly<{
   account?: string; subject: string; body: string; inReplyTo?: string; references?: readonly string[]; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
   // When an identical earlier send is still of unknown outcome: its time, in the owner's zone, for the card.
   earlier_unknown_at?: string;
+  // Present when the bytes end with Waldo's signature (renderOwnerMail), naming whose assistant it signs as. A proposal
+  // without it is the plain-text form made before signatures, still checked and sent as it was shown.
+  signature?: Readonly<{ first_name: string | null }>;
 }>;
+// The words the recipient reads, signature included: what every review of the email shows.
+export const emailWords = (p: EmailSendProposal): string => p.signature ? ownerMailText(p.body, p.signature.first_name) : p.body;
 // Gmail is handed exactly the words the card shows: the frozen bytes carry their digest and are the canonical MIME of the
 // shown recipients, subject and body, and the subject stays one header line (MIME would fold a line break into a space).
 const emailIntact = async (p: EmailSendProposal): Promise<boolean> => {
   if (/[\r\n]/.test(p.subject) || await sha256Hex(p.raw) !== p.digest) return false;
+  if (p.signature) {
+    const rendered = renderOwnerMail({ subject: p.subject, body_markdown: p.body }, p.signature.first_name, { to: p.to, ...(p.cc ? { cc: p.cc } : {}), ...(p.bcc ? { bcc: p.bcc } : {}) },
+      { messageId: p.message_id, ...(p.inReplyTo ? { inReplyTo: p.inReplyTo } : {}), ...(p.references ? { references: p.references } : {}) });
+    return rendered.ok && p.raw === b64url(new TextEncoder().encode(rendered.mime));
+  }
   try {
     return p.raw === b64url(new TextEncoder().encode(buildMime({ to: p.to, ...(p.cc ? { cc: p.cc } : {}), ...(p.bcc ? { bcc: p.bcc } : {}), subject: p.subject, body: p.body,
       messageId: p.message_id, ...(p.inReplyTo ? { inReplyTo: p.inReplyTo } : {}), ...(p.references ? { references: p.references } : {}) })));
   } catch { return false; }
 };
 // What the owner would receive: two proposals with the same content send the same email.
-const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) =>
-  JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
+const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references, signature }: EmailSendProposal) =>
+  JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references, signature });
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
 // verbatim on Send it; the idempotency key collapses a second approval onto the first send.
@@ -238,7 +249,7 @@ const reviewEmail = (p: EmailSendProposal) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
     ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
     ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
-    `Subject: ${p.subject}`, '', p.body].join('\n');
+    `Subject: ${p.subject}`, '', emailWords(p)].join('\n');
 const reviewMessage = (p: MessageSendProposal) => p.content;
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
@@ -307,7 +318,7 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
   // The draft is the frozen words that go out, carried only whole: a body past the contract's bound, or a subject that
   // breaks its header line (Gmail would not be sent it as shown), leaves no draft to approve against.
   const whole = (message: Readonly<{ subject: string | null; body: string }>) => appApprovalMessageV1Schema.safeParse(message).success ? { message } : {};
-  if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}), ...whole({ subject: p.subject, body: p.body }) };
+  if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}), ...whole({ subject: p.subject, body: emailWords(p) }) };
   if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] }, ...whole({ subject: null, body: p.content }) };
   if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
@@ -1429,7 +1440,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (r.kind === 'email_send') {
             const p = JSON.parse(r.payload_json) as EmailSendProposal;
             if (!Array.isArray(p.to) || !p.to.length || !p.to.every((address) => typeof address === 'string') || !Array.isArray(p.cc ?? []) || !Array.isArray(p.bcc ?? []) || !(p.cc ?? []).every((address) => typeof address === 'string') || !(p.bcc ?? []).every((address) => typeof address === 'string') || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
-            return { kind: 'email_send', ...(p.account ? {account:p.account} : {}), to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body,
+            return { kind: 'email_send', ...(p.account ? {account:p.account} : {}), to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: emailWords(p),
               ...(typeof p.earlier_unknown_at === 'string' ? { earlier_unknown_at: p.earlier_unknown_at } : {}) };
           }
           if (r.kind === 'message_send') {

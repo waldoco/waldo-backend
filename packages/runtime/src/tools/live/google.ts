@@ -9,7 +9,8 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
+import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
+import { renderOwnerMail, signerFirstName } from '../../channels/agent-mail/render';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -327,7 +328,8 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
   return result;
 };
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
+// ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null) => [
   {
     name: 'query_calendar',
     description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
@@ -578,7 +580,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists of addresses even for one recipient: to: [\"sam@example.com\"], never to: \"sam@example.com\". A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists even for one address: [\"sam@example.com\"]. Write the body up to your closing word (\"Thanks,\"): Waldo's signature is added below it and shown on the card, so never sign with your name or role. Drafting an email to send once they approve is this tool: the card is that draft. Use draft_email only for a saved Gmail draft they will edit themselves. An earlier send of unknown outcome does not block a new one the owner asks for: the card says if an identical email may have gone out. To email the owner, read their address with connect_service rather than asking. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -600,21 +602,21 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // may request an identical email deliberately; their distinct turn IDs stay independent.
       const dedupe_key = ctx?.turnId ? await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, args])) : undefined;
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
-      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME.
-      // (buildMime returns the MIME TEXT; messages/send rejects it unencoded - google 400
-      // "Base64 decoding failed" on the approved send path.)
-      const raw = b64url(new TextEncoder().encode(buildMime({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, messageId: message_id, ...gate.data.reply,
-      })));
+      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME, the draft and Waldo's signature.
+      // (messages/send rejects MIME text unencoded - google 400 "Base64 decoding failed" on the approved send path.)
+      const signature = { first_name: signerFirstName(ownerName()) };
+      const rendered = renderOwnerMail({ subject: args.subject, body_markdown: args.body_markdown }, signature.first_name,
+        { to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}) }, { messageId: message_id, ...gate.data.reply });
+      if (!rendered.ok) return { ok: false, code: 'invalid_args', error: `The email could not be prepared (${rendered.code}), so nothing was proposed. Fix it and propose it again.`, source_taint: null };
+      const raw = b64url(new TextEncoder().encode(rendered.mime));
       try {
         const proposal_id = await desk.proposeSendEmail({
           operation_ref: await ownerEffectOperationRef(ctx),
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-          subject: args.subject, body: args.body_markdown,
+          subject: rendered.subject, body: args.body_markdown,
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
+          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
         });
         return { ok: true, data: { account: gate.data.account, proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
       } catch (error) {
