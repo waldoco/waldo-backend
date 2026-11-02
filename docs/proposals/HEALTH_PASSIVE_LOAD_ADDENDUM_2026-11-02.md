@@ -252,7 +252,7 @@ These come on top of #1822 §4's list:
 
 - **`HEALTH_PASSIVE_LOAD`**, default `"0"` in both var blocks, classified in the staging profile.
 - **Off,** the producer writes v1 exactly. Ingest stores bins from R-e whatever the switch, so the band warms before the flip (Q3).
-- **Asked of the gate, none taken:**
+- **Gate allocations (2 Nov):**
   - health revision R-e: allocated, 12 (provisional, confirmed at merge);
   - migration M-f: allocated, `20261102080000`;
   - the brain paragraph: its own PR (#61) on #60's branch, reviewed after #60 (gate ruling).
