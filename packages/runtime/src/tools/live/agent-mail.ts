@@ -2,7 +2,7 @@ import {
   sendAgentMailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendAgentMailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { EmailProposalError, proposalStatus, type CardPlacement } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, type CardPlacement, type ProposeOptions, type Replacement } from '../../channels/approvals';
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import { agentMailDirectory, agentMailFirstName } from '../../channels/agent-mail/handles';
 import { agentMailInbox } from '../../channels/agent-mail/inbox';
@@ -20,7 +20,7 @@ export type AgentMailToolHost = Readonly<{
   ownerName(): string | null;
   // The References of a reply to this Message-ID, or null when Waldo is not part of its thread.
   replyReferences(inReplyTo: string): readonly string[] | null;
-  desk: Readonly<{ proposeAgentMailSend(payload: AgentMailSendProposal): Promise<string>; placement?(id: string): CardPlacement }>;
+  desk: Readonly<{ proposeAgentMailSend(payload: AgentMailSendProposal, options?: ProposeOptions): Promise<string>; placement?(id: string): CardPlacement; replacement?(id: string): Replacement | null }>;
 }>;
 
 // The owner object's host: the flags and binding from env, the handle from the directory, the threads from its own inbox.
@@ -71,9 +71,10 @@ export const sendAgentMailHandler = (host: AgentMailToolHost): ToolHandler<SendA
       const proposal_id = await host.desk.proposeAgentMailSend({
         ...(operation_ref ? { operation_ref } : {}), idempotency_key, handle, ...draft,
         from: rendered.preview.from, subject: rendered.preview.subject, body: rendered.preview.text, parts_digest: await agentMailPartsDigest(rendered.parts),
-      });
-      return { ok: true, data: { proposal_id, status: proposalStatus(host.desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
+      }, { replaces: args.replaces });
+      return { ok: true, data: { proposal_id, status: `${proposalStatus(host.desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
     } catch (error) {
+      if (error instanceof ApprovalReplaceError) return refused(replaceRefusal(args.replaces!, error));
       if (!(error instanceof EmailProposalError)) return { ok: false, code: 'transient', error: 'The email proposal could not be prepared. Nothing was sent; check chat before retrying.', source_taint: null };
       return refused(error.reason === 'card_unconfirmed'
         ? 'The review card delivery was not confirmed. Nothing was sent. Check chat before asking for a fresh proposal.'

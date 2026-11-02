@@ -47,7 +47,8 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
   if (prior) return prior.fingerprint === fingerprint ? reply(result(prior.receipt, (prior.approval_state ?? item.state) as AppApprovalStateV1, true), prior.status) : reply({ error: 'request_reused', code: 'request_reused' }, 409);
   if (receiptCapacityReached(book, session)) return reply({ error: 'receipt_capacity', code: 'receipt_capacity', message: 'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.' }, 429);
   // Reading the approval closes it at its expiry; the desk still answers a decision on it, so the owner hears it expired.
-  if (!item.actions.includes(action) && item.state !== 'expired') return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible', message: 'This decision is no longer available. Refresh the approvals.' }, 409);
+  if (!item.actions.includes(action) && item.state !== 'expired') return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible',
+    message: item.withdrawal ? `Waldo withdrew this card, so nothing was done. ${item.withdrawal.reason}` : 'This decision is no longer available. Refresh the approvals.' }, 409);
   const pending: ControlReceipt = { state: 'unconfirmed', message: 'The outcome is not confirmed. Refresh the approvals before deciding again.' };
   book[key] = { fingerprint, status: 503, receipt: pending, expires: host.expires, approval_state: 'outcome_unknown' }; await host.storage.put(RECEIPT_BOOK_KEY, book);
   let receipt = pending, status = 503, state: AppApprovalStateV1 = 'outcome_unknown';

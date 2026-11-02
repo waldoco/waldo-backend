@@ -32,6 +32,8 @@ import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 import { evalConversation, type ConversationSeed } from './conversation-world';
+import { approvalDesk } from '../../src/channels/approvals';
+import { approvalHandlers } from '../../src/tools/live/raise-approval';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -73,7 +75,10 @@ export type WorldSeed = Readonly<{
   // consent granted or not.
   lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
+  // Email cards Waldo already raised that wait on the owner in the app, each at its own time, on the owner object's own desk.
+  approvals?: readonly SeedApproval[];
 }> & ConversationSeed;
+export type SeedApproval = Readonly<{ at: string; to: readonly string[]; cc?: readonly string[]; subject: string; body: string }>;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
 const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -284,6 +289,18 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
   const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  // The seeded cards are app cards, raised in seed order (pcard1, pcard2, ...) at their own times; nothing on this desk can
+  // send, since it has no Google client.
+  let raisedAt: number | null = null, cardSeq = 0;
+  const cards = seed.approvals?.length ? approvalDesk(sql, { surface: 'app', call: async () => undefined, owner: 1, google: async () => null, newId: () => `card${++cardSeq}`,
+    now: () => raisedAt ?? now(), timezone: TIMEZONE, log: () => undefined, appIdentity: () => true }) : null;
+  const cardsReady = (async () => {
+    for (const [index, card] of (seed.approvals ?? []).entries()) {
+      raisedAt = Date.parse(card.at);
+      await cards!.proposeSendEmail({ account: OWNER_EMAIL, to: card.to, ...(card.cc ? { cc: card.cc } : {}), subject: card.subject, body: card.body, message_id: `<seed-${index}@waldo-send>`, raw: 'seeded', digest: 'seeded' });
+    }
+    raisedAt = null;
+  })();
   const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,
@@ -338,6 +355,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
+    ...(cards ? approvalHandlers(cards) : []),
   ];
 
   // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
@@ -392,7 +410,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
-    ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync()]),
+    ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync(), cardsReady]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
@@ -415,6 +433,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
       ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
+      ...(cards ? { approvals: sql.exec<{ id: string; status: string; summary: string; withdrawn_reason: string | null; replaced_by: string | null }>(
+        'SELECT id, status, summary, withdrawn_reason, replaced_by FROM ledger ORDER BY created_at, id').toArray() } : {}),
     }),
   };
 };

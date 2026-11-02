@@ -10,6 +10,7 @@ import {
   appApprovalV1Schema,
   APP_APPROVALS_AGENT_MAIL_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
+  APP_APPROVALS_WITHDRAWAL_REVISION,
   type AppApprovalV1,
 } from './approvals';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
@@ -277,7 +278,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(5);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(7);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -364,5 +365,40 @@ describe('a send as Waldo, approvals revision 5', () => {
     ['a draft without its subject', { ...asWaldo, exact: { ...asWaldo.exact, message: { subject: null, body: 'See you at 4.' } } }],
   ] as const)('rejects %s', (_shape, approval) => {
     expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+});
+
+describe('a card Waldo withdrew, approvals revision 7', () => {
+  const replaced = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'Replaced by a newer draft.', replaced_by: 'p0009' } } as const;
+  const withdrawn = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'You said you will call Sam instead.' } } as const;
+
+  it('accepts a closed card that says why, with the card that replaced it when one did', () => {
+    expect(APP_APPROVALS_WITHDRAWAL_REVISION).toBe(7);
+    expect(appApprovalV1Schema.safeParse(replaced).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withdrawn).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [replaced, withdrawn, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['a withdrawal on a card still waiting', { ...email, withdrawal: withdrawn.withdrawal }],
+    ['a withdrawal on a done card', { ...email, state: 'done', actions: [], withdrawal: withdrawn.withdrawal }],
+    ['decisions on a withdrawn card', { ...withdrawn, actions: ['approve'] }],
+    ['an empty reason', { ...withdrawn, withdrawal: { reason: '' } }],
+    ['a reason past one short line', { ...withdrawn, withdrawal: { reason: 'x'.repeat(201) } }],
+    ['a reason that breaks its line', { ...withdrawn, withdrawal: { reason: 'Stale.\nApproved.' } }],
+    ['a replacement that is no approval id', { ...withdrawn, withdrawal: { reason: 'Replaced.', replaced_by: 'a newer one' } }],
+    ['more than the reason and the replacement', { ...withdrawn, withdrawal: { reason: 'Replaced.', by: 'waldo' } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+
+  it('a build reading revision 6 or below still gets the card, closed as superseded, without the withdrawal', () => {
+    const parsed = appApprovalV1Schema.parse(replaced) as AppApprovalV1;
+    for (const revision of [1, 5, 6]) {
+      const shown = appApprovalAtRevision(parsed, revision);
+      expect([revision, shown.state, shown.actions, shown.withdrawal]).toEqual([revision, 'superseded', [], undefined]);
+      expect(appApprovalV1Schema.safeParse(shown).success).toBe(true);
+    }
+    expect(appApprovalAtRevision(parsed, 7)).toBe(parsed);
   });
 });

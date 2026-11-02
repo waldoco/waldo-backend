@@ -61,7 +61,8 @@ type Sql = Pick<SqlStorage, 'exec'>;
 // Desk status to the owner's answer. Only a skip ("Don't do this") is a false alarm; an approval whose effect then failed
 // was still accepted, and an expiry or a put-off is tracked apart.
 const VERDICT_BY_STATUS: Readonly<Record<string, HealthVerdict>> = {
-  skipped: 'false_alarm', expired: 'expired', undone: 'undone',
+  // A card Waldo withdrew got no answer from the owner, so it reads as one that expired.
+  skipped: 'false_alarm', expired: 'expired', withdrawn: 'expired', undone: 'undone',
   done: 'accepted', changing: 'accepted', uncertain: 'accepted', unverified: 'accepted', rejected: 'accepted', failed: 'accepted', stale: 'accepted',
 };
 
