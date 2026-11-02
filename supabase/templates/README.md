@@ -21,7 +21,7 @@ to new ones.
   one selectable word with `user-select: all`, so one tap or double-click grabs
   all of it.
 
-Rare-code lines are rendered from `.Token` with Go template builtins only:
-`123456`, a `007` prefix, a code that repeats its halves, and a palindrome. Each
-branch is guarded by `len .Token == 6`, so a different OTP length falls back to
-the default line instead of failing to render.
+A one-line note appears only for rare codes (`123456`, a `007` prefix, a code
+that repeats its halves, a palindrome), using Go template builtins on `.Token`.
+Each branch is guarded by `len .Token == 6`, so a different OTP length renders
+no note instead of failing to render.
