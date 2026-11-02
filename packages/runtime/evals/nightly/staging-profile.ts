@@ -56,6 +56,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_SCORE_PARTS: gap('the parts of each score are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102010000'),
   HEALTH_USUAL: gap('the usual bands are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102010000'),
   HEALTH_DAY_LOAD: gap('the day load is served to the app only; the model never reads it and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102030000'),
+  HEALTH_PASSIVE_LOAD: gap('the passive day load is served to the app only; the model never reads it and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102080000'),
   HEALTH_FORM_CURVE: gap('the Form curve is served to the app only; the model never reads it and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102040000'),
   HEALTH_STRESS_CURVE: gap('the stress curve is served to the app only; the model never reads it and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102040000'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),

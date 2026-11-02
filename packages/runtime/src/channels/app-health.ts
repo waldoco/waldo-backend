@@ -5,7 +5,7 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
-  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema, HEALTH_BODY_DAY_REVISION_V1,
+  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema, HEALTH_BODY_DAY_REVISION_V1, HEALTH_PASSIVE_LOAD_REVISION_V1, HEALTH_DAY_LOAD_V2_VERSION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { healthHistoryView, historyWindowOf, partsOfShownPillars } from './app-health-history';
 import { rowFreshness } from './health-context';
@@ -42,6 +42,9 @@ export type AppHealthInput = Readonly<{
   dayLoad?: boolean;
   formCurve?: boolean;
   stressCurve?: boolean;
+  // The upload sources the day's load counts every observed minute for (HEALTH_PASSIVE_LOAD), beside dayLoad; a build that names
+  // health revision 12 is shown that load and its parts while any source is on. Empty, every build is shown v1 and no parts.
+  passiveLoad?: readonly string[];
   // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
   coaching?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
@@ -143,10 +146,21 @@ const readExtra = <K extends 'drivers' | 'windows' | 'components' | 'usual' | 'd
   return {};
 };
 
+// A stored v2 load holds that day's v1 load beside it. While passive load is shown, the v2 load is served without it; otherwise the
+// v1 load is, so a build below the passive revision never loses a day's load, and no load is shown with parts.
+const dayLoadAt = (stored: Record<string, unknown>, passive: boolean): Record<string, unknown> => {
+  const load = asObject(stored.day_load);
+  if (!load) return stored;
+  const { v1, ...v2Shape } = load;
+  const { parts: _parts, ...v1Shape } = v2Shape;
+  if (passive) return { ...stored, day_load: v2Shape };
+  return { ...stored, day_load: load.version === HEALTH_DAY_LOAD_V2_VERSION_V1 ? v1 : v1Shape };
+};
+
 // The one reading of a scores_read answer, for the app and for the owner's console: the contract body, or the closed error.
 // revision is the client's health revision: builds pinned before the app took sleep_debt parse the scores strictly without it.
 // extras names which of the revision-8 and revision-10 additions this answer may carry; the owner's console and every earlier caller show none.
-export type ScoreExtras = Readonly<{ scoreParts?: boolean; usual?: boolean; dayLoad?: boolean; formCurve?: boolean; stressCurve?: boolean }>;
+export type ScoreExtras = Readonly<{ scoreParts?: boolean; usual?: boolean; dayLoad?: boolean; passiveLoad?: boolean; formCurve?: boolean; stressCurve?: boolean }>;
 export const healthScoresView = (result: unknown, day: string | null, now: number, revision: number, extras: ScoreExtras = {}): View => {
   // No row to show is an answer, not an error: a 200 that says why, never a zero score.
   const nothing = (reason: unknown): View => {
@@ -183,7 +197,7 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
     ...(revision >= HEALTH_BASELINE_REVISION_V1 ? { ...readExtra(stored, 'drivers'), ...readExtra(stored, 'windows') } : {}),
     ...(Object.keys(partsOfShown).length ? { components: partsOfShown } : {}),
     ...(revision >= HEALTH_PARTS_REVISION_V1 && extras.usual === true ? readExtra(stored, 'usual') : {}),
-    ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.dayLoad === true ? readExtra(stored, 'day_load') : {}),
+    ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.dayLoad === true ? readExtra(dayLoadAt(stored, revision >= HEALTH_PASSIVE_LOAD_REVISION_V1 && extras.passiveLoad === true), 'day_load') : {}),
     ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.formCurve === true ? readExtra(stored, 'form_curve') : {}),
     ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.stressCurve === true ? readExtra(stored, 'stress_curve') : {}),
   };
@@ -206,7 +220,7 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
   if (unknown || !query.success) return refuse('invalid_request');
   const revision = appContractRevision(input.request.headers.get(APP_CONTRACT_HEADER), 'health');
-  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision, { scoreParts: input.scoreParts === true, usual: input.usual === true, dayLoad: input.dayLoad === true, formCurve: input.formCurve === true, stressCurve: input.stressCurve === true }));
+  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision, { scoreParts: input.scoreParts === true, usual: input.usual === true, dayLoad: input.dayLoad === true, passiveLoad: (input.passiveLoad?.length ?? 0) > 0, formCurve: input.formCurve === true, stressCurve: input.stressCurve === true }));
 };
 
 // Score history exists only for a build that names health revision 4; below it the route is not there, as with the provider routes.
@@ -244,7 +258,7 @@ const settings = async ({ request, doName, rpc, readBody, defer, notifySettings 
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching, scoreParts, usual, dayLoad, formCurve, stressCurve }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching, scoreParts, usual, dayLoad, passiveLoad, formCurve, stressCurve }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -257,6 +271,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     ...(scoreParts ? { scoreParts } : {}),
     ...(usual ? { usual } : {}),
     ...(dayLoad ? { dayLoad } : {}),
+    ...(passiveLoad?.length ? { passiveLoad } : {}),
     ...(formCurve ? { formCurve } : {}),
     ...(stressCurve ? { stressCurve } : {}),
     ...(coaching ? { readSettings: () => invokeHealth(rpc, doName, 'settings_read', '{}') } : {}),

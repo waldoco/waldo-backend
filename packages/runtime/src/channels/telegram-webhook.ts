@@ -58,6 +58,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // shows none. Apply migrations 20261102030000 (day load) and 20261102040000 (the two curves), which admit the new columns,
   // before turning each on.
   HEALTH_DAY_LOAD?: string;
+  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
+  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 12. Apply
+  // migration 20261102080000 first.
+  HEALTH_PASSIVE_LOAD?: string;
   HEALTH_FORM_CURVE?: string;
   HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;

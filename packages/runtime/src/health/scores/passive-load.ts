@@ -140,6 +140,7 @@ export type DayLoadV2 =
 export const dayLoadV2 = (v1: DayLoad, input: PassiveInput): DayLoadV2 => {
   if (v1.state === 'unavailable') return v1;
   const fallback = (reason: PassiveUnavailable): DayLoadV2 => ({ ...v1, parts: { workouts: { share: v1.score > 0 ? 1 : 0 }, passive: { state: 'unavailable', reason } } });
+  if (!input.bins.some(hour => hour.day === input.targetDay)) return fallback('no_bins');
   const basis = zoneBasis(input);
   if (basis.state === 'none') return fallback(basis.reason);
   const today = dayLoads(input.targetDay, input, basis.bounds);

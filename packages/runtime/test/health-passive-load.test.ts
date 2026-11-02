@@ -75,7 +75,7 @@ describe('the zone bounds', () => {
 describe('a day\'s loads', () => {
   it('weigh each second by its zone and split a bin a bound crosses linearly', () => {
     // Twelve observed hours, one at 110-115 across the 111.6 bound: 1.6/5 of it in zone 1, 3.4/5 in zone 2, so 60 x (0.32 + 1.36) = 100.8.
-    const input = inputOf({ only: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], outside: Object.fromEntries([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map(h => [h, h === 12 ? { 110: 3600 } : { 75: 3600 }])) });
+    const input = inputOf({ only: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], outside: Object.fromEntries([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((h): [number, Seconds] => [h, h === 12 ? { 110: 3600 } : { 75: 3600 }])) });
     const loads = dayLoads(TODAY, input, BOUNDS);
     expect(typeof loads).toBe('object');
     if (typeof loads === 'object') { close(loads.passive, 100.8); expect(loads.observedHours).toBe(12); }
