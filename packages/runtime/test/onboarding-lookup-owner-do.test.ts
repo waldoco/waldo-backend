@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; WELCOME_V2?: string; BRAVE_SEARCH_API_KEY?: string }>;
+type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; OWNER_LOOKUP?: string; WELCOME_V2?: string; BRAVE_SEARCH_API_KEY?: string }>;
 type Owner = InstanceType<typeof OwnerDO>;
 const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectState; owner: Owner; book(): JobBook; app(path: string, body: unknown): Promise<Response>; jobs(): { id: string; status: string; brief_json: string; due_at: number | null }[]; hops(prefix: string): string[]; skipped(): string[] }>) => Promise<void>) => {
   const name = `lookup-owner-${crypto.randomUUID()}`;
@@ -145,6 +145,14 @@ it('writes no look-up job without the yes, or with the switch off, and says whic
     expect(jobs()).toEqual([]);
     expect(hops('lookup_')).toEqual([]);
     expect(new Set(skipped())).toEqual(new Set(['switch_off']));
+  });
+  // The server does not offer the look-up at all: told apart from an owner who said no.
+  await ownerWith({ ONBOARDING_LOOKUP: '1', OWNER_LOOKUP: '0' }, async ({ app, jobs, skipped }) => {
+    await consents(app, false);
+    await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-x', name: 'Asha' });
+    await settle();
+    expect(jobs()).toEqual([]);
+    expect(new Set(skipped())).toEqual(new Set(['not_offered']));
   });
 });
 

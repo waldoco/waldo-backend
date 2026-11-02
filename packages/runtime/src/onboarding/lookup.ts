@@ -76,8 +76,8 @@ export type LookupApplierDeps = Readonly<{
   found(since: number): number;
   // Why an update card cannot reach the owner now (quiet hours, follow-ups off, a surface that would only hold it), or null.
   gate(): MachineHeld | null;
-  // Sends the card under its key; commit is the job's settle, written with the send.
-  deliver(id: string, text: string, commit: () => void): Promise<void>;
+  // Sends the card under its key, on the apply's trace; commit is the job's settle, written with the send.
+  deliver(id: string, trace: string, text: string, commit: () => void): Promise<void>;
   // The job left the lane: the welcome build's web stage reads what this grant's look-up found.
   ended(grant: number): void;
 }>;
@@ -93,11 +93,11 @@ const endText = (count: number, finished: boolean): string => finished
 // saying how many it kept for the owner to review, or that it found nothing, or that it could not finish. Counts only: what a
 // finding says reaches the owner where they review it, never in a message.
 export const lookupApplier = (deps: LookupApplierDeps): MachineHandler => {
-  const tell = async (row: JobRow, io: Readonly<{ current(): Promise<void>; settle(): void }>, finished: boolean) => {
+  const tell = async (row: JobRow, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>, finished: boolean) => {
     const held = deps.gate();
     if (held) { io.settle(); return { held }; }
     await io.current();
-    await deps.deliver(`lookup:${row.id}`, endText(deps.found(row.created_at), finished), io.settle);
+    await deps.deliver(`lookup:${row.id}`, io.trace, endText(deps.found(row.created_at), finished), io.settle);
     return 'delivered' as const;
   };
   return {

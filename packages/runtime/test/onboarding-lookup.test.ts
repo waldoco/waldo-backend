@@ -123,10 +123,10 @@ describe('whether a look-up is pending', () => {
 
 describe('when the look-up job ends', () => {
   const result: TaskResult = { status: 'done', summary: 'Two findings recorded.', findings: [], proposals: [], left: [] };
-  type Told = { id: string; text: string };
+  type Told = { id: string; trace: string; text: string };
   const applier = (over: Partial<LookupApplierDeps> = {}) => {
     const told: Told[] = [], ended: number[] = [];
-    const deps: LookupApplierDeps = { found: () => 2, gate: () => null, deliver: async (id, text, commit) => { commit(); told.push({ id, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
+    const deps: LookupApplierDeps = { found: () => 2, gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
     return { told, ended, handler: lookupApplier(deps) };
   };
   const reported = (book: JobBook, d: LookupDeps) => {
@@ -146,7 +146,7 @@ describe('when the look-up job ends', () => {
     const hops: string[] = [];
     await apply(book, id, handler, hops);
     expect(told).toHaveLength(1);
-    expect(told[0]!.id).toBe(`lookup:${id}`);
+    expect(told[0]).toMatchObject({ id: `lookup:${id}`, trace: `task:${id}:apply` });
     expect(told[0]!.text).toContain('2');
     expect(since).toEqual([T0]);
     expect(book.get(id)!.status).toBe('applied');

@@ -5492,7 +5492,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!consent.active('owner_lookup')) {
           const cancelled = this.jobs().cancelMachine('owner_lookup');
           for (const id of cancelled) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
-          if (!cancelled.length) skipped('not_granted');
+          if (!cancelled.length) {
+            const grant = consent.state('owner_lookup');
+            // A yes on record that no longer counts: an old copy, or the notice it depends on is no longer live.
+            skipped(!consent.offered('owner_lookup') ? 'not_offered' : grant.status === 'granted' ? 'grant_not_current' : 'not_granted');
+          }
           return;
         }
         if (!lookupOn) return skipped('switch_off');
@@ -5517,9 +5521,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const lookupApply = lookupApplier({
       found: since => findingStore(storage.sql, memory, lookupConsent(), Date.now).foundSince(since),
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
-      deliver: async (id, text, commit) => {
+      deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
-        await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text }, ownerSubject: String(owner),
+        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text }, ownerSubject: String(owner),
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
