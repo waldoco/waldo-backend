@@ -1638,12 +1638,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const headers={'cache-control':'no-store'};
     const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!range)return Response.json({error:'unavailable'},{status:403,headers});
-    const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
-    try{
-      const answer=await runtime.calendarDemand(range);
-      runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:answer.state==='available',code:demandCode(answer)});
-      return Response.json(answer,{headers});
-    }catch{runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:false,code:'read_failed'});return Response.json({error:'unavailable'},{status:503,headers});}
+    try{return Response.json(await this.setup('app').calendarDemand(range),{headers});}
+    catch{return Response.json({error:'unavailable'},{status:503,headers});}
   }
   // Worker-to-DO only: today's derived health row moved zone. It carries the day and nothing else, and arms the trigger.
   private async healthZoneChange(request: Request): Promise<Response> {
@@ -5705,9 +5701,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       googleConsoleStart: () => google.consoleStart(),
       connectLink,
       issueTicket,
-      calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
-        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
-        client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
+      // Each read, from the Worker's route or the owner object's own recompute, logs its reason code, and why a stretch went
+      // unknown: never a calendar, a title or a minute.
+      calendarDemand: async (range) => {
+        const started = Date.now(), trace = `calendar-demand:${started}`;
+        try {
+          const answer = await calendarDemand({ sql: this.ctx.storage.sql, now: Date.now, voided: code => log({ trace, hop: 'calendar_demand_stretch', ms: 0, ok: false, code }),
+            accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
+            client: (email) => google.client('availability', undefined, undefined, email) }).read(range);
+          log({ trace, hop: 'calendar_demand', ms: Date.now() - started, ok: answer.state === 'available', code: demandCode(answer) });
+          return answer;
+        } catch (error) { log({ trace, hop: 'calendar_demand', ms: Date.now() - started, ok: false, code: 'read_failed' }); throw error; }
+      },
       calendarDay: (request) => appCalendarDayRequest(request, { now: Date.now, timezone: () => clock.timezone, google,
         readScores: day => healthRpc('scores_read', JSON.stringify({ day })) }),
       openFile: async (id) => {
