@@ -21,7 +21,7 @@ const CALENDAR = [
 
 export const WELCOME_SCENARIOS: readonly NightlyScenario[] = [
   {
-    id: 'w1-welcome-leaves-out-housekeeping', live_subset: true, title: 'The welcome build writes the owner\'s life, not Waldo\'s own setup', pain: 'judgment', start: at('24', '09:00'), world: {},
+    id: 'o1-welcome-leaves-out-housekeeping', live_subset: true, title: 'The welcome build writes the owner\'s life, not Waldo\'s own setup', pain: 'judgment', start: at('24', '09:00'), world: {},
     steps: [{ welcome: { stage: 'calendar', sources: ['calendar'], text: CALENDAR } }],
     rubric: {
       outcome: 'Each node is a pattern in the owner\'s own life or work the calendar shows (a weekly planning block, a recurring 1:1, the gym), and each summary speaks to the owner as "you".',

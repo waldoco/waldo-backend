@@ -37,4 +37,11 @@ describe('the welcome build in the nightly catalogue', () => {
     const leaked = await stage([node('Waldo onboarding smoke test', 'You scheduled a smoke test of Waldo\'s onboarding.', 'w-smoke')]);
     expect(leaked.failed).toEqual(['no node is written from the smoke test or the docs page']);
   });
+
+  it('records an answer that is not a node list as writing nothing, not as a harness error', async () => {
+    const gateway = scriptedGateway({ rules: [], unmatchedText: 'not a node list' });
+    const record = await runTrial(scenario!, { gateway, budget: callBudget(10) });
+    expect(record.status).toBe('ran');
+    expect(record.transcript.at(-1)).toMatchObject({ role: 'waldo', text: expect.stringContaining('nothing written') });
+  });
 });
