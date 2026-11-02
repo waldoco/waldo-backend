@@ -423,6 +423,8 @@ const numberedVerb = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json);
   return NUMBERED_VERBS[entry.kind]?.[entry.kind === 'google_task_change' ? p.args?.action : p.action] ?? 'do it';
 };
+// The chat surfaces whose sent card cannot be edited once it is closed: a tap or reply on it answers instead.
+const CARDS_STAY: ReadonlySet<string> = new Set<ApprovalSurface>(['whatsapp', 'imessage']);
 // The surfaces that show no buttons and approve a one-tap card by the owner's numbered reply.
 const NUMBERED: ReadonlySet<ApprovalSurface> = new Set(['imessage']);
 // The reply protocol, not a reading of intent: only a message that is the digit itself decides.
@@ -1373,10 +1375,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const retire = async (id: string, via: ApprovalVia) => {
     const live = sql.exec<{ surface: string; message_ref: string }>('SELECT surface, message_ref FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).toArray();
     sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', deps.now(), id);
-    for (const p of live) {
-      if (p.surface === 'app' || p.surface === 'legacy' || (p.surface === via.surface && p.message_ref === via.messageRef)) continue;
-      await deps.retire?.({ surface: p.surface, message_ref: p.message_ref }).catch(() => deps.log({ trace: id, hop: 'approval_retire', ms: 0, ok: false, code: 'retire_failed' }));
-    }
+    await clearButtons(id, live, via);
   };
   const decideOnce = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const before = row(id)?.status;
@@ -1426,7 +1425,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const entry = row(id)!;
       if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal).catch(() => deps.log({ trace: id, hop: 'approval_withdraw', ms: 0, ok: false, code: 'browser_deny_failed' }));
       await clearButtons(id, live);
-      return { outcome: 'withdrawn', still_shown_on: [...new Set(live.map(p => p.surface).filter(where => where === 'whatsapp' || where === 'imessage'))] };
+      return { outcome: 'withdrawn', still_shown_on: [...new Set(live.map(p => p.surface).filter(where => CARDS_STAY.has(where)))] };
     },
     replacement(id) {
       const replaces = row(id)?.replaces;
