@@ -159,6 +159,12 @@ describe('llmResponse metering', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
   });
 
+  it('a replayed tool turn may carry the dispatcher\'s external stamp, and only that one', () => {
+    const call = { call_id: 'c1', name: 'raise_approval', arguments: '{}' };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint: 'external' }] }).success).toBe(true);
+    for (const source_taint of [null, 'internal', true]) expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint }] }).success, String(source_taint)).toBe(false);
+  });
+
   it('tool-call arguments use a wire ceiling, not a size policy (S4)', () => {
     // A legitimately long tool call (long email body, big doc) must clear the wire schema;
     // per-destination size policy is the scribe's job, not the wire's. The ceiling only

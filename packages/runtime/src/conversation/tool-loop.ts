@@ -448,7 +448,7 @@ export async function runToolLoop(input: Readonly<{
         if (times > 1) unchangedNote = `\n[unchanged: this exact call has returned the same result ${times} times this turn]`;
       }
       const output = capToolOutput(json, input.offload, call.call_id) + replayNote + unchangedNote + browsingNote + budgetNote;
-      turns.push({ call: made, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+      turns.push({ call: made, output, ...(result.source_taint === 'external' ? { source_taint: 'external' as const } : {}), ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       results.push({ lead: '', full: json, ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays

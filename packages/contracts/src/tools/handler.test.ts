@@ -27,6 +27,7 @@ import {
   PRIVILEGED_ACTION_TOOLS,
   taintGateBlocksDirectExecution,
   toolResultSchema,
+  VARYING_ORIGIN_TOOLS,
 } from './handler';
 import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS } from './permissions';
 
@@ -282,6 +283,11 @@ describe('external-origin tool classification — ADR-0049', () => {
       'delegate_task',
       'list_owner_findings',
     ]);
+  });
+
+  it('a tool whose results are outside text on some calls only stamps each result, and is never also always-external', () => {
+    expect(VARYING_ORIGIN_TOOLS).toEqual(['raise_approval']);
+    expect(VARYING_ORIGIN_TOOLS.filter(tool => EXTERNAL_ORIGIN_TOOLS.includes(tool))).toEqual([]);
   });
 });
 

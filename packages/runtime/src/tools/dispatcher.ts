@@ -3,6 +3,7 @@ import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
   EXTERNAL_ORIGIN_TOOLS,
+  VARYING_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
   rungBlockedOutcomeSchema,
@@ -1065,7 +1066,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
     if (!sourceTaint.success) return null;
     const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
-    if (expectsExternal !== (sourceTaint.data === 'external')) return null;
+    if (!VARYING_ORIGIN_TOOLS.includes(tool) && expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
       return { ok: true, data: value.data, source_taint: sourceTaint.data };
     }
