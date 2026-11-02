@@ -196,7 +196,16 @@ Each slice sits behind a switch, defaulting to 0. The gate allocates switch name
 
 No assertions on wording.
 
-## 8. Decisions for the owner
+## 8. Owner direction (2 Nov, after the first draft)
+
+- **Adopt the best patterns from section 3 and improve on them.** Health follows **Bevel** and the **Fitbit/Gemini coach**: a goals interview, a weekly plan, scheduled check-ins, long-term memory of goals and injuries, and daily adjustment.
+  - A Bevel teardown follows as its own research note, and its findings will extend section 5.
+- **No extra creepiness control.** The approval cards already cover it.
+- **Assistant first.** Waldo is a concierge and assistant first: it leads, plans and follows through.
+  - The owner look-up (OSINT) must actually work at onboarding. In the 2 Nov run it produced nothing visible; that is diagnosed separately.
+  - The browser is the next unlock for both the general assistant and health.
+
+## 9. Decisions for the owner
 
 1. Approve the loop and the default daily budget (3 day turns + 2 offers).
 2. The Close may ask one question. This reverses the current rule.
