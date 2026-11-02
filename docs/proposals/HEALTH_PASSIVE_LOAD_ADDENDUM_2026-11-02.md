@@ -166,7 +166,7 @@ So that owner's load runs high per minute. It still runs high against their own 
   - **A counted session the phone does not hold**, such as a provider workout recorded on a strap while the watch was off, follows **one rule, pro rata by hour**:
     - **Minutes in an observed hour:** they are already in that hour's `outside_workouts`, so they count once, under passive in the parts. The session adds nothing for them.
     - **Minutes in an unobserved hour:** that hour's `outside_workouts` are not counted (§3). The session adds its own zone load (v1's `loadOf`, in zones) under workouts, in proportion to its minutes in unobserved hours over its total minutes.
-    - A session with no zones adds nothing for those minutes, and the part says so.
+    - A session with no zones adds nothing for those minutes. No field in the parts records this.
   - **Worked example.** A provider run from 7:00 to 8:30. The 7:00 hour is observed and the 8:00 hour is not.
     - The 7:00–8:00 minutes count from bins, under passive.
     - The run adds 30 / 90 of its own zone load, under workouts.
@@ -174,7 +174,7 @@ So that owner's load runs high per minute. It still runs high against their own 
   - **No second is counted twice. No observed second is lost. The split between parts can lean to passive.**
 - **The phone's own workout zones are not used in v2.** A phone workout's load comes from its `in_workouts` bins on the server's bounds. So v2's workout part need not equal v1's workout load for the same session, and the vectors do not expect it to.
 - **One method, with one exception.** v2 is zones only, so zones are never mixed with effort or minutes. Within zones, the bins are all on the server's bounds. The one exception is a provider session's added load in unobserved hours, which is on the provider's own bounds (or WHOOP's zone durations). That is the same approximation v1 makes today, and it is limited to hours the phone did not see.
-- **Fallback.** If the day has no passive (no bins, `sparse`, `no_zone_basis` or `zone_basis_low`), it is scored by v1 under v1's own method rules, and it serves `parts.passive` as unavailable with the reason.
+- **Fallback.** If the day has no passive, it is scored by v1 under v1's own method rules, and it serves `parts.passive` as unavailable with the reason. The reasons are checked in order: `no_bins` (the day has no bins), then `no_zone_basis` or `zone_basis_low`, then `sparse`.
 - **Like for like.**
   - A v2 day's band is built from the v2 days among the 28 before.
   - A v1 day's band is built from v1 scores of the observed days. v1 can be computed for every observed day.
@@ -191,6 +191,12 @@ So that owner's load runs high per minute. It still runs high against their own 
 - **Not changed:**
   - Weight's `physical_load` part (that would be `weight.v6`);
   - the 28-day training-load phrase, which stays workouts only.
+
+## 4a. As built (waldoco/waldo-backend#1832)
+
+- **No `direction`.** #1830 (`3af9000a`) removed `direction` from the day load: today's score is the load so far, so it is served beside the band and not judged against it. v2 follows the same rule. Like-for-like bands still hold, so a missing passive part never moves a band. But no field reads a day as "below usual".
+- **Passive reasons.** They are checked in the order the §4 fallback names.
+- **`max` on the series read** (§6).
 
 ## 5. Contract: health revision R-e (12, provisional)
 
@@ -216,7 +222,7 @@ parts: {
 - **Shares, not loads.** The score is log-shaped, so points would not add up. Shares are unit-free and do add up to 1.
 - **Method and label.** A v2 day's method is `hr_zones_observed_peak`, and `approximate` is true, because the maximum is observed. This keeps revision 10's rule that `approximate` is the observed-peak method.
 - **Below R-e, the v1 score is served.** An older build never silently loses a day's load.
-  - The producer computes v1 for every observed day anyway, for the like-for-like bands (§4). So on a v2 day it also writes that day's v1 object, in exactly revision 10's shape (v1 version, method, band and direction), under `v1` in the same `day_load` column.
+  - The producer computes v1 for every observed day anyway, for the like-for-like bands (§4). So on a v2 day it also writes that day's v1 object, in exactly revision 10's shape (v1 version, method and band), under `v1` in the same `day_load` column.
   - Below R-e, the response serves that `v1` object as `day_load`. At R-e and above, `v1` is stripped and the v2 object is served.
   - A v1 day is served as today at every revision.
   - The strict pins keep parsing, and a test proves it at revisions 10 and 11.
@@ -229,7 +235,7 @@ parts: {
   - They are stored in the `waldo.health_samples` payload, with its 90-day retention, its withdrawal purge and its account deletion.
   - No table is added.
   - Migration M-f adds the signal to `health_samples_signal_check` and re-creates `waldo.health_ingest` with the new signal's unit and bounds.
-  - It re-creates `waldo.health_series_read` to take the signal. Today that read returns only `value` for a window, so M-f also returns `from_bpm`, `bin_bpm` and both arrays, from a fixed key list, as it already does for a workout's detail.
+  - It re-creates `waldo.health_series_read` to take the signal. Today that read returns only `value` for a window, so M-f also returns the bins (`from_bpm` and both arrays) under `bins`, from a fixed key list, as it already does for a workout's detail. It also returns an hourly heart-rate window's highest under `max`, which the usual maximum needs. That is a new key on an existing read; the Worker's reader ignores keys it does not know.
 - **Batch size.** A bins sample is a few hundred bytes. The app's packer already holds a batch to 128 changes and the request size limit (`batch.ts`), so a full batch of bins splits rather than being refused. A test proves it with the widest arrays.
 - **The producer reads bins in their own call.**
   - It calls `health_series_read` with `signals: ['heart_rate_bins_window']`, so 24 rows per day per source never eat into the main read's 8,000-row cap.
@@ -271,7 +277,7 @@ These come on top of #1822 §4's list:
   - desk day < busy day on foot;
   - an hour in zone 3 > an hour in zone 1;
   - the score is monotone in load.
-- **Like for like:** a property test that a v1 day's direction is never computed against a v2 band, or the reverse.
+- **Like for like:** a v2 day's band is built only from v2 days.
 - **Switch off:** with `HEALTH_PASSIVE_LOAD="0"`, the rows are byte-identical to S4's.
 - **Strip and pins:**
   - at every revision below R-e, the response carries no `parts`, and a v2 day serves its v1 object in revision 10's shape;
