@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>Your Waldo sign-in code</title>
+<style>
+  body { margin: 0; padding: 0; }
+  .code { -webkit-user-select: all; user-select: all; }
+  @media (max-width: 480px) {
+    .card { padding: 28px 20px !important; }
+    .code { font-size: 34px !important; letter-spacing: 6px !important; }
+  }
+  @media (prefers-color-scheme: dark) {
+    .board { background: #17150f !important; }
+    .card { background: #24211b !important; }
+    .codebox { background: #2f2b24 !important; border-color: #4a4438 !important; }
+    .ink { color: #f3efe8 !important; }
+    .muted { color: #a8a093 !important; }
+    .pill { background: #f3efe8 !important; color: #1f1b16 !important; }
+  }
+</style>
+</head>
+<body class="board" style="margin:0;padding:0;background:#f3efe8;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ .Token }} is your Waldo sign-in code. Fresh, and pinned to the top of your board.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
+<div style="display:none;max-height:0;overflow:hidden;">Reading the source? Hi. You found the first one. There are a few more on the board.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="board" style="background:#f3efe8;">
+<tr><td align="center" style="padding:32px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+  <tr><td style="padding:0 6px 18px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td class="ink" style="font-size:24px;font-weight:800;letter-spacing:-0.5px;color:#1f1b16;">waldo</td>
+      <td align="right"><span class="pill" style="display:inline-block;padding:6px 12px;border-radius:999px;background:#1f1b16;color:#f3efe8;font-size:12px;font-weight:600;">sign-in</span></td>
+    </tr></table>
+  </td></tr>
+
+  <tr><td>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td width="33%" valign="bottom" style="padding:0 6px 12px;">
+        <div style="height:92px;border-radius:22px;background:#f2b8a2;"><span style="display:inline-block;width:30px;height:30px;margin:52px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#9749;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">already on it</div>
+      </td>
+      <td width="34%" valign="bottom" style="padding:0 6px 12px;">
+        <div style="height:56px;border-radius:22px;background:#c9d8bf;"><span style="display:inline-block;width:30px;height:30px;margin:16px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#128694;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">walk after lunch</div>
+      </td>
+      <td width="33%" valign="bottom" style="padding:0 6px 12px;">
+        <div style="height:120px;border-radius:22px;background:#f4dc9a;"><span style="display:inline-block;width:30px;height:30px;margin:80px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#127911;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">deep work, 9&ndash;11</div>
+      </td>
+    </tr></table>
+  </td></tr>
+
+  <tr><td style="padding:0 6px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="background:#ffffff;border-radius:28px;">
+      <tr><td class="card" align="center" style="padding:36px 32px 32px;border-radius:28px;background:#ffffff;">
+        <div style="width:14px;height:14px;margin:0 auto 18px;border-radius:50%;background:#e8553d;box-shadow:0 3px 0 rgba(0,0,0,0.12);"></div>
+        <div class="muted" style="font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#8a8073;">Pinned for you</div>
+        <h1 class="ink" style="margin:8px 0 6px;font-size:26px;line-height:32px;font-weight:800;color:#1f1b16;">Your sign-in code</h1>
+        <p class="muted" style="margin:0 0 24px;font-size:15px;line-height:22px;color:#6b6257;">Enter it in Waldo to pick up where you left off.</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr>
+          <td class="codebox" align="center" style="padding:18px 22px 18px 32px;border-radius:20px;background:#f7f4ef;border:2px dashed #e2dacd;">
+            <span class="code ink" style="font-family:'SF Mono',Menlo,Consolas,'Roboto Mono',monospace;font-size:40px;line-height:48px;font-weight:700;letter-spacing:10px;color:#1f1b16;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
+          </td>
+        </tr></table>
+        <div style="margin-top:14px;"><span style="display:inline-block;padding:7px 14px;border-radius:999px;background:#fbe3db;color:#a3361f;font-size:12px;font-weight:600;">Double-tap the code to grab it</span></div>
+        <p class="muted" style="margin:22px 0 0;font-size:13px;line-height:20px;font-style:italic;color:#8a8073;">
+          {{ if eq .Token "123456" }}Yes, really. We double-checked too.{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}Licensed to sign in.{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}A code that says everything twice. Must be important.{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}Reads the same both ways. Like a good plan.{{ else }}Fresh off the board. Expires shortly.{{ end }}{{ else }}Fresh off the board. Expires shortly.{{ end }}
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td width="33%" valign="top" style="padding:12px 6px 0;">
+        <div style="height:64px;border-radius:22px;background:#d6cdea;"><span style="display:inline-block;width:30px;height:30px;margin:24px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#128197;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">calendar, untangled</div>
+      </td>
+      <td width="34%" valign="top" style="padding:12px 6px 0;">
+        <div style="height:104px;border-radius:22px;background:#bcd7e6;"><span style="display:inline-block;width:30px;height:30px;margin:64px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#9993;&#65039;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">inbox at zero-ish</div>
+      </td>
+      <td width="33%" valign="top" style="padding:12px 6px 0;">
+        <div style="height:80px;border-radius:22px;background:#f2b8a2;"><div style="padding:10px 14px 0;text-align:right;font-size:9px;line-height:10px;white-space:nowrap;color:#e9a68d;">you found me</div><span style="display:inline-block;width:30px;height:30px;margin:20px 0 0 10px;border-radius:50%;background:#ffffff;text-align:center;font-size:15px;line-height:30px;">&#127769;</span></div>
+        <div style="padding:6px 4px 0;font-size:11px;font-weight:600;color:#8a8073;" class="muted">early night?</div>
+      </td>
+    </tr></table>
+  </td></tr>
+
+  <tr><td class="muted" style="padding:28px 12px 0;font-size:12px;line-height:18px;color:#8a8073;text-align:center;">
+    Didn&rsquo;t ask for this? Ignore it. Nothing happens without the code.<br>
+    P.S. Waldo will never ask you for this code. Not in chat, not by email, not even nicely.<br><br>
+    Sent to {{ .Email }}
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>
