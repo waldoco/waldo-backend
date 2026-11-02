@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { agentMailInbox } from '../src/channels/agent-mail/inbox';
 import type { AgentMailParts } from '../src/channels/agent-mail/render';
 import { agentMailIntact, type AgentMailSendProposal } from '../src/channels/agent-mail/send';
-import { approvalDesk } from '../src/channels/approvals';
+import { approvalDesk, CARD_SHOWN_IN_FULL } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -74,7 +74,7 @@ describe('send_agent_mail', () => {
       await owner('agent-mail-tool-card', async state => {
         const f = harness(state);
         const out = await f.call(ARGS, taint);
-        expect(out).toMatchObject({ ok: true, data: { status: 'review card requested in chat; nothing was sent', sent: false } });
+        expect(out).toMatchObject({ ok: true, data: { status: `review card requested in chat; nothing was sent ${CARD_SHOWN_IN_FULL}`, sent: false } });
         const [row] = f.rows();
         expect(row).toMatchObject({ status: 'open', payload: { handle: 'sam', from: { name: "Waldo, Sam's assistant", address: `sam@${DOMAIN}` }, to: ['lee@example.test'], cc: ['kim@example.test'], subject: 'Friday' } });
         expect((out as { data?: { proposal_id?: string } }).data?.proposal_id).toBe(row!.id);
