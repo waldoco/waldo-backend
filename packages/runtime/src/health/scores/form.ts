@@ -121,7 +121,7 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
         if (at) { parts.push(higherIsBetter(at.z)); counts.push(at.own); break; }
       }
       add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day), {
-        basis: { z: heartRate.z, own: Math.min(...counts), ownShare: 1, signals: ['stress_heart_rate'] }, usual: usualOfStanding('stress_heart_rate', null, heartRate) ?? undefined,
+        basis: { z: heartRate.z, own: Math.min(...counts), ownShare: heartRate.ownShare, signals: ['stress_heart_rate'] }, usual: usualOfStanding('stress_heart_rate', null, heartRate) ?? undefined,
       });
       own.push(...counts);
     }
