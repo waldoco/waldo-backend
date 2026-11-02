@@ -58,7 +58,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | --- | --- | --- | --- |
 | Cloudflare account | The personal testing account (`docs/ops/TEARDOWN.md`) | No Worker deployed (recorded in #1400) | An organisation-owned account (decision D1). Durable Object data lives in the account that created it, so choose before the first deploy. |
 | Worker name | `waldo-runtime-staging` | `waldo-runtime` | Same, or `waldo-runtime-production` under `env.production` (P2) |
-| Entry | `src/staging-browser.ts` (adds the Playwright SDK, re-exports `index`) | `src/index.ts` | Keep `index.ts` |
+| Entry | `src/staging-entry.ts`, which loads `src/staging-browser.ts` (adds the Playwright SDK, re-exports `index`) on the first event | `src/entry.ts`, which loads `src/index.ts` on the first event | Keep `entry.ts`: startup imports only `lazy-entry.ts` (Cloudflare 10021) |
 | `compatibility_flags` | `nodejs_compat` | none | none; the bundle startup test asserts production needs none |
 | `limits.cpu_ms` | 300000 | default (30 s) | 300000. The staging comment says long owner turns pass 30 s (P3). |
 | Cron | `17 3 * * *` (health retention sweep) | none | The same cron (P3). Without it, raw health is never swept on schedule. |
