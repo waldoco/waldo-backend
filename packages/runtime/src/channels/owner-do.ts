@@ -253,6 +253,7 @@ import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, wakeBriefSweep } from './calendar-push';
+import { calendarSet } from './calendar-set';
 import { gmailPushBook } from './gmail-push';
 import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpkeep, WATCH_UPKEEP_ID } from './watch-upkeep';
 import { gmailPush } from '../connectors/google-push';
@@ -5223,6 +5224,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // the app quiet hours keep only the message and the push back, so a revision still lands. Elsewhere a send is the only way
     // a revision reaches the owner, so quiet hours hold it there.
     const dayState = this.env.WALDO_DAY_STATE === '1', revisesCards = REVISES_CARDS[channel] === true;
+    // Exact Google deltas and the triage turn build on the day state. Off unless '1'.
+    const realtime = dayState && this.env.GOOGLE_REALTIME_TRIAGE === '1';
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
@@ -5247,12 +5250,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
+          ...(realtime ? { delta: { calendars: calendarSet(storage.kv).calendars() } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(
             code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
             () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })); } });
-        log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}` });
+        log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}${check.delta ? `:delta=${check.delta.join(',')}` : ''}` });
         if (check.seedCapped) log({ trace, hop: 'day_state_seed', ms: 0, ok: true, code: 'seed_capped', detail: 'seed_capped' });
         if (check.wakeAt !== undefined) storage.kv.put(UPDATE_JUDGE_WAKE_KEY, check.wakeAt);
         emitObserved(observers, observedEvents(check, day, now));
@@ -5296,8 +5300,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
       transaction: work => storage.transactionSync(work),
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
-      turn: async (turn, text, current) => this.asOwnerJob('heartbeat', turn, async () =>
-        responder.prompt(turn, owner, text, async (_hop, work) => work(), updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external')),
+      turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external')),
+      ...(realtime ? { triage: {
+        // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
+        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n') }),
+        // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
+        cardsSince: (at: number) => storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ?', at).one().n,
+      } } : {}),
       deliver: async (id, trace, text, recordId, commit, effect) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
         const card = effect?.revision as CardId | undefined;
