@@ -667,6 +667,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const bindOptions = (id: string, options: ProposeOptions) => {
     sql.exec('UPDATE ledger SET replaces = ?, raised_outside = ? WHERE id = ?', options.replaces ?? null, options.outside ? 1 : 0, id);
   };
+  // A card raised before the desk recorded this reads as raised in such a turn: an unknown origin fails closed.
+  const raisedOutside = (entry: LedgerRow) => entry.raised_outside !== 0;
   const assertReplaceable = (replaces: string | undefined) => {
     const state = replaces === undefined ? null : replaceableState(replaces);
     if (state !== null) throw new ApprovalReplaceError(state);
@@ -699,7 +701,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const card = reviewText(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     const shown: { surface: string; message_ref: string; approvable: boolean }[] = [];
-    let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, sentHere = false, waits = false;
+    let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, waits = false;
+    let sentHere: Readonly<{ surface: string; message_ref: string; approvable: boolean }> | undefined;
     // A request this chat surface hands to the app is put there even before the owner has the app, so the link has a card to open.
     const handsToApp = HANDS_TO_APP.has(surface) && approvedInApp(entry);
     if (surface === 'app' || handsToApp || deps.appIdentity?.()) {
@@ -727,7 +730,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
         const sent = await say(unsent ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
-        if (sent != null) { shown.push({ surface, message_ref: sentRef(sent), approvable }); sentHere = true; }
+        if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable }; shown.push(sentHere); }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
       } catch (error) { sendFailure = error; }
@@ -738,16 +741,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // The card it revises closes in the commit that first shows this one, and only then: until the owner can see the new
     // card, the earlier one stays theirs to decide.
     const replaced = commit(() => {
-      // A card closed while its own send was out (withdrawn, forgotten) records no presentation: nothing may decide it now.
-      if (!CARD_WAITING_STATUSES.includes(row(id)?.status as DeskStatus)) return 'closed' as const;
-      for (const s of shown) sql.exec('INSERT OR IGNORE INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-        id, s.surface, s.message_ref, deps.now(), s.approvable ? 1 : 0, digest);
+      const record = (s: Readonly<{ surface: string; message_ref: string; approvable: boolean }>, retiredAt: number | null) => sql.exec('INSERT OR IGNORE INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id, s.surface, s.message_ref, deps.now(), s.approvable ? 1 : 0, digest, retiredAt);
+      // A card closed while its own send was out (withdrawn, forgotten) can no longer be decided. Its chat message is
+      // recorded retired, so a number the owner sends it is answered as that card's, not as an earlier card's or a turn's.
+      if (!CARD_WAITING_STATUSES.includes(row(id)?.status as DeskStatus)) {
+        if (sentHere) record(sentHere, deps.now());
+        return 'closed' as const;
+      }
+      for (const s of shown) record(s, null);
       const opened = shown.length ? sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", shown.some(s => s.approvable) ? 'open' : 'review_only', id).rowsWritten : 0;
       if (waits || sentHere) sql.exec('UPDATE ledger SET card_waits_on = ? WHERE id = ?', waits ? surface : null, id);
       if (raise) sql.exec("UPDATE ledger SET deferred_at = NULL WHERE id = ? AND deferred_at IS NOT NULL AND status IN ('open', 'review_only')", id);
       // Only a card the owner can approve somewhere takes the earlier one's place; one too long to approve leaves it open.
       if (!opened || !entry.replaces || !shown.some(s => s.approvable)) return null;
-      return replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, entry.raised_outside === 1, id) : null;
+      return replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, raisedOutside(entry), id) : null;
     });
     if (replaced === 'closed') await clearButtons(id, shown);
     else if (replaced) await afterWithdrawn(entry.replaces!, replaced);
@@ -1461,7 +1469,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           try { card = reviewText(entry); } catch { card = summaryOf(entry); }
           return { approval_id: entry.id, kind: entry.kind, summary: summaryOf(entry), state: APP_APPROVAL_STATE[entry.status as DeskStatus] as WaitingApproval['state'],
             put_off: entry.deferred_at != null, raised_at: when(new Date(entry.created_at).toISOString()), ...senderOf(entry), card, ...(entry.replaces ? { replaces: entry.replaces } : {}),
-            ...(entry.raised_outside === 1 || OUTSIDE_TEXT_KINDS.includes(entry.kind) ? { outside_text: true as const } : {}) };
+            ...(raisedOutside(entry) || OUTSIDE_TEXT_KINDS.includes(entry.kind) ? { outside_text: true as const } : {}) };
         });
     },
     async withdraw(id, reason, options = {}) {

@@ -203,8 +203,8 @@ describe('a withdraw racing a decision or a card going out', () => {
     });
   });
 
-  it('a card withdrawn while its own message was going out records no presentation, and its buttons are cleared', async () => {
-    await ownerDesk('withdraw-while-sending', async ({ desk, email, holds, retired, shownCount, sql, status, app }) => {
+  it('a card withdrawn while its own message was going out records that message only as retired, and its buttons are cleared', async () => {
+    await ownerDesk('withdraw-while-sending', async ({ desk, email, holds, retired, sql, status, app, tap }) => {
       app.has = false;
       holds.card = gate(); holds.cardCalled = gate();
       const proposing = email('Going out');
@@ -214,8 +214,10 @@ describe('a withdraw racing a decision or a card going out', () => {
       holds.card.open();
       expect(await proposing).toBe(id);
       expect(status(id)).toBe('withdrawn');
-      expect(shownCount(id)).toBe(0);
+      expect(sql.exec('SELECT surface, retired_at IS NOT NULL AS retired FROM approval_presentations WHERE approval_id = ?', id).toArray()).toEqual([{ surface: 'telegram', retired: 1 }]);
       expect(retired.some(ref => ref.startsWith('telegram:'))).toBe(true);
+      expect(JSON.stringify(await tap(id))).toContain('withdrew');
+      expect(status(id)).toBe('withdrawn');
     });
   });
 
