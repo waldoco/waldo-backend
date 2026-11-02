@@ -7,6 +7,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: { include: ['test/imessage-media.test.ts'], fileParallelism: false },
   plugins: [cloudflareTest({
+    // The full Worker, whose Durable Object instances these tests reach into; wrangler's main is the lazy deployed entry.
+    main: './src/index.ts',
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', WALDO_ENVIRONMENT: 'test',
       OPENAI_API_KEY: 'fictional-imessage-model-key', COMMON_OWNER_TASKS: '0', WALDO_TOOL_OFFLOAD: '0', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_EGRESS_ALLOWLIST: '',
