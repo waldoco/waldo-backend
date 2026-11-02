@@ -120,7 +120,6 @@ describe('a send as Waldo on the approval desk', () => {
       expect(item!.exact).toEqual({ recipients: { to: ['lee@example.test'], cc: ['kim@example.test'], bcc: [] }, sender: { name: "Waldo, Sam's assistant", address: 'sam@mail.example.test' }, message: { subject: 'Friday', body: p.body } });
       expect(item!.actions).toEqual(['approve', 'edit', 'skip', 'defer']);
       expect(STEP_UP_APPROVALS.agent_mail_send.gated).toBe(true);
-      expect(f.desk.stepUp(id, 'approve')).toBe(true);
       expect(f.fake.attempts).toEqual([]);
 
       const out = await f.approve(id);

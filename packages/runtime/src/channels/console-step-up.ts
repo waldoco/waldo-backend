@@ -48,7 +48,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'approval.approve': { gated: false, why: 'Decides one held calendar change once; leaves no standing grant.' },
   'approval.skip': { gated: false, why: 'Declines one held change.' },
   'approval.undo': { gated: false, why: 'Reverses one decision.' },
-  'approval.send': { gated: true, why: 'Sends one held email or message as the owner, and an email reaches other people; it cannot be called back.' },
+  'approval.send': { gated: false, why: 'Sends one held email or message the owner read in full on its card; by owner ruling (beta) a signed-in session sends without a fresh code.' },
   'approval.edit': { gated: false, why: 'Asks Waldo for a new draft of one held send; sends nothing.' },
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },

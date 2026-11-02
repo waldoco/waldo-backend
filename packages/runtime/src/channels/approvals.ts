@@ -216,8 +216,6 @@ export type ApprovalDesk = Readonly<{
   replayCurrent(id: string, argsDigest: string): Promise<boolean>;
   // Moves a running card to how its replay ended. Only a running card moves, so a settle is applied once.
   settleReplay(id: string, status: ReplayCardStatus): boolean;
-  // Whether this decision on this approval needs the recent email check; an approval it cannot read needs it.
-  stepUp(id: string, action: ApprovalActionV1): boolean;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
@@ -358,7 +356,7 @@ const healthOf = (entry: LedgerRow): Pick<AppApprovalV1, 'health'> => {
   const health = appApprovalHealthV1Schema.safeParse({ reason: stored.reason });
   return health.success ? { health: health.data } : {};
 };
-// The chat surfaces where a send to another person, and every other kind the app gates behind the recent email check, is
+// The chat surfaces where a send to another person, and every other kind that reaches beyond the owner's own things, is
 // handed to the app rather than approved. Which kinds is the app's own rule; a request that cannot be classified is handed over.
 const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessage']);
 // Classified from every detail of the frozen request, never the app card's trimmed one.
@@ -379,7 +377,7 @@ const NUMBERED: ReadonlySet<ApprovalSurface> = new Set(['imessage']);
 // The reply protocol, not a reading of intent: only a message that is the digit itself decides.
 const NUMBERED_REPLY = /^\s*([12])\s*$/;
 const approvedInApp = (entry: LedgerRow): boolean => stepUpFor(entry, 'approve');
-const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
+const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be approved at all.";
 // Asking for a new draft acts on nothing, so the app takes it without the email check; chat hands it over all the same.
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
@@ -1576,10 +1574,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'review_only' as const, undoable: false, review: review(r) })),
         ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
-    },
-    stepUp(id, action) {
-      const entry = row(id);
-      return !entry || stepUpFor(entry, action);
     },
     placement(id) {
       const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
