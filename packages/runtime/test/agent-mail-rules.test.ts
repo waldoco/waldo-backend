@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_MAIL_RULE_DUE_KEY, AGENT_MAIL_RULE_TRIES, agentMailRouting, agentMailRuleHandles, intendAgentMailRule,
+  AGENT_MAIL_RULE_DUE_KEY, AGENT_MAIL_RULE_TRIES, agentMailRouting, agentMailRuleHandles, agentMailRulesDue, deferAgentMailRules, intendAgentMailRule,
   reconcileAgentMailRules, sweepAgentMailRules, type AgentMailRuleCode, type AgentMailRuleDirectory, type HeldHandle, type RuleState,
 } from '../src/channels/agent-mail/rules';
 
@@ -173,6 +173,27 @@ describe('agent mail routing rules', () => {
     expect(w.holders.get('priya')?.state).toBe('unknown');
     expect(w.due()).toBeUndefined();
     expect(w.cloudflare.rules).toEqual([]);
+  });
+
+  it('a wait for the configuration ends on the first configured pass; a backoff still waits', async () => {
+    const w = world();
+    w.claim('priya');
+    deferAgentMailRules(w.kv as never, 1_000_000);
+    expect(agentMailRulesDue(w.kv, false, 1_000_001)).toBe(false);
+    expect(agentMailRulesDue(w.kv, true, 1_000_001)).toBe(true);
+    // Deferred before the wait was marked: a future due with no attempt counted.
+    w.kv.map.delete('agent_mail_rule_deferred_v1');
+    expect(agentMailRulesDue(w.kv, true, 1_000_001)).toBe(true);
+    await w.pass();
+    expect(w.holders.get('priya')?.state).toBe('live');
+
+    const b = world();
+    b.claim('priya');
+    b.cloudflare.failures.POST = [500];
+    await b.pass();
+    expect(b.due()).toBe(1_060_000);
+    expect(agentMailRulesDue(b.kv, true, 1_000_001)).toBe(false);
+    expect(agentMailRulesDue(b.kv, true, 1_060_000)).toBe(true);
   });
 
   it('an address with a rule that is not Waldo\'s fails and leaves that rule alone', async () => {

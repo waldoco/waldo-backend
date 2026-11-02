@@ -473,6 +473,21 @@ describe('agent mail routing rule lane', () => {
     }, ruleEnv('1'));
   });
 
+  it('a rule deferred while routing was unconfigured is created on the first pass after it is configured', async () => {
+    await withOwner(async ({ state, passes }) => {
+      const world = rulesWorld();
+      world.state = 'pending';
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      // What an older pass left before the token was set: the work put off a day, unmarked, with no attempt counted.
+      intendAgentMailRule(state.storage.kv, 'priya', Date.now());
+      state.storage.kv.put(AGENT_MAIL_RULE_DUE_KEY, Date.now() + 24 * 60 * 60_000);
+      await passes(1);
+      expect(world.rules.map(rule => rule.name)).toEqual(['waldo-staging-mail:priya']);
+      expect(world.state).toBe('live');
+      expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
+    }, ruleEnv('1'));
+  });
+
   it('with agent mail on but no zone configured, a claim stays pending and is never reported live', async () => {
     await withOwner(async ({ state, passes }) => {
       const world = rulesWorld();
