@@ -553,6 +553,60 @@ export const healthPartsV1Schema = z.strictObject({
   weight: partsOf(healthWeightPartV1Schema, healthPartKeysV1.weight.length).optional(),
 });
 
+// Health revision 10: the day's load as a score, today's measured Form curve, and today's hourly stress curve, each served by
+// /scores only to a build that names revision 10 and only while its own switch is on. They are the server's numbers: the phone
+// computes none of them. Revision 9 is the signal read; this revision is cumulative with it.
+export const HEALTH_BODY_DAY_REVISION_V1 = 10;
+export const HEALTH_DAY_LOAD_VERSION_V1 = 'day-load.candidate.v1';
+export const HEALTH_DAY_LOAD_WINDOW_DAYS_V1 = 28;
+export const HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 = 14;
+export const healthDayLoadMethodV1Schema = z.enum(['hr_zones', 'hr_zones_observed_peak', 'effort', 'minutes']);
+const loadScore = z.number().finite().min(0).max(100);
+// The owner's usual day load: one spread either side of the mean of the day scores they have had, over the observed days among
+// the twenty-eight before today (a rest day scores 0, an unobserved day is no day), from fourteen such days. Below fourteen
+// there is no band, only how many days are missing. It is in the score's own scale, so no client transforms it. Today's score is
+// the load so far, so no verdict of it against the band is served.
+export const healthDayLoadBandV1Schema = z.union([
+  z.strictObject({ state: z.literal('personal'), low: loadScore, centre: loadScore, high: loadScore, own_days: z.int().min(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1).max(HEALTH_DAY_LOAD_WINDOW_DAYS_V1), days_until_personal: z.literal(0) })
+    .refine(band => band.low <= band.centre && band.centre <= band.high, { error: 'the centre lies inside the band', path: ['centre'] }),
+  z.strictObject({ state: z.literal('provisional'), own_days: z.int().min(0).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - 1), days_until_personal: z.int().min(1).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1) })
+    .refine(band => band.days_until_personal === HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - band.own_days, { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] }),
+]);
+export const healthDayLoadV1Schema = z.union([
+  z.strictObject({
+    state: z.literal('available'), version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), activation: z.literal('candidate_unaccepted'),
+    score: loadScore, method: healthDayLoadMethodV1Schema,
+    // True when the zones were set from the highest heart rate seen in a workout, not a measured maximum.
+    approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
+    band: healthDayLoadBandV1Schema,
+  }).refine(load => load.approximate === (load.method === 'hr_zones_observed_peak'), { error: 'approximate is the observed-peak method', path: ['approximate'] }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.literal('no_readings') }),
+]);
+
+// Today's Form as it read at each quarter of an hour since the owner woke: the same method as the day's Form, run on the hours
+// that had ended by then, so its version is the row's Form version and its last point is the row's Form score. Measured points
+// only; a projection is not served.
+export const healthFormCurveV1Schema = z.strictObject({
+  version: z.string().regex(/^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*\.v[0-9]+$/).max(64),
+  points: z.array(z.strictObject({ at: healthInstantV1Schema, score: loadScore, kind: z.literal('measured') })).min(1).max(96),
+}).refine(curve => curve.points.every((point, i) => i === 0 || Date.parse(curve.points[i - 1]!.at) < Date.parse(point.at)), { error: 'points run forward in time', path: ['points'] });
+
+// Strain on the body at rest, by hour of today: each settled awake hour outside a workout and with little movement, against the
+// same wall-clock hour on the owner's earlier days. 50 is the owner's usual hour and a point is 20 per spread, so higher is more
+// strain; the band is read off the value (70 and up high, 30 and down low). An hour with no value says why, never zero.
+export const HEALTH_STRESS_CURVE_VERSION_V1 = 'stress-curve.candidate.v1';
+export const healthStressBandV1Schema = z.enum(['low', 'medium', 'high']);
+export const healthStressHourReasonV1Schema = z.enum(['workout', 'moving', 'no_reading', 'baseline_immature']);
+export const stressBandOf = (value: number): z.infer<typeof healthStressBandV1Schema> => (value >= 70 ? 'high' : value <= 30 ? 'low' : 'medium');
+export const healthStressCurveV1Schema = z.strictObject({
+  version: z.literal(HEALTH_STRESS_CURVE_VERSION_V1),
+  hours: z.array(z.union([
+    z.strictObject({ at: healthInstantV1Schema, value: loadScore, band: healthStressBandV1Schema }).refine(hour => hour.band === stressBandOf(hour.value), { error: 'the band is read off the value', path: ['band'] }),
+    z.strictObject({ at: healthInstantV1Schema, value: z.null(), band: z.null(), reason: healthStressHourReasonV1Schema }),
+  ])).min(1).max(24),
+}).refine(curve => curve.hours.every((hour, i) => i === 0 || Date.parse(curve.hours[i - 1]!.at) < Date.parse(hour.at)), { error: 'hours run forward in time', path: ['hours'] })
+  .refine(curve => curve.hours.some(hour => hour.value !== null), { error: 'a curve with no hour that has a value is no curve', path: ['hours'] });
+
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -571,6 +625,10 @@ export const healthScoresV1Schema = z.strictObject({
   // Revision 8 and later; absent when the row has none.
   components: healthPartsV1Schema.optional(),
   usual: healthUsualListV1Schema.optional(),
+  // Revision 10 and later; absent when the row has none. Today's row only.
+  day_load: healthDayLoadV1Schema.optional(),
+  form_curve: healthFormCurveV1Schema.optional(),
+  stress_curve: healthStressCurveV1Schema.optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third

@@ -9,6 +9,7 @@ import {
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
   healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
+  HEALTH_BODY_DAY_REVISION_V1, healthDayLoadBandV1Schema, healthDayLoadMethodV1Schema, healthDayLoadV1Schema, healthFormCurveV1Schema, healthStressBandV1Schema, healthStressCurveV1Schema, healthStressHourReasonV1Schema, stressBandOf,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -772,5 +773,110 @@ describe('health revision 8: days left and grouped rows', async () => {
       parts({ groups: [{ key: 'circadian', pillar: 'recovery', state: 'unavailable', reason: 'no_reading' }] }), parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_data' }] }),
       parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_reading', score: 0 }] }), parts({ groups: 'resting_state' }),
     ]);
+  });
+});
+
+describe('health revision 10: the day load, today\'s Form curve and the hourly stress curve', async () => {
+  const { scores } = (await import('./fixtures/health-body-day.v10.json')).default as unknown as { scores: Record<string, any> };
+  const load = scores.day_load, band = load.band, curve = scores.form_curve, stress = scores.stress_curve;
+  it('is health revision 10, after the parts revision', () => {
+    expect(HEALTH_BODY_DAY_REVISION_V1).toBe(10);
+    expect(HEALTH_BODY_DAY_REVISION_V1).toBeGreaterThan(HEALTH_PARTS_REVISION_V1);
+  });
+  it('reads the fixture, and the same body without the three keys', () => {
+    expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+    expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+    const { day_load: _l, form_curve: _f, stress_curve: _s, ...before } = scores;
+    expect(healthScoresV1Schema.safeParse(before).success).toBe(true);
+  });
+  it('keeps the closed lists the producer draws from', () => {
+    expect([...healthDayLoadMethodV1Schema.options]).toEqual(['hr_zones', 'hr_zones_observed_peak', 'effort', 'minutes']);
+    expect([...healthStressBandV1Schema.options]).toEqual(['low', 'medium', 'high']);
+    expect([...healthStressHourReasonV1Schema.options]).toEqual(['workout', 'moving', 'no_reading', 'baseline_immature']);
+  });
+
+  describe('day_load', () => {
+    it('reads a load with a personal band, a provisional one with none, and an unobserved day with its reason', () => {
+      expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, band: { state: 'provisional', own_days: 9, days_until_personal: 5 } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, method: 'hr_zones_observed_peak', approximate: true }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0 }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ state: 'unavailable', reason: 'no_readings' }).success).toBe(true);
+      expect(healthDayLoadBandV1Schema.safeParse(band).success).toBe(true);
+    });
+    it('serves no direction of the score against the band, because today\'s score is the load so far', () => {
+      rejected(healthDayLoadV1Schema, [{ ...load, direction: 'usual' }, { ...load, direction: null }, { ...load, direction: 'above_usual' }]);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 5 }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 99 }).success).toBe(true);
+    });
+    it('refuses a load that is out of range, an unnamed method or version, a mislabelled approximation, and extra keys', () => {
+      rejected(healthDayLoadV1Schema, [
+        { ...load, score: 101 }, { ...load, score: -1 }, { ...load, score: NaN }, { ...load, score: null }, { ...load, method: 'passive' }, { ...load, method: null },
+        { ...load, version: 'day-load.v1' }, { ...load, activation: 'accepted' }, { ...load, approximate: true }, { ...load, method: 'hr_zones_observed_peak' },
+        { ...load, window_days: 30 }, { ...load, target: 70 }, { ...load, trimp: 310 }, { ...load, band: undefined },
+        { state: 'unavailable', reason: 'baseline_immature' }, { state: 'unavailable', reason: 'no_readings', score: 0 }, { state: 'unavailable' }, 'day_load', null,
+      ]);
+    });
+    it('has a band that is the owner\'s own from fourteen days, in order, with the days left counted for the client', () => {
+      for (const bad of [
+        { ...band, low: 50 }, { ...band, high: 40 }, { ...band, high: 101 }, { ...band, low: -1 }, { ...band, own_days: 13 }, { ...band, own_days: 29 }, { ...band, days_until_personal: 1 },
+        { state: 'provisional', own_days: 14, days_until_personal: 0 }, { state: 'provisional', own_days: 9, days_until_personal: 4 }, { state: 'provisional', own_days: 9 },
+        { state: 'provisional', low: 10, centre: 20, high: 30, own_days: 9, days_until_personal: 5 }, { ...band, estimator: 'own_mean_sd' }, { state: 'learning', own_days: 3, days_until_personal: 11 },
+      ]) expect(healthDayLoadBandV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    });
+  });
+
+  describe('form_curve', () => {
+    it('reads measured points in time order, up to ninety-six, under the Form version', () => {
+      expect(healthFormCurveV1Schema.safeParse(curve).success).toBe(true);
+      expect(healthFormCurveV1Schema.safeParse({ ...curve, points: [curve.points[0]] }).success).toBe(true);
+      const many = Array.from({ length: 96 }, (_, i) => ({ at: new Date(Date.parse('2026-11-02T00:00:00Z') + i * 900_000).toISOString(), score: 50, kind: 'measured' }));
+      expect(healthFormCurveV1Schema.safeParse({ ...curve, points: many }).success).toBe(true);
+      rejected(healthFormCurveV1Schema, [{ ...curve, points: [...many, { at: '2026-11-03T00:00:00.000Z', score: 50, kind: 'measured' }] }]);
+    });
+    it('refuses a projected point, no points, points out of order or repeated, a score out of range, a bad version, and extra keys', () => {
+      const [a, b] = curve.points;
+      rejected(healthFormCurveV1Schema, [
+        { ...curve, points: [{ ...a, kind: 'projected' }] }, { ...curve, points: [] }, { ...curve, points: [b, a] }, { ...curve, points: [a, a] },
+        { ...curve, points: [{ ...a, score: 101 }] }, { ...curve, points: [{ ...a, score: -1 }] }, { ...curve, points: [{ ...a, at: 'nine' }] }, { ...curve, points: [{ ...a, kind: undefined }] },
+        { ...curve, points: [{ ...a, band: 'high' }] }, { ...curve, version: 'Form 9' }, { ...curve, version: undefined }, { ...curve, stress: 'rising' }, curve.points, null,
+      ]);
+    });
+  });
+
+  describe('stress_curve', () => {
+    const [first, second, third] = stress.hours;
+    it('reads hours that hold a value with its band, and hours that hold none with their reason', () => {
+      expect(healthStressCurveV1Schema.safeParse(stress).success).toBe(true);
+      expect(healthStressCurveV1Schema.safeParse({ ...stress, hours: stress.hours.slice(2, 3) }).success).toBe(true);
+      expect(stress.hours.some((hour: { value: number | null }) => hour.value === null)).toBe(true);
+      expect([stressBandOf(70), stressBandOf(69.9), stressBandOf(30), stressBandOf(30.1), stressBandOf(0), stressBandOf(100)]).toEqual(['high', 'medium', 'low', 'medium', 'low', 'high']);
+    });
+    it('refuses a band that is not the value\'s, a value with a reason or a gap with a value, and an hour that says nothing', () => {
+      const valued = stress.hours.find((hour: { value: number | null }) => hour.value !== null);
+      rejected(healthStressCurveV1Schema, [
+        { ...stress, hours: [{ ...valued, band: 'low' }] }, { ...stress, hours: [{ ...valued, band: null }] }, { ...stress, hours: [{ ...valued, reason: 'workout' }] },
+        { ...stress, hours: [valued, { ...first, band: 'high' }] }, { ...stress, hours: [valued, { ...first, value: 0 }] }, { ...stress, hours: [valued, { ...first, reason: 'asleep' }] },
+        { ...stress, hours: [valued, { ...first, reason: undefined }] }, { ...stress, hours: [{ ...valued, value: 100.5, band: 'high' }] }, { ...stress, hours: [{ ...valued, value: -1, band: 'low' }] },
+        { ...stress, hours: [{ ...valued, value: NaN, band: 'medium' }] },
+      ]);
+    });
+    it('refuses no hours, more than a day of them, hours out of order, none with a value, another version, and extra keys', () => {
+      const valued = stress.hours.find((hour: { value: number | null }) => hour.value !== null);
+      const day = Array.from({ length: 25 }, (_, i) => ({ ...valued, at: new Date(Date.parse('2026-11-02T00:00:00Z') + i * 3_600_000).toISOString() }));
+      rejected(healthStressCurveV1Schema, [
+        { ...stress, hours: [] }, { ...stress, hours: day }, { ...stress, hours: [third, second] }, { ...stress, hours: [second, second] }, { ...stress, hours: [first] },
+        { ...stress, version: 'stress-curve.v1' }, { ...stress, version: undefined }, { ...stress, trend: 'rising' }, stress.hours, null,
+      ]);
+      expect(healthStressCurveV1Schema.safeParse({ ...stress, hours: day.slice(0, 24) }).success).toBe(true);
+    });
+    it('is served on a score and nowhere else is a key added', () => {
+      rejected(healthScoresV1Schema, [
+        { ...scores, day_load: { state: 'unavailable' } }, { ...scores, form_curve: { ...curve, points: [] } }, { ...scores, stress_curve: { ...stress, hours: [] } },
+        { ...scores, stress_trend: 'rising' }, { ...scores, day_load: null }, { ...scores, form_curve: null }, { ...scores, stress_curve: null },
+      ]);
+      const { history } = (scores as { history?: unknown });
+      expect(history).toBeUndefined();
+    });
   });
 });

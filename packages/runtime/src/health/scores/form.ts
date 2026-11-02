@@ -60,22 +60,32 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
   (minute === null ? day : { ...day, hourly: day.hourly.filter(bucket => wallMinute(Date.parse(bucket.startAt), day.timezone) < minute) });
 // Form reads the hours that hold one of its own signals. An hour holding only active energy is Weight's, so it never counts
 // toward Form's hours, its data horizon or the hour still filling.
-const formHours = (day: DayRecord): DayRecord =>
+export const formHours = (day: DayRecord): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
+
+// What Form reads of a day read at `asOf`, or null when the day holds no hour of its own. The day's data horizon is the end of its
+// newest hour. A day still running needs that horizon recent; a finished day is judged on the hours it has, so a recompute the
+// next morning does not turn it stale. Only the current hour grows, so the newest hour, while the read falls inside it, is left
+// out on both sides until it ends: `settled` is the instant the day's hours are taken through.
+export const formReading = (record: DayRecord, asOf: string | null): Readonly<{ stale: boolean; settled: number }> | null => {
+  const target = formHours(record);
+  if (target.hourly.length === 0) return null;
+  const { end } = localDayWindow(target.day, target.timezone);
+  const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
+  const stale = asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS;
+  const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
+  return { stale, settled: filling ? horizon - HOUR_MS : horizon };
+};
 
 export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false): FormResult => {
   const target = formHours(record), prior = earlier.map(formHours);
   const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
   if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
-  if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
-  // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
-  // judged on the hours it has, so a recompute the next morning does not turn it stale.
+  const reading = formReading(target, asOf);
+  if (reading === null) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
+  if (reading.stale) return { state: 'unavailable', reason: 'stale_inputs' };
+  const { settled } = reading;
   const { end } = localDayWindow(target.day, target.timezone);
-  const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
-  if (asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS) return { state: 'unavailable', reason: 'stale_inputs' };
-  // Only the current hour grows, so the newest hour, while the read falls inside it, is left out on both sides until it ends.
-  const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
-  const settled = filling ? horizon - HOUR_MS : horizon;
   const cutoff = settled >= end ? null : wallMinute(settled, target.timezone);
   const sameHours = (day: DayRecord) => throughMinute(day, cutoff);
   const today = sameHours(target);
