@@ -82,7 +82,7 @@ describe('the Worker recompute and the day load and curve switches', () => {
   it('writes none with the switches absent, "0" or anything but "1"', async () => {
     for (const flag of [undefined, '0', '', 'true', ' 1']) {
       rows = [];
-      const flags = flag === undefined ? {} : { HEALTH_DAY_LOAD: flag, HEALTH_FORM_CURVE: flag, HEALTH_STRESS_CURVE: flag };
+      const flags: Record<string, string> = flag === undefined ? {} : { HEALTH_DAY_LOAD: flag, HEALTH_FORM_CURVE: flag, HEALTH_STRESS_CURVE: flag };
       await ingest({ HEALTH_PROVISIONAL_SCORES: '1', ...flags });
       expect(rows.length, String(flag)).toBeGreaterThan(0);
       expect(JSON.stringify(rows), String(flag)).not.toMatch(NEW);
