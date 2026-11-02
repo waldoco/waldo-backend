@@ -161,8 +161,8 @@ export const intendAgentMailRule = (kv: Kv, handle: string, now = Date.now()): v
 export const agentMailRuleHandles = (kv: Pick<Kv, 'get'>): string[] => Object.keys(kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {});
 
 // Agent mail is off or unconfigured: no Cloudflare call, and recorded work waits rather than waking every pass. A wait for
-// the configuration ends on the first pass that finds it configured, not a day later. It is marked; a wait with no attempt
-// counted is one too, since a backoff always counts one (a wait recorded before the mark existed has none).
+// the configuration ends on the first pass that finds it configured, not a day later. It is marked. An unmarked wait longer
+// than the directory backoff with no attempt counted is one too: every other backoff counts an attempt.
 export const deferAgentMailRules = (kv: Kv, now = Date.now()): void => {
   if (agentMailRuleHandles(kv).length) { kv.put(AGENT_MAIL_RULE_DUE_KEY, now + DEFER_MS); kv.put(DEFERRED_KEY, true); }
   else { kv.delete(AGENT_MAIL_RULE_DUE_KEY); kv.delete(DEFERRED_KEY); }
@@ -171,7 +171,9 @@ export const agentMailRulesDue = (kv: Pick<Kv, 'get'>, configured: boolean, now 
   const due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY);
   if (due == null) return false;
   if (due <= now) return true;
-  return configured && (kv.get<boolean>(DEFERRED_KEY) === true || Object.keys(kv.get<Record<string, number>>(TRIES_KEY) ?? {}).length === 0);
+  if (!configured) return false;
+  return kv.get<boolean>(DEFERRED_KEY) === true
+    || (due - now > BACKOFF_FIRST_MS && Object.keys(kv.get<Record<string, number>>(TRIES_KEY) ?? {}).length === 0);
 };
 
 export async function reconcileAgentMailRules(deps: Readonly<{

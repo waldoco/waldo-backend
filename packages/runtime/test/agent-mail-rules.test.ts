@@ -194,6 +194,14 @@ describe('agent mail routing rules', () => {
     expect(b.due()).toBe(1_060_000);
     expect(agentMailRulesDue(b.kv, true, 1_000_001)).toBe(false);
     expect(agentMailRulesDue(b.kv, true, 1_060_000)).toBe(true);
+
+    // The directory backoff counts no attempt, and its pass lists Cloudflare first: it still waits its minute.
+    const d = world();
+    d.claim('priya');
+    const down = { ...d.directory, current: async () => { throw new Error('directory down'); } };
+    await reconcileAgentMailRules({ kv: d.kv as never, setup: d.setup, directory: down, now: () => 1_000_000, log: () => {} });
+    expect(d.due()).toBe(1_060_000);
+    expect(agentMailRulesDue(d.kv, true, 1_000_001)).toBe(false);
   });
 
   it('an address with a rule that is not Waldo\'s fails and leaves that rule alone', async () => {
