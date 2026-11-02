@@ -191,4 +191,18 @@ describe('exact deltas', () => {
       expect(h.updates.since('mail_since')).toBe(T0 - 600_000);
     });
   });
+
+  it('a calendar whose baseline is past the page cap is read the older way and tried again only a day later', async () => {
+    await withDelta(async (h) => {
+      seed(h, { mail: '100' });
+      h.fakes.calendar = async () => ({ state: 'capped' });
+      await h.check();
+      expect(h.cursor('cal:primary')).toBe(`capped:${T0}`);
+      expect(h.fakes.calls.filter(call => call.startsWith('calendarDelta'))).toHaveLength(1);
+      expect(h.fakes.calls).toContain('window:primary');
+      await h.check();
+      expect(h.fakes.calls.filter(call => call.startsWith('calendarDelta')), 'held for a day').toHaveLength(1);
+      expect(h.fakes.calls.filter(call => call === 'window:primary')).toHaveLength(2);
+    });
+  });
 });

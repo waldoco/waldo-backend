@@ -236,6 +236,8 @@ export type DeltaSource = Readonly<{ calendars: readonly string[] }>;
 type DeltaGoogle = Pick<GoogleClient, 'newMail' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
 // What one tick reads the older way, for a calendar the delta could not read: a few pages of the window since the watermark.
 const WINDOW_PAGES = 4;
+// A calendar cursor that holds this, and when, instead of a sync token: its baseline was past the page cap.
+const CAPPED = 'capped:';
 // The kept title only answers whether it changed. It is an HMAC under a random key made once for the owner's object and kept in
 // its own storage, never logged or exported, so a short, guessable title can't be recovered from it by hashing a dictionary.
 const TITLE_KEY = 'calendar_title_key_v1';
@@ -261,7 +263,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const [from, to] = dayState ? [now - DAY_STATE_BACK_MS, now + DAY_STATE_AHEAD_MS] : [now, now + 2 * DAY_MS];
-  const found = delta ? await readDelta(book, google as DeltaGoogle, delta, { calendarSince, mailSince, from, to }) : null;
+  const found = delta ? await readDelta(book, google as DeltaGoogle, delta, { calendarSince, mailSince, from, to, now }) : null;
   let items: readonly CalendarChange[], mailItems: readonly MailItem[];
   if (found) ({ items, mail: mailItems } = found);
   else {
@@ -299,7 +301,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
 // cursor is new or re-based, or whose delta cannot be read, reads its gap once the older way (since the watermark), and a
 // failed delta leaves its cursor where it was: the overlap that follows is deduped, so nothing is lost or said twice.
 const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSource,
-  window: Readonly<{ calendarSince: number | null; mailSince: number | null; from: number; to: number }>) => {
+  window: Readonly<{ calendarSince: number | null; mailSince: number | null; from: number; to: number; now: number }>) => {
   const cursors: CursorMove[] = [], codes: DeltaCode[] = [];
   const events = new Map<string, CalendarDeltaEvent>();
   // Google lists changes in no time window: only events in the read window are news, and an event the owner was shown that
@@ -320,12 +322,17 @@ const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSour
   };
   let read = 0, firstFailure: unknown;
   for (const calendarId of delta.calendars) {
-    const key = `cal:${calendarId}`, token = book.cursor(key);
+    const key = `cal:${calendarId}`, stored = book.cursor(key);
+    // A baseline past the page cap is tried again a day later, not on every tick; meanwhile the calendar is read the older way.
+    const cappedAt = stored?.startsWith(CAPPED) ? Number(stored.slice(CAPPED.length)) : null;
+    const token = cappedAt === null ? stored : null;
     let gap = true;
     try {
-      const found = await google.calendarDelta!(calendarId, token, window.from);
-      if (found.state === 'capped') codes.push('calendar_capped');
-      else {
+      const found = cappedAt !== null && window.now - cappedAt < DAY_MS ? { state: 'capped' as const, held: true } : await google.calendarDelta!(calendarId, token, window.from);
+      if (found.state === 'capped') {
+        codes.push('calendar_capped');
+        if (!('held' in found)) cursors.push({ key, from: stored, to: `${CAPPED}${window.now}` });
+      } else {
         cursors.push({ key, from: token, to: found.sync_token });
         if (found.state === 'delta') { gap = false; for (const event of found.events) if (!events.has(event.id) && inWindow(event)) events.set(event.id, event); }
         else codes.push(token === null ? 'calendar_baseline' : 'calendar_rebased');
