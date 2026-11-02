@@ -53,6 +53,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // 20261102010000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
   HEALTH_SCORE_PARTS?: string;
   HEALTH_USUAL?: string;
+  // "1" serves one reading's daily series (GET /app/v1/health/signals) to a build that names health revision 9; anything else leaves
+  // the route out. It writes nothing. Apply migration 20261102020000, which adds the signed read behind it, before turning it on.
+  HEALTH_SIGNALS_READ?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.

@@ -20,8 +20,8 @@ export const PROVISIONAL_ALGORITHM = { recovery: 'recovery.v5', form: 'form.v9',
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 // RMSSD is the canonical HRV method and SDNN its labelled fallback. A nightly minimum is the closest resting measure, then a
 // platform's daily estimate, then a spot measurement, and last the low the producer takes from a night's heart-rate hours.
-const HRV_ORDER: readonly HrvMethod[] = ['rmssd', 'sdnn'];
-const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown', 'asleep_hours_low'];
+export const HRV_ORDER: readonly HrvMethod[] = ['rmssd', 'sdnn'];
+export const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown', 'asleep_hours_low'];
 
 export interface RecoveryBasis {
   readonly components: readonly Component[];

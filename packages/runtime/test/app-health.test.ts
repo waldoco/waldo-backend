@@ -541,7 +541,7 @@ describe('app health settings', () => {
 describe('app health route table', () => {
   it('serves exactly the routes the contract declares', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
-      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores', 'GET /app/v1/health/scores/history',
+      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores', 'GET /app/v1/health/scores/history', 'GET /app/v1/health/signals',
       'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
   });
