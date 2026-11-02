@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { healthPartKeysV1, healthPartsV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema } from '../../contracts/src/app/health-ingest';
 import { computeDailyScores } from '../src/health/scores';
-import { PART_ORDER } from '../src/health/scores/parts';
+import { PART_ORDER, groupRows } from '../src/health/scores/parts';
 import { USUAL_SIGNALS } from '../src/health/scores/usual';
 import type { DailyScores, DailyScoresInput, DayRecord, PartRow, UsualRow } from '../src/health/scores/types';
 import { goldenScoreInputs, SYNTHETIC_TARGET, syntheticAddDays, syntheticDay, syntheticInput, syntheticRun, syntheticWobble } from './support/health-golden';
@@ -439,5 +439,27 @@ describe('grouped rows: Resting State and Circadian', () => {
     expect(group.baseline).toMatchObject({ state: 'provisional', days_until_personal: 14 - group.baseline!.own_days });
     expect(groupOf(withParts(goldenScoreInputs().missing_target_sleep!), 'resting_state')).toBeUndefined();
     expect(withParts(goldenScoreInputs().first_day_only!).components?.groups?.map(entry => entry.key)).toEqual(['resting_state']);
+  });
+});
+
+describe('grouped rows: made from hand-built parts', () => {
+  const baseline = (own_days: number, own_share: number) => ({ state: 'provisional' as const, own_days, own_share, days_until_personal: 14 - own_days });
+  const on = (key: string, over: Partial<Extract<PartRow, { state: 'available' }>> = {}): PartRow => ({
+    key, state: 'available', score: 60, share: 0.25, points: 15, direction: 'usual', signals: [key], baseline: baseline(10, 0.8), ...over,
+  }) as PartRow;
+  const off = (key: string, reason: 'no_reading' | 'baseline_immature'): PartRow => ({ key, state: 'unavailable', reason }) as PartRow;
+  const recovery = (hrv: PartRow, resting: PartRow): Parameters<typeof groupRows>[0] => ({ recovery: [on('sleep', { share: 0.5, points: 30 }), hrv, resting] });
+  it('stands on the part with fewer own days, and on the smaller own share of the two', () => {
+    const group = groupRows(recovery(on('hrv', { baseline: baseline(12, 0.9) }), on('resting_heart_rate', { baseline: baseline(6, 0.95) })))[0] as Extract<ReturnType<typeof groupRows>[number], { state: 'available' }>;
+    expect(group.baseline).toMatchObject({ own_days: 6, days_until_personal: 8, own_share: 0.9 });
+  });
+  it('names no_reading when one part has none and the other is still learning, whichever order they come in', () => {
+    expect(groupRows(recovery(off('hrv', 'no_reading'), off('resting_heart_rate', 'baseline_immature')))[0]).toMatchObject({ state: 'unavailable', reason: 'no_reading' });
+    expect(groupRows(recovery(off('hrv', 'baseline_immature'), off('resting_heart_rate', 'no_reading')))[0]).toMatchObject({ state: 'unavailable', reason: 'no_reading' });
+    expect(groupRows(recovery(off('hrv', 'baseline_immature'), on('resting_heart_rate')))[0]).toMatchObject({ state: 'unavailable', reason: 'baseline_immature' });
+  });
+  it('is not made from a list that lacks one of its parts', () => {
+    expect(groupRows({ recovery: [on('sleep'), on('hrv')] })).toEqual([]);
+    expect(groupRows({})).toEqual([]);
   });
 });

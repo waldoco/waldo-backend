@@ -10,7 +10,7 @@
 --   reader ignores keys it does not know, so an older Worker is unaffected. Its 31-day window, row cap and truncated flag are unchanged.
 -- - The day load's fence (20261102030000) keeps its v1 check as waldo.health_day_load_v1_valid, and waldo.health_day_load_valid now
 --   admits that shape, a v1 load with parts that say why the passive part is missing, or a day-load.candidate.v2 load (the
---   observed-peak method, approximate, its own band and direction) with its parts and that day's v1 load beside it. The writer
+--   observed-peak method, approximate, its own band, and no direction, as v1 has none) with its parts and that day's v1 load beside it. The writer
 --   calls it by name, so the writer is not re-created.
 -- Signatures, security definer, search_path and grants are unchanged. Rollback: supabase/rollback/20261102080000_health_passive_load.down.sql.
 alter table waldo.health_samples drop constraint health_samples_signal_check;
@@ -292,7 +292,7 @@ language plpgsql immutable set search_path = '' as $$
 begin
   if jsonb_typeof(p_load) is distinct from 'object' then return false; end if;
   if p_load->'version' = '"day-load.candidate.v2"'::jsonb then
-    -- The core of a v2 load is checked as a v1 load would be (score, band, direction), with its own method and label, and the day's
+    -- The core of a v2 load is checked as a v1 load would be (score, band, no direction), with its own method and label, and the day's
     -- v1 load beside it is a whole v1 load.
     return p_load ? 'parts' and p_load ? 'v1' and p_load->'method' = '"hr_zones_observed_peak"'::jsonb
       and waldo.health_day_load_v1_valid(jsonb_set(p_load - 'parts' - 'v1', '{version}', '"day-load.candidate.v1"'))

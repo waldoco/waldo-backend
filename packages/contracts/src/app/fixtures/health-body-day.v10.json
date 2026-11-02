@@ -2,7 +2,7 @@
   "notes": [
     "Synthetic values only. Send x-waldo-app-contract: health=10 (or later) to GET /app/v1/health/scores to receive day_load, form_curve and stress_curve, each while its own switch is on and for today's row only; a build below revision 10 gets exactly the body it had.",
     "day_load is the day's load as a 0 to 100 score, log-shaped over the day's training load in one method (hr_zones, hr_zones_observed_peak, effort or minutes, never mixed). Today is the load so far. A worn day with no workout scores 0; a day nothing worn saw is unavailable with no_readings, never a low score. There is no passive load and no target: the band is the owner's own usual.",
-    "day_load.band is the owner's usual day score, mean plus and minus one spread over the observed days among the 28 before today, from 14 of them (personal). Below that it is provisional: no band, only own_days and days_until_personal, which the client shows and never subtracts. direction is today's score against the band (above_usual, usual, below_usual), null without a band; it describes a reading, never good or bad. approximate is true exactly for hr_zones_observed_peak.",
+    "day_load.band is the owner's usual day score, mean plus and minus one spread over the observed days among the 28 before today, from 14 of them (personal). Below that it is provisional: no band, only own_days and days_until_personal, which the client shows and never subtracts. Today's score is the load so far, so no direction against the band is served. approximate is true exactly for hr_zones_observed_peak.",
     "form_curve is today's Form as it read at each quarter of an hour since waking, measured points only. version is the row's Form version and the last point's score is the row's Form score.",
     "stress_curve is strain on the body at rest by hour of today: 50 is the owner's usual for that wall-clock hour and 20 points are one spread, so higher is more strain. band is read off the value (70 and up high, 30 and down low). An hour with no value says why (workout, moving, no_reading, baseline_immature) and is never a zero. No hour at all means no curve key."
   ],
@@ -71,8 +71,7 @@
         "high": 65.5,
         "own_days": 24,
         "days_until_personal": 0
-      },
-      "direction": "usual"
+      }
     },
     "form_curve": {
       "version": "form.v9",

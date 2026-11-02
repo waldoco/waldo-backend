@@ -37,10 +37,10 @@ create function pg_temp.write(extra jsonb) returns jsonb language sql as $$
 create function pg_temp.refused(load jsonb) returns boolean language sql as $$ select pg_temp.write(jsonb_build_object('day_load',load))->>'error' = 'invalid_request' $$;
 create function pg_temp.v1(over jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('state','available','version','day-load.candidate.v1','activation','candidate_unaccepted','score',61.4,'method','hr_zones','approximate',false,
-    'window_days',28,'band',jsonb_build_object('state','personal','low',22.1,'centre',43.8,'high',65.5,'own_days',24,'days_until_personal',0),'direction','usual') || over $$;
+    'window_days',28,'band',jsonb_build_object('state','personal','low',22.1,'centre',43.8,'high',65.5,'own_days',24,'days_until_personal',0)) || over $$;
 create function pg_temp.v2(over jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('state','available','version','day-load.candidate.v2','activation','candidate_unaccepted','score',52.1,'method','hr_zones_observed_peak','approximate',true,
-    'window_days',28,'band',jsonb_build_object('state','personal','low',9.6,'centre',18.4,'high',27.2,'own_days',19,'days_until_personal',0),'direction','above_usual',
+    'window_days',28,'band',jsonb_build_object('state','personal','low',9.6,'centre',18.4,'high',27.2,'own_days',19,'days_until_personal',0),
     'parts','{"workouts":{"share":0.2},"passive":{"state":"available","share":0.8,"observed_hours":24}}'::jsonb,'v1',pg_temp.v1()) || over $$;
 create function pg_temp.with_parts(parts text) returns jsonb language sql as $$ select pg_temp.v1(jsonb_build_object('parts',parts::jsonb)) $$;
 
@@ -83,9 +83,9 @@ select is(pg_temp.write(jsonb_build_object('day_load',pg_temp.v2()))->>'written'
 select is(pg_temp.h('scores_read','passive-owner')->'scores'->'day_load',pg_temp.v2(),'and read back as written, v1 included, for the Worker to choose');
 select is(pg_temp.write(jsonb_build_object('day_load',pg_temp.with_parts('{"workouts":{"share":1},"passive":{"state":"unavailable","reason":"sparse"}}')))->>'written','true','a v1 load with parts that say why passive is missing is written');
 select is(pg_temp.write(jsonb_build_object('day_load',pg_temp.v1()))->>'written','true','a plain v1 load is written as before');
-select is(pg_temp.write(jsonb_build_object('day_load',pg_temp.v2('{"score":0,"direction":"below_usual","parts":{"workouts":{"share":0},"passive":{"state":"available","share":0,"observed_hours":12}}}')))->>'written','true','a v2 day with no load has two zero shares');
+select is(pg_temp.write(jsonb_build_object('day_load',pg_temp.v2('{"score":0,"parts":{"workouts":{"share":0},"passive":{"state":"available","share":0,"observed_hours":12}}}')))->>'written','true','a v2 day with no load has two zero shares');
 select ok(pg_temp.refused(pg_temp.v2() - 'v1') and pg_temp.refused(pg_temp.v2() - 'parts') and pg_temp.refused(pg_temp.v2(jsonb_build_object('v1',pg_temp.v1('{"score":101}')))),'a v2 load without its v1, without parts, or with a v1 that is not a v1 load is refused');
-select ok(pg_temp.refused(pg_temp.v2('{"method":"hr_zones","approximate":false}')) and pg_temp.refused(pg_temp.v2('{"approximate":false}')) and pg_temp.refused(pg_temp.v2('{"direction":"usual"}')) and pg_temp.refused(pg_temp.v2('{"score":101}')),'a v2 load on another method, without its label, against its band, or out of range is refused');
+select ok(pg_temp.refused(pg_temp.v2('{"method":"hr_zones","approximate":false}')) and pg_temp.refused(pg_temp.v2('{"approximate":false}')) and pg_temp.refused(pg_temp.v2('{"direction":"above_usual"}')) and pg_temp.refused(pg_temp.v2('{"score":101}')),'a v2 load on another method, without its label, with a direction, or out of range is refused');
 select ok(pg_temp.refused(pg_temp.v2('{"parts":{"workouts":{"share":0.5},"passive":{"state":"available","share":0.4,"observed_hours":24}}}'))
   and pg_temp.refused(pg_temp.v2('{"parts":{"workouts":{"share":0.2},"passive":{"state":"available","share":0.8,"observed_hours":11}}}'))
   and pg_temp.refused(pg_temp.v2('{"parts":{"workouts":{"share":0.2},"passive":{"state":"unavailable","reason":"sparse"}}}'))

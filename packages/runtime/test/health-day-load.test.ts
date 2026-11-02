@@ -75,12 +75,12 @@ describe('the day\'s load', () => {
     const alternating = (count: number) => prior(count).filter((_, i) => i % 2 === 0).map(day => zoned(day));
     it('is provisional below fourteen observed days, with the days still needed and no band', () => {
       const load = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(13)], workouts: [zoned(TODAY)] });
-      expect(load).toMatchObject({ band: { state: 'provisional', own_days: 13, days_until_personal: 1 }, direction: null });
+      expect(load).toMatchObject({ band: { state: 'provisional', own_days: 13, days_until_personal: 1 } });
       expect(dayLoad({ targetDay: TODAY, observedDays: [TODAY], workouts: [] })).toMatchObject({ band: { state: 'provisional', own_days: 0, days_until_personal: 14 } });
     });
     it('is personal at exactly fourteen, one spread either side of the mean of the served scores, floored at 0 and capped at 100', () => {
       const load = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: [zoned(TODAY), ...alternating(14)] });
-      expect(load).toMatchObject({ band: { state: 'personal', low: 0, centre: 39.2, high: 78.4, own_days: 14, days_until_personal: 0 }, direction: 'usual' });
+      expect(load).toMatchObject({ band: { state: 'personal', low: 0, centre: 39.2, high: 78.4, own_days: 14, days_until_personal: 0 } });
     });
     it('counts a rest day as 0 and leaves an unobserved day out, so a gap is not a rest', () => {
       // 20 days observed (the alternating pattern over 28 days has 14 workouts and 14 rest days), 8 unobserved.
@@ -94,14 +94,14 @@ describe('the day\'s load', () => {
       const load = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: [zoned(TODAY, { zoneSeconds: [0, 0, 0, 0, 3600] }), ...alternating(14)] });
       expect(load).toMatchObject({ band: { own_days: 14, centre: 39.2 } });
     });
-    it('says above, within or below usual by the served band, and a flat history gives a band of one point', () => {
-      const rest = prior(14);
-      const flat = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...rest], workouts: [zoned(TODAY)] });
-      expect(flat).toMatchObject({ band: { state: 'personal', low: 0, centre: 0, high: 0 }, direction: 'above_usual', score: 78.4 });
-      expect(dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...rest], workouts: [] })).toMatchObject({ direction: 'usual', score: 0 });
+    it('serves a flat history as a band of one point, and no verdict of the score against any band', () => {
+      const flat = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: [zoned(TODAY)] });
+      expect(flat).toMatchObject({ band: { state: 'personal', low: 0, centre: 0, high: 0 }, score: 78.4 });
+      expect(flat).not.toHaveProperty('direction');
       const heavy = prior(14).map(day => zoned(day, { zoneSeconds: [0, 0, 0, 0, 3600] }));
-      expect(dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: [...heavy, zoned(TODAY)] })).toMatchObject({ direction: 'below_usual' });
-      expect(dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: heavy })).toMatchObject({ direction: 'below_usual', score: 0 });
+      const morning = dayLoad({ targetDay: TODAY, observedDays: [TODAY, ...prior(14)], workouts: heavy });
+      expect(morning).toMatchObject({ score: 0, band: { state: 'personal' } });
+      expect(morning).not.toHaveProperty('direction');
     });
   });
 });

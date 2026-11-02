@@ -99,7 +99,6 @@
         "own_days": 19,
         "days_until_personal": 0
       },
-      "direction": "above_usual",
       "parts": {
         "workouts": {
           "share": 0
@@ -237,7 +236,6 @@
       "own_days": 24,
       "days_until_personal": 0
     },
-    "direction": "usual",
     "parts": {
       "workouts": {
         "share": 1

@@ -130,7 +130,7 @@ type Parts = Readonly<{ workouts: Readonly<{ share: number }>; passive: Readonly
 export type DayLoadV2 =
   | Readonly<{
     state: 'available'; version: typeof DAY_LOAD_V2_VERSION; activation: 'candidate_unaccepted'; score: number; method: 'hr_zones_observed_peak'; approximate: true;
-    window_days: typeof DAY_LOAD_WINDOW_DAYS; band: DayLoadBand; direction: 'above_usual' | 'usual' | 'below_usual' | null; parts: Parts; v1: DayLoad;
+    window_days: typeof DAY_LOAD_WINDOW_DAYS; band: DayLoadBand; parts: Parts; v1: DayLoad;
   }>
   | (Extract<DayLoad, { state: 'available' }> & Readonly<{ parts: Parts }>)
   | Extract<DayLoad, { state: 'unavailable' }>;
@@ -149,11 +149,10 @@ export const dayLoadV2 = (v1: DayLoad, input: PassiveInput): DayLoadV2 => {
   const before = Array.from({ length: DAY_LOAD_WINDOW_DAYS }, (_, i) => dayLoads(shiftDay(input.targetDay, -(i + 1)), input, basis.bounds))
     .filter((loads): loads is Loads => typeof loads !== 'string').map(loads => dayScoreV2(loads.workouts + loads.passive));
   const band = bandOf(before);
-  const direction = band.state === 'provisional' ? null : score > band.high ? 'above_usual' : score < band.low ? 'below_usual' : 'usual';
   const passiveShare = load > 0 ? round3(today.passive / load) : 0;
   return {
     state: 'available', version: DAY_LOAD_V2_VERSION, activation: 'candidate_unaccepted', score, method: 'hr_zones_observed_peak', approximate: true,
-    window_days: DAY_LOAD_WINDOW_DAYS, band, direction,
+    window_days: DAY_LOAD_WINDOW_DAYS, band,
     parts: { workouts: { share: load > 0 ? round3(1 - passiveShare) : 0 }, passive: { state: 'available', share: passiveShare, observed_hours: today.observedHours } },
     v1,
   };

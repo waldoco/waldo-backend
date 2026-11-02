@@ -19,13 +19,14 @@ export type DayLoadBand =
 export type DayLoad =
   | Readonly<{
     state: 'available'; version: typeof DAY_LOAD_VERSION; activation: 'candidate_unaccepted'; score: number; method: LoadMethod; approximate: boolean;
-    window_days: typeof DAY_LOAD_WINDOW_DAYS; band: DayLoadBand; direction: 'above_usual' | 'usual' | 'below_usual' | null;
+    window_days: typeof DAY_LOAD_WINDOW_DAYS; band: DayLoadBand;
   }>
   | Readonly<{ state: 'unavailable'; reason: 'no_readings' }>;
 
 // observedDays are the days a body-worn sensor reported on; a day with a workout is observed whatever the caller says. An
 // observed day with no workout is a rest day and scores 0. A day nothing worn saw is left out, never scored as rest, and
-// when the target day itself is unobserved there is no load for it. The target day may still be running: its load is the load so far.
+// when the target day itself is unobserved there is no load for it. The target day may still be running: its load is the load so far,
+// so it is served beside the band and not judged against it.
 export const dayLoad = (input: Readonly<{ targetDay: string; observedDays: readonly string[]; workouts: readonly WorkoutLoad[] }>): DayLoad => {
   const span = [input.targetDay, ...Array.from({ length: DAY_LOAD_WINDOW_DAYS }, (_, i) => shiftDay(input.targetDay, -(i + 1)))];
   const inSpan = new Set(span);
@@ -43,9 +44,8 @@ export const dayLoad = (input: Readonly<{ targetDay: string; observedDays: reado
       const centre = mean(before), spread = Math.sqrt(mean(before.map(value => (value - centre) ** 2)));
       return { state: 'personal', low: round1(Math.max(0, centre - spread)), centre: round1(centre), high: round1(Math.min(100, centre + spread)), own_days: before.length, days_until_personal: 0 };
     })();
-  const direction = band.state === 'provisional' ? null : score > band.high ? 'above_usual' : score < band.low ? 'below_usual' : 'usual';
   return {
     state: 'available', version: DAY_LOAD_VERSION, activation: 'candidate_unaccepted', score, method, approximate: method === 'hr_zones_observed_peak',
-    window_days: DAY_LOAD_WINDOW_DAYS, band, direction,
+    window_days: DAY_LOAD_WINDOW_DAYS, band,
   };
 };

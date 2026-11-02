@@ -155,16 +155,17 @@ describe('the v2 day', () => {
   it('is compared only with v2 days: a past day too thin for passive is no day of the band', () => {
     // 28 past desk days at 9.6, of which 9 have only 11 hours: 19 own days, all 9.6, so the band is 9.6 to 9.6.
     const load = dayLoadV2(v1Of(), inputOf(walking, day => (day >= before(9) ? { only: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] } : {})));
-    expect(load).toMatchObject({ band: { state: 'personal', low: 9.6, centre: 9.6, high: 9.6, own_days: 19 }, direction: 'above_usual' });
+    expect(load).toMatchObject({ band: { state: 'personal', low: 9.6, centre: 9.6, high: 9.6, own_days: 19 } });
+    expect(load).not.toHaveProperty('direction');
   });
-  it('shows a provisional band below fourteen v2 days, with no direction', () => {
+  it('shows a provisional band below fourteen v2 days', () => {
     const load = dayLoadV2(v1Of(), inputOf(walking, day => (day >= before(15) ? { only: [7] } : {})));
-    expect(load).toMatchObject({ band: { state: 'provisional', own_days: 13, days_until_personal: 1 }, direction: null });
+    expect(load).toMatchObject({ band: { state: 'provisional', own_days: 13, days_until_personal: 1 } });
   });
 });
 
 describe('a day v2 cannot score', () => {
-  it('is v1 exactly, with its own v1 band and direction, and says why passive is missing', () => {
+  it('is v1 exactly, with its own v1 band, and says why passive is missing', () => {
     const v1 = v1Of([{ day: TODAY, minutes: 60, zoneSeconds: [0, 1800, 1800, 0, 0], effort: null }]);
     const thin = dayLoadV2(v1, inputOf({ only: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] }));
     expect(thin).toEqual({ ...v1, parts: { workouts: { share: 1 }, passive: { state: 'unavailable', reason: 'sparse' } } });

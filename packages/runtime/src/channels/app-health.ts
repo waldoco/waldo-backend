@@ -198,7 +198,8 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
     ...(Object.keys(partsOfShown).length ? { components: partsOfShown } : {}),
     ...(revision >= HEALTH_PARTS_REVISION_V1 && extras.usual === true ? readExtra(stored, 'usual') : {}),
     ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.dayLoad === true ? readExtra(dayLoadAt(stored, revision >= HEALTH_PASSIVE_LOAD_REVISION_V1 && extras.passiveLoad === true), 'day_load') : {}),
-    ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.formCurve === true ? readExtra(stored, 'form_curve') : {}),
+    // The curve's last point is the Form score, so it is shown only while the view shows that score.
+    ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.formCurve === true && (views?.form as { state?: string } | undefined)?.state === 'available' ? readExtra(stored, 'form_curve') : {}),
     ...(revision >= HEALTH_BODY_DAY_REVISION_V1 && extras.stressCurve === true ? readExtra(stored, 'stress_curve') : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);

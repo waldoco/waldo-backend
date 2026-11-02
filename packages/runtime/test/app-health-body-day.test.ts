@@ -119,6 +119,18 @@ describe('scores at health revision 10', () => {
     for (const key of NEW_KEYS) expect(error).toHaveBeenCalledWith(`app health scores ${key} shape`);
     expect(error.mock.calls.map(args => JSON.stringify(args)).join('\n')).not.toMatch(/\d/);
   });
+  it('never gives back a Form score the view withholds as the last point of the curve', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const damaged = { ...pillars.form, baseline: { state: 'provisional', personal_days: 5 } };
+    answers = { health_scores_read: { scores: row({ form: damaged, day_load: served.day_load, form_curve: served.form_curve, stress_curve: served.stress_curve }) } };
+    const body = JSON.parse((await text(SCORES, contracts('health=10'), ON))[1]);
+    expect(body.form).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    expect(body.form_curve).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('"kind":"measured"');
+    expect(body.day_load).toEqual(served.day_load);
+    expect(body.stress_curve).toEqual(served.stress_curve);
+    expect(body.recovery.score).toBe(71);
+  });
   it('never carries any of the three in the score history, at any revision, with the switches on', async () => {
     const day = { day: served.day, recovery: pillars.recovery, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } };
     const answer = { history: { from: '2026-10-27', to: served.day, days: [day] } };

@@ -583,23 +583,21 @@ export const healthDayLoadMethodV1Schema = z.enum(['hr_zones', 'hr_zones_observe
 const loadScore = z.number().finite().min(0).max(100);
 // The owner's usual day load: one spread either side of the mean of the day scores they have had, over the observed days among
 // the twenty-eight before today (a rest day scores 0, an unobserved day is no day), from fourteen such days. Below fourteen
-// there is no band, only how many days are missing. It is in the score's own scale, so no client transforms it.
+// there is no band, only how many days are missing. It is in the score's own scale, so no client transforms it. Today's score is
+// the load so far, so no verdict of it against the band is served.
 export const healthDayLoadBandV1Schema = z.union([
   z.strictObject({ state: z.literal('personal'), low: loadScore, centre: loadScore, high: loadScore, own_days: z.int().min(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1).max(HEALTH_DAY_LOAD_WINDOW_DAYS_V1), days_until_personal: z.literal(0) })
     .refine(band => band.low <= band.centre && band.centre <= band.high, { error: 'the centre lies inside the band', path: ['centre'] }),
   z.strictObject({ state: z.literal('provisional'), own_days: z.int().min(0).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - 1), days_until_personal: z.int().min(1).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1) })
     .refine(band => band.days_until_personal === HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - band.own_days, { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] }),
 ]);
-// Which way today's score stands against the owner's usual band: a description of a reading, never good or bad. null without a band.
 const dayLoadCommon = {
   state: z.literal('available'), activation: z.literal('candidate_unaccepted'), score: loadScore,
   // True when the zones were set from the highest heart rate seen, not a measured maximum.
   approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
-  band: healthDayLoadBandV1Schema, direction: healthPartDirectionV1Schema.nullable(),
+  band: healthDayLoadBandV1Schema,
 };
-type DayLoadShape = { score: number; method: string; approximate: boolean; band: z.infer<typeof healthDayLoadBandV1Schema>; direction: string | null };
-const labelledApproximate = (load: DayLoadShape) => load.approximate === (load.method === 'hr_zones_observed_peak');
-const directionAgainstBand = (load: DayLoadShape) => load.direction === (load.band.state === 'provisional' ? null : load.score > load.band.high ? 'above_usual' : load.score < load.band.low ? 'below_usual' : 'usual');
+const labelledApproximate = (load: { method: string; approximate: boolean }) => load.approximate === (load.method === 'hr_zones_observed_peak');
 
 // Health revision 12: the day's load counting every observed minute (day-load.candidate.v2), not only workouts. Its parts are
 // shares of the day's load, unit-free because the score is log-shaped. A day the passive part cannot be read for is v1, with the
@@ -614,10 +612,8 @@ const healthDayLoadV2PartsSchema = dayLoadPartsOf(z.strictObject({ state: z.lite
   .refine(parts => (parts.workouts.share === 0 && parts.passive.share === 0) || Math.abs(parts.workouts.share + parts.passive.share - 1) <= 0.001, { error: 'the parts\' shares add up to the load', path: ['workouts'] });
 export const healthDayLoadV1Schema = z.union([
   z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), method: healthDayLoadMethodV1Schema, parts: healthDayLoadV1PartsSchema.optional() })
-    .refine(labelledApproximate, { error: 'approximate is the observed-peak method', path: ['approximate'] })
-    .refine(directionAgainstBand, { error: 'the direction is the score against the band', path: ['direction'] }),
-  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_V2_VERSION_V1), method: z.literal('hr_zones_observed_peak'), approximate: z.literal(true), parts: healthDayLoadV2PartsSchema })
-    .refine(directionAgainstBand, { error: 'the direction is the score against the band', path: ['direction'] }),
+    .refine(labelledApproximate, { error: 'approximate is the observed-peak method', path: ['approximate'] }),
+  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_V2_VERSION_V1), method: z.literal('hr_zones_observed_peak'), approximate: z.literal(true), parts: healthDayLoadV2PartsSchema }),
   z.strictObject({ state: z.literal('unavailable'), reason: z.literal('no_readings') }),
 ]);
 
