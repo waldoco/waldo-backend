@@ -162,9 +162,11 @@ export const updatePushLine = (changes: readonly Change[], event: string | undef
 export const updateSweepTools = (sourceFollowups: boolean): readonly ToolName[] =>
   sourceFollowups ? ['get_context', 'read_memory', 'search_episodes', 'open_loop'] : OUTSIDE_TEXT_JOB_TOOLS;
 // The triage turn reads what it needs, and may raise a card only while the owner can be interrupted: the card is the
-// interrupt, so it can never outrun the budget.
+// interrupt, so it can never outrun the budget. A send and a calendar change raise their own card; propose_action raises one
+// for any other tool.
+const CARD_TOOLS: readonly ToolName[] = ['send_email', 'propose_calendar_change', 'propose_action'];
 export const triageTools = (sourceFollowups: boolean, canAct: boolean): readonly ToolName[] =>
-  [...new Set<ToolName>([...OUTSIDE_TEXT_READS, ...(sourceFollowups ? updateSweepTools(true) : []), ...(canAct ? ['propose_action' as const] : [])])];
+  [...new Set<ToolName>([...OUTSIDE_TEXT_READS, ...(sourceFollowups ? updateSweepTools(true) : []), ...(canAct ? CARD_TOOLS : [])])];
 
 export const updateSweepApplyText = (localNow: string, changes: readonly Change[], context: Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups: boolean }>,
   result: Parameters<typeof machineResultText>[0], withheld: readonly string[] = []): string =>

@@ -59,7 +59,7 @@ export const mailFollowupPrompt = (localNow: string, loop: import('../channels/l
 
 // The triage turn (GOOGLE_REALTIME_TRIAGE): the same update check, choosing one of four outcomes for the batch. Code holds the
 // owner's quiet hours and daily interrupt budget; `hold` says why nothing can interrupt them now, and then the turn has no
-// propose_action.
+// tool that raises a card.
 export type TriageHold = 'quiet' | 'budget' | 'cooldown';
 const HOLDS: Readonly<Record<TriageHold, string>> = {
   quiet: 'It is the owner\'s quiet hours: nothing can interrupt them now. A revision still lands silently.',
@@ -77,7 +77,7 @@ export const triagePrompt = (localNow: string, context: Readonly<{ changes: stri
   `Decide what this batch means for the owner, against their goals, the people they work with, today's plan and how their day and body are going. ${VOLUME[context.volume]} A calendar change may carry what the event was before it ("before"); "invite" marks an invitation they have not answered, and "series" a change to a whole recurring series. A read, archived or starred mail is something the owner already did.`,
   ...(context.sourceFollowups === false ? [] : [SOURCE_FOLLOWUPS]),
   'Choose one:',
-  '- act: something here needs the owner to decide or approve an action now (reply, accept or move a meeting, add a task). Offer it with propose_action, which raises a card they approve; nothing happens without it. The card is the notification, so write no message with it.',
+  '- act: something here needs the owner to decide or approve an action now (reply, accept or move a meeting, add a task). Offer it on a card they approve: send_email for a reply, propose_calendar_change for a meeting, propose_action for anything else. Nothing happens without their approval. The card is the notification, so write no message with it.',
   '- tell: they should know now. Say a short update in their chat, or revise a day card that already reached them today when the change makes it wrong (write the whole card as it should now read), and push a phone notification only when it is worth interrupting them for.',
   '- brief: worth knowing, not now. The next day card carries it.',
   '- silent: noise, newsletters, changes Waldo made itself (check the ledger), and what the owner already handled. Nothing carries it.',
