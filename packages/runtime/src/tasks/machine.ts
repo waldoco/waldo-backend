@@ -86,6 +86,9 @@ export type MachineHandler = Readonly<{
   noNews?(row: JobRow, settle: () => void): void | Promise<void>;
   // The apply runs on an empty result too: the job's judgment does not rest on the worker's findings alone.
   decidesOnEmpty?: boolean;
+  // The job parked before its worker reported: a job whose worker's own writes are its news (the look-up's findings) still
+  // tells the owner what it got done. It calls `settle` as `apply` does. Without it a parked job settles silently.
+  parked?(row: JobRow, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>): Promise<MachineApplied>;
   // The job left the lane, however it ended (applied, parked, dropped): for work waiting on it, never for a message.
   ended?(row: JobRow): void;
 }>;
@@ -159,18 +162,18 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
     catch (error) { if (error instanceof ClosedRunError) return; throw error; }
     done(name, { ...fields, detail: 'noted' });
   };
-  if (row.park_reason) return stopped('machine_parked', { ok: false, code: row.park_reason }, PARK_WORDS[row.park_reason]);
+  const handler = deps.appliers[job];
+  if (row.park_reason && !handler?.parked) return stopped('machine_parked', { ok: false, code: row.park_reason }, PARK_WORDS[row.park_reason]);
   // A pass lost inside the apply turn left its intent: the turn may have raised a card or opened a loop, so it is not run
   // again. The owner never asked for this work, so nothing names it; the trigger's next tick asks again.
   if (applyInterrupted(row)) return quietly('machine_apply_uncertain', { ok: false });
-  const handler = deps.appliers[job];
-  const result = jobResult(row)!;
-  if ((result.status === 'failed' || result.status === 'blocked') && !result.findings.length && !result.proposals.length) {
+  const result = row.park_reason ? null : jobResult(row)!;
+  if (result && !handler?.parked && (result.status === 'failed' || result.status === 'blocked') && !result.findings.length && !result.proposals.length) {
     return stopped('machine_stopped', { ok: false, code: result.status }, result.status === 'blocked' ? 'something it needed was not available' : 'it ran into an error');
   }
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
   // nothing about an item it was not shown, so a job with one goes to the brain's apply, which can see it.
-  if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {
+  if (result && !result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {
     if (!handler?.noNews) return quietly('machine_no_news');
     try { await handler.noNews(row, settle); } catch (error) { return unavailable(error); }
     return done('machine_no_news');
@@ -180,10 +183,12 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
   let outcome: MachineApplied;
   if (!book.beginApply(row.id)) return;
   applied = true;
+  const io = { trace: `task:${row.id}:apply`, current, settle };
   try {
-    outcome = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
+    outcome = await (result ? handler.apply(row, result, io) : handler.parked!(row, io));
   } catch (error) { return unavailable(error); }
-  if (outcome === 'delivered') done('machine_applied');
-  else if (outcome === 'skipped') done('machine_skipped');
+  const parked = row.park_reason ? { code: row.park_reason } : {};
+  if (outcome === 'delivered') done('machine_applied', parked);
+  else if (outcome === 'skipped') done('machine_skipped', parked);
   else done('machine_held', { code: outcome.held });
 };

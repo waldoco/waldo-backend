@@ -45,9 +45,9 @@ const MAX_POINTERS = 10;
 // ADR-0081: nothing numeric about the owner's body is stored in DO memory, and a node is a phrase, not a measurement.
 const DIGIT = /\p{Nd}/u;
 
-// days: the days of readings a health stage read; early: a web stage settled while the look-up was still running; reread: a
+// days: the days of readings a health stage read; grant: the look-up grant a web stage was taken up again for; reread: a
 // calendar or mail stage taken up again for an account connected after it settled.
-type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; early?: true; reread?: true }>;
+type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; grant?: number; reread?: true }>;
 type Row = Readonly<{ started_at: number; finished_at: number | null; stages_json: string; nodes: number }>;
 
 // The one welcome build per owner. The row holds stage states, times and a count, never text.
@@ -118,13 +118,14 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       write({ ...current, health: { ...health, state: 'pending', at, retried: true } }, null);
       return true;
     },
-    // The look-up ended after the web stage settled without it: the stage goes back to pending, once.
-    lateWeb(): boolean {
+    // A look-up ended: a web stage that settled without what it found goes back to pending, once for each look-up grant, so a
+    // setup rerun's new yes is read too, however long after the build began.
+    lateWeb(grant: number): boolean {
       const run = row();
       if (!run) return false;
       const current = stages(run), web = current.web;
-      if (web.state !== 'empty' || !web.early || web.retried) return false;
-      write({ ...current, web: { ...web, state: 'pending', at: now(), retried: true } }, null);
+      if (!settled(web.state) || web.grant === grant) return false;
+      write({ ...current, web: { ...web, state: 'pending', at: now(), grant } }, null);
       return true;
     },
     // A Google account connected after the calendar and mail stages settled: each read goes back to pending, once, within a
@@ -150,7 +151,7 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       const run = row();
       if (run) write({ ...stages(run), [stage]: { ...stages(run)[stage], state: 'reading', at: now() } }, null);
     },
-    settle(stage: WelcomeStage, state: Settled, added: number, noted: Readonly<{ days?: number; early?: true }> = {}): void {
+    settle(stage: WelcomeStage, state: Settled, added: number, noted: Readonly<{ days?: number }> = {}): void {
       const run = row();
       if (!run) return;
       const at = now(), next = { ...stages(run), [stage]: { ...stages(run)[stage], state, at, ...noted } };
@@ -349,7 +350,7 @@ const runInOrder = async (deps: WelcomeDeps, v2: NonNullable<WelcomeDeps['v2']>,
   if (stages.includes('web') && v2.lookupOpen()) {
     stages = stages.filter((stage) => stage !== 'web');
     const started = deps.build.startedAt();
-    if (started !== null && deps.now() - started >= WELCOME_WEB_WAIT_MS) deps.transaction(() => deps.build.settle('web', 'empty', 0, { early: true }));
+    if (started !== null && deps.now() - started >= WELCOME_WEB_WAIT_MS) deps.transaction(() => deps.build.settle('web', 'empty', 0));
   }
   if (!stages.length) return;
   deps.transaction(() => { for (const stage of stages) deps.build.begin(stage); });
