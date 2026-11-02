@@ -77,7 +77,7 @@ const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDe
   mcp_call: desk => desk.proposeMcpCall({ server: 'crm', tool: 'update_deal', args: { id: 1 } }),
   tainted_action: async desk => desk.proposeTaintedAction(await tainted()),
 };
-const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
+const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
 
 describe('a send proposed in a chat surface is handed to the app', () => {
