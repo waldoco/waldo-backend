@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS, withdrawRunCards } from '../src/channels/approvals';
+import { approvalDesk, CARD_SHOWN_IN_FULL, PROPOSAL_TTL_MS, UNDO_WINDOW_MS, withdrawRunCards } from '../src/channels/approvals';
 import { APP_REVIEW_MAX_CHARS } from '../src/channels/surfaces/app';
 import { GoogleError, type GoogleClient } from '../src/connectors/google';
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
@@ -619,7 +619,7 @@ describe('approval desk - email_send rail', () => {
       await desk.proposeSendEmail({
         to: ['a@x.test'], cc: ['c@x.test'], bcc: ['b@x.test'], subject: 'Quarterly', body: 'Line one\nLine two', message_id: '<m2@waldo-send>', raw: 'raw', digest: 'd',
       });
-      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nCc: c@x.test\nBcc: b@x.test\nSubject: Quarterly\n\nLine one\nLine two');
+      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nCc: c@x.test\nBcc: b@x.test\nSubject: Quarterly\n\nLine one\nLine two\n\nNothing has been sent.');
     });
   });
 
@@ -649,7 +649,7 @@ describe('approval desk - email_send rail', () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-1'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sent, sentRaw, tick } = await setup(state, {});
-      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text');
+      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text\n\nNothing has been sent.');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`e:${id}`);
@@ -669,7 +669,7 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
-  it('adds a deterministic receipt and only a view-details link, never a second send button', async () => {
+  it('is one message: the card says nothing was sent and carries the view-details link, never a second send button', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-receipt'));
     await runInDurableObject(stub, async (_i, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
@@ -680,14 +680,13 @@ describe('approval desk - email_send rail', () => {
       });
       const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
       const id = await desk.proposeSendEmail(payload);
-      expect(sent).toHaveLength(2);
-      expect(sent[1]!.body.text).toContain('use the Send it instruction on that card');
-      expect(sent[1]!.body.text).not.toContain('Tap Send it');
-      expect(sent[1]!.body.text).toContain('https://waldo.example/console/waiting');
-      expect(sent[1]!.body.text).toContain('Nothing has been sent');
-      expect(sent[1]!.body.reply_markup).toBeUndefined();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.body.text).toContain('Subject: Hello\n\nBody text');
+      expect(sent[0]!.body.text).toContain('Nothing has been sent');
+      expect(sent[0]!.body.text).toContain('https://waldo.example/console/waiting');
+      expect(JSON.stringify(sent[0]!.body.reply_markup).match(/a:p41/g)).toHaveLength(1);
       expect(await desk.proposeSendEmail(payload)).toBe(id);
-      expect(sent).toHaveLength(2);
+      expect(sent).toHaveLength(1);
       await expect(desk.proposeSendEmail({ ...payload, subject: 'Changed' })).rejects.toThrow('identifier_reused');
     });
   });
@@ -705,12 +704,12 @@ describe('approval desk - email_send rail', () => {
       const id = await desk.proposeSendEmail(first);
       const retry = { ...first, message_id: '<fresh@waldo-send>', raw: 'fresh raw', digest: 'fresh digest' };
       expect(await desk.proposeSendEmail(retry)).toBe(id);
-      expect(cards).toBe(2); // one card, one receipt
+      expect(cards).toBe(1);
       expect(desk.pending(1_000_000).find((item) => item.id === id)?.state).toBe('open');
       await expect(desk.proposeSendEmail({ ...retry, subject: 'Changed' })).rejects.toThrow('identifier_reused');
       const later = await desk.proposeSendEmail({ ...retry, dedupe_key: 'turn-2' });
       expect(later).not.toBe(id);
-      expect(cards).toBe(4);
+      expect(cards).toBe(2);
     });
   });
 
@@ -735,12 +734,12 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
-  it('does not re-propose on secondary receipt failure after the review card arrives', async () => {
+  it('sends no second message after the card, so a repeated proposal reuses the open card', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-receipt-failure'));
     await runInDurableObject(stub, async (_i, state) => {
       let calls = 0;
       const desk = approvalDesk(state.storage.sql, {
-        call: async () => { if (++calls === 2) throw new Error('receipt timeout'); return {}; },
+        call: async () => { if (++calls === 2) throw new Error('a second message was sent'); return {}; },
         owner: 42, google: async () => null, newId: () => '43', now: () => 1_000_000,
         timezone: 'Asia/Kolkata', log: () => undefined,
       });
@@ -748,7 +747,7 @@ describe('approval desk - email_send rail', () => {
       const id = await desk.proposeSendEmail(payload);
       expect(desk.pending(1_000_000).find((candidate) => candidate.id === id)?.state).toBe('open');
       expect(await desk.proposeSendEmail(payload)).toBe(id);
-      expect(calls).toBe(2);
+      expect(calls).toBe(1);
     });
   });
 
@@ -931,7 +930,7 @@ describe('approval presentations', () => {
       const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
       const sent = await email.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<pres@waldo-send>' }));
       expect(shown(sql, sent)).toEqual([{ surface: 'telegram', message_ref: '42:501', approvable: 1, retired_at: null }]);
-      expect(email.placement(sent)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false });
+      expect(email.placement(sent)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false, hereInFull: true });
 
       const fromApp = approvalDesk(sql, { ...app, currentRunRef: () => 'app-message-0001' });
       const proposed = await fromApp.propose({ action: 'create', title: 'Walk', start: iso('2026-10-10T15:00:00Z'), end: iso('2026-10-10T15:30:00Z'), reason: 'afternoon slot' });
@@ -963,6 +962,9 @@ describe('approval presentations', () => {
       const card = sent[0]!;
       expect(String(card.body.text)).toContain("can't be approved here");
       expect(String(card.body.text)).toContain(`waldo://approvals/${id}`);
+      expect(String(card.body.text)).toContain('Nothing has been sent.');
+      expect(sent.filter(call => call.method === 'sendMessage')).toHaveLength(1);
+      expect(desk.placement(id).hereInFull).toBeUndefined();
       expect(JSON.stringify(card.body.reply_markup)).not.toContain(`a:${id}`);
       expect(status(sql, id)).toBe('open');
       expect(shown(sql, id).map(row => [row.surface, row.approvable])).toEqual([['app', 1], ['telegram', 0]]);
@@ -981,6 +983,7 @@ describe('approval presentations', () => {
       const huge = `To: a@x.test\r\nSubject: Huge\r\n\r\n${'y'.repeat(33_000)}`;
       const tooLong = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Huge', body: 'y'.repeat(33_000), message_id: '<huge@waldo-send>' }));
       expect(String(sent[0]!.body.text)).not.toContain('waldo://');
+      expect(String(sent[0]!.body.text)).toContain('Nothing has been sent.');
       expect(status(sql, tooLong)).toBe('review_only');
       const [appView] = await desk.approvals(NOW, { id: tooLong });
       expect(appView).toMatchObject({ state: 'review_only', actions: ['skip', 'defer'] });
@@ -1059,7 +1062,7 @@ describe('app approval projection', () => {
       expect(byId[message]!.exact).toEqual({ recipients: { to: ['whatsapp'], cc: [], bcc: [] }, message: { subject: null, body: 'Running late.' } });
       expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip', 'defer'], review: 'Approve this browser action? Book the table on https://reservations.example/book?party=4&hold=secret-hold#slot (time: 18:30, card: ending 4242)', expires_at: NOW + 30 * 60_000 });
       expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['approve', 'skip', 'defer'], review: 'Run this MCP tool? Run lookup on the crm MCP server\n\nArgs:\n{\n  "q": "secret-ish"\n}' });
-      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, hereInFull: true });
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-0001' });
       const appBrowser = await fromApp.proposeBrowserSubmit(page), appMcp = await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
       const parts = appApprovalParts(sql)('app-run-0001').live;
@@ -1130,7 +1133,7 @@ describe('decisions from any surface', () => {
 
       retired.length = 0;
       const second = await onTelegram.proposeSendEmail(await emailProposal({ to: ['b@x.test'], subject: 'Hi', body: 'Hello', message_id: '<any2@waldo-send>' }));
-      const tapped = telegram.filter(call => call.method === 'sendMessage').at(-2)!;
+      const tapped = telegram.filter(call => call.method === 'sendMessage').at(-1)!;
       await onTelegram.callback({ id: 'tap', from: { id: 42 }, data: `s:${second}`, message: { message_id: telegram.indexOf(tapped) + 1, chat: { id: 42 } } }, 'trace');
       expect(retired).toEqual([]);
       expect((await inApp.decide(second, 'a', 'trace', { surface: 'app' })).toast).toBe('Already handled.');
@@ -1231,7 +1234,7 @@ describe('decisions from any surface', () => {
         call: async (method: string) => method === 'sendMessage' ? (telegramUp ? { message_id: n, chat: { id: 42 } } : undefined) : true });
       const send = sendMessageHandler(desk), mcp = callMcpToolHandler(JSON.stringify([{ name: 'crm', url: 'https://mcp.test/rpc' }]), desk);
       const status = (result: unknown) => (result as { data: { status: string } }).data.status;
-      expect(status(await send.handle({ channel: 'telegram', content: 'Hi', idempotency_key: 'status-1' }, {} as never))).toBe('sent to the owner with Send it / Modify / Not now buttons');
+      expect(status(await send.handle({ channel: 'telegram', content: 'Hi', idempotency_key: 'status-1' }, {} as never))).toBe(`sent to the owner with Send it / Modify / Not now buttons ${CARD_SHOWN_IN_FULL}`);
       telegramUp = false;
       expect(status(await send.handle({ channel: 'telegram', content: 'Hi again', idempotency_key: 'status-2' }, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing was sent.');
       expect(status(await mcp.handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing has run.');
@@ -1301,7 +1304,7 @@ describe('approval desk round two', () => {
         call: async (method: string) => method === 'sendMessage' ? (telegramUp ? { message_id: n, chat: { id: 42 } } : undefined) : true });
       const [task] = googleTaskHandlers(desk);
       const status = (result: unknown) => (result as { data: { status: string } }).data.status;
-      expect(status(await task!.handle(args, {} as never))).toBe('awaiting_owner_approval');
+      expect(status(await task!.handle(args, {} as never))).toBe(`awaiting_owner_approval ${CARD_SHOWN_IN_FULL}`);
       telegramUp = false;
       expect(status(await task!.handle(args, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing has changed.');
 
@@ -1309,7 +1312,7 @@ describe('approval desk round two', () => {
       const host = { taskRef: 'task-one', pageUrl: 'https://fixture.example/form', propose: async () => ({ id: 'prepared-one', url: 'https://fixture.example/form', actionRef: '#submit', scopeDigest: `sha256:${'a'.repeat(64)}`, binding: { value: 'synthetic' } }) };
       const browser = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: payload => inApp.proposeBrowserSubmit(payload), placement: id => inApp.placement(id) });
       const prepared = await browser.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'prepare', command: { operation: 'prepare_submit' } }), { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => {} } as never);
-      expect(prepared).toMatchObject({ ok: true, data: { stopped: 'approval_pending', status: 'awaiting owner approval' } });
+      expect(prepared).toMatchObject({ ok: true, data: { stopped: 'approval_pending', status: `awaiting owner approval ${CARD_SHOWN_IN_FULL}` } });
     });
   });
 
@@ -1363,7 +1366,7 @@ describe('approval desk round four', () => {
       ]);
       const listed = await desk.approvals(NOW);
       expect(listed.map(item => [item.approval_id, item.actions, item.review])).toEqual([[browser, ['approve', 'skip', 'defer'], cards[1]], [mcp, ['approve', 'skip', 'defer'], cards[0]]]);
-      for (const id of [mcp, browser]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+      for (const id of [mcp, browser]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, hereInFull: true });
 
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `mask${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-mask' });
       await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });

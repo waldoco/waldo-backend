@@ -147,10 +147,17 @@ export const calendarInviteDetails = (p: Readonly<{ calendar_id?: string; attend
 // waitsHere: the card for this surface waits for the owner's next message there.
 // handsToApp: this chat surface never approves the kind, so its card hands the approval to the app.
 // numbered: this surface shows no buttons, so the card here is approved by the owner replying 1 or 2.
-export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean; waitsHere?: boolean; handsToApp?: boolean; numbered?: boolean }>;
+// hereInFull: the card here showed the whole review, not only a summary.
+export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean; waitsHere?: boolean; handsToApp?: boolean; numbered?: boolean; hereInFull?: boolean }>;
 const NUMBERED_STATUS = 'sent to the owner as its own message ahead of your reply; it asks them to reply 1 to approve or 2 to skip, and a bare 1 or 2 after your reply answers it. Do not offer numbered choices in your reply.';
+// The card already reached the owner as its own message, so a reply that restates it is the same draft twice.
+export const CARD_SHOWN_IN_FULL = 'The owner already has that card in full, ahead of your reply: what it does, who it reaches, the exact words, and where to approve it. Do not restate any of it. Add only what the card cannot say, such as how you chose a recipient, or nothing.';
 // What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
-export const proposalStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
+export const proposalStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string => {
+  const status = placementStatus(placement, shownHere, nothingDone);
+  return placement?.hereInFull ? `${status} ${CARD_SHOWN_IN_FULL}` : status;
+};
+const placementStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
   !placement || placement.hereApprovable ? placement?.numbered ? NUMBERED_STATUS : shownHere
     : placement.handsToApp && !placement.appApprovable ? `It cannot be approved in chat, and the Waldo app cannot approve it either. ${nothingDone}`
     : placement.handsToApp && placement.here ? `The review is shown here, but it is approved only in the Waldo app; the card carries the link. ${nothingDone}`
@@ -574,13 +581,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     }
     if (surface !== 'app') {
       const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
+      // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
+      const review = entry.kind === 'email_send' ? await deps.reviewUrl?.().catch(() => null) : null;
+      // An app handoff that cannot approve already ends with "Nothing was done."
+      const unsent = entry.kind !== 'email_send' ? '' : [...(handsToApp && inApp?.approvable !== true ? [] : ['Nothing has been sent.']), ...(review ? [`You can also review it at ${review}.`] : [])].join(' ');
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
       const text = handsToApp ? `${fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`}\n\n${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}`
         : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
-        const sent = await say(text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
+        const sent = await say(unsent ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
         if (sent != null) { shown.push({ surface, message_ref: sentRef(sent), approvable }); sentHere = true; }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
@@ -1403,30 +1414,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       bindOrigin(id, originRunRef);
-      let shown: Awaited<ReturnType<typeof present>>;
       try {
-        shown = await present(id);
+        await present(id);
       } catch {
         // A timeout can mean the card arrived. Leave it unapprovable until reconciled;
         // never say a card was delivered or attempt a second blind send.
         throw new EmailProposalError('card_unconfirmed');
-      }
-      const card = shown.find(s => s.surface === surface && s.surface !== 'app');
-      if (!card) return id;
-      const url = await deps.reviewUrl?.().catch(() => null);
-      const detail = url ? ` You can also review it at ${url}.` : '';
-      const appApproves = shown.some(s => s.surface === 'app' && s.approvable), inApp = deps.appLink && appApproves;
-      const receipt = HANDS_TO_APP.has(surface) && approvedInApp(row(id)!) ? `Email ready for review: the card above has the exact recipients, subject and body. ${HANDED_TO_APP} ${appHandoff(id, appApproves)}${appApproves ? ' Nothing has been sent.' : ''}`
-        : card.approvable
-        ? 'Email ready for review. The card above has the exact recipients, subject and body. If it is right, use the Send it instruction on that card. Nothing has been sent.'
-        : inApp ? `The email is too long to approve from its chat card. No Send it approval was offered here and nothing has been sent. Review and approve it in the Waldo app: ${deps.appLink!(id)}`
-          : 'The email is too long to approve from its chat card. No Send it approval was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
-      try {
-        await say(`${receipt}${detail}`);
-      } catch {
-        // The card itself is already the full review. A failed secondary receipt must not
-        // make the model claim the proposal failed or recreate a duplicate card.
-        deps.log({ trace: id, hop: 'email_review_receipt', ms: 0, ok: false, code: 'send_failed' });
       }
       return id;
     },
@@ -1583,7 +1576,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1 && (where !== 'app' || appFull)));
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
       const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
-      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}) };
+      // A card handed to the app shows the review whenever it fits, as present() decides.
+      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewText(entry!).length <= REVIEW_BUDGET);
+      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}) };
     },
     async approvals(now, filter = {}) {
       expireDue();

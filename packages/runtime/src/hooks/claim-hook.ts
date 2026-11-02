@@ -12,6 +12,8 @@ export type LoopEventLike = Readonly<{
   // Only a tool result that itself says its receipt is unavailable is unresolved.
   receiptStatus?: 'unavailable';
   code?: string;
+  // The stage that refused it: invalid_args with this code means the argument check refused it before the handler ran.
+  reason?: string;
   // The effect was done by a child task; the parent receipts it like its own so the reply can claim only receipted effects.
   delegated?: true;
   // When the tool call returned, epoch ms.
