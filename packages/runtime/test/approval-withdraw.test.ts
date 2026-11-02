@@ -18,7 +18,7 @@ const gate = () => { let open!: () => void; const opened = new Promise<void>(res
 // One owner DO with a Telegram desk whose owner also has the app, an effect ledger, and a Gmail and calendar client whose
 // calls can be held open, so a test can land a withdraw while an approval waits inside its effect.
 const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
-  desk: ReturnType<typeof approvalDesk>; sql: SqlStorage; calls: Call[]; retired: string[]; sends: string[]; creates: string[]; clock: { at: number };
+  desk: ReturnType<typeof approvalDesk>; sql: SqlStorage; calls: Call[]; retired: string[]; sends: string[]; creates: string[]; denied: string[]; clock: { at: number };
   holds: { google?: ReturnType<typeof gate>; googleCalled?: ReturnType<typeof gate>; send?: ReturnType<typeof gate>; sendCalled?: ReturnType<typeof gate>; create?: ReturnType<typeof gate>; createCalled?: ReturnType<typeof gate> };
   telegram: { deliver: boolean }; writesFirst: { now: boolean }; app: { has: boolean };
   tool(args: unknown): Promise<Record<string, unknown>>;
@@ -29,7 +29,7 @@ const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
 }>) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
     let n = 0, mid = 0;
-    const calls: Call[] = [], retired: string[] = [], sends: string[] = [], creates: string[] = [];
+    const calls: Call[] = [], retired: string[] = [], sends: string[] = [], creates: string[] = [], denied: string[] = [];
     const clock = { at: Date.UTC(2026, 10, 2, 9, 0) }, telegram = { deliver: true }, writesFirst = { now: true }, app = { has: true };
     const holds: Parameters<typeof run>[0]['holds'] = {};
     const client = {
@@ -48,11 +48,12 @@ const ownerDesk = async <T>(name: string, run: (tools: Readonly<{
       google: async () => { holds.googleCalled?.open(); await holds.google?.opened; return client; },
       appIdentity: () => app.has, writesFirstNow: () => writesFirst.now,
       retire: async ({ surface, message_ref }) => { retired.push(`${surface}:${message_ref}`); },
+      browserDeny: async proposal => { denied.push(proposal.url); },
     });
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const handler = approvalHandlers(desk)[0]!;
     let messageSeq = 0;
-    return run({ desk, sql: state.storage.sql, calls, retired, sends, creates, clock, holds, telegram, writesFirst, app,
+    return run({ desk, sql: state.storage.sql, calls, retired, sends, creates, denied, clock, holds, telegram, writesFirst, app,
       tool: async args => (await handler.handle(handler.schema.parse(args) as never) as { data: Record<string, unknown> }).data,
       list: async (revision = 6) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://owner/app/v1/approvals', { headers: { [APP_CONTRACT_HEADER]: `approvals=${revision}` } }), host)).json()).approvals,
       decideInApp: (id, digest) => appApprovalsRequest(new Request('https://owner/app/v1/approvals/decisions', { method: 'POST', body: JSON.stringify({ approval_id: id, action: 'approve', expected_digest: digest, request_id: `decision-${id}` }) }), host),
@@ -192,7 +193,7 @@ describe('replace', () => {
       const c = await email('Draft', { cc: ['jay@example.com'] });
       const d = await email('Draft', { cc: ['jay@example.com'], body: 'Hi Varun, meet Jay. Final.' }, c);
       expect([status(a), status(b), status(c), status(d)]).toEqual(['open', 'open', 'withdrawn', 'open']);
-      expect(desk.replacement(d)).toEqual({ approval_id: c, replaced: true, state: 'superseded' });
+      expect(desk.replacement(d)).toEqual({ approval_id: c, replaced: true, state: 'superseded', card: 'shown' });
       expect((await list()).find(item => item.approval_id === c)).toMatchObject({ state: 'superseded', withdrawal: { reason: REPLACED_REASON, replaced_by: d } });
       expect(retired.filter(ref => ref.startsWith('telegram:'))).toHaveLength(1);
       expect(String((await tap(c)).find(call => call.method === 'sendMessage')?.body.text)).toContain(REPLACED_REASON);
@@ -208,6 +209,37 @@ describe('replace', () => {
       await expect(email('Draft v2', {}, a)).rejects.toEqual(new ApprovalReplaceError('skipped'));
       await expect(email('Draft v3', {}, 'pnobody1')).rejects.toEqual(new ApprovalReplaceError('not_found'));
       expect(rows()).toBe(before);
+    });
+  });
+
+  it('a revised card no surface can approve leaves the earlier one open', async () => {
+    await ownerDesk('replace-unapprovable', async ({ desk, email, status, app }) => {
+      app.has = false;
+      const a = await email('Draft');
+      const b = await email('Draft', { body: 'x'.repeat(4_000) }, a);
+      expect([status(a), status(b)]).toEqual(['open', 'review_only']);
+      expect(desk.replacement(b)).toEqual({ approval_id: a, replaced: false, state: 'open', card: 'unapprovable' });
+    });
+  });
+
+  it('replacing a browser card releases the browser task it paused, as a withdraw does', async () => {
+    await ownerDesk('replace-browser', async ({ desk, email, status, denied }) => {
+      const page = await desk.proposeBrowserSubmit({ url: 'https://fixture.invalid/book', action: { selector: '#submit', description: 'Book the table' }, binding: { time: '18:30' }, steps: [] });
+      const other = await desk.proposeBrowserSubmit({ url: 'https://fixture.invalid/other', action: { selector: '#submit', description: 'Book' }, binding: {}, steps: [] });
+      await email('Booked?', {}, page);
+      expect(status(page)).toBe('withdrawn');
+      expect(await desk.withdraw(other, 'Not needed.')).toMatchObject({ outcome: 'withdrawn' });
+      expect(denied).toEqual(['https://fixture.invalid/book', 'https://fixture.invalid/other']);
+    });
+  });
+
+  it('an earlier card past its expiry closes as expired, not as replaced', async () => {
+    await ownerDesk('replace-expired', async ({ desk, email, status, clock }) => {
+      const a = await email('Draft');
+      clock.at += PROPOSAL_TTL_MS + 1;
+      await expect(email('Draft', {}, a)).rejects.toEqual(new ApprovalReplaceError('expired'));
+      expect(status(a)).toBe('expired');
+      expect(desk.ledger([])).not.toContain('withdrawn');
     });
   });
 

@@ -15,6 +15,7 @@ const note = (result: ReraiseOutcome): string => {
   if (result.on_this_reply) return 'Its card is on this reply.';
   return result.shown_on.some(surface => surface !== 'app') ? 'A fresh card with its buttons was sent to the owner.' : "It is back in the owner's approvals list; no card is on this reply.";
 };
+const OUTSIDE_TEXT: ReadonlySet<string> = new Set(['browser_submit', 'tainted_action']);
 const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', imessage: 'iMessage' };
 const withdrawNote = (result: WithdrawOutcome): string => {
   if (result.outcome === 'not_found') return 'No card of yours has that id, so nothing changed.';
@@ -32,7 +33,11 @@ export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' 
     autonomy_gated: false,
     mutates_state: true,
     async handle(args: RaiseApprovalArgs) {
-      if (args.operation === 'list') return { ok: true as const, data: { approvals: desk.waiting() }, source_taint: null };
+      // A browser or held-back action card carries words from a page or a message, so a list showing one is outside text.
+      if (args.operation === 'list') {
+        const approvals = desk.waiting();
+        return { ok: true as const, data: { approvals }, source_taint: approvals.some(card => OUTSIDE_TEXT.has(card.kind)) ? 'external' as const : null };
+      }
       if (args.operation === 'withdraw') {
         const result = await desk.withdraw(args.approval_id!, args.reason!);
         return { ok: true as const, data: { approval_id: args.approval_id!, ...result, note: withdrawNote(result) }, source_taint: null };

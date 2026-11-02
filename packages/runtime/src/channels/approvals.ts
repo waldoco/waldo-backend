@@ -192,10 +192,15 @@ const placementStatus = (placement: CardPlacement | undefined, shownHere: string
         : `Only a summary card could be shown, so it cannot be approved yet. ${nothingDone}`;
 // What a proposing tool made with replaces tells the model, in fixed words, so its reply says what happened to the earlier card.
 const STILL_WAITING: readonly AppApprovalStateV1[] = ['open', 'review_only', 'edit_requested', 'unconfirmed'];
-export const replacementStatus = (replacement: Replacement | null): string => !replacement ? ''
-  : replacement.replaced ? ` It replaced ${replacement.approval_id}, which is now closed for the owner as "${REPLACED_REASON}"`
-    : STILL_WAITING.includes(replacement.state) ? ` ${replacement.approval_id} closes when this card reaches the owner; until then it is still theirs to decide.`
-      : ` ${replacement.approval_id} was not replaced: the owner settled it first (it is ${replacement.state}). Tell the owner both exist.`;
+export const replacementStatus = (replacement: Replacement | null): string => {
+  if (!replacement) return '';
+  const { approval_id: earlier, state } = replacement;
+  if (replacement.replaced) return ` It replaced ${earlier}, which is now closed for the owner as "${REPLACED_REASON}"`;
+  if (state === 'superseded') return ` ${earlier} was already closed, so this card replaced nothing.`;
+  if (!STILL_WAITING.includes(state)) return ` ${earlier} was not replaced: the owner settled it first (it is ${state}). Tell the owner both exist.`;
+  return replacement.card === 'waiting' ? ` ${earlier} closes when this card reaches the owner; until then it is still theirs to decide.`
+    : ` ${earlier} stays open: this card could not be shown in full anywhere it can be approved, so the owner can still decide the earlier one. Tell the owner.`;
+};
 // A proposal refused because the card it would replace cannot be closed. Nothing was proposed.
 export const replaceRefusal = (replaces: string, error: ApprovalReplaceError): string =>
   `${error.state === 'not_found' ? `${replaces} is not one of your cards` : `${replaces} is no longer waiting on the owner (it is ${error.state})`}, so nothing was proposed. Check raise_approval list, and propose again without replaces if the owner still wants it.`;
@@ -210,7 +215,8 @@ export type ReraiseOutcome = Readonly<{ outcome: 'raised'; shown_on: readonly st
 // still_shown_on: the chat surfaces whose sent card cannot be changed; a tap or reply on it there answers that it was withdrawn.
 export type WithdrawOutcome = Readonly<{ outcome: 'withdrawn'; still_shown_on: readonly string[] } | { outcome: 'not_found' } | { outcome: 'not_waiting'; state: AppApprovalStateV1 }>;
 // Whether showing a revised card closed the one it replaces, and that one's state now.
-export type Replacement = Readonly<{ approval_id: string; replaced: boolean; state: AppApprovalStateV1 }>;
+// card: whether the new card still waits to go out, or went out where no surface could approve it.
+export type Replacement = Readonly<{ approval_id: string; replaced: boolean; state: AppApprovalStateV1; card: 'waiting' | 'unapprovable' | 'shown' }>;
 // Options a proposal takes beyond its payload: the earlier card it revises.
 export type ProposeOptions = Readonly<{ replaces?: string }>;
 // What Waldo writes to the ledger as done without asking the owner. It can never be a kind the owner decides: readers such as
@@ -609,6 +615,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', deps.now(), id);
     return live;
   };
+  // A closed browser card releases the browser task it paused, as a skip does; then its messaging buttons are cleared.
+  const afterWithdrawn = async (id: string, live: readonly Readonly<{ surface: string; message_ref: string }>[]) => {
+    const entry = row(id)!;
+    if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal).catch(() => deps.log({ trace: id, hop: 'approval_withdraw', ms: 0, ok: false, code: 'browser_deny_failed' }));
+    await clearButtons(id, live);
+  };
   const clearButtons = async (id: string, live: readonly Readonly<{ surface: string; message_ref: string }>[], skip?: ApprovalVia) => {
     for (const p of live) {
       if (p.surface === 'app' || p.surface === 'legacy' || (p.surface === skip?.surface && p.message_ref === skip.messageRef)) continue;
@@ -620,6 +632,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     expireDue(id);
     const entry = row(id);
     if (!entry || !PROPOSAL_KINDS.includes(entry.kind) || !entry.id.startsWith('p')) return 'not_found';
+    // Without the effect ledger a calendar change keeps reading open through its effect, so nothing could tell it is in flight.
+    if (!deps.effects && entry.kind === 'calendar_change') return APP_APPROVAL_STATE[entry.status as DeskStatus] ?? 'not_done';
     if (WITHDRAWABLE.includes(entry.status as DeskStatus) && !applyOnRecord(entry) && !deps.effects?.isActive(`${operationRefOf(entry)}:apply`)) return null;
     return APP_APPROVAL_STATE[entry.status as DeskStatus] ?? 'not_done';
   };
@@ -703,10 +717,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const opened = shown.length ? sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", shown.some(s => s.approvable) ? 'open' : 'review_only', id).rowsWritten : 0;
       if (waits || sentHere) sql.exec('UPDATE ledger SET card_waits_on = ? WHERE id = ?', waits ? surface : null, id);
       if (raise) sql.exec("UPDATE ledger SET deferred_at = NULL WHERE id = ? AND deferred_at IS NOT NULL AND status IN ('open', 'review_only')", id);
-      const earlier = opened && entry.replaces ? row(entry.replaces) : undefined;
-      return earlier && !applyOnRecord(earlier) ? closeWithdrawn(earlier.id, REPLACED_REASON, id) : null;
+      // Only a card the owner can approve somewhere takes the earlier one's place; one too long to approve leaves it open.
+      if (!opened || !entry.replaces || !shown.some(s => s.approvable)) return null;
+      return replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, id) : null;
     });
-    if (replaced) await clearButtons(entry.replaces!, replaced);
+    if (replaced) await afterWithdrawn(entry.replaces!, replaced);
     return shown;
   };
   // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
@@ -1422,16 +1437,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (state !== null) return { outcome: 'not_waiting', state };
       const live = commit(() => closeWithdrawn(id, reason));
       if (!live) return { outcome: 'not_waiting', state: APP_APPROVAL_STATE[row(id)!.status as DeskStatus] ?? 'not_done' };
-      const entry = row(id)!;
-      if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal).catch(() => deps.log({ trace: id, hop: 'approval_withdraw', ms: 0, ok: false, code: 'browser_deny_failed' }));
-      await clearButtons(id, live);
+      await afterWithdrawn(id, live);
       return { outcome: 'withdrawn', still_shown_on: [...new Set(live.map(p => p.surface).filter(where => CARDS_STAY.has(where)))] };
     },
     replacement(id) {
-      const replaces = row(id)?.replaces;
+      const entry = row(id), replaces = entry?.replaces;
       const earlier = replaces ? row(replaces) : undefined;
-      if (!replaces || !earlier) return null;
-      return { approval_id: replaces, replaced: earlier.status === 'withdrawn' && earlier.replaced_by === id, state: APP_APPROVAL_STATE[earlier.status as DeskStatus] ?? 'not_done' };
+      if (!entry || !replaces || !earlier) return null;
+      const shownApprovable = sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND approvable = 1', id).toArray().length > 0;
+      return { approval_id: replaces, replaced: earlier.status === 'withdrawn' && earlier.replaced_by === id, state: APP_APPROVAL_STATE[earlier.status as DeskStatus] ?? 'not_done',
+        card: entry.status === 'card_unconfirmed' ? 'waiting' : shownApprovable ? 'shown' : 'unapprovable' };
     },
     async reraise(id) {
       expireDue(id);
