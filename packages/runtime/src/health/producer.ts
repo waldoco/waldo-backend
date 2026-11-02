@@ -1,6 +1,9 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import { dayLoad } from './scores/day-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
+import { formCurve } from './scores/form-curve';
+import { stressCurve } from './scores/stress-curve';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
@@ -34,6 +37,13 @@ export type ProducerDeps = Readonly<{
   // engine only, and never on a backfilled row; neither changes a score, and each is its own column the model's read never has.
   scoreParts?: boolean;
   usual?: boolean;
+  // Off unless true. On, today's and yesterday's rows carry the day's load as a score (dayLoad), and today's row today's measured
+  // Form curve (formCurve) and hourly stress curve (stressCurve), which the row writer must admit. Each is computed from the
+  // same readings as the scores, changes none of them, and costs the owner only itself if it cannot be computed. Never on a
+  // backfilled row.
+  dayLoad?: boolean;
+  formCurve?: boolean;
+  stressCurve?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
@@ -390,13 +400,18 @@ const sessionsOf = (workouts: readonly Reading[]): Reading[] => workouts.reduce<
   return kept;
 }, []);
 
+// Another source's workouts never mix in, and a session is counted once.
+const workoutsOf = (source: Source): WorkoutLoad[] => sessionsOf(source.readings.filter(r => r.signal === 'workout'))
+  .map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null }));
+const observedDaysOf = (source: Source): string[] => [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))];
+
 // The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
-// Another source's workouts never mix in.
-const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
-  throughDay: yesterday,
-  observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
-  workouts: sessionsOf(source.readings.filter(r => r.signal === 'workout')).map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
-});
+const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({ throughDay: yesterday, observedDays: observedDaysOf(source), workouts: workoutsOf(source) });
+
+// A computation that cannot be done costs the owner that one key, never the row. The tag holds no value.
+const orNothing = (tag: string, make: () => object | null): object => {
+  try { return make() ?? {}; } catch { console.error(`health ${tag} failed`); return {}; }
+};
 
 // What a row carries of the parts and bands, when asked for and when the engine had them: absent otherwise, which clears the column.
 const scoreDetailOf = (scores: DailyScores, ask: Readonly<{ parts: boolean; usual: boolean }>): object => ({
@@ -561,10 +576,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
           continue;
         }
       }
+      const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt };
+      const forToday = targetDay === today;
       const row = {
-        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, forToday),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
         ...scoreDetailOf(scores, ask),
+        ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoad({ targetDay, observedDays: observedDaysOf(chosen), workouts: workoutsOf(chosen) }) })) : {}),
+        ...(forToday && deps.formCurve ? orNothing('form curve', () => { const curve = formCurve(input, scores.form); return curve && { form_curve: curve }; }) : {}),
+        ...(forToday && deps.stressCurve ? orNothing('stress curve', () => { const curve = stressCurve({ targetDay, days, asOf: series.readAt }); return curve && { stress_curve: curve }; }) : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
