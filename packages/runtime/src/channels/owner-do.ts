@@ -187,7 +187,7 @@ import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodie
 import { HEALTH_TRIGGER_RUN, NIGHTLY_RUN, recordedRun, runBook } from './background-runs';
 import { daytimeMemory, MEMORY_DAYTIME_ID } from '../memory/consolidator';
 import { dayHistoryDay, dayHistoryList, startDayHistory, type DayDetail, type DayHistoryDeps, type DaysList } from './day-history';
-import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, revokeGoogleGrant, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, revokeGoogleGrant, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type CalendarListItem, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { CONSENT_TTL_MS, finishConsent, startConsent, takeStart, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { startRedirect } from '../connectors/oauth-browser-binding';
 import { HANDOFF_PARAM, newHandoff } from './connect-confirm';
@@ -253,7 +253,8 @@ import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, wakeBriefSweep } from './calendar-push';
-import { calendarSet } from './calendar-set';
+import { calendarSet, realtimeTriage } from './calendar-set';
+import { calendarChannelsBook } from './calendar-watches';
 import { gmailPushBook } from './gmail-push';
 import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpkeep, WATCH_UPKEEP_ID } from './watch-upkeep';
 import { gmailPush } from '../connectors/google-push';
@@ -2362,7 +2363,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const state = request.headers.get('x-waldo-gcal-state');
     const number = Number(request.headers.get('x-waldo-gcal-number'));
     if (!channel || (state !== 'sync' && state !== 'exists' && state !== 'not_exists') || !Number.isSafeInteger(number)) return new Response('ok');
-    if (calendarPushBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake') return new Response('ok');
+    // A channel per read calendar (GOOGLE_REALTIME_TRIAGE), else the older primary-only channel.
+    if (calendarChannelsBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake' && calendarPushBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake') return new Response('ok');
     ensureSchema(this.ctx.storage);
     const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
     console.log(JSON.stringify({ hop: 'calendar_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
@@ -5094,6 +5096,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       accounts, cancel: () => scheduler.cancelReadable(WATCH_UPKEEP_ID),
       calendar: { book: calendarPushBook(identity), origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
         resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID() },
+      ...(realtimeTriage(this.env) ? { calendars: { book: calendarChannelsBook(identity), legacy: calendarPushBook(identity), set: calendarSet(identity),
+        origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
+        resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
+        listCalendars: async () => {
+          const client = await google.client();
+          if (!client?.calendarListsPage) return null;
+          const items: CalendarListItem[] = [];
+          let token: string | undefined;
+          for (let page = 0; page < 4; page += 1) {
+            const listed = await client.calendarListsPage(250, false, token);
+            items.push(...listed.items);
+            if (!listed.next_page_token) return items;
+            token = listed.next_page_token;
+          }
+          return null;
+        },
+        dropCursor: (calendarId: string) => { updates.dropCursor(`cal:${calendarId}`); } } } : {}),
       gmail: { book: gmailPushBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
@@ -5225,7 +5244,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // a revision reaches the owner, so quiet hours hold it there.
     const dayState = this.env.WALDO_DAY_STATE === '1', revisesCards = REVISES_CARDS[channel] === true;
     // Exact Google deltas and the triage turn build on the day state. Off unless '1'.
-    const realtime = dayState && this.env.GOOGLE_REALTIME_TRIAGE === '1';
+    const realtime = realtimeTriage(this.env);
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'

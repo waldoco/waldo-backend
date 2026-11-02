@@ -30,7 +30,7 @@ const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'syn
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', GMAIL_PUSH_PROJECT: 'waldo-dev' };
 
 const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[], email: '' }, failing: new Set<string>(),
-  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[] }));
+  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[], calendars: [] as unknown[] }));
 // A locally held refresh token resolves to a bearer route without reaching Google.
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -39,6 +39,7 @@ vi.mock('../src/connectors/google', async load => {
     googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
       account, events: async () => [], calendarPage: async () => ({ events: [], next_page_token: null, fetched_count: 0, account, observed_at: new Date().toISOString() }),
       event: async () => null, changedEvents: async () => [], newMail: async () => [],
+      calendarListsPage: async () => ({ items: edge.calendars, next_page_token: null, fetched_count: edge.calendars.length, account, observed_at: new Date().toISOString() }),
     }) };
 });
 vi.mock('../src/connectors/google-push', async load => {
@@ -75,13 +76,14 @@ const answer = (body: Record<string, unknown>): unknown => {
   if (edge.failing.has(String(body.op))) return { error: { status: 503, message: 'backend unavailable' } };
   if (body.op === 'exchange') return { id: edge.exchange.id, email: edge.exchange.email, scopes: edge.exchange.scopes };
   if (body.op === 'gmail_watch') return { data: { historyId: '555', expiration: Date.now() + 7 * DAY } };
-  if (body.op === 'calendar_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
+  if (body.op === 'calendar_watch' || body.op === 'events_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
+  if (body.op === 'call' && body.method === 'calendarListsPage') return { data: { items: edge.calendars, next_page_token: null, fetched_count: edge.calendars.length, account: { connection_id: body.connection, email: null }, observed_at: new Date().toISOString() } };
   if (body.op === 'call') return { data: [] };
   return { error: { status: 404, message: 'unknown operation' } };
 };
 
 beforeEach(() => {
-  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = [];
+  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = []; edge.calendars = [];
   vi.useFakeTimers({ toFake: ['Date'], now: START });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -119,7 +121,7 @@ type World = Readonly<{
   // A verified Gmail push for this owner: 'wake' when it was admitted and pulled the sweep.
   push(connection: string, history: string): Promise<'wake' | 'ignore'>;
 }>;
-type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[]; pushProject?: string }>;
+type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[]; pushProject?: string; realtime?: boolean }>;
 
 const world = async (name: string, setup: Setup, run: (world: World) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -131,7 +133,7 @@ const world = async (name: string, setup: Setup, run: (world: World) => Promise<
     if (setup.accounts) await state.storage.put('google:accounts', setup.accounts);
     state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
     for (const kind of setup.off ?? []) state.storage.sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, 0)', kind);
-    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }), ...(setup.realtime ? { WALDO_DAY_STATE: '1', GOOGLE_REALTIME_TRIAGE: '1' } : {}) }) as unknown as Owner;
     const logs: MockInstance = vi.spyOn(console, 'log');
     const connect = async (id: string, scopes: readonly string[], email = EMAIL) => {
       edge.exchange = { id, scopes: [...scopes], email };
@@ -437,6 +439,38 @@ describe('Gmail and Calendar watch upkeep', () => {
       expect(runtime.reminders.list()).toEqual([]);
       for (let n = 0; n < 2 && w.watches('gmail_watch').length === 0; n++) await w.pass();
       expect(w.watches('gmail_watch'), 'quiet hours and low volume don\'t stop it').toEqual(['conn-1']);
+    });
+  });
+});
+
+describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
+  const listed = (id: string, primary = false) => ({ id, title: id, access_role: primary ? 'owner' : 'reader', primary, selected: true, hidden: false });
+  it('upkeep watches each read calendar on its own channel, and a push on any of them wakes the owner\'s sweep', async () => {
+    edge.calendars = [listed(EMAIL, true), listed('team@group.example.test')];
+    await world('upkeep-realtime', { off: ['event_briefs'], realtime: true }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('calendar_watch'), 'the primary calendar').toEqual(['conn-1']);
+      const team = edge.ops.filter(body => body.op === 'events_watch');
+      expect(team.map(body => body.calendar_id)).toEqual(['team@group.example.test']);
+      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:started=2:failed=0:stopped=0']);
+      for (const { raw } of w.lines('calendar_watch')) expect(raw).not.toMatch(/@|conn-|example/);
+      const push = (channel: string, number: number) => w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': channel, 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': String(number) } }));
+      expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
+      expect(w.lines('calendar_push')).toHaveLength(1);
+      expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
+      expect(w.lines('calendar_push'), 'a redelivery wakes nothing').toHaveLength(1);
+    });
+  });
+
+  it('with the switch off, only the primary calendar is watched, as before', async () => {
+    edge.calendars = [listed(EMAIL, true), listed('team@group.example.test')];
+    await world('upkeep-realtime-off', { off: ['event_briefs'] }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('calendar_watch')).toEqual(['conn-1']);
+      expect(edge.ops.filter(body => body.op === 'events_watch')).toEqual([]);
     });
   });
 });

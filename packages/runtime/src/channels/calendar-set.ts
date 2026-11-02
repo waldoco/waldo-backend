@@ -1,5 +1,9 @@
 import type { CalendarListItem } from '../connectors/google';
 
+// The switch: exact deltas, every calendar watched, and the triage turn. It builds on the day state; off unless both are '1'.
+export const realtimeTriage = (env: Readonly<{ WALDO_DAY_STATE?: string; GOOGLE_REALTIME_TRIAGE?: string }>): boolean =>
+  env.WALDO_DAY_STATE === '1' && env.GOOGLE_REALTIME_TRIAGE === '1';
+
 // The calendars the owner reads, for GOOGLE_REALTIME_TRIAGE: the same set Weight reads (selected and not hidden), less the
 // ones whose events cannot be listed (free/busy only). The primary calendar is kept by its 'primary' alias, so its cursor and
 // channel stay one through a reconnect. Watch upkeep refreshes the set; until it has, only the primary calendar is read.

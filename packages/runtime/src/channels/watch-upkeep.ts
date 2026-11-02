@@ -2,6 +2,7 @@ import { googleHas } from '../connectors/google';
 import { RETRY_AFTER_FAILURE_MS } from '../connectors/google-push';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { ensureCalendarWatch, type CalendarPushBook, type CalendarWatchMiss } from './calendar-push';
+import { ensureCalendarWatches } from './calendar-watches';
 import { ensureGmailWatch, type GmailPushBook, type GmailWatchMiss } from './gmail-push';
 import { localIso } from './reminders';
 
@@ -43,6 +44,8 @@ export type WatchUpkeepDeps = Readonly<{
   accounts(): Promise<readonly Scoped[]>;
   cancel(): Promise<void>;
   calendar: Omit<Parameters<typeof ensureCalendarWatch>[0], 'now'>;
+  // GOOGLE_REALTIME_TRIAGE: every calendar the owner reads gets its own channel, in place of the primary-only one.
+  calendars?: Omit<Parameters<typeof ensureCalendarWatches>[0], 'now'>;
   gmail: Omit<Parameters<typeof ensureGmailWatch>[0], 'now'>;
   log(line: Readonly<{ hop: WatchHop; ok: boolean; code: string; ms: number }>): void;
 }>;
@@ -65,7 +68,14 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
     }
     if (outcome) deps.log({ hop, ...outcome, ms: Date.now() - now });
   };
-  await step('calendar_watch', grants.calendar, deps.calendar.book, async now => {
+  const calendars = deps.calendars;
+  // Each calendar keeps its own backoff, so a throw here (the grant lookup) is simply tried again at the next upkeep.
+  if (calendars) await step('calendar_watch', grants.calendar, { fail: () => undefined }, async now => {
+    const watch = await ensureCalendarWatches({ ...calendars, now });
+    return watch === 'skipped' || (!watch.started && !watch.failed && !watch.stopped) ? null
+      : { ok: watch.failed === 0, code: `calendar_watches:started=${watch.started}:failed=${watch.failed}:stopped=${watch.stopped}` };
+  });
+  else await step('calendar_watch', grants.calendar, deps.calendar.book, async now => {
     const watch = await ensureCalendarWatch({ ...deps.calendar, now });
     return watch === 'started' || watch === 'failed' ? { ok: watch === 'started', code: `calendar_watch_${watch}` } : null;
   });
