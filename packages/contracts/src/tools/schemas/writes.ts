@@ -122,9 +122,9 @@ export type DraftDocumentArgs = z.infer<typeof draftDocumentArgsSchema>;
 // forms are the adapter's inbound draft shape, never the model's outbound one.
 export const draftEmailArgsSchema = z.strictObject({
   account: z.email().optional(),
-  to: z.array(z.email()).min(1).max(50),
-  cc: z.array(z.email()).max(50).optional(),
-  bcc: z.array(z.email()).max(50).optional(),
+  to: z.array(z.email()).min(1).max(50).describe('A list of addresses, even for one person: ["sam@example.com"], never a bare string.'),
+  cc: z.array(z.email()).max(50).optional().describe('A list of addresses, like to.'),
+  bcc: z.array(z.email()).max(50).optional().describe('A list of addresses, like to.'),
   subject: z.string().min(1).max(200),
   body_markdown: z.string().min(1).max(10_000),
   reply_to_thread_id: z.string().min(1).optional(),

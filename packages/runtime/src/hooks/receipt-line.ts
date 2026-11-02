@@ -21,9 +21,12 @@ const targetOf = (keys: readonly string[], args: unknown): string =>
 // A refused attempt of a repeatable tool that a later call in the same turn made good (the same target, accepted) is
 // superseded, not a failure of the turn. A transient failure (a handler that threw, a timeout) may have crossed its effect,
 // and an unconfirmed receipt may have landed: those stay shown, as does any failure never made good.
+// A call whose arguments the schema check refused (a string where it wants a list) never reached its handler, so it did
+// nothing and the line leaves it off. A handler's own refusal stays shown, and claim checks still see both as failed.
+const refusedArguments = (event: LoopEventLike | undefined) => event?.code === 'invalid_args' && event.reason === 'invalid_args';
 const shownReceipts = (events: readonly LoopEventLike[]) => {
-  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
   const eventOf = new Map(events.map(event => [event.seq, event]));
+  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect) && !refusedArguments(eventOf.get(r.seq)));
   const superseded = (r: (typeof receipts)[number]) => {
     const keys = REPEATABLE_TARGET_ARGS[r.tool as ToolName], code = eventOf.get(r.seq)?.code;
     if (!keys || r.state !== 'failed' || code === undefined || code === 'transient') return false;
