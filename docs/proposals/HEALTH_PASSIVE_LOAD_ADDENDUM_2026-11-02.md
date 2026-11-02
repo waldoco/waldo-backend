@@ -46,13 +46,17 @@ A new window signal, one fixed local-hour bucket, like `heart_rate_window`:
 { sample_id: 'heart_rate_bins_window:<source>:<hour start epoch>',
   signal: 'heart_rate_bins_window', unit: 'seconds',
   start_at, end_at, day, utc_offset_minutes, revision,   // as every window
+  value,               // covered seconds, 0 to 3600: the sum of both arrays (ingest requires a numeric value)
   from_bpm,            // integer, a multiple of 5, 30 to 225: the lower edge of the first bin
   bin_bpm: 5,          // literal
   outside_workouts,    // seconds per bin, 1 to 40 bins, each 0 to 3600
   in_workouts }        // same length as outside_workouts
 ```
 
-The contract checks that the two arrays have the same length and that their total fits the hour, with a minute's slack. Bins above 225 bpm fold into the last bin.
+The contract checks three things:
+- the two arrays have the same length;
+- `value` equals their total;
+- the total fits the hour, with a minute's slack. Bins above 225 bpm fold into the last bin.
 
 ### How the phone fills it
 
@@ -104,16 +108,20 @@ An owner who rarely exerts has an observed maximum well under their true one. Ta
 
 So zone 1 starts at the higher of:
 - 50 % of the usual maximum;
-- the high edge of the owner's usual **resting-hour** heart rate.
+- the **sitting edge**: the 95th percentile of the seconds in the owner's resting hours.
 
-The resting-hour usual is:
-- the mean heart rate of hours that are awake, outside a workout and with fewer than 10 movement minutes, over the 30-day window;
-- this is the resting-hour rule of energy windows and the stress curve (`energy-windows.ts:16`);
-- the high edge is centre + 1 SD (the drivers' statistic), needing 14 such days.
+**How the sitting edge is built:**
+- **Resting hours** are hours that are outside a workout and not inside a recorded night, and that hold fewer than 1,000 steps.
+- **Why steps.** The resting-hour rule of energy windows and the stress curve uses movement minutes (`energy-windows.ts:16`, under 10). Health Connect has no movement minutes (no Apple Exercise Time), so on Android, Samsung included, that rule finds no resting hour at all. Steps are on both platforms. 1,000 steps is the same 10 minutes at a walking cadence of about 100 a minute.
+- **The percentile** is taken over those hours' `outside_workouts` bins in the 30-day window, and needs 14 days with resting hours.
+- **Why a percentile of seconds.** The edge must be in the same unit as what it gates. Heart rate while sitting varies more within an hour than hourly means vary between days, so an edge built from hourly means would let a quarter of desk seconds through.
+  - At the 95th percentile, about 5 % of a desk day's sitting seconds still count: under an hour of zone 1.
+  - That is a near-constant offset that the owner's own band absorbs, and a vector pins it well below a day on foot.
+- **It is internal.** It is not a "usual" and is never served. #1822 gives the stress heart rate one estimator for display, and this edge does not compete with it.
 
 Time below the start of zone 1 weighs 0.
 
-This is a statistic of the owner's own data, not a population threshold. Neither input needs the resting heart rate signal, so **the Samsung path, which writes no resting heart rate, runs the same rule as every other source.**
+This is a statistic of the owner's own data, not a population threshold. It needs neither resting heart rate nor movement minutes, so **the Samsung and Health Connect paths, which write neither, run the same rule as Apple.**
 
 If zone 1's start reaches zone 2's (60 % of the maximum), the observed maximum cannot separate the owner's sitting from their effort. Passive is then unavailable (`zone_basis_low`). It returns once a harder day lifts the maximum.
 
@@ -138,8 +146,9 @@ If zone 1's start reaches zone 2's (60 % of the maximum), the observed maximum c
   - **Workouts the phone holds:** their seconds are only ever in `in_workouts`, so each second counts once.
   - **A counted session the phone does not hold**, such as a provider workout from a strap with no watch on:
     - If any of its hours are observed, its heart rate is already in `outside_workouts`. It counts once, under passive in the parts.
-    - If none of its hours are observed, its own zone load (v1's `loadOf`, in zones) is added under workouts.
-  - **The total is right either way. Only the split between parts can lean to passive.**
+    - For its minutes in unobserved hours, its own zone load (v1's `loadOf`, in zones) is added under workouts, pro rata to those minutes. A session with no zones adds nothing, and the part says so.
+  - **No second is counted twice, and no observed second is lost. The split between parts can lean to passive.**
+- **The phone's own workout zones are not used in v2.** A phone workout's load comes from its `in_workouts` bins on the server's bounds. So v2's workout part need not equal v1's workout load for the same session, and the vectors do not expect it to.
 - **One method.** v2 is zones only, so the method rule holds: nothing is mixed.
 - **Fallback.** If the day has no passive (no bins, `sparse`, `no_zone_basis` or `zone_basis_low`), it is scored by v1 under v1's own method rules, and it serves `parts.passive` as unavailable with the reason.
 - **Like for like.**
@@ -165,6 +174,7 @@ If zone 1's start reaches zone 2's (60 % of the maximum), the observed maximum c
 - `heart_rate_bins_window` is accepted from R-e.
 - A backend below R-e rejects that reading alone (per-sample refusal, revision 3), so an older backend loses nothing else.
 - This is why it is a new signal and not a key on `heart_rate_window`: a strict window carrying an unknown key would be refused whole, and the hour's heart rate lost with it.
+- **Deploy order.** The app drops a reading refused as `unsupported_signal`; the contract says "a newer build loses only that reading". So the backend's R-e migration and Worker go live before any app build that sends bins.
 
 **Response.** On `/scores`, from R-e, an available `day_load` gains:
 
@@ -188,7 +198,9 @@ parts: {
 - **Bins are raw readings.**
   - They are stored in the `waldo.health_samples` payload, with its 90-day retention, its withdrawal purge and its account deletion.
   - No table is added.
-  - Migration M-f adds the signal to `health_samples_signal_check` and re-creates `waldo.health_ingest` with the new bounds. `health_series_read` gains the signal too.
+  - Migration M-f adds the signal to `health_samples_signal_check` and re-creates `waldo.health_ingest` with the new signal's unit and bounds.
+  - It re-creates `waldo.health_series_read` to take the signal. Today that read returns only `value` for a window, so M-f also returns `from_bpm`, `bin_bpm` and both arrays, from a fixed key list, as it already does for a workout's detail.
+- **Batch size.** A bins sample is a few hundred bytes. The app's packer already holds a batch to 128 changes and the request size limit (`batch.ts`), so a full batch of bins splits rather than being refused. A test proves it with the widest arrays.
 - **The producer reads bins in their own call.**
   - It calls `health_series_read` with `signals: ['heart_rate_bins_window']`, so 24 rows per day per source never eat into the main read's 8,000-row cap.
   - The 31-day window covers the 28-day span.
@@ -205,7 +217,7 @@ parts: {
 
 These come on top of #1822 §4's list:
 - **Golden vectors, on synthetic values:**
-  - a desk day;
+  - a desk day whose sitting heart rate varies sample to sample (a flat desk day would hide a leaky floor);
   - a busy day on foot with no workout (non-zero, the reason for this design);
   - a run day;
   - a run day where the phone's workout and a provider copy are both counted (each second once);
@@ -214,7 +226,8 @@ These come on top of #1822 §4's list:
   - a low observed maximum (`zone_basis_low`);
   - fewer than 14 peak days (`no_zone_basis`);
   - a bin split by a bound;
-  - a Samsung source with no resting heart rate.
+  - a Samsung source with no resting heart rate and no movement minutes;
+  - a provider session that is half in observed hours.
 - **Anchor vectors for the scale constant.** These are ordering properties, not targets:
   - desk day < busy day on foot;
   - an hour in zone 3 > an hour in zone 1;
@@ -264,7 +277,8 @@ These come on top of #1822 §4's list:
 | Claim | Falsified by | Then |
 |---|---|---|
 | A 10-minute hold covers a worn hour | On a real older Apple Watch, fewer than half of worn waking hours reach 30 covered minutes | Raise the hold to the measured cadence, or lower the observed-hour bar, with new vectors |
-| The floor keeps desk days light | On real owners, a desk day scores inside the band of days with a workout | Raise the floor to the resting-hour centre + 2 SD, or fall back to reserve for that owner |
+| The floor keeps desk days light | On real owners, a desk day scores inside the band of days with a workout | Raise the percentile to 99, or fall back to reserve for that owner |
+| Steps find resting hours | Under 14 days of resting hours by day 30 on a real Android owner | Lower the step bar, or use the hourly heart-rate low as the resting hour's mark |
 | The third-highest peak is a stable maximum | The usual maximum moves more than 10 bpm week to week on one owner | Lengthen to 90 days through S3's read |
 | Bins fit the read | The bins call for one owner exceeds the read cap | Read two half-windows |
 | Each second counts once | A golden vector with a phone workout and its provider copy shows any second twice | Block v2 |
