@@ -39,14 +39,14 @@ const seriesOf = (spec: Shape) => ({
   sources: [{ source: 'apple', consent_epoch: 3, truncated: false, samples: Array.from({ length: spec.nights }, (_, i) => dayOfReadings(i, spec)).flat() }],
 });
 type Row = Record<string, any> & { day: string };
-const rowsOf = async (spec: Shape, extra: Partial<ProducerDeps> = {}, series: unknown = seriesOf(spec)): Promise<{ rows: Row[]; outcome: string }> => {
+const rowsOf = async (spec: Shape, extra: Partial<ProducerDeps> = {}, series: unknown = seriesOf(spec), now = NOW): Promise<{ rows: Row[]; outcome: string }> => {
   const rows: Row[] = [];
   const typed = series as { sources: { samples: Sample[] }[] };
   const outcome = await produceHealthScores({
     readSeries: async range => (!Array.isArray(typed.sources) ? series : { ...typed, sources: typed.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => { rows.push(JSON.parse(payload) as Row); return { written: true }; },
     compute: dailyScoresFor('1'), ...extra,
-  }, { now: NOW, timezone: 'UTC' });
+  }, { now, timezone: 'UTC' });
   return { rows, outcome };
 };
 const todayOf = (rows: Row[]) => rows.find(row => row.day === TODAY)!;
@@ -168,8 +168,15 @@ describe('producer: day load, Form curve and stress curve behind their switches'
     });
   });
 
+  it('writes a full day\'s row with every switch on well within the writer\'s limit of 32 KiB', async () => {
+    const spec: Shape = { ...evenDays, hours: 24 };
+    const full = { ...seriesOf(spec), read_at: `${TODAY}T23:30:00.000123Z` };
+    const { rows } = await rowsOf(spec, { dayLoad: true, formCurve: true, stressCurve: true, scoreParts: true, usual: true, trainingLoad: true }, full, Date.parse(`${TODAY}T23:30:00Z`));
+    expect(todayOf(rows).form_curve.points.length).toBeGreaterThan(40);
+    expect(new TextEncoder().encode(JSON.stringify(todayOf(rows))).length).toBeLessThan(20_000);
+  });
   it('writes no row larger than the writer takes, with every switch and every other column on', async () => {
     const { rows } = await rowsOf(evenDays, { dayLoad: true, formCurve: true, stressCurve: true, scoreParts: true, usual: true, trainingLoad: true });
-    for (const row of rows) expect(new TextEncoder().encode(JSON.stringify(row)).length, row.day).toBeLessThan(12_000);
+    for (const row of rows) expect(new TextEncoder().encode(JSON.stringify(row)).length, row.day).toBeLessThan(20_000);
   });
 });

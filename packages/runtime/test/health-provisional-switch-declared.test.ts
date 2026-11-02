@@ -66,6 +66,15 @@ describe('MEDICATIONS in the Worker config', () => {
   });
 });
 
+describe('HEALTH_DAY_LOAD, HEALTH_FORM_CURVE and HEALTH_STRESS_CURVE in the Worker config', () => {
+  it('are off in both blocks until the gate turns each on at a named deploy with migrations 20261102030000 and 20261102040000', () => {
+    for (const name of ['HEALTH_DAY_LOAD', 'HEALTH_FORM_CURVE', 'HEALTH_STRESS_CURVE']) {
+      expect(parsed.vars[name], name).toBe('0');
+      expect(parsed.env.staging.vars[name], name).toBe('0');
+    }
+  });
+});
+
 describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
   it('are off in both blocks until the gate turns them on at a named deploy with migration 20261102010000', () => {
     for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
