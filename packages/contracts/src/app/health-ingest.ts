@@ -591,16 +591,33 @@ export const healthDayLoadBandV1Schema = z.union([
     .refine(band => band.days_until_personal === HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - band.own_days, { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] }),
 ]);
 // Which way today's score stands against the owner's usual band: a description of a reading, never good or bad. null without a band.
+const dayLoadCommon = {
+  state: z.literal('available'), activation: z.literal('candidate_unaccepted'), score: loadScore,
+  // True when the zones were set from the highest heart rate seen, not a measured maximum.
+  approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
+  band: healthDayLoadBandV1Schema, direction: healthPartDirectionV1Schema.nullable(),
+};
+type DayLoadShape = { score: number; method: string; approximate: boolean; band: z.infer<typeof healthDayLoadBandV1Schema>; direction: string | null };
+const labelledApproximate = (load: DayLoadShape) => load.approximate === (load.method === 'hr_zones_observed_peak');
+const directionAgainstBand = (load: DayLoadShape) => load.direction === (load.band.state === 'provisional' ? null : load.score > load.band.high ? 'above_usual' : load.score < load.band.low ? 'below_usual' : 'usual');
+
+// Health revision 12: the day's load counting every observed minute (day-load.candidate.v2), not only workouts. Its parts are
+// shares of the day's load, unit-free because the score is log-shaped. A day the passive part cannot be read for is v1, with the
+// reason. Below revision 12 a v2 day is served as that day's v1 load, and no load carries parts.
+export const HEALTH_DAY_LOAD_V2_VERSION_V1 = 'day-load.candidate.v2';
+export const healthDayLoadPassiveReasonV1Schema = z.enum(['no_bins', 'sparse', 'no_zone_basis', 'zone_basis_low']);
+const loadShare = z.number().finite().min(0).max(1);
+const dayLoadPartsOf = <Passive extends z.ZodType>(passive: Passive) => z.strictObject({ workouts: z.strictObject({ share: loadShare }), passive });
+const healthDayLoadV1PartsSchema = dayLoadPartsOf(z.strictObject({ state: z.literal('unavailable'), reason: healthDayLoadPassiveReasonV1Schema }))
+  .refine(parts => parts.workouts.share === 0 || parts.workouts.share === 1, { error: 'without a passive part the workouts are all of the load, or there is none', path: ['workouts'] });
+const healthDayLoadV2PartsSchema = dayLoadPartsOf(z.strictObject({ state: z.literal('available'), share: loadShare, observed_hours: z.int().min(12).max(25) }))
+  .refine(parts => (parts.workouts.share === 0 && parts.passive.share === 0) || Math.abs(parts.workouts.share + parts.passive.share - 1) <= 0.001, { error: 'the parts\' shares add up to the load', path: ['workouts'] });
 export const healthDayLoadV1Schema = z.union([
-  z.strictObject({
-    state: z.literal('available'), version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), activation: z.literal('candidate_unaccepted'),
-    score: loadScore, method: healthDayLoadMethodV1Schema,
-    // True when the zones were set from the highest heart rate seen in a workout, not a measured maximum.
-    approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
-    band: healthDayLoadBandV1Schema, direction: healthPartDirectionV1Schema.nullable(),
-  }).refine(load => load.approximate === (load.method === 'hr_zones_observed_peak'), { error: 'approximate is the observed-peak method', path: ['approximate'] })
-    .refine(load => load.direction === (load.band.state === 'provisional' ? null : load.score > load.band.high ? 'above_usual' : load.score < load.band.low ? 'below_usual' : 'usual'),
-      { error: 'the direction is the score against the band', path: ['direction'] }),
+  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), method: healthDayLoadMethodV1Schema, parts: healthDayLoadV1PartsSchema.optional() })
+    .refine(labelledApproximate, { error: 'approximate is the observed-peak method', path: ['approximate'] })
+    .refine(directionAgainstBand, { error: 'the direction is the score against the band', path: ['direction'] }),
+  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_V2_VERSION_V1), method: z.literal('hr_zones_observed_peak'), approximate: z.literal(true), parts: healthDayLoadV2PartsSchema })
+    .refine(directionAgainstBand, { error: 'the direction is the score against the band', path: ['direction'] }),
   z.strictObject({ state: z.literal('unavailable'), reason: z.literal('no_readings') }),
 ]);
 
