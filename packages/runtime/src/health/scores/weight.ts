@@ -2,7 +2,8 @@ import { labelOf, standing } from './baseline';
 import { ALGORITHM, PROVISIONAL_ALGORITHM } from './recovery';
 import { BASELINE_DAYS, combine, higherIsBetter, zScore, type Component } from './stats';
 import { weightZone } from './zones';
-import type { DayRecord, DemandInputs, WeightResult } from './types';
+import { partRows, PART_ORDER } from './parts';
+import type { Absent, DayRecord, DemandInputs, WeightResult } from './types';
 
 const FIELDS = [
   ['calendar', 'meetingMinutes', 0.35], ['tasks', 'openTaskMinutes', 0.3], ['messages', 'messageCount', 0.15],
@@ -10,7 +11,7 @@ const FIELDS = [
 const PHYSICAL_LOAD_SHARE = 0.2;
 
 // The day's active energy, the sum of its hours; unknown on a day with no energy reading.
-const activeEnergy = (day: DayRecord): number | null => {
+export const activeEnergy = (day: DayRecord): number | null => {
   const hours = day.hourly.flatMap(bucket => (bucket.activeEnergyKcal === null ? [] : [bucket.activeEnergyKcal]));
   return hours.length ? hours.reduce((total, kcal) => total + kcal, 0) : null;
 };
@@ -25,18 +26,19 @@ const history = (prior: readonly DayRecord[], read: (day: DayRecord) => number |
 // Weight on the shared baseline: any one component with a baseline of its own gives Weight, and coverage shows what is
 // missing. With no demand and no load reading at all there is nothing to read; with some but no baseline yet, the baseline
 // is still forming.
-const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[]): WeightResult => {
+const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[], detail: boolean): WeightResult => {
   const components: Component[] = [];
   const signals: string[] = [];
   const own: number[] = [];
+  const absent = new Map<string, Absent>();
   const days = new Set<string>([target.day]);
   const demand = target.demand;
   let anyReading = false;
-  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number): boolean => {
+  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number, signal: readonly string[] = []): boolean => {
     anyReading = true;
     const at = standing(value, past.map(entry => entry.value), null);
-    if (at === null) return false;
-    components.push({ name, score: higherIsBetter(at.z), weight: share });
+    if (at === null) { absent.set(name, 'baseline_immature'); return false; }
+    components.push({ name, score: higherIsBetter(at.z), weight: share, basis: { z: at.z, own: at.own, ownShare: at.ownShare, signals: signal } });
     signals.push(name);
     own.push(at.own);
     past.forEach(entry => days.add(entry.day));
@@ -45,19 +47,26 @@ const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[]): Weig
   for (const [name, field, share] of FIELDS) {
     const value = demand?.[field];
     if (value !== null && value !== undefined) add(name, value, history(prior, day => day.demand?.[field]), share);
+    else if (name === 'calendar') absent.set('calendar', 'no_reading');
   }
+  absent.set('physical_load', 'no_reading');
   for (const measure of LOAD_MEASURES) {
     const value = measure(target);
-    if (value !== null && add('physical_load', value, history(prior, measure), PHYSICAL_LOAD_SHARE)) break;
+    if (value === null) continue;
+    absent.delete('physical_load');
+    if (add('physical_load', value, history(prior, measure), PHYSICAL_LOAD_SHARE, measure === activeEnergy ? ['active_energy'] : [])) break;
   }
   if (!components.length) return { state: 'unavailable', reason: anyReading ? 'baseline_immature' : 'calendar_demand_unavailable' };
   const { score, coverage } = combine(components);
-  return { state: 'available', score, zone: weightZone(score), algorithm_version: PROVISIONAL_ALGORITHM.weight, activation: 'accepted', coverage, hrv_method: null, used: { signals, days: [...days].sort() }, baseline: labelOf(own, false) };
+  return {
+    state: 'available', score, zone: weightZone(score), algorithm_version: PROVISIONAL_ALGORITHM.weight, activation: 'accepted', coverage, hrv_method: null, used: { signals, days: [...days].sort() }, baseline: labelOf(own, false),
+    ...(detail ? { parts: partRows(PART_ORDER.weight, components, absent) } : {}),
+  };
 };
 
 // The day's demand against the owner's own usual. Calendar is the anchor: without it there is no Weight.
-export const weightScore = (target: DayRecord, prior: readonly DayRecord[], provisional = false): WeightResult => {
-  if (provisional) return provisionalWeight(target, prior);
+export const weightScore = (target: DayRecord, prior: readonly DayRecord[], provisional = false, detail = false): WeightResult => {
+  if (provisional) return provisionalWeight(target, prior, detail);
   const demand = target.demand;
   if (demand?.meetingMinutes === null || demand === null) return { state: 'unavailable', reason: 'calendar_demand_unavailable' };
   const components: Component[] = [];

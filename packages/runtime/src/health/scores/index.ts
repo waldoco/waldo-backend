@@ -1,16 +1,19 @@
 import { labelOf } from './baseline';
-import { driversOf } from './drivers';
+import { driverRanges, driversOf, SUBJECT_SIGNALS } from './drivers';
 import { formScore } from './form';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { energyWindows } from './energy-windows';
+import { PART_ORDER, partRows } from './parts';
+import { inUsualOrder, usualOfRange } from './usual';
 import { priorDays, sleepDebt } from './sleep-debt';
 import { combine } from './stats';
 import { isTimeZone, localDayWindow } from './time';
 import { recoveryZone } from './zones';
-import { weightScore } from './weight';
-import type { DailyScores, DailyScoresInput, DayRecord, RecoveryResult, Unavailable, UnavailableReason } from './types';
+import { activeEnergy, weightScore } from './weight';
+import { ownRange } from './drivers';
+import type { DailyScores, DailyScoresInput, DayRecord, PartsByPillar, RecoveryResult, Unavailable, UnavailableReason, UsualRow } from './types';
 
-export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, UnavailableReason } from './types';
+export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, PartRow, UnavailableReason, UsualRow } from './types';
 
 const everywhere = (reason: UnavailableReason): DailyScores => {
   const unavailable: Unavailable = { state: 'unavailable', reason };
@@ -53,14 +56,46 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
       : { state: 'available', score, zone: recoveryZone(score), algorithm_version: ALGORITHM.recovery, activation: 'candidate_unaccepted', coverage, hrv_method: basis.hrvMethod, used };
   }
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);
-  return {
+  // Asked for, a provisional computation also keeps what each score was made of; none of it changes a score.
+  const detail = provisional && (input.parts === true || input.usual === true);
+  const form = formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, detail);
+  const weight = weightScore(target, prior, provisional, detail);
+  const scores: DailyScores = {
     recovery,
     drivers: driversOf(target, prior),
     sleep_debt: debt,
-    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional),
-    weight: weightScore(target, prior, provisional),
+    form,
+    weight,
     ...(provisional ? { windows: energyWindows({ targetDay: input.targetDay, days: [...byDay.values()], recoveryZone: recovery.state === 'available' ? recovery.zone : null, sleepTrend: debt.state === 'unavailable' ? 'steady' : debt.trend ?? 'steady' }) } : {}),
   };
+  if (!detail) return scores;
+
+  // The parts and bands are set beside the pillars, not inside them, so a pillar is the same object with or without them.
+  const recoveryRead = 'reason' in basis ? null : basis;
+  const components: PartsByPillar = {
+    ...(recoveryRead ? { recovery: partRows(PART_ORDER.recovery, recoveryRead.components, recoveryRead.absent ?? new Map()) } : {}),
+    ...(form.state === 'available' && form.parts ? { form: form.parts } : {}),
+    ...(weight.state === 'available' && weight.parts ? { weight: weight.parts } : {}),
+  };
+  const energy = ownRange(target, prior, activeEnergy);
+  const usual: UsualRow[] = inUsualOrder([
+    ...(recoveryRead?.components.flatMap(component => (component.usual ? [component.usual] : [])) ?? []),
+    ...(form.state === 'available' ? form.usual ?? [] : []),
+    ...driverRanges(target, prior).map(({ subject, method, range }) => usualOfRange(SUBJECT_SIGNALS[subject], method, range)),
+    ...(energy ? [usualOfRange('active_energy', null, energy)] : []),
+  ]);
+  return {
+    ...scores,
+    form: withoutDetail(form), weight: withoutDetail(weight),
+    ...(input.parts === true && Object.keys(components).length ? { components } : {}),
+    ...(input.usual === true && usual.length ? { usual } : {}),
+  };
+};
+
+const withoutDetail = <P extends DailyScores['form'] | DailyScores['weight']>(pillar: P): P => {
+  if (pillar.state !== 'available') return pillar;
+  const { parts: _parts, usual: _usual, ...rest } = pillar;
+  return rest as P;
 };
 
 // The engine the owner's recompute runs, chosen by the HEALTH_PROVISIONAL_SCORES variable: only the exact value "1" turns

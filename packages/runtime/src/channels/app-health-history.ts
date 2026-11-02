@@ -11,6 +11,8 @@ type Pillar = 'recovery' | 'form' | 'weight';
 export type HistoryReaders = Readonly<{
   pillar: (pillar: Pillar, stored: unknown) => object | null;
   failure: (result: unknown) => ErrorCode | null;
+  // Present only for a build that names the parts revision, with the switch on: reads one day's stored parts as the contract's.
+  parts?: (stored: unknown) => { success: true; data: object } | { success: false };
 }>;
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
@@ -47,7 +49,10 @@ export const healthHistoryView = (result: unknown, windowDays: 7 | 30 | 90, read
     const day = healthDayV1Schema.safeParse(row?.day);
     const recovery = row && readers.pillar('recovery', row.recovery), form = row && readers.pillar('form', row.form), weight = row && readers.pillar('weight', row.weight);
     if (!row || !day.success || !recovery || !form || !weight) continue;
-    days.push({ day: day.data, recovery, form, weight, ...(row.backfilled === true ? { backfilled: true } : {}) });
+    // A day's parts that do not read as the contract's cost the owner that day's parts, not the day.
+    const parts = readers.parts && row.components !== undefined && row.components !== null ? readers.parts(row.components) : null;
+    if (parts && !parts.success) console.error('app health scores history parts shape');
+    days.push({ day: day.data, recovery, form, weight, ...(row.backfilled === true ? { backfilled: true } : {}), ...(parts?.success ? { components: parts.data } : {}) });
   }
   if (days.length < rows.length) console.error('app health scores history rows skipped', rows.length - days.length);
   if (rows.length > 0 && days.length === 0) return nothing('no_readings');

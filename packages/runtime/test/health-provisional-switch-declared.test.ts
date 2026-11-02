@@ -65,3 +65,12 @@ describe('MEDICATIONS in the Worker config', () => {
     expect(parsed.env.staging.vars.MEDICATIONS).toBe('0');
   });
 });
+
+describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
+  it('are off in both blocks until the gate turns them on at a named deploy with migration 20261102010000', () => {
+    for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
+      expect(parsed.vars[name], name).toBe('0');
+      expect(parsed.env.staging.vars[name], name).toBe('0');
+    }
+  });
+});

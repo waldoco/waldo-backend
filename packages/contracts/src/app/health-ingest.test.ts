@@ -6,6 +6,7 @@ import {
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
   HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
+  HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -617,5 +618,104 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
     const request = { ...batch, samples: Array.from({ length: fits }, (_, i) => ({ ...full, sample_id: `HK:1F0E7C9A-0000-4000-8000-${String(i).padStart(12, '0')}` })) };
     expect(healthIngestV1Schema.safeParse(request).success).toBe(true);
     expect(bytes(request)).toBeLessThanOrEqual(HEALTH_INGEST_MAX_REQUEST_BYTES_V1);
+  });
+});
+
+describe('health revision 8: parts of each score and the owner\'s usual', async () => {
+  const fixture = (await import('./fixtures/health-scores-parts.v8.json')).default;
+  const { scores, history } = fixture as unknown as { scores: Record<string, any>; history: Record<string, any> };
+  const usualBand = scores.usual[0];
+  const midnightBand = scores.usual.find((band: { signal: string }) => band.signal === 'sleep_midpoint');
+  const hrvPart = scores.components.recovery[1];
+  const sleepPart = scores.components.recovery[0];
+  it('is health revision 8, after the observed-peak revision', () => {
+    expect(HEALTH_PARTS_REVISION_V1).toBe(8);
+    expect(HEALTH_PARTS_REVISION_V1).toBeGreaterThan(HEALTH_OBSERVED_PEAK_REVISION_V1);
+  });
+  it('reads the fixture\'s scores and history, and the same body without the new keys', () => {
+    expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+    expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+    const { components: _components, usual: _usual, ...before } = scores;
+    expect(healthScoresV1Schema.safeParse(before).success).toBe(true);
+    expect(healthScoresHistoryV1Schema.safeParse(history).success).toBe(true);
+    const { components: _day, ...oldDay } = history.days[0];
+    expect(healthScoresHistoryV1Schema.safeParse({ ...history, days: [oldDay] }).success).toBe(true);
+  });
+  it('has parts whose points add up to the pillar\'s score once rounded, and shares that add up to one', () => {
+    for (const pillar of ['recovery', 'form', 'weight'] as const) {
+      const parts = scores.components[pillar] as { share: number; points: number }[];
+      expect(Math.round(parts.reduce((sum, part) => sum + part.points, 0)), pillar).toBe(scores[pillar].score);
+      expect(parts.reduce((sum, part) => sum + part.share, 0), pillar).toBeCloseTo(1, 5);
+    }
+  });
+  it('keeps the closed signal and part lists the producer draws from', () => {
+    expect([...healthUsualSignalV1Schema.options]).toEqual([
+      'overnight_hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'stress_heart_rate',
+      'breathing_rate', 'spo2', 'wrist_temperature', 'awake_time', 'walking_heart_rate', 'steps', 'active_energy', 'vo2_max',
+    ]);
+    expect(healthPartKeysV1).toEqual({ recovery: ['sleep', 'hrv', 'resting_heart_rate'], form: ['from_the_night', 'sleep_midpoint', 'daylight', 'movement', 'stress'], weight: ['calendar', 'tasks', 'messages', 'physical_load'] });
+  });
+
+  describe('usual', () => {
+    it('reads a band for each signal on its own statistic, including one that crosses midnight and a log-scale band that is not symmetric', () => {
+      for (const band of scores.usual) expect(healthUsualV1Schema.safeParse(band).success, band.signal).toBe(true);
+      expect(usualBand.centre - usualBand.low).not.toBeCloseTo(usualBand.high - usualBand.centre, 1);
+      expect(midnightBand.low).toBeGreaterThan(midnightBand.high);
+      expect(healthUsualV1Schema.safeParse({ ...midnightBand, low: 1000, centre: 1030, high: 1060 }).success).toBe(true);
+      expect(healthUsualV1Schema.safeParse({ ...usualBand, state: 'provisional', own_days: 9, own_share: 0.4 }).success).toBe(true);
+    });
+    it('refuses a band that is out of order, mislabelled or not the statistic its signal uses', () => {
+      rejected(healthUsualV1Schema, [
+        { ...usualBand, low: 45 }, { ...usualBand, high: 40 }, { ...usualBand, centre: 60 },
+        { ...usualBand, estimator: 'own_mean_sd' }, { ...scores.usual[4], estimator: 'shrunk_predictive' },
+        { ...usualBand, method: null }, { ...usualBand, method: 'overnight_resting' }, { ...scores.usual[1], method: 'rmssd' }, { ...scores.usual[3], method: 'rmssd' },
+        { ...usualBand, state: 'provisional' }, { ...usualBand, own_days: 9 }, { ...scores.usual[4], own_share: 0.5 },
+        { ...usualBand, window_days: 60 }, { ...usualBand, own_days: 31 }, { ...usualBand, own_share: 1.1 }, { ...usualBand, signal: 'sleep_score' },
+        { ...usualBand, target: 44 }, { ...usualBand, low: Infinity }, { ...usualBand, low: null },
+        { ...midnightBand, low: 1500 }, { ...midnightBand, high: -1 }, { ...midnightBand, centre: 600 }, { ...midnightBand, low: 700, centre: 650, high: 800 },
+        'overnight_hrv', null,
+      ]);
+    });
+    it('lists one band per signal and no more than the signals there are', () => {
+      expect(healthUsualListV1Schema.safeParse([]).success).toBe(true);
+      expect(healthUsualListV1Schema.safeParse(scores.usual).success).toBe(true);
+      rejected(healthUsualListV1Schema, [[usualBand, usualBand], Array.from({ length: 15 }, () => usualBand)]);
+    });
+  });
+
+  describe('parts', () => {
+    const parts = (over: Record<string, unknown>) => ({ ...scores.components, ...over });
+    it('reads each pillar\'s parts, and an unavailable part with its reason and nothing else', () => {
+      expect(healthPartsV1Schema.safeParse(scores.components).success).toBe(true);
+      expect(healthPartsV1Schema.safeParse({}).success).toBe(true);
+      expect(healthPartsV1Schema.safeParse(history.days[0].components).success).toBe(true);
+      expect(healthPartsV1Schema.safeParse(parts({ recovery: [sleepPart, { key: 'hrv', state: 'unavailable', reason: 'baseline_immature' }] })).success).toBe(true);
+    });
+    it('refuses a part under the wrong pillar, a repeat, a made-up direction or reason, and extra keys', () => {
+      const unavailable = { key: 'hrv', state: 'unavailable', reason: 'no_reading' };
+      rejected(healthPartsV1Schema, [
+        parts({ recovery: [{ ...hrvPart, key: 'daylight' }] }), parts({ form: [{ ...hrvPart, key: 'hrv' }] }), parts({ weight: [{ ...hrvPart, key: 'stress' }] }),
+        parts({ recovery: [sleepPart, sleepPart] }), parts({ recovery: [] }), parts({ form: Array.from({ length: 6 }, () => hrvPart) }),
+        parts({ recovery: [{ ...hrvPart, direction: 'good' }] }), parts({ recovery: [{ ...hrvPart, direction: undefined }] }), parts({ recovery: [{ ...hrvPart, direction: 'higher' }] }),
+        parts({ recovery: [{ ...unavailable, reason: 'unknown' }] }), parts({ recovery: [{ ...unavailable, score: 0 }] }), parts({ recovery: [{ key: 'hrv', state: 'unavailable' }] }),
+        parts({ recovery: [{ ...hrvPart, target: 70 }] }), parts({ recovery: [{ ...hrvPart, need_minutes: 480 }] }),
+        parts({ recovery: [{ ...hrvPart, score: 101 }] }), parts({ recovery: [{ ...hrvPart, share: 1.5 }] }), parts({ recovery: [{ ...hrvPart, points: -1 }] }), parts({ recovery: [{ ...hrvPart, score: NaN }] }),
+        parts({ recovery: [{ ...hrvPart, signals: ['overnight_hrv', 'overnight_hrv', 'movement', 'daylight'] }] }), parts({ recovery: [{ ...hrvPart, signals: ['hrv'] }] }),
+        parts({ recovery: [{ ...hrvPart, baseline: { state: 'personal', own_days: 5, own_share: 1 } }] }), parts({ recovery: [{ ...hrvPart, baseline: { state: 'learning', own_days: 5, own_share: 1 } }] }),
+        parts({ sleep: [sleepPart] }), { recovery: 'sleep' }, null,
+      ]);
+    });
+    it('carries the need on the sleep part: its minutes in the range the engine trusts, and how it was found', () => {
+      rejected(healthPartsV1Schema, [
+        parts({ recovery: [{ ...sleepPart, need_minutes: undefined }] }), parts({ recovery: [{ ...sleepPart, need_basis: undefined }] }),
+        parts({ recovery: [{ ...sleepPart, need_minutes: HEALTH_SLEEP_NEED_MIN_MINUTES_V1 - 1 }] }), parts({ recovery: [{ ...sleepPart, need_minutes: HEALTH_SLEEP_NEED_MAX_MINUTES_V1 + 1 }] }),
+        parts({ recovery: [{ ...sleepPart, need_minutes: 462.5 }] }), parts({ recovery: [{ ...sleepPart, need_basis: 'population' }] }),
+      ]);
+      for (const need_basis of ['owner_confirmed', 'own_average', 'blended_average']) expect(healthPartsV1Schema.safeParse(parts({ recovery: [{ ...sleepPart, need_basis }] })).success, need_basis).toBe(true);
+    });
+    it('is served on a score and on a history day, and nowhere else is a key added', () => {
+      rejected(healthScoresV1Schema, [{ ...scores, components: { recovery: [] } }, { ...scores, usual: [{ ...usualBand, low: 99 }] }, { ...scores, components: null }, { ...scores, usual: null }]);
+      rejected(healthScoresHistoryV1Schema, [{ ...history, days: [{ ...history.days[0], usual: scores.usual }] }, { ...history, days: [{ ...history.days[0], components: { recovery: [] } }] }]);
+    });
   });
 });
