@@ -273,7 +273,7 @@ components: [{
 - **Rest days:** an observed day with no workout is 0.
 - **Unobserved days:** `null`.
 - **Score:** served as a score on the scale the owner picks (Q4), with the owner's usual band of day load (B14's `own_mean_sd` over observed days among the last 28), the method, and `approximate: true` when zones came from an observed peak.
-- **Passive load is not in v1.** The phone sends hourly min, mean and max, not seconds in zones, so passive time in zones cannot be faithfully computed. Hourly means would understate and smear it. It needs a per-hour zone summary from the phone: a new input and a new revision.
+- **Passive load is not in v1.** The phone sends hourly min, mean and max, not seconds in zones, so passive time in zones cannot be faithfully computed. Hourly means would understate and smear it. It needs a new per-hour input from the phone and a new revision. `day-load.candidate.v2` adds it: see `HEALTH_PASSIVE_LOAD_ADDENDUM_2026-11-02.md`.
 - **No target formula.** The gate ruled on 31 Oct that how hard to train is the model's call ("no computed target number", coaching plan B). The owner's usual band stands in for Bevel's target band, and the model says in words whether today has room. Q5 asks whether the owner wants a formula band instead.
 - **Stored:** in its own `day_load` column on the derived row, numeric, in the existing component-score class; the candidate needs acceptance, not a new row. **Shown:** `/scores` at S4's revision, and as the Load row's reading on Weight's detail.
 - **Weight's formula is unchanged.** Replacing Weight's physical-load part with day load would be `weight.v6` and a separate decision.
