@@ -4,11 +4,14 @@ export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_WEBHOOK_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
   OPENAI_API_KEY?: string;
+  WALDO_SIGNAL_SECRET?: string;
+  WALDO_OWNER_TIMEZONE?: string;
+  WALDO_MORNING_DEADLINE?: string;
 }>;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 
-const sameSecret = (given: string, expected: string): boolean => {
+export const sameSecret = (given: string, expected: string): boolean => {
   const a = new TextEncoder().encode(given);
   const b = new TextEncoder().encode(expected);
   let diff = a.length ^ b.length;

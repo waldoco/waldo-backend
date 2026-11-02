@@ -9,6 +9,7 @@ import {
   responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
+import { handleOwnerSignal, OWNER_SIGNAL_PATH } from './channels/owner-signals';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
@@ -64,6 +65,9 @@ declare global {
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
+      WALDO_SIGNAL_SECRET?: string;
+      WALDO_OWNER_TIMEZONE?: string;
+      WALDO_MORNING_DEADLINE?: string;
       OPENAI_API_KEY?: string;
       WALDO_ENV?: string;
     }
@@ -108,8 +112,12 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
-    if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
+    const { pathname } = new URL(request.url);
+    if (pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (pathname === OWNER_SIGNAL_PATH) {
+      return handleOwnerSignal(request, env, (work) => ctx?.waitUntil(work));
     }
     if (env.RESPONSIBILITY_PUBLIC_API_ENABLED !== 'true') {
       return new Response('not found', {

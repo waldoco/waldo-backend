@@ -3,15 +3,29 @@ import {
 } from '@waldo/contracts';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { OpenAIGpt5NanoAdapter } from '../llm/openai';
+import { OpenAIGpt5NanoAdapter, type OpenAIResponsesClient } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
+import { NO_MESSAGE } from './owner-signals';
 import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions } from './telegram-listener';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+
+export type ProactiveTurn = Readonly<{
+  id: string;
+  chatId: number;
+  entryText: string;
+  instruction: string;
+}>;
+
+export type TelegramResponder = Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & Readonly<{
+  // Resolves to the message to send, or null when the model decided nothing is worth saying.
+  // The caller must persist the result with `commit` only after the message is delivered.
+  proactive(turn: ProactiveTurn): Promise<Readonly<{ text: string; commit(): Promise<void> }> | null>;
+}>;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -20,14 +34,15 @@ export const createTelegramResponder = (
   store?: ConversationStore,
   memory?: CoreFileStore,
   log: (entry: object) => void = () => undefined,
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
+  client?: OpenAIResponsesClient,
+): TelegramResponder => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
   const invocation = accepted.value;
   const ownerId = invocation.verified_authority.principal_ref;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
-  const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey }) });
+  const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey, client }) });
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const ask = async (system: string, content: string) => {
     const result = await runtime.complete({
@@ -43,9 +58,15 @@ export const createTelegramResponder = (
     return result.response.text;
   };
   const tree = new ConversationTree();
+  // Set only for the duration of one proactive submit; the owner DO serialises turns.
+  let turnInstruction: string | null = null;
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => ask(
-      [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
+      [
+        messagingSystemPrompt(request.system, request.tools),
+        ...(memory ? [memoryPrompt(memory.read())] : []),
+        ...(turnInstruction ? [turnInstruction] : []),
+      ].join('\n\n'),
       request.messages.join('\n'),
     ),
   }, tree);
@@ -72,5 +93,31 @@ export const createTelegramResponder = (
       return publication.text;
     },
     chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),
+    async proactive(turn) {
+      await restored;
+      const id = `signal-${turn.id}`;
+      turnInstruction = turn.instruction;
+      let publication;
+      try {
+        publication = await path.submit({
+          authenticatedOwnerId: ownerId, invocation,
+          context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
+          userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.entryText, appPayload: turn.entryText, modelProjection: { mode: 'include' } },
+          assistantEntryId: `${id}-reply`,
+        });
+      } finally {
+        turnInstruction = null;
+      }
+      const text = publication.text.trim();
+      if (text === NO_MESSAGE) return null;
+      const leafId = publication.leafId;
+      return {
+        text,
+        async commit() {
+          await store?.save([tree.get(id)!, tree.get(leafId)!], leafId);
+          parentId = leafId;
+        },
+      };
+    },
   };
 };

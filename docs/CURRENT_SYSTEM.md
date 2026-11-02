@@ -28,6 +28,7 @@ Limits of the live path:
 
 - Staging Worker `waldo-runtime-staging` serves `POST /telegram/webhook` (commit `06c7eb5`), handing each verified update to `TelegramOwnerDO`. The local runner uses the same code path for development.
 - On the staging Worker, each turn's user and assistant entries are saved to the owner Durable Object's storage and restored on wake, so eviction and redeploys keep the conversation. The local runner still keeps history in memory only. The full history goes to the model on every turn; context budgeting is tracked in #145.
+- `POST /signals` takes owner device signals (`woke_up`, `winding_down`, `workout_ended`, `meeting_notes`) authenticated by `WALDO_SIGNAL_SECRET`. Each one runs a proactive turn in `TelegramOwnerDO`, where the model decides whether to message; a morning-deadline alarm covers days without a wake-up signal. Not yet deployed or exercised on a real device. See [ops/PROACTIVE_SIGNALS.md](ops/PROACTIVE_SIGNALS.md).
 - No tools are granted to the Telegram chat. The model is told so and says so.
 - Consequential approvals are not accepted over Telegram.
 

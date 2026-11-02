@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
 
-Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY` and `WALDO_OWNER_TELEGRAM_ID`.
+Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY` and `WALDO_OWNER_TELEGRAM_ID`. Proactive signals add `WALDO_SIGNAL_SECRET`, `WALDO_OWNER_TIMEZONE` and `WALDO_MORNING_DEADLINE` ([PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md)).
 
 Use a separate checkout for this loop, so your other branches and local edits stay untouched.
 
@@ -96,6 +96,7 @@ Remote access from the Codespace:
 ## 5. Built today
 
 - Telegram owner chat on the staging Worker. Updates arrive by webhook, go to a Durable Object, then to the model. It has the receipt, typing and final reactions, per-hop tracing, and honest replies for unsupported messages.
+- Proactive messages: the iPhone posts wake-up, wind-down, workout and meeting-note signals to `POST /signals`, and the model decides whether to message. A morning deadline alarm covers days with no wake-up signal. Setup is in [PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md).
 - Staging still uses fixture admission instead of real per-user sign-in. No tools are granted to the model. See [#144](https://github.com/waldoco/waldo-backend/issues/144).
 
 ## 6. Forward map
