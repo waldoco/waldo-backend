@@ -12,8 +12,9 @@ import { DurableObject } from 'cloudflare:workers';
 type FullWorker = Pick<typeof import('./index'), 'default' | 'OwnerDO' | 'DeviceBridgeDO' | 'IMessageBridgeDO' | 'TaskWorkerDO'>;
 type Env = Cloudflare.Env;
 type Handler = 'fetch' | 'alarm' | 'webSocketMessage' | 'webSocketClose' | 'webSocketError';
-// Every public method must be listed (a new RPC method fails typecheck until it is); handlers are listed when the real class defines them.
-type Forwarded<T> = { [K in Exclude<keyof T, keyof DurableObject> as T[K] extends (...args: never[]) => unknown ? K : never]: true } & { [K in Handler]?: true };
+// Exactly the real class's public methods and the handlers it defines: a missing or extra name fails typecheck.
+type Forwarded<T> = { [K in Exclude<keyof T, keyof DurableObject> as T[K] extends (...args: never[]) => unknown ? K : never]: true }
+  & { [K in Extract<Handler, keyof T> as {} extends Pick<T, K> ? never : K]: true };
 
 const real = new WeakMap<DurableObject, Record<string, (...args: unknown[]) => unknown>>();
 

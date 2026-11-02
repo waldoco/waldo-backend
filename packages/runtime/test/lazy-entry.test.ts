@@ -1,9 +1,11 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import entry, * as lazy from '../src/entry';
 import * as full from '../src/index';
 import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 import type { IMessageBridgeDO } from '../src/channels/imessage/bridge-do';
+import type { OwnerDO } from '../src/channels/owner-do';
+import type { TaskWorkerDO } from '../src/tasks/worker-do';
 
 // Runs with the deployed entry as main (vitest.lazy-entry.config.ts), so every binding here is a forwarding class.
 const CLASSES = ['OwnerDO', 'DeviceBridgeDO', 'IMessageBridgeDO', 'TaskWorkerDO'] as const;
@@ -43,5 +45,17 @@ describe('lazy deployed entry', () => {
     expect((await owner.fetch(new Request('https://owner.invalid/console/browser/trial'))).status).toBe(401);
     const bridge = env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.newUniqueId()) as unknown as DurableObjectStub<IMessageBridgeDO>;
     expect(await bridge.tapbacksReady()).toBe(false);
+  });
+
+  it('runs a task worker alarm whose owner RPC goes through both forwarders', async () => {
+    const ownerId = env.OWNER_DO!.idFromName('lazy-entry-task-owner');
+    const ticket = { jobId: 'job-unknown', attempt: 1, token: 'token-unknown' };
+    const owner = env.OWNER_DO!.get(ownerId) as unknown as DurableObjectStub<OwnerDO>;
+    expect(await owner.taskHeartbeat(ticket)).toBe(false);
+    const tasks = (env as unknown as { TASK_WORKER_DO: DurableObjectNamespace<TaskWorkerDO> }).TASK_WORKER_DO;
+    const worker = tasks.get(tasks.idFromName('lazy-entry-task'));
+    await worker.start({ owner: ownerId.toString(), ticket });
+    // start arms an immediate alarm; an unknown job is not claimable, so the attempt ends and the worker clears its ticket.
+    await vi.waitFor(() => runInDurableObject(worker, (_instance, state) => { expect([...state.storage.kv.list()]).toEqual([]); }));
   });
 });
