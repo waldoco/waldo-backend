@@ -30,7 +30,7 @@
       ],
       "weight": [
         { "key": "calendar", "state": "available", "score": 40, "share": 0.636364, "points": 25.45456, "direction": "below_usual", "signals": [], "baseline": { "state": "personal", "own_days": 30, "own_share": 1 } },
-        { "key": "physical_load", "state": "available", "score": 70, "share": 0.363636, "points": 25.45452, "direction": "above_usual", "signals": ["active_energy"], "baseline": { "state": "personal", "own_days": 30, "own_share": 1 } }
+        { "key": "physical_load", "state": "available", "score": 70, "share": 0.363636, "points": 25.45452, "direction": "above_usual", "signals": [], "baseline": { "state": "personal", "own_days": 30, "own_share": 1 } }
       ]
     },
     "usual": [

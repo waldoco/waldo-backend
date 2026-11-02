@@ -7,6 +7,8 @@ import {
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
   HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
+  healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
+  healthUsualMethodV1Schema, healthWeightPartV1Schema,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -717,5 +719,29 @@ describe('health revision 8: parts of each score and the owner\'s usual', async 
       rejected(healthScoresV1Schema, [{ ...scores, components: { recovery: [] } }, { ...scores, usual: [{ ...usualBand, low: 99 }] }, { ...scores, components: null }, { ...scores, usual: null }]);
       rejected(healthScoresHistoryV1Schema, [{ ...history, days: [{ ...history.days[0], usual: scores.usual }] }, { ...history, days: [{ ...history.days[0], components: { recovery: [] } }] }]);
     });
+  });
+});
+
+describe('health revision 8: one valid and one invalid input for each exported schema', async () => {
+  const { scores } = (await import('./fixtures/health-scores-parts.v8.json')).default as unknown as { scores: Record<string, any> };
+  const [sleepPart, hrvPart] = scores.components.recovery;
+  const dayPart = scores.components.form[2];
+  const cases: [string, { safeParse(input: unknown): { success: boolean } }, unknown, unknown][] = [
+    ['healthUsualSignalV1Schema', healthUsualSignalV1Schema, 'spo2', 'sleep_score'],
+    ['healthUsualMethodV1Schema', healthUsualMethodV1Schema, 'absolute', 'pnn50'],
+    ['healthUsualV1Schema', healthUsualV1Schema, scores.usual[0], { ...scores.usual[0], low: 99 }],
+    ['healthUsualListV1Schema', healthUsualListV1Schema, scores.usual, [scores.usual[0], scores.usual[0]]],
+    ['healthPartDirectionV1Schema', healthPartDirectionV1Schema, 'below_usual', 'good'],
+    ['healthPartBaselineV1Schema', healthPartBaselineV1Schema, { state: 'personal', own_days: 21, own_share: 0.9 }, { state: 'personal', own_days: 5, own_share: 0.9 }],
+    ['healthPartUnavailableReasonV1Schema', healthPartUnavailableReasonV1Schema, 'baseline_immature', 'no_data'],
+    ['healthSleepPartV1Schema', healthSleepPartV1Schema, sleepPart, { ...sleepPart, need_minutes: undefined }],
+    ['healthRecoveryPartV1Schema', healthRecoveryPartV1Schema, hrvPart, { ...hrvPart, key: 'daylight' }],
+    ['healthFormPartV1Schema', healthFormPartV1Schema, dayPart, { ...dayPart, key: 'hrv' }],
+    ['healthWeightPartV1Schema', healthWeightPartV1Schema, scores.components.weight[0], { ...scores.components.weight[0], key: 'sleep' }],
+    ['healthPartsV1Schema', healthPartsV1Schema, scores.components, { recovery: [hrvPart, hrvPart] }],
+  ];
+  it.each(cases)('%s reads its valid input and refuses its invalid one', (_name, schema, valid, invalid) => {
+    expect(schema.safeParse(valid).success).toBe(true);
+    expect(schema.safeParse(invalid).success).toBe(false);
   });
 });

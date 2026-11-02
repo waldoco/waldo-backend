@@ -319,3 +319,54 @@ describe('usual: a band and a driver phrase for one signal never disagree', () =
     expect(young.drivers.filter(driver => driver.startsWith('breathing'))).toEqual([]);
   });
 });
+
+describe('a part and the band it links to say the same thing', () => {
+  const inside = (value: number, band: UsualRow, wrapping = false): boolean => (wrapping && band.low > band.high ? value > band.low || value < band.high : band.low < value && value < band.high);
+  const near = (value: number, band: UsualRow) => [band.low, band.high].some(edge => Math.abs(value - edge) < 1e-3 * Math.max(1, Math.abs(edge)));
+  const todayOf = (input: DailyScoresInput): DayRecord => input.days.find(entry => entry.day === input.targetDay)!;
+  const readings = (input: DailyScoresInput, scores: DailyScores): { part: string; value: number; band: UsualRow; wrapping: boolean }[] => {
+    const record = todayOf(input);
+    const hrv = usualOf(scores, 'overnight_hrv'), resting = usualOf(scores, 'resting_heart_rate'), midpoint = usualOf(scores, 'sleep_midpoint');
+    return [
+      ...(hrv ? [{ part: 'hrv', value: record.overnightHrv.find(entry => entry.method === hrv.method)!.value, band: hrv, wrapping: false }] : []),
+      ...(resting ? [{ part: 'resting_heart_rate', value: record.restingHeartRate.find(entry => entry.method === resting.method)!.value, band: resting, wrapping: false }] : []),
+      ...(midpoint && record.sleep ? [{ part: 'sleep_midpoint', value: record.sleep.midpointMinute, band: midpoint, wrapping: true }] : []),
+    ];
+  };
+  const variants: [string, DailyScoresInput][] = [
+    ...inputs,
+    ['hrv far above', syntheticInput(syntheticRun(25, i => (i === 0 ? { overnightHrv: [{ value: 200, method: 'rmssd' }] } : {})))],
+    ['hrv far below', syntheticInput(syntheticRun(25, i => (i === 0 ? { overnightHrv: [{ value: 15, method: 'rmssd' }] } : {})))],
+    ['resting far above', syntheticInput(syntheticRun(25, i => (i === 0 ? { restingHeartRate: [{ value: 95, method: 'provider_resting_daily' }] } : {})))],
+    ['midpoint late', syntheticInput(syntheticRun(25, i => (i === 0 ? { sleep: { ...syntheticDay(0).sleep!, midpointMinute: 400 } } : {})))],
+  ];
+  it.each(variants)('%s: a reading inside the band has the direction usual, and one outside has one away from it', (_name, input) => {
+    const scores = withParts(input);
+    for (const { part, value, band, wrapping } of readings(input, scores)) {
+      if (near(value, band)) continue;
+      const row = (part === 'sleep_midpoint' ? partOf(scores, 'form', part) : partOf(scores, 'recovery', part)) as Extract<PartRow, { state: 'available' }> | undefined;
+      if (!row) continue;
+      expect(row.direction === 'usual', `${part} ${value} in ${band.low}..${band.high}`).toBe(inside(value, band, wrapping));
+    }
+  });
+  it.each(variants)('%s: a part links only to bands of the same statistic as its own direction', (_name, input) => {
+    const scores = withParts(input);
+    for (const pillar of PILLARS) for (const part of available(scores.components?.[pillar])) for (const signal of part.signals) {
+      expect(usualOf(scores, signal), `${pillar}.${part.key} -> ${signal}`).toBeDefined();
+      expect(usualOf(scores, signal)!.estimator, `${pillar}.${part.key} -> ${signal}`).toBe('shrunk_predictive');
+    }
+  });
+  it('gives the physical-load part no link, since its band is the plain mean and spread and its direction is not', () => {
+    const load = partOf(withParts(goldenScoreInputs().mature_own_average_need!), 'weight', 'physical_load') as Extract<PartRow, { state: 'available' }>;
+    expect(load.signals).toEqual([]);
+  });
+});
+
+// The parts and bands as the engine wrote them for synthetic owners, pinned so a drift in any number shows as a diff.
+describe('parts and usual: golden vectors', async () => {
+  const golden = (await import('./fixtures/health-parts-golden.json')).default as { scores: Record<string, string> };
+  it.each(Object.keys(golden.scores))('%s is written exactly as pinned', name => {
+    const scores = withParts(goldenScoreInputs()[name]!);
+    expect(JSON.stringify({ components: scores.components, usual: scores.usual })).toBe(golden.scores[name]);
+  });
+});

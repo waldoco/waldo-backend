@@ -502,7 +502,8 @@ const partCommon = {
   points: z.number().finite().min(0).max(100),
   // Null for a part that is judged against a need or is itself made of parts (sleep, from_the_night), not against a usual.
   direction: healthPartDirectionV1Schema.nullable(),
-  // The usual bands, by signal, this part reads against; a band beside it on the same row is that part's own usual.
+  // The usual bands, by signal, this part's direction is read against: the same estimate, so a value inside the band is a part
+  // that is usual. Empty for a part with no band of its own.
   signals: z.array(healthUsualSignalV1Schema).max(3),
   baseline: healthPartBaselineV1Schema.nullable(),
 };

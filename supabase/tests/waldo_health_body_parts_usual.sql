@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(31);
+select plan(33);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -48,7 +48,8 @@ create function pg_temp.usual() returns jsonb language sql as $$
   select jsonb_build_array(pg_temp.band('overnight_hrv'),pg_temp.band('resting_heart_rate'),pg_temp.band('breathing_rate'),pg_temp.band('spo2')) $$;
 create function pg_temp.refused_parts(parts jsonb) returns boolean language sql as $$ select pg_temp.write(jsonb_build_object('components',parts))->>'error' = 'invalid_request' $$;
 create function pg_temp.refused_usual(usual jsonb) returns boolean language sql as $$ select pg_temp.write(jsonb_build_object('usual',usual))->>'error' = 'invalid_request' $$;
-create function pg_temp.hist(n int default 30) returns jsonb language sql as $$ select pg_temp.h('scores_history','parts-owner',jsonb_build_object('days',n))->'history'->'days' $$;
+create function pg_temp.hist(n int default 30, parts boolean default true) returns jsonb language sql as $$
+  select pg_temp.h('scores_history','parts-owner',jsonb_build_object('days',n) || case when parts then '{"parts":true}'::jsonb else '{}'::jsonb end)->'history'->'days' $$;
 
 insert into auth.users(id,email) values ('f1000000-0000-0000-0000-0000000000a1','parts@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values ('f3000000-0000-0000-0000-0000000000a3','f1000000-0000-0000-0000-0000000000a1','parts-owner','parts@example.invalid');
@@ -65,6 +66,9 @@ select is(pg_temp.h('scores_read','parts-owner')->'scores'->'components',pg_temp
 select is(pg_temp.h('scores_read','parts-owner')->'scores'->'usual',pg_temp.usual(),'and the bands as written');
 select is(pg_temp.hist(7)->0->'components',pg_temp.parts(),'the score history returns each day''s parts');
 select ok(not (pg_temp.hist(7)->0 ? 'usual'),'and never the bands');
+select ok(not (pg_temp.hist(7,false)->0 ? 'components'),'but only when the read asks for them, so the producer''s own read of which days hold a row never carries them');
+select is((select count(*)::int from unnest(array['{"days":7,"parts":false}','{"days":7,"parts":"true"}','{"days":7,"parts":1}','{"days":7,"usual":true}']::jsonb[]) bad
+  where pg_temp.h('scores_history','parts-owner',bad)->>'error' = 'invalid_request'),4,'a history read with a parts value other than true, or any other key, is refused');
 
 -- The model's read is not given either column, nor anything in a pillar.
 select ok(not (pg_temp.model_read('parts-owner')->'context' ? 'components'),'the model''s read has no parts');

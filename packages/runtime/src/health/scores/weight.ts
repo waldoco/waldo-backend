@@ -34,11 +34,11 @@ const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[], detai
   const days = new Set<string>([target.day]);
   const demand = target.demand;
   let anyReading = false;
-  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number, signal: readonly string[] = []): boolean => {
+  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number): boolean => {
     anyReading = true;
     const at = standing(value, past.map(entry => entry.value), null);
     if (at === null) { absent.set(name, 'baseline_immature'); return false; }
-    components.push({ name, score: higherIsBetter(at.z), weight: share, basis: { z: at.z, own: at.own, ownShare: at.ownShare, signals: signal } });
+    components.push({ name, score: higherIsBetter(at.z), weight: share, basis: { z: at.z, own: at.own, ownShare: at.ownShare, signals: [] } });
     signals.push(name);
     own.push(at.own);
     past.forEach(entry => days.add(entry.day));
@@ -54,7 +54,7 @@ const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[], detai
     const value = measure(target);
     if (value === null) continue;
     absent.delete('physical_load');
-    if (add('physical_load', value, history(prior, measure), PHYSICAL_LOAD_SHARE, measure === activeEnergy ? ['active_energy'] : [])) break;
+    if (add('physical_load', value, history(prior, measure), PHYSICAL_LOAD_SHARE)) break;
   }
   if (!components.length) return { state: 'unavailable', reason: anyReading ? 'baseline_immature' : 'calendar_demand_unavailable' };
   const { score, coverage } = combine(components);

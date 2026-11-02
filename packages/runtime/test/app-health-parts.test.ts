@@ -126,6 +126,21 @@ describe('scores at health revision 8', () => {
     expect(error).toHaveBeenCalledWith('app health scores usual shape');
     expect(error.mock.calls.map(args => JSON.stringify(args)).join('\n')).not.toMatch(/share|centre|above_usual|\d/);
   });
+  it('never gives back a score the view withholds as the sum of its parts', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const damaged = { ...pillars.recovery, baseline: { state: 'provisional', personal_days: 5 } };
+    answers = { health_scores_read: { scores: row({ recovery: damaged, components: served.components, usual: served.usual }) } };
+    const body = JSON.parse((await text(SCORES, contracts('health=8'), ON))[1]);
+    expect(body.recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    expect(Object.keys(body.components)).toEqual(['form', 'weight']);
+    expect(JSON.stringify(body)).not.toContain('"hrv"');
+    expect(body.usual).toEqual(served.usual);
+    // A row whose pillar is unavailable and still holds parts for it shows no parts for it either, and none at all when none is left.
+    answers = { health_scores_read: { scores: row({ form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' }, components: { form: served.components.form, weight: served.components.weight } }) } };
+    const bare = JSON.parse((await text(SCORES, contracts('health=8'), ON))[1]);
+    expect(bare.components).toBeUndefined();
+    expect(healthScoresResponseV1Schema.safeParse(bare).success).toBe(true);
+  });
   it('never shows the owner\'s console either, which reads at revision 4 with no extras', () => {
     for (const revision of [4, 7, 8, 9]) {
       const view = healthScoresView({ scores: withExtras }, null, Date.parse(served.compiled_at), revision) as { body: Record<string, unknown> };
@@ -166,6 +181,21 @@ describe('score history at health revision 8', () => {
     expect(healthScoresHistoryResponseV1Schema.safeParse(body).success).toBe(true);
     expect(body.days[0].components).toEqual(servedHistory.days[0].components);
     expect(JSON.stringify(body)).not.toMatch(/"usual":/);
+  });
+  it('asks the database for parts only when it will show them, so every other read carries none', async () => {
+    const asked = async (revision: string, over: Record<string, string>) => { rpcs.length = 0; await days(revision, over); return rpcs.map(r => r.body.p_payload); };
+    expect(await asked('health=8', ON)).toEqual([JSON.stringify({ days: 7, parts: true })]);
+    for (const [revision, over] of [['health=7', ON], ['health=4', ON], ['health=8', {}], ['health=8', { HEALTH_SCORE_PARTS: '0' }], ['health=8', { HEALTH_USUAL: '1' }]] as const) {
+      expect(await asked(revision, over), `${revision} ${JSON.stringify(over)}`).toEqual([JSON.stringify({ days: 7 })]);
+    }
+  });
+  it('shows a day\'s parts only for the pillars the day shows as available', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const damaged = { ...pillars.recovery, baseline: { state: 'provisional', personal_days: 5 } };
+    const [, body] = await days('health=8', ON, [histRow({ recovery: damaged })]);
+    expect(body.days[0].recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    expect(body.days[0].components).toBeUndefined();
+    expect(healthScoresHistoryResponseV1Schema.safeParse(body).success).toBe(true);
   });
   it('is the revision-7 answer with the switch off, whatever the rows hold', async () => {
     const seven = await days('health=7', ON);

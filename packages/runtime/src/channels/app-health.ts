@@ -7,7 +7,7 @@ import {
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
   healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema,
 } from '../../../contracts/src/app/health-ingest';
-import { healthHistoryView, historyWindowOf } from './app-health-history';
+import { healthHistoryView, historyWindowOf, partsOfShownPillars } from './app-health-history';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
@@ -166,12 +166,17 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   const { trend: _trend, ...storedDebt } = asObject(stored?.sleep_debt) ?? {};
   const debt = shown && !priorLed && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(asObject(stored.sleep_debt) ? storedDebt : stored.sleep_debt) : null;
   if (debt && !debt.success) console.error('app health scores sleep debt shape');
-  const body = stored && {
+  const views = stored && { recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision) };
+  // The parts of a pillar are shown only while the pillar is: a score the view withholds is not given back as the sum of its parts.
+  const shownParts = stored && views && extras.scoreParts === true && revision >= HEALTH_PARTS_REVISION_V1 ? readExtra(stored, 'components') : {};
+  const partsOfShown = 'components' in shownParts && views ? partsOfShownPillars(shownParts.components as Record<string, unknown>, views) : {};
+  const body = stored && views && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
-    recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision),
+    ...views,
     ...(debt?.success ? { sleep_debt: debt.data } : {}),
     ...(revision >= HEALTH_BASELINE_REVISION_V1 ? { ...readExtra(stored, 'drivers'), ...readExtra(stored, 'windows') } : {}),
-    ...(revision >= HEALTH_PARTS_REVISION_V1 ? { ...(extras.scoreParts === true ? readExtra(stored, 'components') : {}), ...(extras.usual === true ? readExtra(stored, 'usual') : {}) } : {}),
+    ...(Object.keys(partsOfShown).length ? { components: partsOfShown } : {}),
+    ...(revision >= HEALTH_PARTS_REVISION_V1 && extras.usual === true ? readExtra(stored, 'usual') : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return { body: parsed.data };
@@ -208,7 +213,8 @@ const scoresHistory = async ({ request, url, doName, rpc, scoreParts }: AppHealt
     pillar: (pillar: Pillar, stored: unknown) => pillarView(pillar, stored, HEALTH_SCORES_HISTORY_REVISION_V1), failure: failureCode,
     ...(revision >= HEALTH_PARTS_REVISION_V1 && scoreParts === true ? { parts: (stored: unknown) => healthPartsV1Schema.safeParse(stored) } : {}),
   };
-  return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })), days, readers));
+  // The database returns each day's parts only when asked, so a build below revision 8 and the producer's own read never carry them.
+  return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days, ...(readers.parts ? { parts: true } : {}) })), days, readers));
 };
 
 // The owner's stated sleep need. The health plane answers with when it last changed too; the app is shown the need alone.

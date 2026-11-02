@@ -12,7 +12,8 @@
 -- - waldo.health_context_write is re-created whole from its last definition (20261101020000), admits the two keys through those
 --   functions, and never on a backfilled row. waldo.health_scores_read is re-created whole from its last definition (20261027170000)
 --   and returns both columns when set; waldo.health_scores_history is re-created whole from its last definition (20261027140000)
---   and returns each day's parts when set. The Worker shows them only to a build that names revision 8 while the switch is on.
+--   and returns each day's parts when set and asked for ({"days":90,"parts":true}), so the producer's own read of which days hold a row
+--   never pulls them. The Worker shows them only to a build that names revision 8 while the switch is on.
 -- Signatures, security definer, search_path and grants are unchanged. Rollback: supabase/rollback/20261102010000_health_body_parts_usual.down.sql.
 alter table public.health_context_daily add column components jsonb;
 alter table public.health_context_daily add column usual jsonb;
@@ -357,7 +358,7 @@ end $$;
 
 create or replace function waldo.health_scores_history(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare v_owner uuid; v_auth uuid; v_body jsonb; v_window integer; v_tz text; v_from date; v_to date; v_days jsonb;
+declare v_owner uuid; v_auth uuid; v_body jsonb; v_window integer; v_tz text; v_from date; v_to date; v_days jsonb; v_parts boolean;
 begin
   if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
     or waldo.router_signed('health.scores_history.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
@@ -367,8 +368,10 @@ begin
   if v_owner is null then return '{"error":"not_linked"}'; end if;
   if octet_length(p_payload) > 256 then return '{"error":"invalid_request"}'; end if;
   begin v_body := p_payload::jsonb; exception when others then return '{"error":"invalid_request"}'; end;
-  if jsonb_typeof(v_body) is distinct from 'object' or exists (select 1 from jsonb_object_keys(v_body) k where k <> 'days')
-    or jsonb_typeof(v_body->'days') is distinct from 'number' or (v_body->>'days') not in ('7', '30', '90') then return '{"error":"invalid_request"}'; end if;
+  if jsonb_typeof(v_body) is distinct from 'object' or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('days', 'parts'))
+    or jsonb_typeof(v_body->'days') is distinct from 'number' or (v_body->>'days') not in ('7', '30', '90')
+    or (v_body ? 'parts' and v_body->'parts' is distinct from 'true'::jsonb) then return '{"error":"invalid_request"}'; end if;
+  v_parts := coalesce(v_body->'parts' = 'true'::jsonb, false);
   v_window := (v_body->>'days')::integer;
   select b.timezone into v_tz
     from public.health_context_daily c join waldo.health_context_basis b on b.owner_id = v_owner and b.day = c.day
@@ -380,7 +383,7 @@ begin
     v_from := v_to - (v_window - 1);
     select jsonb_agg(jsonb_build_object('day', c.day, 'recovery', c.recovery, 'form', c.form, 'weight', c.weight)
         || case when to_jsonb(c) -> 'backfilled' = 'true'::jsonb then '{"backfilled":true}'::jsonb else '{}'::jsonb end
-        || case when c.components is null then '{}'::jsonb else jsonb_build_object('components', c.components) end order by c.day)
+        || case when not v_parts or c.components is null then '{}'::jsonb else jsonb_build_object('components', c.components) end order by c.day)
       into v_days
       from public.health_context_daily c join waldo.health_context_basis b on b.owner_id = v_owner and b.day = c.day
       where c.user_id = v_auth and c.day between v_from and v_to and waldo.health_basis_live(v_owner, b.consent_basis, false);
