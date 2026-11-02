@@ -185,7 +185,7 @@ const sampleCommon = {
   utc_offset_minutes: z.int().min(-840).max(840),
 };
 const hrvMethodV1 = z.enum(['rmssd', 'sdnn']);
-const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration', 'stand_hour'];
+const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration', 'stand_hour', 'heart_rate_bins_window'];
 const HOUR_MS = 3_600_000;
 // The bucket is exactly one hour and starts on the hour of the reading's own offset (so +05:30 and +05:45
 // zones align on their local clock, not the UTC clock).
@@ -243,6 +243,19 @@ const workoutDetail = {
   // A swim's distance is distance_m.
   swimming: z.strictObject({ strokes: z.int().min(0).max(100_000) }).optional(),
 };
+// Health revision 12: an hour's heart rate as the seconds spent in each 5 bpm, split by whether a workout the platform holds covered
+// them. The phone holds each device's sample until that device's next one, at most ten minutes, and counts a second once across
+// devices, so a gap is uncovered time, not low time. Bins start at from_bpm; the first bin also takes anything slower and the last
+// anything from 225 up. value is the seconds covered, both arrays summed. The beat stream, and any sample time, stays on the phone.
+export const HEALTH_PASSIVE_LOAD_REVISION_V1 = 12;
+export const HEALTH_HR_BIN_BPM_V1 = 5;
+export const HEALTH_HR_BINS_TOP_BPM_V1 = 225;
+const binSeconds = z.array(z.int().min(0).max(3_600)).min(1).max(40);
+type BinsShape = { value: number; from_bpm: number; outside_workouts: readonly number[]; in_workouts: readonly number[] };
+const binsAddUp = (bins: BinsShape): boolean =>
+  bins.outside_workouts.length === bins.in_workouts.length
+  && bins.from_bpm + HEALTH_HR_BIN_BPM_V1 * (bins.outside_workouts.length - 1) <= HEALTH_HR_BINS_TOP_BPM_V1
+  && [...bins.outside_workouts, ...bins.in_workouts].reduce((a, b) => a + b, 0) === bins.value;
 type WorkoutShape = { start_at: string; end_at: string; avg_hr_bpm?: number | undefined; max_hr_bpm?: number | undefined; hr_zones?: { seconds: readonly number[] } | undefined };
 const isOneSession = (workout: WorkoutShape): boolean =>
   (workout.avg_hr_bpm === undefined || workout.max_hr_bpm === undefined || workout.avg_hr_bpm <= workout.max_hr_bpm)
@@ -282,6 +295,12 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('lean_body_mass'), unit: z.literal('kilograms'), value: z.number().finite().min(10).max(250) }),
   // One local hour: 1 when the owner stood and moved in it, 0 when the Watch saw the hour idle.
   z.strictObject({ ...sampleCommon, signal: z.literal('stand_hour'), unit: z.literal('count'), value: z.union([z.literal(0), z.literal(1)]) }),
+  // Revision 12.
+  z.strictObject({
+    ...sampleCommon, signal: z.literal('heart_rate_bins_window'), unit: z.literal('seconds'), value: z.int().min(1).max(3_600),
+    from_bpm: z.int().min(30).max(HEALTH_HR_BINS_TOP_BPM_V1).refine(bpm => bpm % HEALTH_HR_BIN_BPM_V1 === 0, 'bins start on a multiple of 5 bpm'),
+    bin_bpm: z.literal(HEALTH_HR_BIN_BPM_V1), outside_workouts: binSeconds, in_workouts: binSeconds,
+  }).refine(binsAddUp, 'heart-rate bins are two equal arrays below the top bin whose seconds add up to value'),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
@@ -290,7 +309,7 @@ export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
-  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour',
+  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour', 'heart_rate_bins_window',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
@@ -572,14 +591,29 @@ export const healthDayLoadBandV1Schema = z.union([
   z.strictObject({ state: z.literal('provisional'), own_days: z.int().min(0).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - 1), days_until_personal: z.int().min(1).max(HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1) })
     .refine(band => band.days_until_personal === HEALTH_DAY_LOAD_BAND_MIN_DAYS_V1 - band.own_days, { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] }),
 ]);
+const dayLoadCommon = {
+  state: z.literal('available'), activation: z.literal('candidate_unaccepted'), score: loadScore,
+  // True when the zones were set from the highest heart rate seen, not a measured maximum.
+  approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
+  band: healthDayLoadBandV1Schema,
+};
+const labelledApproximate = (load: { method: string; approximate: boolean }) => load.approximate === (load.method === 'hr_zones_observed_peak');
+
+// Health revision 12: the day's load counting every observed minute (day-load.candidate.v2), not only workouts. Its parts are
+// shares of the day's load, unit-free because the score is log-shaped. A day the passive part cannot be read for is v1, with the
+// reason. Below revision 12 a v2 day is served as that day's v1 load, and no load carries parts.
+export const HEALTH_DAY_LOAD_V2_VERSION_V1 = 'day-load.candidate.v2';
+export const healthDayLoadPassiveReasonV1Schema = z.enum(['no_bins', 'sparse', 'no_zone_basis', 'zone_basis_low']);
+const loadShare = z.number().finite().min(0).max(1);
+const dayLoadPartsOf = <Passive extends z.ZodType>(passive: Passive) => z.strictObject({ workouts: z.strictObject({ share: loadShare }), passive });
+const healthDayLoadV1PartsSchema = dayLoadPartsOf(z.strictObject({ state: z.literal('unavailable'), reason: healthDayLoadPassiveReasonV1Schema }))
+  .refine(parts => parts.workouts.share === 0 || parts.workouts.share === 1, { error: 'without a passive part the workouts are all of the load, or there is none', path: ['workouts'] });
+const healthDayLoadV2PartsSchema = dayLoadPartsOf(z.strictObject({ state: z.literal('available'), share: loadShare, observed_hours: z.int().min(12).max(25) }))
+  .refine(parts => (parts.workouts.share === 0 && parts.passive.share === 0) || Math.abs(parts.workouts.share + parts.passive.share - 1) <= 0.001, { error: 'the parts\' shares add up to the load', path: ['workouts'] });
 export const healthDayLoadV1Schema = z.union([
-  z.strictObject({
-    state: z.literal('available'), version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), activation: z.literal('candidate_unaccepted'),
-    score: loadScore, method: healthDayLoadMethodV1Schema,
-    // True when the zones were set from the highest heart rate seen in a workout, not a measured maximum.
-    approximate: z.boolean(), window_days: z.literal(HEALTH_DAY_LOAD_WINDOW_DAYS_V1),
-    band: healthDayLoadBandV1Schema,
-  }).refine(load => load.approximate === (load.method === 'hr_zones_observed_peak'), { error: 'approximate is the observed-peak method', path: ['approximate'] }),
+  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_VERSION_V1), method: healthDayLoadMethodV1Schema, parts: healthDayLoadV1PartsSchema.optional() })
+    .refine(labelledApproximate, { error: 'approximate is the observed-peak method', path: ['approximate'] }),
+  z.strictObject({ ...dayLoadCommon, version: z.literal(HEALTH_DAY_LOAD_V2_VERSION_V1), method: z.literal('hr_zones_observed_peak'), approximate: z.literal(true), parts: healthDayLoadV2PartsSchema }),
   z.strictObject({ state: z.literal('unavailable'), reason: z.literal('no_readings') }),
 ]);
 

@@ -1,0 +1,249 @@
+{
+  "notes": "Synthetic. Health revision 12: one hour's heart-rate bins (70-110 bpm in 5 bpm bins, 30 minutes outside a workout and 30 inside), and a scores body whose day load is day-load.candidate.v2 with its parts. v1_with_parts is a day the passive part could not be read for.",
+  "sample": {
+    "sample_id": "heart_rate_bins_window:apple:1762070400",
+    "revision": 1762074000,
+    "start_at": "2026-11-02T08:00:00.000Z",
+    "end_at": "2026-11-02T09:00:00.000Z",
+    "day": "2026-11-02",
+    "utc_offset_minutes": 0,
+    "signal": "heart_rate_bins_window",
+    "unit": "seconds",
+    "value": 3600,
+    "from_bpm": 70,
+    "bin_bpm": 5,
+    "outside_workouts": [
+      600,
+      1200,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "in_workouts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      600,
+      900,
+      300
+    ]
+  },
+  "scores": {
+    "day": "2026-11-02",
+    "timezone": "Asia/Kolkata",
+    "compiled_at": "2026-11-02T07:00:00.000Z",
+    "freshness": "fresh",
+    "recovery": {
+      "state": "available",
+      "score": 71,
+      "zone": "solid",
+      "algorithm_version": "recovery.v5",
+      "activation": "accepted",
+      "confidence": 0.8,
+      "hrv_method": "rmssd",
+      "baseline": {
+        "state": "personal",
+        "personal_days": 21,
+        "needed": 14,
+        "prior": "adults"
+      }
+    },
+    "form": {
+      "state": "available",
+      "score": 64,
+      "zone": "steady",
+      "algorithm_version": "form.v9",
+      "activation": "accepted",
+      "confidence": 0.7,
+      "hrv_method": "rmssd",
+      "baseline": {
+        "state": "provisional",
+        "personal_days": 9,
+        "needed": 14,
+        "prior": "adults"
+      }
+    },
+    "weight": {
+      "state": "available",
+      "score": 51,
+      "zone": "moderate",
+      "algorithm_version": "weight.v5",
+      "activation": "accepted",
+      "confidence": 0.6,
+      "hrv_method": null,
+      "baseline": {
+        "state": "personal",
+        "personal_days": 30,
+        "needed": 14,
+        "prior": "none"
+      }
+    },
+    "day_load": {
+      "state": "available",
+      "version": "day-load.candidate.v2",
+      "activation": "candidate_unaccepted",
+      "score": 52.1,
+      "method": "hr_zones_observed_peak",
+      "approximate": true,
+      "window_days": 28,
+      "band": {
+        "state": "personal",
+        "low": 9.6,
+        "centre": 18.4,
+        "high": 27.2,
+        "own_days": 19,
+        "days_until_personal": 0
+      },
+      "parts": {
+        "workouts": {
+          "share": 0
+        },
+        "passive": {
+          "state": "available",
+          "share": 1,
+          "observed_hours": 24
+        }
+      }
+    },
+    "form_curve": {
+      "version": "form.v9",
+      "points": [
+        {
+          "at": "2026-11-02T07:00:00.000Z",
+          "score": 58,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T07:15:00.000Z",
+          "score": 60,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T07:30:00.000Z",
+          "score": 61,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T07:45:00.000Z",
+          "score": 63,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T08:00:00.000Z",
+          "score": 66,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T08:15:00.000Z",
+          "score": 67,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T08:30:00.000Z",
+          "score": 65,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T08:45:00.000Z",
+          "score": 64,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T09:00:00.000Z",
+          "score": 63,
+          "kind": "measured"
+        },
+        {
+          "at": "2026-11-02T09:15:00.000Z",
+          "score": 64,
+          "kind": "measured"
+        }
+      ]
+    },
+    "stress_curve": {
+      "version": "stress-curve.candidate.v1",
+      "hours": [
+        {
+          "at": "2026-11-02T06:00:00.000Z",
+          "value": null,
+          "band": null,
+          "reason": "no_reading"
+        },
+        {
+          "at": "2026-11-02T07:00:00.000Z",
+          "value": null,
+          "band": null,
+          "reason": "baseline_immature"
+        },
+        {
+          "at": "2026-11-02T08:00:00.000Z",
+          "value": 41.5,
+          "band": "medium"
+        },
+        {
+          "at": "2026-11-02T09:00:00.000Z",
+          "value": null,
+          "band": null,
+          "reason": "moving"
+        },
+        {
+          "at": "2026-11-02T10:00:00.000Z",
+          "value": 57.2,
+          "band": "medium"
+        },
+        {
+          "at": "2026-11-02T11:00:00.000Z",
+          "value": 73.9,
+          "band": "high"
+        },
+        {
+          "at": "2026-11-02T12:00:00.000Z",
+          "value": null,
+          "band": null,
+          "reason": "workout"
+        },
+        {
+          "at": "2026-11-02T13:00:00.000Z",
+          "value": 27.4,
+          "band": "low"
+        },
+        {
+          "at": "2026-11-02T14:00:00.000Z",
+          "value": 50.0,
+          "band": "medium"
+        }
+      ]
+    }
+  },
+  "v1_with_parts": {
+    "state": "available",
+    "version": "day-load.candidate.v1",
+    "activation": "candidate_unaccepted",
+    "score": 61.4,
+    "method": "hr_zones",
+    "approximate": false,
+    "window_days": 28,
+    "band": {
+      "state": "personal",
+      "low": 22.1,
+      "centre": 43.8,
+      "high": 65.5,
+      "own_days": 24,
+      "days_until_personal": 0
+    },
+    "parts": {
+      "workouts": {
+        "share": 1
+      },
+      "passive": {
+        "state": "unavailable",
+        "reason": "sparse"
+      }
+    }
+  }
+}

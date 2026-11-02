@@ -9,6 +9,7 @@ import {
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
   healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
+  HEALTH_PASSIVE_LOAD_REVISION_V1, HEALTH_DAY_LOAD_V2_VERSION_V1, healthDayLoadPassiveReasonV1Schema, healthSignalV1Schema,
   HEALTH_BODY_DAY_REVISION_V1, healthDayLoadBandV1Schema, healthDayLoadMethodV1Schema, healthDayLoadV1Schema, healthFormCurveV1Schema, healthStressBandV1Schema, healthStressCurveV1Schema, healthStressHourReasonV1Schema, stressBandOf,
 } from './health-ingest';
 
@@ -877,6 +878,66 @@ describe('health revision 10: the day load, today\'s Form curve and the hourly s
       ]);
       const { history } = (scores as { history?: unknown });
       expect(history).toBeUndefined();
+    });
+  });
+});
+
+describe('health revision 12: an hour\'s heart-rate bins and the day\'s load counting every observed minute', async () => {
+  const fixture = (await import('./fixtures/health-passive-load.v12.json')).default as unknown as { sample: Record<string, any>; scores: Record<string, any>; v1_with_parts: Record<string, any> };
+  const { sample, scores, v1_with_parts: v1 } = fixture;
+  const load = scores.day_load;
+  it('is health revision 12, after the day load\'s revision, and names the second load version', () => {
+    expect(HEALTH_PASSIVE_LOAD_REVISION_V1).toBe(12);
+    expect(HEALTH_PASSIVE_LOAD_REVISION_V1).toBeGreaterThan(HEALTH_BODY_DAY_REVISION_V1);
+    expect(HEALTH_DAY_LOAD_V2_VERSION_V1).toBe('day-load.candidate.v2');
+    expect([...healthDayLoadPassiveReasonV1Schema.options]).toEqual(['no_bins', 'sparse', 'no_zone_basis', 'zone_basis_low']);
+  });
+
+  describe('heart_rate_bins_window', () => {
+    it('reads an hour\'s bins, one bin, and the top bin at 225, and checks each as its own change', () => {
+      expect(healthSampleV1Schema.safeParse(sample).success).toBe(true);
+      expect(healthSampleV1Schema.safeParse({ ...sample, value: 60, from_bpm: 225, outside_workouts: [60], in_workouts: [0] }).success).toBe(true);
+      expect(healthSampleV1Schema.safeParse({ ...sample, value: 3600, from_bpm: 30, outside_workouts: [...Array(39).fill(0), 3600], in_workouts: Array(40).fill(0) }).success).toBe(true);
+      expect(checkHealthChangeV1('sample', 0, sample)).toMatchObject({ ok: true });
+      expect(healthSignalV1Schema.safeParse('heart_rate_bins_window').success).toBe(true);
+    });
+    it('refuses arrays of two lengths, seconds that do not add up to value, bins past 225, a start off the 5 bpm grid, no seconds, and extra keys', () => {
+      rejected(healthSampleV1Schema, [
+        { ...sample, in_workouts: sample.in_workouts.slice(1) }, { ...sample, value: 3599 }, { ...sample, value: 0, outside_workouts: [0], in_workouts: [0] },
+        { ...sample, from_bpm: 72 }, { ...sample, from_bpm: 25 }, { ...sample, from_bpm: 230 }, { ...sample, from_bpm: 195 },
+        { ...sample, value: 3600, outside_workouts: [...Array(40).fill(0), 3600], in_workouts: Array(41).fill(0) }, { ...sample, outside_workouts: [], in_workouts: [] },
+        { ...sample, outside_workouts: sample.outside_workouts.map((s: number, i: number) => (i === 0 ? s + 0.5 : s)), value: 3600.5 },
+        { ...sample, outside_workouts: [-600, 2400, ...sample.outside_workouts.slice(2)] }, { ...sample, bin_bpm: 10 }, { ...sample, unit: 'beats_per_minute' },
+        { ...sample, value: 3601, outside_workouts: [601, 1200, 0, 0, 0, 0, 0, 0] }, { ...sample, beats: [72, 74] }, { ...sample, end_at: '2026-11-02T09:30:00.000Z' },
+      ]);
+    });
+  });
+
+  describe('day_load', () => {
+    it('reads the fixture\'s v2 load, and a v1 load with parts that says why passive is missing', () => {
+      expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+      expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0, parts: { workouts: { share: 0 }, passive: { state: 'available', share: 0, observed_hours: 12 } } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse(v1).success).toBe(true);
+      for (const reason of healthDayLoadPassiveReasonV1Schema.options) expect(healthDayLoadV1Schema.safeParse({ ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason } } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...v1, parts: { ...v1.parts, workouts: { share: 0 } } }).success).toBe(true);
+    });
+    it('refuses a v2 load without parts or with a missing passive part, shares that do not add up, another method or no approximate label, a direction, and the stored v1 beside it', () => {
+      const { parts, ...bare } = load;
+      rejected(healthDayLoadV1Schema, [
+        bare, { ...load, parts: { ...parts, passive: { state: 'unavailable', reason: 'sparse' } } },
+        { ...load, parts: { workouts: { share: 0.5 }, passive: { ...parts.passive, share: 0.4 } } }, { ...load, parts: { ...parts, passive: { ...parts.passive, observed_hours: 11 } } },
+        { ...load, parts: { ...parts, passive: { ...parts.passive, observed_hours: 26 } } }, { ...load, parts: { ...parts, passive: { ...parts.passive, share: 1.2 } } },
+        { ...load, method: 'hr_zones', approximate: false }, { ...load, approximate: false }, { ...load, direction: 'above_usual' }, { ...load, v1 }, { ...load, version: 'day-load.candidate.v3' },
+        { ...load, parts: { ...parts, trimp: 194 } }, { ...load, parts: { ...parts, workouts: { share: 0, load: 0 } } },
+      ]);
+    });
+    it('refuses a v1 load whose parts claim a passive share, a split workouts share, or an unnamed reason', () => {
+      rejected(healthDayLoadV1Schema, [
+        { ...v1, parts: { workouts: { share: 0.7 }, passive: { state: 'available', share: 0.3, observed_hours: 20 } } }, { ...v1, parts: { ...v1.parts, workouts: { share: 0.5 } } },
+        { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason: 'watch_off' } } }, { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable' } } }, { ...v1, parts: null },
+      ]);
     });
   });
 });

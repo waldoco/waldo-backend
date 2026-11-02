@@ -1,6 +1,7 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import { dayLoad } from './scores/day-load';
+import { dayLoadV2, type PassiveInput } from './scores/passive-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { formCurve } from './scores/form-curve';
 import { stressCurve } from './scores/stress-curve';
@@ -42,6 +43,9 @@ export type ProducerDeps = Readonly<{
   // same readings as the scores, changes none of them, and costs the owner only itself if it cannot be computed. Never on a
   // backfilled row.
   dayLoad?: boolean;
+  // The upload sources whose days the day's load counts every observed minute for (day-load.candidate.v2), from the hourly
+  // heart-rate bins; empty or absent, every day is v1. It applies only beside dayLoad. A day v2 cannot read is v1 with the reason.
+  passiveLoad?: readonly string[];
   formCurve?: boolean;
   stressCurve?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
@@ -77,6 +81,13 @@ const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_h
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
 const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
 const NIGHT_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature'];
+// The passive load's readings are read on their own too: 24 bins and 24 step windows a day would otherwise eat the scores' row cap.
+const PASSIVE_SIGNALS = ['heart_rate_bins_window', 'steps_window'];
+// Only the phone's own transports send heart-rate bins.
+const PASSIVE_SOURCES: readonly string[] = ['apple', 'health_connect', 'samsung'];
+// HEALTH_PASSIVE_LOAD: "0", or a comma list of the sources passive load is on for. Anything not a phone transport is ignored.
+export const passiveLoadSources = (value: string | undefined): readonly string[] =>
+  (value ?? '').split(',').map(source => source.trim()).filter(source => PASSIVE_SOURCES.includes(source));
 const RESTING_METHODS: readonly string[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown'];
 const STAGES = ['light', 'deep', 'rem', 'unspecified', 'awake'] as const;
 // ADR-0081's confidence order for whole sources (Apple > Oura > WHOOP), then the phone transports. Ranked, not counted:
@@ -90,7 +101,9 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
+// max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; max?: number | null; bins?: HeartRateBins | null }>;
+export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
@@ -117,6 +130,14 @@ const workoutDetailOf = (activity: unknown, raw: unknown): WorkoutDetail => {
     detail: r ?? {},
   };
 };
+const binSeconds = (raw: unknown): number[] | null =>
+  Array.isArray(raw) && raw.length >= 1 && raw.length <= 40 && raw.every(s => Number.isInteger(s) && s >= 0) ? raw as number[] : null;
+// An hour's bins, or none: two arrays of one length starting on the 5 bpm grid, as the contract admits.
+const binsOf = (raw: unknown): HeartRateBins | null => {
+  const r = asRecord(raw), outside = binSeconds(r?.outside_workouts), inside = binSeconds(r?.in_workouts);
+  const fromBpm = r?.from_bpm;
+  return outside && inside && outside.length === inside.length && typeof fromBpm === 'number' && Number.isInteger(fromBpm) && fromBpm % 5 === 0 && fromBpm >= 30 && fromBpm <= 225 ? { fromBpm, outside, inside } : null;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -127,6 +148,8 @@ const reading = (raw: unknown): Reading | null => {
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
     samsungWriter: r.samsung_writer === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
+    max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
+    bins: r.signal === 'heart_rate_bins_window' ? binsOf(r.bins) : null,
   };
 };
 
@@ -186,7 +209,8 @@ const span = (r: Reading): Span | null => (r.startAt && r.endAt ? { startAt: r.s
 
 // The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled duration is
 // time asleep by the contract; a duration labelled time in bed or unknown is not taken for it.
-const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
+const isAsleep = (r: Reading): boolean => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration');
+const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(isAsleep));
 const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   const asleep = asleepOf(readings);
   const midpoint = newest(readings.filter(r => r.signal === 'sleep_midpoint'));
@@ -405,6 +429,26 @@ const workoutsOf = (source: Source): WorkoutLoad[] => sessionsOf(source.readings
   .map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null }));
 const observedDaysOf = (source: Source): string[] => [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))];
 
+// What the passive load reads of one source: its hourly bins and steps (read on their own, under the same consent epoch), and
+// from its scores' readings its nights, its day peaks and its sessions with their spans.
+const passiveInputOf = (source: Source, passive: Series, targetDay: string): PassiveInput | null => {
+  const read = passive.sources.find(other => other.source === source.source && other.epoch === source.epoch);
+  if (!read) return null;
+  const ms = (at: string | null) => (at ? Date.parse(at) : NaN);
+  const sessions = sessionsOf(source.readings.filter(r => r.signal === 'workout'));
+  return {
+    targetDay,
+    bins: read.readings.flatMap(r => (r.signal === 'heart_rate_bins_window' && r.bins && r.startAt && r.endAt ? [{ day: r.day, startAt: ms(r.startAt), endAt: ms(r.endAt), ...r.bins }] : [])),
+    steps: read.readings.flatMap(r => (r.signal === 'steps_window' && r.startAt ? [{ startAt: ms(r.startAt), count: r.value }] : [])),
+    nights: source.readings.filter(r => isAsleep(r) && r.startAt && r.endAt).map(r => ({ startAt: ms(r.startAt), endAt: ms(r.endAt) })),
+    peaks: [
+      ...source.readings.flatMap(r => (r.signal === 'heart_rate_window' && r.max !== null && r.max !== undefined ? [{ day: r.day, bpm: r.max }] : [])),
+      ...sessions.flatMap(r => { const max = r.workout?.detail.max_hr_bpm; return typeof max === 'number' && Number.isFinite(max) ? [{ day: r.day, bpm: max }] : []; }),
+    ],
+    sessions: sessions.flatMap(r => (r.startAt && r.endAt ? [{ day: r.day, startAt: ms(r.startAt), endAt: ms(r.endAt), zoneSeconds: r.workout?.zoneSeconds ?? null }] : [])),
+  };
+};
+
 // The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
 const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({ throughDay: yesterday, observedDays: observedDaysOf(source), workouts: workoutsOf(source) });
 
@@ -497,6 +541,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
     const scoresRead = deps.readSeries({ ...range, signals: SIGNALS });
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
+    const passiveOn = deps.dayLoad === true && (deps.passiveLoad?.length ?? 0) > 0;
+    const passiveRead = passiveOn ? deps.readSeries({ ...range, signals: PASSIVE_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' })) : null;
     const parsed = parseSeries(await scoresRead);
     if (parsed.kind !== 'series') return parsed.kind;
     const stated = deps.readSettings ? statedNeedOf(await deps.readSettings().catch(() => null)) : { minutes: null, changedAt: null };
@@ -505,6 +551,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
     const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
+    // Without its bins read a day's load is v1, as with the switch off: nothing is claimed about a passive part it could not read.
+    const passiveParsed = passiveRead && await passiveRead;
+    if (passiveParsed && passiveParsed.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'passive_unread' }));
+    const passive = passiveParsed?.kind === 'series' ? untruncated(passiveParsed.series, 'passive_truncated') : null;
+    const dayLoadOf = (chosen: Source, targetDay: string) => {
+      const v1 = dayLoad({ targetDay, observedDays: observedDaysOf(chosen), workouts: workoutsOf(chosen) });
+      const input = passive && deps.passiveLoad?.includes(chosen.source) ? passiveInputOf(chosen, passive, targetDay) : null;
+      return input ? dayLoadV2(v1, input) : v1;
+    };
     // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
     // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
     const present = [...series.sources].filter(s => s.readings.length > 0);
@@ -582,7 +637,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, forToday),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
         ...scoreDetailOf(scores, ask),
-        ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoad({ targetDay, observedDays: observedDaysOf(chosen), workouts: workoutsOf(chosen) }) })) : {}),
+        ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoadOf(chosen, targetDay) })) : {}),
         ...(forToday && deps.formCurve ? orNothing('form curve', () => { const curve = formCurve(input, scores.form); return curve && { form_curve: curve }; }) : {}),
         ...(forToday && deps.stressCurve ? orNothing('stress curve', () => { const curve = stressCurve({ targetDay, days, asOf: series.readAt }); return curve && { stress_curve: curve }; }) : {}),
       };

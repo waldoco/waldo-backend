@@ -66,6 +66,13 @@ describe('MEDICATIONS in the Worker config', () => {
   });
 });
 
+describe('HEALTH_PASSIVE_LOAD in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on for named sources at a deploy with migration 20261102080000', () => {
+    expect(parsed.vars.HEALTH_PASSIVE_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_PASSIVE_LOAD).toBe('0');
+  });
+});
+
 describe('HEALTH_DAY_LOAD, HEALTH_FORM_CURVE and HEALTH_STRESS_CURVE in the Worker config', () => {
   it('are off in both blocks until the gate turns each on at a named deploy with migrations 20261102030000 and 20261102040000', () => {
     for (const name of ['HEALTH_DAY_LOAD', 'HEALTH_FORM_CURVE', 'HEALTH_STRESS_CURVE']) {
