@@ -168,7 +168,9 @@ If zone 1's start reaches zone 2's (60 % of the maximum), the observed maximum c
   - Weight's `physical_load` part (that would be `weight.v6`);
   - the 28-day training-load phrase, which stays workouts only.
 
-## 5. Contract: health revision R-e
+## 5. Contract: health revision R-e (12, provisional)
+
+**Allocated by the gate on 2 November.** R-e is 12 for now. Revisions go in landing order, so if passive merges before S6, it takes 11 and S6 moves to 12. The gate confirms the number at merge. The build keeps it in one constant, so the change is one line. M-f is `20261102080000`.
 
 **Ingest.**
 - `heart_rate_bins_window` is accepted from R-e.
@@ -251,9 +253,9 @@ These come on top of #1822 §4's list:
 - **`HEALTH_PASSIVE_LOAD`**, default `"0"` in both var blocks, classified in the staging profile.
 - **Off,** the producer writes v1 exactly. Ingest stores bins from R-e whatever the switch, so the band warms before the flip (Q3).
 - **Asked of the gate, none taken:**
-  - health revision R-e: 12 if S6 ships at 11 first, or reordered if passive lands before S6;
-  - migration M-f;
-  - whether the brain paragraph goes on #60's branch or a follow-up PR.
+  - health revision R-e: allocated, 12 (provisional, confirmed at merge);
+  - migration M-f: allocated, `20261102080000`;
+  - the brain paragraph: its own PR (#61) on #60's branch, reviewed after #60 (gate ruling).
 - **Depends on** S4 (the `day_load` column, fence and band).
 - **App (waldoco/waldo-app):** the bins builder beside `heartRateWindows`, iOS and Android, sent from R-e.
 
