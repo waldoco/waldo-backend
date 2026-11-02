@@ -5,7 +5,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { buildSessionState } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { agentMailInbox } from '../src/channels/agent-mail/inbox';
-import type { AgentMailParts } from '../src/channels/agent-mail/render';
+import { WALDO_SITE, type AgentMailParts } from '../src/channels/agent-mail/render';
 import { agentMailIntact, type AgentMailSendProposal } from '../src/channels/agent-mail/send';
 import { approvalDesk, CARD_SHOWN_IN_FULL } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
@@ -78,7 +78,7 @@ describe('send_agent_mail', () => {
         const [row] = f.rows();
         expect(row).toMatchObject({ status: 'open', payload: { handle: 'sam', from: { name: "Waldo, Sam's assistant", address: `sam@${DOMAIN}` }, to: ['lee@example.test'], cc: ['kim@example.test'], subject: 'Friday' } });
         expect((out as { data?: { proposal_id?: string } }).data?.proposal_id).toBe(row!.id);
-        expect(row!.payload.body).toContain(`Waldo, Sam's assistant\nsam@${DOMAIN}`);
+        expect(row!.payload.body).toContain(`Waldo\nSam's personal assistant\n${WALDO_SITE}`);
         expect(f.sent).toEqual([]);
         // The same turn and arguments find the same card.
         await f.call(ARGS, taint);

@@ -1,8 +1,9 @@
 import { WALDO_MARK_HEIGHT, WALDO_MARK_PNG_BASE64, WALDO_MARK_WIDTH } from './mark';
 
-// Turns a draft Waldo wrote into the exact mail that leaves Waldo's own mailbox. Pure: the same input always gives the
-// same bytes, so the approval card, the stored message and the send are one thing. The model writes every word; the
-// frame adds only a wordmark, the layout and a signature with Waldo's mark saying whose assistant Waldo is. Every field the model or a
+// Turns a draft Waldo wrote into the exact mail that leaves Waldo's own mailbox (renderAgentMail) or the owner's Gmail
+// (renderOwnerMail). Pure: the same input always gives the same bytes, so the approval card, the stored message and the
+// send are one thing. The model writes every word up to its closing; both add the same signature with Waldo's mark saying
+// whose assistant Waldo is, and Waldo's own mail adds a wordmark and layout around it. Every field the model or a
 // directory supplies is untrusted: text is escaped, links must be http(s) and show where they go, header values lose
 // control characters, and an address that is not plainly an address refuses the whole render.
 
@@ -250,17 +251,26 @@ const quotedPrintable = (text: string): string => text.split('\n').map(line => {
 }).join('\r\n');
 const base64Lines = (base64: string) => base64.match(/.{1,76}/g)!.join('\r\n');
 
-const signatureName = (first: string | null) => first ? `Waldo, ${first}'s assistant` : 'Waldo';
+const fromName = (first: string | null) => first ? `Waldo, ${first}'s assistant` : 'Waldo';
 
-const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ caption: string; href: string }> | null, first: string | null, address: string, contentId: string) => {
+// The signature under every email Waldo writes, from either mailbox: Waldo, linked to its site, whose personal assistant
+// it is, and its mark. With no first name to use there is no assistant line.
+export const WALDO_SITE = 'https://heywaldo.in';
+const assistantLine = (first: string | null) => first ? `${first}'s personal assistant` : null;
+const signatureText = (first: string | null) => ['Waldo', assistantLine(first), WALDO_SITE].filter(line => line !== null).join('\n');
+const signatureHtml = (first: string | null, contentId: string) => {
+  const role = assistantLine(first);
+  return `<p style="margin:0 0 8px 0"><a href="${WALDO_SITE}" style="${LINK_STYLE};font-weight:bold">Waldo</a>${role ? `<br><span style="color:${MUTED}">${escape(role)}</span>` : ''}</p>`
+    + `<img src="cid:${contentId}" width="${WALDO_MARK_WIDTH}" height="${WALDO_MARK_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none">`;
+};
+// The model's words, then the signature: the plain text a client shows, and what an approval card shows.
+const signedText = (bodyText: string, first: string | null) => `${bodyText}\n\n${signatureText(first)}`;
+
+const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ caption: string; href: string }> | null, first: string | null, contentId: string) => {
   const calloutHtml = callout ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0"><tr><td style="background-color:${ACCENT_SUBTLE};border-radius:12px;padding:14px 16px">${htmlInline(callout)}</td></tr></table>` : '';
   const actionHtml = action ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 8px 0"><tr><td style="background-color:${INK};border-radius:12px"><a href="${escape(action.href)}" style="display:inline-block;padding:12px 20px;color:${ON_INK};font-weight:bold;text-decoration:none">${escape(action.caption)}</a></td></tr></table>`
     + `<p style="margin:0 0 16px 0;font-size:13px;color:${MUTED};word-break:break-all">${escape(action.href)}</p>` : '';
-  const signature = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 0 0;border-top:1px solid ${BORDER}"><tr><td style="padding:16px 0 0 0">`
-    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="vertical-align:middle;padding:0 12px 0 0">`
-    + `<img src="cid:${contentId}" width="${WALDO_MARK_WIDTH}" height="${WALDO_MARK_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none"></td>`
-    + `<td style="vertical-align:middle;font-size:13px;line-height:1.5;color:${MUTED}"><strong style="color:${INK}">Waldo</strong>${first ? `, ${escape(first)}'s assistant` : ''}<br>${escape(address)}</td>`
-    + '</tr></table></td></tr></table>';
+  const signature = signatureHtml(first, contentId);
   return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">'
     + `<title>${escape(subject)}</title></head>\n<body style="margin:0;padding:0;background-color:${CANVAS}">\n`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${CANVAS}"><tr><td align="center" style="padding:24px 12px">\n`
@@ -272,6 +282,33 @@ const htmlDocument = (subject: string, blocks: readonly Block[], callout: readon
     + `<tr><td style="background-color:${CARD};border:1px solid ${BORDER};border-radius:16px;padding:28px;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n`
     + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</td></tr></table>\n</body></html>`;
 };
+
+// The body both renders send: the plain text, and the HTML with Waldo's mark inline by its Content-ID.
+const alternativeBody = (text: string, html: string, contentId: string): string[] => [
+  `--${ALT}`,
+  'Content-Type: text/plain; charset="UTF-8"',
+  'Content-Transfer-Encoding: quoted-printable',
+  '',
+  quotedPrintable(text),
+  `--${ALT}`,
+  `Content-Type: multipart/related; boundary="${REL}"; type="text/html"`,
+  '',
+  `--${REL}`,
+  'Content-Type: text/html; charset="UTF-8"',
+  'Content-Transfer-Encoding: quoted-printable',
+  '',
+  quotedPrintable(html),
+  `--${REL}`,
+  `Content-Type: image/png; name="${MARK_FILE}"`,
+  'Content-Transfer-Encoding: base64',
+  `Content-ID: <${contentId}>`,
+  `Content-Disposition: inline; filename="${MARK_FILE}"`,
+  '',
+  base64Lines(WALDO_MARK_PNG_BASE64),
+  `--${REL}--`,
+  `--${ALT}--`,
+  '',
+];
 
 export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, recipients: AgentMailRecipients, wire: AgentMailWire): AgentMailRendered {
   const draft: AgentMailDraft = {
@@ -302,24 +339,23 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     action = { caption: label, href };
   }
   const first = sender.ownerFirstName ? [...oneLine(sender.ownerFirstName)].slice(0, NAME_MAX).join('').trim() || null : null;
-  const fromName = signatureName(first);
+  const from = fromName(first);
   const domain = sender.address.slice(sender.address.lastIndexOf('@') + 1).toLowerCase();
   const contentId = `waldo-mark@${domain}`;
 
-  const html = htmlDocument(subject, blocks, callout, action, first, sender.address, contentId);
+  const html = htmlDocument(subject, blocks, callout, action, first, contentId);
   if (new TextEncoder().encode(html).length > AGENT_MAIL_HTML_MAX) return fail('too_large');
-  const text = [
+  const text = signedText([
     ...(callout ? [textInline(callout)] : []),
     ...blocks.map(textBlock),
     ...(action ? [`${action.caption}: ${action.href}`] : []),
-    `-- \n${fromName}\n${sender.address}`,
-  ].join('\n\n') + '\n';
+  ].join('\n\n'), first) + '\n';
 
   const references: string[] = [];
   for (let i = (wire.references?.length ?? 0) - 1, size = -1; i >= 0 && (size += wire.references![i]!.length + 1) <= REFERENCES_MAX_BYTES; i -= 1) references.unshift(wire.references![i]!);
   const threading = { ...(wire.inReplyTo ? { 'In-Reply-To': wire.inReplyTo } : {}), ...(references.length ? { References: references.join(' ') } : {}) };
   const mime = [
-    `From: ${displayName(fromName)} <${sender.address}>`,
+    `From: ${displayName(from)} <${sender.address}>`,
     addressHeader('To', to),
     ...(cc.length ? [addressHeader('Cc', cc)] : []),
     headerText('Subject', subject),
@@ -330,39 +366,66 @@ export function renderAgentMail(input: AgentMailDraft, owner: AgentMailSender, r
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${ALT}"`,
     '',
-    `--${ALT}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    'Content-Transfer-Encoding: quoted-printable',
-    '',
-    quotedPrintable(text),
-    `--${ALT}`,
-    `Content-Type: multipart/related; boundary="${REL}"; type="text/html"`,
-    '',
-    `--${REL}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    'Content-Transfer-Encoding: quoted-printable',
-    '',
-    quotedPrintable(html),
-    `--${REL}`,
-    `Content-Type: image/png; name="${MARK_FILE}"`,
-    'Content-Transfer-Encoding: base64',
-    `Content-ID: <${contentId}>`,
-    `Content-Disposition: inline; filename="${MARK_FILE}"`,
-    '',
-    base64Lines(WALDO_MARK_PNG_BASE64),
-    `--${REL}--`,
-    `--${ALT}--`,
-    '',
+    ...alternativeBody(text, html, contentId),
   ].join('\r\n');
   if (mime.length > AGENT_MAIL_MIME_MAX) return fail('too_large');
 
   return {
     ok: true,
     mime,
-    preview: { from: { name: fromName, address: sender.address }, to, cc, subject, text, html },
+    preview: { from: { name: from, address: sender.address }, to, cc, subject, text, html },
     parts: {
-      from: { email: sender.address, name: fromName }, to, cc, subject, text, html, headers: threading,
+      from: { email: sender.address, name: from }, to, cc, subject, text, html, headers: threading,
       attachments: [{ content: WALDO_MARK_PNG_BASE64, filename: MARK_FILE, type: 'image/png', disposition: 'inline', contentId }],
     },
   };
+}
+
+// Mail Waldo writes from the owner's own Gmail. Gmail sets From and Date from the account, so the headers are the
+// recipients, subject and threading, and the body is the owner's draft in plain text and in light HTML, then the signature.
+export type OwnerMailDraft = Readonly<{ subject: string; body_markdown: string }>;
+export type OwnerMailRecipients = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[] }>;
+export type OwnerMailWire = Readonly<{ messageId: string; inReplyTo?: string; references?: readonly string[] }>;
+// subject: as the bytes carry it, on one line, which is what the card must show.
+export type OwnerMailRendered = Readonly<{ ok: true; mime: string; subject: string; text: string }> | Readonly<{ ok: false; code: AgentMailRenderError }>;
+
+// What the recipient's client shows as plain text, and what the approval card shows: the draft's words, then the signature.
+export const ownerMailText = (bodyMarkdown: string, first: string | null): string =>
+  signedText(parse(wellFormed(bodyMarkdown)).map(textBlock).join('\n\n'), signerOf(first));
+const signerOf = (first: string | null) => first === null ? null : [...oneLine(wellFormed(first))].slice(0, NAME_MAX).join('') || null;
+
+export function renderOwnerMail(draft: OwnerMailDraft, first: string | null, recipients: OwnerMailRecipients, wire: OwnerMailWire): OwnerMailRendered {
+  const fail = (code: AgentMailRenderError): OwnerMailRendered => ({ ok: false, code });
+  const to = [...recipients.to], cc = [...recipients.cc ?? []], bcc = [...recipients.bcc ?? []];
+  if (to.length === 0) return fail('no_recipients');
+  if (![...to, ...cc, ...bcc].every(validAddress)) return fail('invalid_recipient');
+  if (!validMessageId(wire.messageId) || (wire.inReplyTo !== undefined && !validMessageId(wire.inReplyTo)) || wire.references?.some(id => !validMessageId(id))) return fail('invalid_wire');
+  const subject = oneLine(wellFormed(draft.subject));
+  if (!subject) return fail('empty_subject');
+  if ([...subject].length > AGENT_MAIL_SUBJECT_MAX) return fail('subject_too_long');
+  if (draft.body_markdown.length > AGENT_MAIL_BODY_MAX) return fail('body_too_long');
+  const blocks = parse(wellFormed(draft.body_markdown));
+  if (blocks.length === 0) return fail('empty_body');
+  // The mark's Content-ID needs only to be unique within the message; Waldo's own domain names it in either mailbox.
+  const contentId = 'waldo-mark@heywaldo.in';
+  const html = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>\n'
+    + `<body style="margin:0;padding:0;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n${blocks.map(htmlBlock).join('\n')}\n${signatureHtml(signerOf(first), contentId)}\n</body></html>`;
+  // No HTML bound here: AGENT_MAIL_HTML_MAX keeps Waldo's own mail clear of Gmail's clipping, but an owner's long table is
+  // still delivered whole when clipped, so it is not refused for it.
+  const text = ownerMailText(draft.body_markdown, first);
+  const mime = [
+    addressHeader('To', to),
+    ...(cc.length ? [addressHeader('Cc', cc)] : []),
+    ...(bcc.length ? [addressHeader('Bcc', bcc)] : []),
+    headerText('Subject', subject),
+    `Message-ID: ${wire.messageId}`,
+    ...(wire.inReplyTo ? [`In-Reply-To: ${wire.inReplyTo}`] : []),
+    ...(wire.references?.length ? [idsHeader('References', wire.references)] : []),
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${ALT}"`,
+    '',
+    ...alternativeBody(text, html, contentId),
+  ].join('\r\n');
+  if (mime.length > AGENT_MAIL_MIME_MAX) return fail('too_large');
+  return { ok: true, mime, subject, text };
 }
