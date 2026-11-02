@@ -667,6 +667,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const bindOptions = (id: string, options: ProposeOptions) => {
     sql.exec('UPDATE ledger SET replaces = ?, raised_outside = ? WHERE id = ?', options.replaces ?? null, options.outside ? 1 : 0, id);
   };
+  // A card raised before the desk recorded this reads as raised in such a turn: an unknown origin fails closed.
+  const raisedOutside = (entry: LedgerRow) => entry.raised_outside !== 0;
   const assertReplaceable = (replaces: string | undefined) => {
     const state = replaces === undefined ? null : replaceableState(replaces);
     if (state !== null) throw new ApprovalReplaceError(state);
@@ -747,7 +749,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (raise) sql.exec("UPDATE ledger SET deferred_at = NULL WHERE id = ? AND deferred_at IS NOT NULL AND status IN ('open', 'review_only')", id);
       // Only a card the owner can approve somewhere takes the earlier one's place; one too long to approve leaves it open.
       if (!opened || !entry.replaces || !shown.some(s => s.approvable)) return null;
-      return replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, entry.raised_outside === 1, id) : null;
+      return replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, raisedOutside(entry), id) : null;
     });
     if (replaced === 'closed') await clearButtons(id, shown);
     else if (replaced) await afterWithdrawn(entry.replaces!, replaced);
@@ -1461,7 +1463,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           try { card = reviewText(entry); } catch { card = summaryOf(entry); }
           return { approval_id: entry.id, kind: entry.kind, summary: summaryOf(entry), state: APP_APPROVAL_STATE[entry.status as DeskStatus] as WaitingApproval['state'],
             put_off: entry.deferred_at != null, raised_at: when(new Date(entry.created_at).toISOString()), ...senderOf(entry), card, ...(entry.replaces ? { replaces: entry.replaces } : {}),
-            ...(entry.raised_outside === 1 || OUTSIDE_TEXT_KINDS.includes(entry.kind) ? { outside_text: true as const } : {}) };
+            ...(raisedOutside(entry) || OUTSIDE_TEXT_KINDS.includes(entry.kind) ? { outside_text: true as const } : {}) };
         });
     },
     async withdraw(id, reason, options = {}) {

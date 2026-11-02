@@ -9,7 +9,9 @@ import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import type { GoogleClient } from '../src/connectors/google';
 import { sendAgentMailHandler } from '../src/tools/live/agent-mail';
 import { googleHandlers } from '../src/tools/live/google';
+import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalHandlers } from '../src/tools/live/raise-approval';
+import { googleTaskHandlers } from '../src/tools/live/tasks';
 
 const DOMAIN = 'mail.example.test';
 const ctx = (outside = false) => ({ authenticatedUserId: 'owner', turnId: `turn-${crypto.randomUUID()}`, toolCallId: 'call-1', ...(outside ? { toolArgSourceTaint: 'external' } : {}) }) as never;
@@ -35,11 +37,14 @@ const owner = <T>(name: string, run: (tools: Readonly<{
       call: async (method, body) => { if (method === 'sendMessage') replies.push((body as { text: string }).text); return method === 'sendMessage' ? { message_id: ++mid, chat: { id: 42 } } : true; },
       notice: async (key, text) => { notices.push({ key, text }); },
       agentMail: { intact: p => agentMailIntact(p, DOMAIN), send: async () => ({ messageId: `<out@${DOMAIN}>` }), sent: () => undefined },
+      googleTasks: () => ({ prepare: async (_id: string, args: unknown) => ({ args, account: { connection_id: 'conn-1', email: 'owner@example.test' }, list: { id: 'l1', title: 'Errands', etag: '"le"' }, before: null }) }) as never,
     });
     const handlers = [
       ...googleHandlers({ client: async () => client }, desk, { timezone: 'UTC', now: () => new Date() }),
       sendAgentMailHandler({ domain: () => DOMAIN, handle: async () => 'sam', ownerName: () => 'Sam Fulper', replyReferences: () => [], desk }),
       ...approvalHandlers(desk),
+      sendMessageHandler(desk),
+      ...googleTaskHandlers(desk),
     ];
     return run({ sql: state.storage.sql, notices, replies, desk,
       tool: async (name, args, outside) => {
@@ -52,6 +57,8 @@ const owner = <T>(name: string, run: (tools: Readonly<{
   });
 
 const EMAIL = { to: ['varun@example.test'], subject: 'Intro', body_markdown: 'Hi Varun, meet Jay.' };
+const TASK = { source: 'google_tasks', action: 'create', task_list_id: 'l1', changes: { title: 'Call Varun' }, reason: 'You asked me to.' };
+const MESSAGE = (key: string) => ({ channel: 'whatsapp', content: 'Running late.', idempotency_key: key.repeat(64) });
 const WALK = { action: 'create', title: 'Walk', start: '2026-12-03T07:00:00+00:00', end: '2026-12-03T07:30:00+00:00', reason: 'Morning air.' };
 
 describe('replaces on the proposing tools', () => {
@@ -127,6 +134,29 @@ describe('a turn that read outside text', () => {
       await tool('raise_approval', { operation: 'withdraw', approval_id: id, reason: 'You will call Varun instead.' });
       expect(row(id)).toMatchObject({ withdrawn_reason: 'You will call Varun instead.', withdrawn_outside: 0 });
       expect(notices).toEqual([]);
+    });
+  });
+
+  it('send_message and propose_google_task_change record whether the turn read outside text, and the list carries it', async () => {
+    await owner('tool-outside-raised', async ({ tool, row, desk }) => {
+      const message = (await tool('send_message', MESSAGE('a'))).data.proposal_id as string;
+      const task = (await tool('propose_google_task_change', TASK)).data.approval_ref as string;
+      expect([row(message).raised_outside, row(task).raised_outside]).toEqual([0, 0]);
+      expect((await tool('raise_approval', { operation: 'list' })).source_taint).toBeNull();
+      const outsideMessage = (await tool('send_message', MESSAGE('b'), true)).data.proposal_id as string;
+      const outsideTask = (await tool('propose_google_task_change', { ...TASK, changes: { title: 'Reply to the thread' } }, true)).data.approval_ref as string;
+      expect([row(outsideMessage).raised_outside, row(outsideTask).raised_outside]).toEqual([1, 1]);
+      expect(desk.waiting().filter(card => card.outside_text).map(card => card.approval_id)).toEqual([outsideMessage, outsideTask]);
+    });
+  });
+
+  it('a card raised before the desk recorded where it came from reads as outside text', async () => {
+    await owner('tool-outside-unknown', async ({ tool, sql }) => {
+      const id = (await tool('send_email', EMAIL)).data.proposal_id as string;
+      sql.exec('UPDATE ledger SET raised_outside = NULL WHERE id = ?', id);
+      const listed = await tool('raise_approval', { operation: 'list' });
+      expect(listed.source_taint).toBe('external');
+      expect(listed.data.approvals).toEqual([expect.objectContaining({ approval_id: id, outside_text: true })]);
     });
   });
 
