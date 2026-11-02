@@ -30,13 +30,17 @@ OwnerDO stays the only writer. Everything new lives in its SQLite, written by th
 that already commits the change record and watermarks (`updateSweepCheck` → `transaction`). No new service, no Supabase
 table, no new store of record.
 
-| State | Table (DO SQLite) | Writer |
+| State | Where (DO SQLite) | Writer |
 |---|---|---|
-| Gmail cursor (`historyId`) per connection | `google_sync_cursor` (`key`, `cursor`, `at`) | update sweep, same transaction as the record |
-| Calendar `syncToken` per calendar | same table, key `cal:<calendarId>` | same |
-| Delta dedupe (`msg:<id>`, `evt:<id>:<etag>`) | `google_delta_seen` (pruned after 14 days) | same |
-| Calendar channel per calendar | `calendar_channels` (`calendar_id`, channel, resource, expiry, highest message number, state) | watch upkeep (renew) and push admission (message number), both on the owner's object |
-| Interrupt budget and cooldown | the ADR-0068 delivery gate's existing counters, new push class `update_interrupt` | apply turn's delivery transaction |
+| Gmail cursor (`historyId`) | `watch_state` key `cursor:mail` (existing key/value table) | update sweep, in the record's transaction, compare-and-set |
+| Calendar `syncToken` per calendar | `watch_state` key `cursor:cal:<calendarId>` | same |
+| Delta dedupe (`msg:<id>`, `evt:<id>:<etag>`) | `google_delta_seen`, created by the update book like `observed_mail` (no DO migration), pruned after 14 days | same |
+| Calendar channel per calendar | `calendar_channels` KV book on the owner's object | watch upkeep (start, renew, stop); push admission (message number) |
+| Interrupt budget and cooldown | `watch_state` keys per owner-local day | the triage apply's delivery transaction |
+
+A cursor moves only if it still holds the value the read started from (`CursorMovedError` rolls the whole write back,
+code `held_cursor_moved`), so a slow read can never overwrite a newer cursor. The time watermarks (`mail_since`,
+`calendar_since`) keep moving every tick: they bound the older-way gap read.
 
 The push `historyId` stays a fence only: the cursor that `history.list` starts from is the one the sweep last
 committed, so a lost or reordered push costs latency, never data. Pushes are hints; the 10-minute poll keeps running.
@@ -49,9 +53,13 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   `UNREAD`, `INBOX`, `STARRED`, `IMPORTANT` become `read` / `archived` / `starred` changes on messages already seen.
   More than the cap: the cursor still moves to the response's `historyId` and the batch says how many were left out.
 - **Calendar:** `events.list(calendarId, syncToken, showDeleted, singleEvents=false, maxResults=250)`, at most 8 pages,
-  per calendar the owner reads (§2.3). Each event becomes `added` / `changed` / `cancelled` / `invite` (the owner is an
-  attendee with `needsAction` and not the organizer). A recurring series change is one `series` change, not N instances.
-  The existing last-seen table still supplies `before`.
+  per calendar the owner reads (§2.3). `singleEvents=false` keeps a baseline finite: an endless daily series is one
+  master, not unbounded instances. So a series change is one change flagged `series` (it counts as touching today for
+  the Weight recompute and re-plan); an edited or cancelled instance is its own change with its own times, as today.
+  An invite is a change flagged `invite` (the owner is an attendee with `needsAction` and not the organizer).
+  Google lists changes in no time window, so only events in the read window, events the owner was shown before
+  (last-seen), and series are news; a far-off event or the cancellation of one never shown is not. The existing
+  last-seen table still supplies `before`.
 - **Expiry and resync (bounded):** Google documents `404` for an out-of-date `startHistoryId` and `410` for an invalid
   `syncToken` [verified, reference docs]. Either one re-baselines silently: Gmail takes the current `historyId` from
   `users.getProfile`; Calendar re-lists from `timeMin = now − 1 day` (allowed on the initial list, not with a token
@@ -60,9 +68,14 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   exceeds the cap stays on the time-watermark read and is logged `sync_capped`.
 - **Dedupe:** by message id and by event id + etag, in `google_delta_seen`, so a re-baseline overlap, a gap read and a
   redelivered push never produce the same change twice. Within one batch an event seen on two calendars is one change.
+- **Fallback:** a delta read that throws (an older proxy without the method, a provider error) leaves that cursor where
+  it was and reads that source the older way this tick. Dedupe makes the later overlap exact. One calendar that cannot
+  be read at all (gone, unsubscribed, no access) keeps its cursor and holds no other calendar back; only when every
+  calendar fails does the tick fail as before, with nothing moved.
+- **Owner actions on mail** (read, archived, starred), for a mail already seen, ride along as context in the batch and
+  the next main card. They never start a judgment on their own: the owner already acted.
 - **Proxy:** the reads are two new `GoogleClient` methods (`mailDelta`, `calendarDelta`) in `GOOGLE_METHODS`, so a
-  Vault-backed grant reaches them through `connector-proxy`. An older deployed proxy rejects an unknown method; the
-  sweep then logs `delta_unavailable` and uses the time-watermark read, so the deploy order cannot lose changes.
+  Vault-backed grant reaches them through `connector-proxy` (which also checks the calendar scope for `calendarDelta`).
 
 ### 2.3 Every calendar the owner reads [proposed]
 
@@ -89,8 +102,11 @@ switch on it gets:
 - **What code enforces, and only this:**
   1. dedupe (§2.2);
   2. quiet hours: `tell` becomes `brief`, `act` waits as `brief` (the existing quiet rule; a revision still lands);
-  3. a per-day interrupt budget and cooldown through the ADR-0068 gate, class `update_interrupt`: **2 a day, 60 min
-     apart** (#1823 §9 decision 1 proposes "+2 event offers a day"); over budget, `tell` and `act` become `brief`;
+  3. a per-day interrupt budget and cooldown, counted per owner-local day: **2 a day, 60 min apart** (#1823 §9
+     decision 1 proposes "+2 event offers a day"); over budget, `tell` and `act` become `brief`. This is a small book
+     beside the update cards, not an ADR-0068 push class: `push_class` is part of the public DTO and the app's
+     notification contract, so a new class is a cross-repo contract change. #1823 P6 ("everything through the gate")
+     is where update cards move onto ADR-0068, and this budget folds into it there;
   4. one notification per batch: at most one push, and `act` and `tell` never both notify;
   5. the turn sees how much budget is left, and `propose_action` is in its tool manifest only while budget admits an
      interrupt (smallest per-turn capability manifest), so a card can never outrun the budget.
@@ -146,12 +162,12 @@ The debounce, not the push rate, bounds model cost: a burst of 50 pushes in 5 mi
 
 Set `GOOGLE_REALTIME_TRIAGE=0`. The sweep returns to the time-watermark read and today's effects prompt; the new tables
 are left in place and ignored (no migration, all `CREATE TABLE IF NOT EXISTS`). Per-calendar channels lapse within 7 days
-and their pushes are ignored by the `primary` book; upkeep re-arms the `primary` channel. No contract field is removed.
-The one contract addition is the push class `update_interrupt` (additive enum value).
+and their pushes are ignored by the `primary` book; upkeep re-arms the `primary` channel. No contract field is removed
+and none is added.
 
 ## 7. Decisions that depend on the owner's #1823 §9 answers
 
-- **§9.1 budget:** the interrupt budget (2/day, 60 min cooldown) is a policy-table value, changed in one place.
+- **§9.1 budget:** the interrupt budget (2/day, 60 min cooldown) is two constants, changed in one place.
 - **§9.2 the Close may ask:** not needed here.
 - **§9.7 Waldo's own calendar:** if approved, `act` on a scheduling change could write a block there without a card;
   this build keeps every `act` a card.
