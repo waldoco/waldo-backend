@@ -205,6 +205,80 @@ No assertions on wording.
   - The owner look-up (OSINT) must actually work at onboarding. In the 2 Nov run it produced nothing visible; that is diagnosed separately.
   - The browser is the next unlock for both the general assistant and health.
 
+### 8.1 Adopted from Bevel and the Fitbit coach
+
+Source: [`docs/research/bevel-fitbit-coach-teardown-2026-11-02.md`](../research/bevel-fitbit-coach-teardown-2026-11-02.md). Each item maps onto a slice.
+
+- **Check-ins as owner-owned instruction objects** (P2): title, instruction, schedule, pause, delete. The Brief, check-in, Close and weekly reset become default check-ins the owner can edit, rather than hard-coded jobs.
+- **Draft, then confirm, for plans and logs** (P2, P7): this is the existing approval card.
+- **Three named update moments with one off switch** (P6): morning, after a workout, evening.
+- **A skippable goals interview** (P3, P4): answers become editable goals, and it can be revisited.
+- **A one-tap activity status** (P3): Active, Sick, Injured or On a break. It damps advice and nudges.
+- **Honest calibration** (health UI): "calibrating" for the first days, with predicted values drawn dotted.
+- **Visible memory** (the To check / Constellations screen): "ask what you've learned about me".
+- **A calendar read/write split** (P2), below.
+
+**Where Waldo goes further:**
+- threshold alerts through approval cards (Bevel hasn't shipped them);
+- cross-domain plans that read calendar, mail and tasks;
+- plans that land on the calendar itself;
+- score explanations per input, with no forbidden numbers;
+- no per-message credits.
+
+### 8.2 Waldo's own calendar [proposed, owner decision]
+
+Planning that feels like Reclaim needs Waldo to place blocks without a card for each one. The proposal:
+- Waldo writes **only to its own "Waldo" calendar**, created on connect, with every block movable and undoable.
+- Every write to the owner's other calendars keeps its approval card.
+
+This is a narrow slice of the parked standing-grant work (ADR-0086 draft), so unparking it is the owner's call.
+
+### 8.3 Owner look-up (OSINT): why the 2 Nov run showed nothing
+
+Source: an audit at `37c647cd`. Whether the look-up ran is not yet confirmed: it needs `GET /app/v1/findings` with the owner's session, or the Patrol activity around 04:56Z.
+
+**The design gaps, regardless of what happened:**
+1. **Too late for the tour.** The job is due 5 minutes after the grant (sooner after the first reply) and has a 10-minute deadline (`onboarding/lookup.ts:12,47`). Web findings can only reach the constellation later, through `lateWeb`.
+2. **A rerun can't show web results.** `welcome.start()` does nothing when a build exists (`welcome.ts:68-70`), and a reopened web stage settles `empty` at once from the old `started_at` (`:349-352`).
+3. **Findings aren't visible.** There is no findings screen, so findings can exist with no web nodes showing. The To check group (section 8) fixes this.
+4. **Failures are silent:**
+   - `reconcile` returns without a log on `no_name`, `held_topic` and similar codes (`owner-do.ts:5489-5505`, `machine.ts:56`);
+   - the app's grant-failure alert is navigated away (`app/(onboarding)/chat.tsx:434,483,499`).
+5. **A possible quote mismatch** [inference]: Brave snippets carry `<strong>` highlight markup, so a quote copied with it may fail `quote_not_on_page`.
+6. **`partial` on the constellation has nothing to do with the web.** It comes from a pending forget or purge in `memory-graph.ts:14-57`.
+
+**Fix direction:**
+- When the look-up ends, send one update card ("I found N things about you, review them").
+- Show findings in To check.
+- Let a rerun restart the web stage.
+- Log every no-op code.
+- Keep the app's failure visible.
+- Strip markup before the quote check.
+- Let the owner paste profile links as seeds (LinkedIn/X, approved 25 Oct).
+
+### 8.4 Browser: what is left
+
+From the audit at `37c647cd`:
+
+| Piece | Status |
+|---|---|
+| Public reader (Cloudflare) behind `browse_page` | On in staging |
+| Owner sessions, typed `browse_act` and the sign-in handoff | Merged, but each owner must opt in on the console; `COMMON_BROWSER_REGISTRATION` is unset |
+| Errands that submit forms | **Draft #1648**; blocked on the D5 ruling (built as 3 submits per yes) and review |
+| Session-handle redaction bug | **Draft #1643**; a real bug that breaks retained sessions |
+| Signing back in later | Needs the own password store (**draft #1589**, custody ADR, D7 ruling) |
+| Bot walls and captchas | **Draft #1638** (Browserbase over CDP). Conflicts with the 13 Oct "Cloudflare, not Browserbase" ruling, so the owner must revisit it. The keys sit in staging unused |
+| Payments | No design. Proposed: provider-tokenised cards and an approval card for every purchase |
+| Browser for all testers | Operator and spend decision ($5/month cap) |
+
+**Order** [proposed]:
+1. #1643 (bug);
+2. #1648 (forms) after D5;
+3. browser for all testers;
+4. password store;
+5. escalation;
+6. payments.
+
 ## 9. Decisions for the owner
 
 1. Approve the loop and the default daily budget (3 day turns + 2 offers).
@@ -213,5 +287,10 @@ No assertions on wording.
 4. Diet: go on the ADR-0081 amendment for nutrition via the phone health stores.
 5. Who builds the app half (chips, notifications, background sync, memory screen): Suyash or the orchestrator's lanes.
 6. Is this loop what "ecosystem template" meant?
+7. Waldo's own calendar without per-block approval (section 8.2).
+8. Browser:
+   - D5, how many form submits one yes allows (#1648);
+   - revisit "Cloudflare, not Browserbase" for bot walls (#1638);
+   - turn the browser on for all testers.
 
 [^r]: [`docs/research/proactive-agents-2026-11-02.md`](../research/proactive-agents-2026-11-02.md) (2 Nov). Primary URLs are inside: OpenAI/TechCrunch on Pulse; the Google blog on CC and Gemini scheduled actions; poke.com and reviews; Sunsama help; the Google blog on the Fitbit coach; the Oura blog; Bevel help. Product claims carry the dates in that note.
