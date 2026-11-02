@@ -231,8 +231,9 @@ export type ChangeRead = Readonly<{
 type CursorMove = Readonly<{ key: string; from: string | null; to: string }>;
 // What a delta read did, as a bounded code for logs: never an id or a calendar name.
 export type DeltaCode = `${'mail' | 'calendar'}_${'baseline' | 'rebased' | 'capped' | 'delta_failed' | 'read_failed'}`;
-// The calendars the delta reads, by Google id.
-export type DeltaSource = Readonly<{ calendars: readonly string[] }>;
+// The calendars the delta reads, by Google id, and the account they are read through: cursors belong to one mailbox and
+// one account's calendars, so a different account starts every source from a baseline.
+export type DeltaSource = Readonly<{ calendars: readonly string[]; account: string }>;
 type DeltaGoogle = Pick<GoogleClient, 'newMail' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
 // What one tick reads the older way, for a calendar the delta could not read: a few pages of the window since the watermark.
 const WINDOW_PAGES = 4;
@@ -303,6 +304,10 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
 const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSource,
   window: Readonly<{ calendarSince: number | null; mailSince: number | null; from: number; to: number; now: number }>) => {
   const cursors: CursorMove[] = [], codes: DeltaCode[] = [];
+  const owner = book.cursor('account');
+  if (owner !== delta.account) cursors.push({ key: 'account', from: owner, to: delta.account });
+  // A cursor kept for another account is no cursor here; the write still checks it against what is stored.
+  const cursorOf = (key: string) => (owner === delta.account ? book.cursor(key) : null);
   const events = new Map<string, CalendarDeltaEvent>();
   // Google lists changes in no time window: only events in the read window are news, and an event the owner was shown that
   // moved out of it or was cancelled. A recurring series is news wherever its first instance falls.
@@ -322,7 +327,8 @@ const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSour
   };
   let read = 0, firstFailure: unknown;
   for (const calendarId of delta.calendars) {
-    const key = `cal:${calendarId}`, stored = book.cursor(key);
+    // What is stored now, before any I/O: the write moves the cursor only if it still holds this.
+    const key = `cal:${calendarId}`, held = book.cursor(key), stored = cursorOf(key);
     // A baseline past the page cap is tried again a day later, not on every tick; meanwhile the calendar is read the older way.
     const cappedAt = stored?.startsWith(CAPPED) ? Number(stored.slice(CAPPED.length)) : null;
     const token = cappedAt === null ? stored : null;
@@ -331,9 +337,9 @@ const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSour
       const found = cappedAt !== null && window.now - cappedAt < DAY_MS ? { state: 'capped' as const, held: true } : await google.calendarDelta!(calendarId, token, window.from);
       if (found.state === 'capped') {
         codes.push('calendar_capped');
-        if (!('held' in found)) cursors.push({ key, from: stored, to: `${CAPPED}${window.now}` });
+        if (!('held' in found)) cursors.push({ key, from: held, to: `${CAPPED}${window.now}` });
       } else {
-        cursors.push({ key, from: token, to: found.sync_token });
+        cursors.push({ key, from: held, to: found.sync_token });
         if (found.state === 'delta') { gap = false; for (const event of found.events) if (!events.has(event.id) && inWindow(event)) events.set(event.id, event); }
         else codes.push(token === null ? 'calendar_baseline' : 'calendar_rebased');
       }
@@ -345,11 +351,11 @@ const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSour
   }
   // An outage, not one calendar: the tick fails as before and nothing moves.
   if (delta.calendars.length && read === 0) throw firstFailure;
-  const cursor = book.cursor('mail');
+  const heldMail = book.cursor('mail'), cursor = cursorOf('mail');
   let mail: readonly MailItem[] | null = null, labels: readonly MailLabelChange[] = [], leftOut = 0;
   try {
     const found = await google.mailDelta!(cursor, 20);
-    cursors.push({ key: 'mail', from: cursor, to: found.history_id });
+    cursors.push({ key: 'mail', from: heldMail, to: found.history_id });
     if (found.state === 'delta') ({ added: mail, labels, left_out: leftOut } = found);
     else codes.push(cursor === null ? 'mail_baseline' : 'mail_rebased');
   } catch { codes.push('mail_delta_failed'); }

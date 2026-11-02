@@ -147,7 +147,7 @@ Assumptions: an active owner, 60 inbox mails and 15 calendar changes a day acros
 
 | Item | Volume | Cost |
 |---|---|---|
-| Google API calls | ~300 history/list + metadata calls, ~150 calendar delta pages, ~5 channel renewals | free within default quota (Gmail 1B units/day project-wide; history.list 2 units, messages.get 5 units) |
+| Google API calls | the 10-minute poll reads every read calendar and the mailbox each tick: (calendars + 1) × 144 ≈ 860 a day at 5 calendars, ≈ 3,000 at the 20-calendar cap, plus pushes, metadata reads for new mail (~60) and renewals | free within default quota; the Calendar API's per-user rate limit is the scaling item to watch at the cap |
 | Triage turns | bounded by the 5-min debounce (≤ 288), realistically 20–40 batches | ~8k input + 300 output tokens each, mostly cached prefix |
 | Model spend | 30 turns × ~$0.01–0.03 (Sonnet-class, cache reads) | **~$0.30–0.90/day**; worst case (288 turns) ~$5 |
 | Reader job | today's sweep already runs one per batch | unchanged |
@@ -182,8 +182,16 @@ and none is added.
 - **§9.2 the Close may ask:** not needed here.
 - **§9.7 Waldo's own calendar:** if approved, `act` on a scheduling change could write a block there without a card;
   this build keeps every `act` a card.
-- **Not in §9, raised here:** whether promotions/social mail should reach triage at all (kept at today's
-  `category:primary` scope for cost parity).
+- **Not in §9, raised here: deterministic filters beyond the five the brief allows** (dedupe, quiet hours, budget,
+  one notification, cooldown). Each is a read-scope parity or cost bound, not an importance rule; the gate rules on each:
+  1. mail outside the inbox's primary tab (and sent, drafts, spam, trash) never reaches triage: today's `newMail` scope;
+  2. delta events outside the read window (a day back to two weeks ahead), and cancellations of events never shown,
+     are not news: today's window and last-seen rule, since Google's deltas carry no window;
+  3. a batch of only owner actions on mail (read, archived, starred) starts no turn: the owner already acted;
+  4. at most 20 calendars are read and watched: a cost and rate-limit bound.
+- **Accounts:** deltas, the calendar list and watches follow the account the update sweep already reads (the first
+  non-failing calendar-scoped grant). Cursors are tied to that account: when it changes, every source restarts from a
+  baseline. Reading every connected account is a follow-up.
 
 ## 8. Deploy order (not done by this PR)
 

@@ -26,6 +26,7 @@ type Harness = Readonly<{ updates: UpdateBook; fakes: Fakes; storage: DurableObj
   check(calendars?: readonly string[]): ReturnType<typeof updateSweepCheck>;
   jobs(): JobRow[]; rows(): Change[][]; cursor(key: string): string | null }>;
 let seq = 0;
+const h_account = { value: 'conn-1' };
 const withDelta = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`update-delta-${seq += 1}`)), async (_instance, state) => {
     const sql = state.storage.sql;
@@ -53,7 +54,7 @@ const withDelta = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       // The judged job settles, so the next tick reads again.
       settle: () => { sql.exec("UPDATE task_jobs SET status = 'applied', settled_at = 1"); },
       check: (calendars = ['primary']) => updateSweepCheck({
-        updates, jobs: book, google, now: T0, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: false, delta: { calendars },
+        updates, jobs: book, google, now: T0, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: false, delta: { calendars, account: h_account.value },
         gate: () => null, providerDown: () => false, transaction: work => state.storage.transactionSync(work),
         enqueued: () => undefined, held: () => [], dayChanged: async () => undefined,
       }),
@@ -62,7 +63,7 @@ const withDelta = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       cursor: (key) => updates.cursor(key),
     });
   });
-const seed = (h: Harness, cursors: Record<string, string>) => h.storage.transactionSync(() => { for (const [key, value] of Object.entries(cursors)) h.updates.moveCursor(key, h.updates.cursor(key), value); });
+const seed = (h: Harness, cursors: Record<string, string>) => h.storage.transactionSync(() => { h.updates.moveCursor('account', h.updates.cursor('account'), h_account.value); for (const [key, value] of Object.entries(cursors)) h.updates.moveCursor(key, h.updates.cursor(key), value); });
 
 describe('exact deltas', () => {
   it('golden: one batch from the mail history and each calendar, recorded with the moved cursors in one write', async () => {
@@ -203,6 +204,19 @@ describe('exact deltas', () => {
       await h.check();
       expect(h.fakes.calls.filter(call => call.startsWith('calendarDelta')), 'held for a day').toHaveLength(1);
       expect(h.fakes.calls.filter(call => call === 'window:primary')).toHaveLength(2);
+    });
+  });
+
+  it('cursors belong to one account: another account starts every source from a baseline', async () => {
+    await withDelta(async (h) => {
+      seed(h, { mail: '100', 'cal:primary': 's1' });
+      h_account.value = 'conn-2';
+      try {
+        h.fakes.mail = async (cursor) => ({ state: 'rebased', history_id: cursor === null ? '7' : 'wrong' });
+        h.fakes.calendar = async (_id, token) => ({ state: 'rebased', sync_token: token === null ? 'b2' : 'wrong' });
+        expect((await h.check()).code).toBe('unchanged');
+        expect([h.cursor('account'), h.cursor('mail'), h.cursor('cal:primary')]).toEqual(['conn-2', '7', 'b2']);
+      } finally { h_account.value = 'conn-1'; }
     });
   });
 });

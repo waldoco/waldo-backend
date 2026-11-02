@@ -6,7 +6,7 @@ import type { TaskResult } from '@waldo/contracts';
 import type { CalendarChange, GoogleClient, MailItem } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
-import { updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
+import { triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { PUSHES } from '../src/channels/expo-push';
 import type { TaskHost } from '../src/tasks/brain';
@@ -694,5 +694,11 @@ describe('the triage turn', () => {
       expect([a.effects, a.chose]).toEqual([[], ['invalid']]);
       expect(unfolded(h)).toContain('Sync with Krati');
     });
+  });
+
+  it('with mail follow-ups the turn may still open a source-bound loop while held, but never holds a card tool', () => {
+    expect(triageTools(true, false)).toContain('open_loop');
+    expect(triageTools(true, false).filter(name => ['send_email', 'propose_calendar_change', 'propose_action'].includes(name))).toEqual([]);
+    expect(triageTools(true, true)).toEqual(expect.arrayContaining(['open_loop', 'send_email', 'propose_calendar_change', 'propose_action']));
   });
 });

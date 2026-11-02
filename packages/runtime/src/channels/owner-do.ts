@@ -5269,7 +5269,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
-          ...(realtime ? { delta: { calendars: calendarSet(storage.kv).calendars() } } : {}),
+          ...(realtime ? { delta: { calendars: calendarSet(storage.kv).calendars(), account: client.account?.connection_id ?? client.account?.email ?? 'google' } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(
@@ -5325,7 +5325,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
         context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n') }),
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
-        cardsSince: (at: number) => storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ?', at).one().n,
+        // A done row is a record of something that ran (a draft), not a card waiting on the owner.
+        cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
       } } : {}),
       deliver: async (id, trace, text, recordId, commit, effect) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
