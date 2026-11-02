@@ -56,6 +56,12 @@ export const updateBook = (sql: Sql) => {
   sql.exec('CREATE TABLE IF NOT EXISTS google_delta_seen (key TEXT PRIMARY KEY, seen_at INTEGER NOT NULL)');
   const state = (key: string) => sql.exec<{ value: string }>('SELECT value FROM watch_state WHERE key = ?', key).toArray()[0]?.value ?? null;
   const setState = (key: string, value: string) => sql.exec('INSERT INTO watch_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
+  // The triage turn's interrupts on one owner-local day: how many, and when the last went (whatever its day, for the cooldown).
+  const interrupts = (day: string): Readonly<{ count: number; last: number | null }> => {
+    const stored = state('triage_interrupts');
+    const parsed = stored === null ? null : JSON.parse(stored) as { day: string; count: number; last: number };
+    return parsed?.day === day ? { count: parsed.count, last: parsed.last } : { count: 0, last: parsed?.last ?? null };
+  };
   return {
     observeMail(source_ref: string, thread_id: string, at: number, message_id = source_ref): void {
       sql.exec('INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id) VALUES (?, ?, ?, ?) ON CONFLICT (source_ref) DO UPDATE SET observed_at = excluded.observed_at, message_id = excluded.message_id, judged = 0, update_id = NULL WHERE observed_mail.message_id != excluded.message_id AND observed_mail.observed_at <= excluded.observed_at', source_ref, thread_id, at, message_id);
@@ -156,6 +162,12 @@ export const updateBook = (sql: Sql) => {
         .some(row => (JSON.parse(row.changes) as Change[]).some(change => change.source === 'mail'
           ? senders.has(senderOf((JSON.parse(change.detail) as { from?: unknown }).from))
           : touchesDay(change, day, timezone)));
+    },
+    // The triage turn chose to note this batch only: the next main card does not carry it.
+    noted(recordId: number): void { sql.exec('UPDATE update_cards SET folded = 1 WHERE id = ?', recordId); },
+    interrupts,
+    interrupted(day: string, at: number): void {
+      setState('triage_interrupts', JSON.stringify({ day, count: interrupts(day).count + 1, last: at }));
     },
     fold(upTo: number): void {
       sql.exec('UPDATE update_cards SET folded = 1 WHERE at <= ?', upTo);

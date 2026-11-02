@@ -2,12 +2,12 @@ import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
 import { machineResultText, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
-import { SKIP_UPDATE, updateCardPrompt, updateEffectsPrompt } from '../prompt/update-cards';
+import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
 import { PUSHES, pushTitle } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
-import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
+import { OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS } from './check-back';
 import { localIso } from './reminders';
 import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, readChanges, touchesDay, writeChanges, type Change, type DeltaCode, type DeltaSource, type TitleDigest, type UpdateBook } from './update-cards';
 
@@ -161,6 +161,10 @@ export const updatePushLine = (changes: readonly Change[], event: string | undef
 // otherwise it reads, and asks the owner on a card for any change.
 export const updateSweepTools = (sourceFollowups: boolean): readonly ToolName[] =>
   sourceFollowups ? ['get_context', 'read_memory', 'search_episodes', 'open_loop'] : OUTSIDE_TEXT_JOB_TOOLS;
+// The triage turn reads what it needs, and may raise a card only while the owner can be interrupted: the card is the
+// interrupt, so it can never outrun the budget.
+export const triageTools = (sourceFollowups: boolean, canAct: boolean): readonly ToolName[] =>
+  [...new Set<ToolName>([...OUTSIDE_TEXT_READS, ...(sourceFollowups ? updateSweepTools(true) : []), ...(canAct ? ['propose_action' as const] : [])])];
 
 export const updateSweepApplyText = (localNow: string, changes: readonly Change[], context: Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups: boolean }>,
   result: Parameters<typeof machineResultText>[0], withheld: readonly string[] = []): string =>
@@ -190,13 +194,38 @@ export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => 
 // What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
 export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
 
+// The triage turn's choice. The schema is the contract between the turn and the code that delivers it.
+export const triageSchema = z.strictObject({
+  decision: z.enum(['act', 'tell', 'brief', 'silent']),
+  revise: z.strictObject({ card: z.enum(dayCardIds), text: effectText }).optional(),
+  say: effectText.optional(),
+  push: z.strictObject({ event: z.string().trim().min(1).max(256).optional() }).optional(),
+}).refine(chosen => chosen.decision === 'tell' || (!chosen.revise && !chosen.say && !chosen.push), { error: 'say, revise and push go only with tell' })
+  .refine(chosen => chosen.decision !== 'tell' || (!!chosen.revise !== !!chosen.say), { error: 'a tell says or revises, not both' });
+export type Triage = z.infer<typeof triageSchema>;
+export const parseTriage = (reply: string): Triage | 'invalid' => {
+  const body = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(reply.trim())?.[1] ?? reply.trim();
+  try {
+    const parsed = triageSchema.safeParse(JSON.parse(body));
+    return parsed.success ? parsed.data : 'invalid';
+  } catch { return 'invalid'; }
+};
+// What triage delivered, as a bounded code. act: the turn raised a card. held_*: a tell that would have interrupted the owner
+// waited for the next main card (a revision in it still landed, silently). invalid: an unreadable choice, left for the next card.
+export type TriageCode = 'act' | 'act_without_card' | 'tell' | 'tell+push' | 'revise' | 'brief' | 'silent' | 'invalid' | 'revise_undelivered' | `held_${TriageHold}`;
+// The owner's daily interrupt budget for triage: act, and a tell that messages or pushes, each spend one.
+export const TRIAGE_INTERRUPTS_PER_DAY = 2;
+export const TRIAGE_COOLDOWN_MS = 60 * 60_000;
+export const triageHold = (spent: Readonly<{ count: number; last: number | null }>, now: number, quiet: boolean): TriageHold | null =>
+  quiet ? 'quiet' : spent.count >= TRIAGE_INTERRUPTS_PER_DAY ? 'budget' : spent.last !== null && now - spent.last < TRIAGE_COOLDOWN_MS ? 'cooldown' : null;
+
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
   gate(): SweepGate | null;
   transaction(work: () => void): void;
   context(): Promise<Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high' }>>;
-  // The update-card turn on the owner's chain, with updateSweepTools and the job's taint: its raw reply.
-  turn(trace: string, text: string, current: () => Promise<void>): Promise<string>;
+  // The update-card turn on the owner's chain, with updateSweepTools (or the tools given) and the job's taint: its raw reply.
+  turn(trace: string, text: string, current: () => Promise<void>, tools?: readonly ToolName[]): Promise<string>;
   // Queues the card under its key for the update record, `commit` in the same transaction; a key already queued only commits.
   // With the day state it may be a revision of a day card, and carry the push line to raise once it is delivered.
   deliver(id: string, trace: string, text: string, recordId: number, commit: () => void, effect?: Readonly<{ revision?: string; push?: string }>): Promise<void>;
@@ -211,9 +240,16 @@ export type UpdateSweepApplyDeps = Readonly<{
     delivered(card: string): boolean;
     // Whether the owner turned named update pushes on (updatePushLine).
     named(): boolean;
-    chose(trace: string, code: UpdateEffectCode): void;
+    chose(trace: string, code: UpdateEffectCode | TriageCode): void;
     // The job settled, however it ended: changes that arrived while it was open can be read now, not at the next poll.
     settled(): void;
+  }>;
+  // GOOGLE_REALTIME_TRIAGE, with the day state: the apply turn triages the batch.
+  triage?: Readonly<{
+    // What the turn reads beside the batch: the owner's goals, from their memory.
+    context(): Promise<Readonly<{ goals: string }>>;
+    // How many approval cards were raised since `at`: what the turn offered with propose_action.
+    cardsSince(at: number): number;
   }>;
 }>;
 
@@ -241,6 +277,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
         await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
         return 'delivered';
       }
+      if (deps.triage) return triage(row, result, io, day, deps.triage, changes, recordId!, withheld, sourceFollowups, commit);
       const quiet = day.quiet();
       const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, revisesCards: day.revisesCards });
       const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
@@ -256,6 +293,41 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
       return 'delivered';
+  };
+  // The triage outcome is what the turn did, held to the owner's limits by code: a card it raised is the act, whatever it
+  // answered; a tell that would interrupt them waits while quiet hours, the budget or the cooldown hold.
+  const triage = async (row: JobRow, result: Parameters<MachineHandler['apply']>[1], io: Parameters<MachineHandler['apply']>[2], day: NonNullable<UpdateSweepApplyDeps['dayState']>,
+    sense: NonNullable<UpdateSweepApplyDeps['triage']>, changes: readonly Change[], recordId: number, withheld: readonly string[] | undefined, sourceFollowups: boolean, commit: () => void) => {
+    const started = deps.now();
+    const localDay = localIso(started, deps.timezone).slice(0, 10);
+    const hold = triageHold(deps.updates.interrupts(localDay), started, day.quiet());
+    const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups,
+      cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count });
+    const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, hold === null));
+    const chosen = parseTriage(reply);
+    const spend = () => deps.updates.interrupted(localDay, deps.now());
+    const settle = (code: TriageCode, work: () => void = () => undefined) => { day.chose(io.trace, code); deps.transaction(() => { work(); commit(); }); return 'skipped' as const; };
+    if (sense.cardsSince(started) > 0) return settle('act', spend);
+    if (chosen === 'invalid') return settle('invalid');
+    if (chosen.decision === 'act') return settle('act_without_card');
+    if (chosen.decision === 'brief') return settle('brief');
+    if (chosen.decision === 'silent') return settle('silent', () => deps.updates.noted(recordId));
+    if (chosen.revise && !day.delivered(chosen.revise.card)) return settle('revise_undelivered');
+    // A message interrupts; so does a push, and a revision that can only go out as a new message.
+    const interrupts = !!chosen.say || !!chosen.push || !day.revisesCards;
+    if (interrupts && hold !== null) {
+      if (!chosen.revise || !day.revisesCards) return settle(`held_${hold}`);
+      // Only the revision in place still lands, silently.
+      day.chose(io.trace, `held_${hold}`);
+      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise.text, recordId, commit, { revision: chosen.revise.card });
+      return 'delivered' as const;
+    }
+    // A push goes only from a surface that raises one; elsewhere the message is the notification.
+    const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
+    day.chose(io.trace, !interrupts ? 'revise' : push ? 'tell+push' : 'tell');
+    await deps.deliver(`update:${row.id}`, io.trace, chosen.say ?? chosen.revise!.text, recordId, () => { if (interrupts) spend(); commit(); },
+      { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
+    return 'delivered' as const;
   };
   return {
     apply: async (row, result, io) => { try { return await apply(row, result, io); } finally { deps.dayState?.settled(); } },
