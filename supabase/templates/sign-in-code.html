@@ -9,11 +9,17 @@
 <style>
   body { margin: 0; padding: 0; }
   .code { -webkit-user-select: all; user-select: all; }
+  @media (max-width: 480px) {
+    .h1 { font-size: 28px !important; line-height: 34px !important; }
+    .code { font-size: 30px !important; letter-spacing: 6px !important; }
+  }
   @media (prefers-color-scheme: dark) {
-    .bg { background: #111111 !important; }
-    .ink { color: #f2f2f2 !important; }
-    .muted { color: #8c8c8c !important; }
-    .rule { border-color: #2a2a2a !important; }
+    .bg { background: #141210 !important; }
+    .sky { background: #2a1f1a !important; }
+    .ground { background: #1e1a17 !important; }
+    .ink { color: #f5f0eb !important; }
+    .muted { color: #a39a91 !important; }
+    .rule { border-color: #2e2925 !important; }
   }
 </style>
 </head>
@@ -21,20 +27,49 @@
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ .Token }} is your Waldo sign-in code.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
 <div style="display:none;max-height:0;overflow:hidden;">Reading the source? Hi. Some codes come with a note.</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="bg" style="background:#ffffff;">
-<tr><td align="center" style="padding:48px 24px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <tr><td class="ink" style="font-size:17px;font-weight:700;letter-spacing:-0.3px;color:#111111;">waldo</td></tr>
-  <tr><td class="ink" style="padding:40px 0 8px;font-size:20px;line-height:28px;font-weight:600;color:#111111;">Your sign-in code</td></tr>
-  <tr><td class="muted" style="font-size:15px;line-height:22px;color:#6b6b6b;">Enter it in Waldo to continue. It expires shortly.</td></tr>
-  <tr><td style="padding:28px 0;">
-    <span class="code ink" style="font-family:'SF Mono',Menlo,Consolas,'Roboto Mono',monospace;font-size:34px;line-height:40px;font-weight:600;letter-spacing:6px;color:#111111;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
+<tr><td align="center" style="padding:40px 20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+  <tr><td align="center" style="padding-bottom:32px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td valign="middle"><div style="width:22px;height:22px;border-radius:50%;background:#ef5b3f;"></div></td>
+      <td valign="middle" class="ink" style="padding-left:8px;font-size:22px;font-weight:700;letter-spacing:-0.4px;color:#2b2622;">waldo</td>
+    </tr></table>
   </td></tr>
-  {{ if eq .Token "123456" }}<tr><td class="muted" style="padding:0 0 28px;font-size:13px;line-height:20px;color:#6b6b6b;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td class="muted" style="padding:0 0 28px;font-size:13px;line-height:20px;color:#6b6b6b;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td class="muted" style="padding:0 0 28px;font-size:13px;line-height:20px;color:#6b6b6b;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td class="muted" style="padding:0 0 28px;font-size:13px;line-height:20px;color:#6b6b6b;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
-  <tr><td class="rule muted" style="padding-top:20px;border-top:1px solid #ececec;font-size:12px;line-height:18px;color:#8c8c8c;">
-    Didn&rsquo;t ask for this? Ignore it. Nothing happens without the code.<br>
-    Waldo will never ask you for this code. Not in chat, not by email, not even nicely.<br>
+
+  <tr><td style="padding:0 20px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td class="sky" align="center" style="height:112px;padding:0 0 0;border-radius:24px 24px 0 0;background:#ffe6d8;vertical-align:bottom;">
+        <div style="font-size:14px;line-height:14px;color:#ef5b3f;padding:0 0 18px 120px;">&#10022;</div>
+        <div style="width:112px;height:56px;margin:0 auto;border-radius:56px 56px 0 0;background:#ef5b3f;"></div>
+      </td></tr>
+      <tr><td class="ground" style="height:36px;border-radius:0 0 24px 24px;background:#fff6f0;"></td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td align="center" class="h1 ink" style="padding:36px 12px 12px;font-size:34px;line-height:40px;font-weight:800;letter-spacing:-0.6px;color:#2b2622;">Here&rsquo;s your<br>sign-in code</td></tr>
+  <tr><td align="center" class="muted" style="padding:0 16px;font-size:16px;line-height:26px;color:#5f5750;">Enter it in Waldo to pick up where you left off. It&rsquo;s only good for a little while.</td></tr>
+
+  <tr><td align="center" style="padding:32px 0 10px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td align="center" style="padding:16px 30px 16px 38px;border-radius:999px;background:#ef5b3f;">
+        <span class="code" style="font-family:'SF Mono',Menlo,Consolas,'Roboto Mono',monospace;font-size:34px;line-height:40px;font-weight:700;letter-spacing:8px;color:#ffffff;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
+      </td>
+    </tr></table>
+  </td></tr>
+  <tr><td align="center" class="muted" style="font-size:13px;line-height:20px;color:#8f857c;">Tap the code to select it</td></tr>
+
+  {{ if eq .Token "123456" }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
+
+  <tr><td align="center" style="padding:48px 0 0;">
+    <table role="presentation" width="160" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid #ece6e0;font-size:0;line-height:0;">&nbsp;</td></tr></table>
+  </td></tr>
+  <tr><td align="center" class="muted" style="padding:20px 16px 0;font-size:12px;line-height:19px;color:#8f857c;">
+    Didn&rsquo;t ask for this? You can ignore it. Nothing happens without the code.<br>
+    Waldo will never ask you for this code. Not in chat, not by email, not even nicely.<br><br>
     Sent to {{ .Email }}
   </td></tr>
+
 </table>
 </td></tr>
 </table>
