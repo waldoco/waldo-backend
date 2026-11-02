@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
-import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupPending, openLookup, startLookup, type LookupDeps } from '../src/onboarding/lookup';
+import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupApplier, lookupPending, openLookup, startLookup, type LookupApplierDeps, type LookupDeps } from '../src/onboarding/lookup';
 import { jobBook, taskBrief, type JobBook } from '../src/tasks/jobs';
 import { applyMachineJob } from '../src/tasks/machine';
 import { fenced } from '../src/prompt/turn-prompt';
@@ -123,18 +123,67 @@ describe('whether a look-up is pending', () => {
 
 describe('when the look-up job ends', () => {
   const result: TaskResult = { status: 'done', summary: 'Two findings recorded.', findings: [], proposals: [], left: [] };
-  it('tells the work waiting on it once, whether it applied or parked, and never sends the owner anything', () => withOwner(async ({ book, deps }) => {
-    const d = deps();
+  type Told = { id: string; text: string };
+  const applier = (over: Partial<LookupApplierDeps> = {}) => {
+    const told: Told[] = [], ended: number[] = [];
+    const deps: LookupApplierDeps = { found: () => 2, gate: () => null, deliver: async (id, text, commit) => { commit(); told.push({ id, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
+    return { told, ended, handler: lookupApplier(deps) };
+  };
+  const reported = (book: JobBook, d: LookupDeps) => {
     agree(d.consent, T0);
     startLookup(d, identity);
     const row = openLookup(book)!;
-    const ticket = book.startAttempt(row.id)!;
-    expect(book.report(ticket, result, { rounds: 3, costUsd: 0.01 })).toBe('accepted');
-    const ended: string[] = [], hops: string[] = [];
-    await applyMachineJob(book.get(row.id)!, { book, now: () => T0, hop: (_row, name) => { hops.push(name); },
-      appliers: { owner_lookup: { decidesOnEmpty: true, apply: async (_row, _result, io) => { io.settle(); return 'skipped'; }, ended: (after) => { ended.push(after.status); } } } });
-    expect(ended).toEqual(['applied']);
-    expect(hops).toContain('machine_skipped');
-    expect(hops).not.toContain('machine_applied');
+    expect(book.report(book.startAttempt(row.id)!, result, { rounds: 3, costUsd: 0.01 })).toBe('accepted');
+    return row.id;
+  };
+  const apply = (book: JobBook, id: string, handler: ReturnType<typeof lookupApplier>, hops: string[] = []) =>
+    applyMachineJob(book.get(id)!, { book, now: () => T0, hop: (_row, name) => { hops.push(name); }, appliers: { owner_lookup: handler } });
+
+  it('tells the owner what it found, counted from the findings it recorded, and lets the web stage read them', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const since: number[] = [];
+    const { told, ended, handler } = applier({ found: (at) => { since.push(at); return 2; } });
+    const hops: string[] = [];
+    await apply(book, id, handler, hops);
+    expect(told).toHaveLength(1);
+    expect(told[0]!.id).toBe(`lookup:${id}`);
+    expect(told[0]!.text).toContain('2');
+    expect(since).toEqual([T0]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(ended).toEqual([T0]);
+    expect(hops).toContain('machine_applied');
+  }));
+
+  it('says so honestly when it found nothing, rather than staying silent', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const { told, handler } = applier({ found: () => 0 });
+    await apply(book, id, handler);
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).not.toMatch(/\d/);
+  }));
+
+  it('sends nothing while the owner\'s update gate is closed (quiet hours, follow-ups off), and names why', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const { told, ended, handler } = applier({ gate: () => 'held_quiet' });
+    const hops: string[] = [];
+    await apply(book, id, handler, hops);
+    expect(told).toEqual([]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(hops).toContain('machine_held');
+    expect(ended).toEqual([T0]);
+  }));
+
+  it('a look-up that parked before it finished (its deadline) still says what it recorded', () => withOwner(async ({ book, deps }) => {
+    const d = deps();
+    agree(d.consent, T0);
+    startLookup(d, identity);
+    const id = openLookup(book)!.id;
+    expect(book.park(id, 'deadline')).toBe(true);
+    const { told, ended, handler } = applier();
+    await apply(book, id, handler);
+    expect(book.get(id)!.status).toBe('parked');
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).toContain('2');
+    expect(ended).toEqual([T0]);
   }));
 });

@@ -99,8 +99,8 @@ import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '../memory/claims';
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
-import { ownerName, recordSignupName } from '../onboarding/first-run';
-import { lookupPending, openLookup, startLookup } from '../onboarding/lookup';
+import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
+import { lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
@@ -359,6 +359,7 @@ type OwnerRuntime = Readonly<{
 const LATE_FIRE_MS = 5 * 60_000;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
 const LOOKUP_STARTED_KEY = 'owner_lookup_started';
+const LOOKUP_TRACE = 'owner-lookup';
 // The last message row of one chain. Every chain of an owner shares one history store, so the store's own leaf can sit in another chain.
 const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
   [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
@@ -5489,17 +5490,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       reconcile: async () => {
         // A yes that no longer counts stops a running look-up whatever the switch says now, so turning the switch off never
         // leaves one running.
+        // Each pass that writes no job says why, by code alone, so a look-up that never ran is visible.
+        const skipped = (code: string) => log({ trace: LOOKUP_TRACE, hop: 'lookup_skipped', ms: 0, ok: true, code });
         const consent = lookupConsent();
         if (!consent.active('owner_lookup')) {
-          for (const id of this.jobs().cancelMachine('owner_lookup')) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
+          const cancelled = this.jobs().cancelMachine('owner_lookup');
+          for (const id of cancelled) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
+          if (!cancelled.length) skipped('not_granted');
           return;
         }
-        if (!lookupOn || lookupStarted() === consent.state('owner_lookup').granted_at) return;
+        if (!lookupOn) return skipped('switch_off');
+        if (lookupStarted() === consent.state('owner_lookup').granted_at) return skipped('started');
         const name = ownerName(memory), doName = identity.get<string>('do_name');
         const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
         const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, surface: 'app',
           started: lookupStarted, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
-        if (made.code !== 'enqueued') return;
+        if (made.code !== 'enqueued') return skipped(made.code === 'no_name' ? `no_name:${ownerNameGap(memory)}` : made.code);
         log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
@@ -5510,10 +5516,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, Date.now());
       },
     };
-    // The look-up's worker records its findings as it goes, so its apply tells the owner nothing; its end lets a web stage that
-    // settled without it read the findings.
-    const lookupApply = { decidesOnEmpty: true, apply: async (_row: unknown, _result: unknown, io: { settle(): void }) => { io.settle(); return 'skipped' as const; },
-      ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
+    // The look-up's worker records its findings as it goes; its end tells the owner how it went, under the update cards' gate,
+    // and lets a web stage that settled without it read the findings.
+    const lookupApply = lookupApplier({
+      found: since => findingStore(storage.sql, memory, lookupConsent(), Date.now).foundSince(since),
+      gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
+      deliver: async (id, text, commit) => {
+        if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text }, ownerSubject: String(owner),
+          doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
+      },
+      ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
     const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
