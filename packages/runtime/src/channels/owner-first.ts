@@ -8,12 +8,6 @@ import { OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 // owner's turn takes the chain. One writer still: the pass yields; nothing runs beside it.
 export const ownerFirst = (env: Readonly<{ WALDO_OWNER_FIRST?: string }>): boolean => env.WALDO_OWNER_FIRST === '1';
 
-// With WALDO_OWNER_ACK=1, a WhatsApp message admitted while other work holds the chain gets this line at once, as a reply to
-// it. The app's admitted state and typing already say so, and iMessage stays silent until its answer (one send slot per
-// bridge, which the running turn holds).
-export const ownerAck = (env: Readonly<{ WALDO_OWNER_ACK?: string }>): boolean => env.WALDO_OWNER_ACK === '1';
-export const OWNER_ACK = "Got it. I'll get to this as soon as I finish what I'm working on.";
-
 // Each surface inbox marks an admitted message due a moment after admission. A message whose wake was put off (its owner's
 // authority could not be read, a WhatsApp quiet window still open) is not waiting yet: counting it would end every pass early
 // and spin the alarm until it is due.

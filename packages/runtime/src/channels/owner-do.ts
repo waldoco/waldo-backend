@@ -75,7 +75,7 @@ import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/o
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
-import { OWNER_ACK, ownerAck, ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
+import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -2321,16 +2321,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (changed) return new Response('unavailable', { status: 503 });
     // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
     if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
-    if (ownerAck(this.env) && this.chainBusy > 0) for (const m of claimed) if (m.from === subject && whatsappTurnMessage(m) && typeof m.id === 'string' && m.id !== '') this.ctx.waitUntil(this.whatsappAck(m.id));
     return new Response('ok');
-  }
-  // One line, as a reply to the owner's message, that it waits behind the work running now. Sent once, from its admission;
-  // a send that fails is only logged, since the message's own turn still answers it.
-  private async whatsappAck(wamid: string): Promise<void> {
-    try {
-      const { api, owner } = this.setup('whatsapp');
-      await api.sendMessage({ chat_id: owner, text: OWNER_ACK, ...{ quote_message_id: wamid } });
-    } catch { console.error(JSON.stringify({ hop: 'owner_ack', ok: false, code: 'send_failed' })); }
   }
   // Meta's later reports on sends it accepted: window refusals (131047), arrivals on the owner's phone (delivered, read or
   // played) and other failures. Each is applied to the outbox record it names before the acknowledgement, in one synchronous
@@ -3374,12 +3365,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Every Google client and account read migrates a legacy grant first, and the migration hands the grant to Vault before it
   // deletes it, so reads that start at once wait on the one migration in flight instead of each adopting the grant.
   private googleMigration: Promise<void> | null = null;
-  // Units of work running on the serial chain now: a message admitted while it is above zero waits behind them.
-  private chainBusy = 0;
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
-    const run = this.queue.then(async () => { this.chainBusy += 1; try { return await work(); } finally { this.chainBusy -= 1; } })
-      .finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
+    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
   }

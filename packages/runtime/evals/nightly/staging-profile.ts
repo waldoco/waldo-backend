@@ -31,7 +31,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_OWNER_FIRST: gap('owner messages take the chain before queued machine turns; the trial runs one owner turn at a time with no machine work queued'),
   WALDO_SECOND_MESSAGE: gap('a running owner turn is offered newer owner messages; the trial sends each step after the last one answered'),
-  WALDO_OWNER_ACK: inert('a fixed WhatsApp line sent outside any turn; the trial runs the app surface'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),

@@ -4,7 +4,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { OWNER_ACK } from '../src/channels/owner-first';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
@@ -97,31 +96,5 @@ it('iMessage fold closes only a message still admitted, clears its words and lea
     expect(inbox.fold(second.id)).toBe(false);
     expect(inbox.records().map(row => [row.state, row.text])).toEqual([['running', 'Find me three flights to Goa.'], ['completed', '']]);
     await state.storage.deleteAlarm();
-  });
-});
-
-it('WALDO_OWNER_ACK: a WhatsApp message that waits behind a running turn gets one line at once, as a reply to it', async () => {
-  await harness('second-choice-whatsapp-ack', async world => {
-    model.choice = 'queue';
-    const gate = deferred(); model.hold = gate.promise;
-    expect((await post(world.instance, 'wamid.ack.A', { type: 'text', text: { body: 'Find me three flights to Goa for Friday.' } })).status).toBe(200);
-    // Nothing runs yet, so the first message is not told to wait.
-    expect(world.sent).toEqual([]);
-    const drained = drainWhatsAppTurns(world.instance);
-    await vi.waitFor(() => expect(model.inputs).toHaveLength(1), { timeout: 10_000, interval: 20 });
-    expect((await post(world.instance, 'wamid.ack.B', { type: 'text', text: { body: 'Separately, is it raining in Pune?' } })).status).toBe(200);
-    await vi.waitFor(() => expect(world.sent).toEqual([OWNER_ACK]), { timeout: 5_000, interval: 20 });
-    expect(world.quoted).toEqual(['wamid.ack.B']);
-    gate.resolve();
-    await drained;
-    expect(world.sent).toEqual([OWNER_ACK, 'Reply to both.', 'Reply to the newer message.']);
-  }, { WALDO_OWNER_ACK: '1' });
-});
-
-it('without WALDO_OWNER_ACK the waiting message gets no extra line', async () => {
-  await harness('second-choice-whatsapp-no-ack', async world => {
-    model.choice = 'queue';
-    await secondWhileFirstRuns(world, { type: 'text', text: { body: 'Separately, is it raining in Pune?' } });
-    expect(world.sent).not.toContain(OWNER_ACK);
   });
 });
