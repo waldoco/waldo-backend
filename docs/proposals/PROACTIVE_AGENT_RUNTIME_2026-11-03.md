@@ -103,8 +103,9 @@ change below keeps that.
   worker, as the update sweep and loop check-back already do. `OwnerDO` runs only the short apply turn.
 - Owner messages take priority over queued machine apply turns. The serial chain stays, but its queue becomes
   owner-first [inference: no starvation risk, because apply turns are short and bounded].
-- Build the second-message design on every surface: the model chooses to fold, queue or stop. An immediate "on it, I'll
-  pick that up next" reaches the owner when a turn is running.
+- Build the second-message design on every surface: the model chooses to fold, queue or stop. Per the owner's 31 Oct
+  ruling, the owner sees typing on every surface rather than a fixed acknowledgement line, and the model says it will get
+  to the message next in its own words when it queues it.
 
 ### 4.2 Workers that can ask and resume
 
