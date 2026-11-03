@@ -192,7 +192,9 @@ export type CalendarBlock = 'rest' | 'deep_work';
 export type RestBlocks = Readonly<{ blocks: readonly Readonly<{ start: string; end: string }>[]; others: readonly Readonly<{ start: string; end: string; all_day: boolean }>[] }>;
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
-  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
+  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted';
+  // The event carries the private mark Waldo writes on the events it creates.
+  waldo_made?: true }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
@@ -204,8 +206,8 @@ export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: stri
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
 // the join link, attachments and the owner's status stay out of the shared card projection; meeting
 // prep adds the link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status' | 'waldo_made'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, waldo_made: _made, ...projection } = event;
   return projection;
 };
 
@@ -434,7 +436,8 @@ export type GoogleClient = Readonly<{
   // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
+  // made: mark the event as one Waldo created, the mark a standing grant reads back before it moves or removes the event.
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; made?: boolean; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarMoveOptions): Promise<CalendarItem>;
   // With a marker, answers the cancelled version it left, which a restore is fenced on.
   cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem | void>;
@@ -896,9 +899,9 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
     // A Meet request is keyed to the event id, so a retried create cannot ask for a second link.
-    createEvent: async ({ title, start, end, id, operationMarker, block, calendarId, attendees, description, location, meet, sendUpdates }) => send(
+    createEvent: async ({ title, start, end, id, operationMarker, block, made, calendarId, attendees, description, location, meet, sendUpdates }) => send(
       events(calendarId, undefined, { sendUpdates, conferenceDataVersion: meet ? '1' : undefined }), 'POST', {
-        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarTags(operationMarker, block),
+        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarTags(operationMarker, block, made),
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
@@ -1127,8 +1130,8 @@ const REST_LISTING_MAX = 250;
 const REST_WINDOWS_MAX = 20;
 const calendarMarker = (operationMarker?: string) => operationMarker ? { extendedProperties: { private: { waldoOperation: operationMarker } } } : {};
 // Only a create names the kind. A move or cancel patches the marker alone, and a patch leaves the keys it does not name.
-const calendarTags = (operationMarker?: string, block?: CalendarBlock) => operationMarker || block
-  ? { extendedProperties: { private: { ...(operationMarker ? { waldoOperation: operationMarker } : {}), ...(block ? { waldoBlock: block } : {}) } } } : {};
+const calendarTags = (operationMarker?: string, block?: CalendarBlock, made?: boolean) => operationMarker || block || made
+  ? { extendedProperties: { private: { ...(operationMarker ? { waldoOperation: operationMarker } : {}), ...(block ? { waldoBlock: block } : {}), ...(made ? { waldoMade: '1' } : {}) } } } : {};
 const calendarTimes = (start: string, end: string) => {
   const date = (v: string) => /^\d{4}-\d\d-\d\d$/.test(v) && new Date(v).toISOString().slice(0,10) === v;
   const allDay = date(start) && date(end);
@@ -1146,6 +1149,7 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   ...(event.etag ? { etag: event.etag } : {}),
   // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
   ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
+  ...(event.extendedProperties?.private?.waldoMade === '1' ? { waldo_made: true as const } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),

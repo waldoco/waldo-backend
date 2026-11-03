@@ -67,6 +67,7 @@ export * from './runtime/class-state';
 export * from './runtime/schedule';
 export * from './runtime/cron';
 export * from './runtime/loop-policy';
+export * from './runtime/standing-grant';
 export * from './runtime/sink';
 export * from './runtime/routing';
 export * from './runtime/evidence';

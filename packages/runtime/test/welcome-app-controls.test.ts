@@ -62,20 +62,16 @@ it('node actions run as the console memory action on the node, against that node
   });
 });
 
-it('a correction is the owner\'s word, so it needs a recent sign-in; confirm and forget do not', async () => {
+it('a correction, like confirm and forget, needs no recent sign-in', async () => {
   await owner(async (storage) => {
     const acted: ConsoleAction[] = [];
     const old = host(storage, acted, new Date(Date.now() - 3 * 3_600_000).toISOString());
     const detail = await read(old, 'view=constellation&memory_view=detail&id=memory:node:1');
-    const refused = await act(old, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: 'Mondays are for the team', revision: detail.revision, request_id: 'welcome-correct-01' });
-    expect([refused.status, refused.body]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(acted).toEqual([]);
+    const corrected = await act(old, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: '  Mondays are for the team ', revision: detail.revision, request_id: 'welcome-correct-01' });
+    expect(corrected.status).toBe(200);
     const forgotten = await act(old, { view: 'constellation', action: 'node.forget', id: 'memory:node:1', revision: detail.revision, request_id: 'welcome-forget-02' });
     expect(forgotten.status).toBe(200);
-    const fresh = host(storage, acted);
-    const corrected = await act(fresh, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: '  Mondays are for the team ', revision: detail.revision, request_id: 'welcome-correct-02' });
-    expect(corrected.status).toBe(200);
-    expect(acted).toEqual([{ action: 'node.forget', id: '1', value: '', made: 'app:node.forget' }, { action: 'node.correct', id: '1', value: 'Mondays are for the team', made: 'app:node.correct' }]);
+    expect(acted).toEqual([{ action: 'node.correct', id: '1', value: 'Mondays are for the team', made: 'app:node.correct' }, { action: 'node.forget', id: '1', value: '', made: 'app:node.forget' }]);
   });
 });
 

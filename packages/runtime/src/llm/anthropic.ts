@@ -3,6 +3,7 @@ import { validModelCredential } from './credential-shape';
 import { ANTHROPIC_PROVIDER, PROVIDER_OF, type LLMAttachment, type LLMRequest, type LLMToolCall, type LLMToolTurn, type ModelName } from '@waldo/contracts';
 import { OUTPUT_ITEM_PROVIDER, outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
 import type { ReplyDeltaSink } from '../conversation/reply-stream';
+import { OWNER_SKILL_PROCEDURES_LEAD, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type AnthropicMessagesClient = Pick<Anthropic, 'messages'>;
@@ -208,8 +209,14 @@ const onlySearched = (response: Anthropic.Message): boolean => response.stop_rea
   && response.content.some((block) => (block.type as string) === 'tool_search_tool_result')
   && response.content.every((block) => ['server_tool_use', 'tool_search_tool_result', 'thinking', 'redacted_thinking'].includes(block.type as string));
 
+// A skill loaded mid-turn appends its procedures after the stable head, so the breakpoint stays on the head: the tools and
+// the head remain a cached prefix on the next round, and the procedures are read through the rolling message breakpoints.
+// The two blocks join to the exact system text; anything that is not the head plus the procedures stays one block.
 function systemPrompt(system: string, cached: boolean): Anthropic.MessageCreateParams['system'] {
-  return cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system;
+  if (!cached) return system;
+  const split = system.endsWith(OWNER_SKILL_SAFEGUARDS) ? system.indexOf(`\n\n${OWNER_SKILL_PROCEDURES_LEAD}`) : -1;
+  if (split <= 0) return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+  return [{ type: 'text', text: system.slice(0, split), cache_control: { type: 'ephemeral' } }, { type: 'text', text: system.slice(split) }];
 }
 
 // Rolling breakpoints beside the system one, four in all as the API allows. A round appends two messages, so the last
