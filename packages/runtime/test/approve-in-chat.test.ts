@@ -279,6 +279,17 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
     });
   });
 
+  // The model reads its drafts unsigned; the card the owner approves in words is the signed one that goes out.
+  it('a signed email is approvable in words from the card that shows its signature', async () => {
+    await owner('in-words-signed', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeSendEmail(await emailProposal({ to: ['sam@example.test'], subject: 'Weekly numbers', body: 'Hi Sam', message_id: `<${crypto.randomUUID()}@waldo-send>`, signature: { first_name: 'Shivansh' } }));
+      expect(f.messages.at(-1)!.text).toContain('personal assistant');
+      expect(f.desk.placement(id)).toMatchObject({ chatApprovable: true });
+      expect(f.desk.waiting().find(card => card.approval_id === id)!.card).not.toContain('personal assistant');
+    });
+  });
+
   it('an email edited after it was shown is not sent by an earlier go ahead', async () => {
     await owner('in-words-email', async state => {
       const f = harness(state, 'whatsapp');
