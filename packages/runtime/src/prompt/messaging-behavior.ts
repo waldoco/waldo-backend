@@ -138,8 +138,8 @@ const harnessTools = (tools: readonly string[]): string => {
   return catalogue ? `${HARNESS_TOOLS_LINE}\nTool catalogue:\n${catalogue}` : '';
 };
 
-export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, toolSearch: boolean | 'harness' = false): string {
-  const searchLine = toolSearch === 'harness' ? harnessTools(tools) : toolSearch ? TOOL_SEARCH_LINE : undefined;
+export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, toolSearch: boolean | 'harness' = false, direct: ReadonlySet<string> = new Set()): string {
+  const searchLine = toolSearch === 'harness' ? harnessTools(tools.filter((name) => !direct.has(name))) : toolSearch ? TOOL_SEARCH_LINE : undefined;
   const tail = [...(tools.length > 0 && searchLine ? [searchLine] : []), ...(tools.length === 0 ? ['Tools available in this chat: none.'] : [])];
   const taskSection = tools.length === 0 || tools.includes('web_search') ? TASKS : tasks(false);
   if (!presentation) return [taskSection === TASKS ? MESSAGING_BEHAVIOR : [IDENTITY, VOICE, WALDO_VOCABULARY, taskSection, EXAMPLES, `${DOING}\n${DIRECT_DOING}`, HEALTH, REMEMBERING].join('\n\n'), ...tail].join('\n\n');

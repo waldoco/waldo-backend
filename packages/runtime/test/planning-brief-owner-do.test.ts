@@ -68,7 +68,7 @@ const ANSWERS = ['Finish the deck', 'Gym first', 'Something else'];
 const health = vi.hoisted(() => ({ shared: false }));
 const HEALTH_WORDS = ['Form zone:', 'slept 52 minutes under baseline', 'Recovery: low'];
 const NO_HEALTH = 'No derived health context is available for this invocation.';
-// Staging loads non-core tools through find_tools and use_tool; the default loader offers them directly.
+// Staging loads non-core tools through find_tools and use_tool in an owner's own turn; the default loader offers them directly.
 const via = (harness: boolean, name: string, args: Record<string, unknown>): Round[] => harness
   ? [{ calls: [{ name: 'find_tools', arguments: { names: [name] } }] }, { calls: [{ name: 'use_tool', arguments: { name, arguments: args } }] }]
   : [{ calls: [{ name, arguments: args }] }];
@@ -163,14 +163,15 @@ const briefRow = (history: Awaited<ReturnType<Steps['history']>>) => history.mes
 describe('the planning Brief on the app', { timeout: 30_000 }, () => {
   it.each([['default', false], ['harness', true]] as const)('asks one question with answers to tap; the answer puts a block on a card; the calendar changes only on yes (%s loader)', async (loader, harness) => {
     const QUESTION = 'The Brief\nYour day is open until Startup time at 3. What do you want done this morning?';
-    model.brief = [...via(harness, 'offer_replies', { choices: ANSWERS }), { text: QUESTION }];
+    // The Brief is offered its proposal tools directly on either loader; the owner's own turn loads a deferred one as usual.
+    model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: QUESTION }];
     model.owner = [...via(harness, 'propose_calendar_change', BLOCK), { text: 'It is on a card for your yes.' }];
     await owned(`planning-brief-ask-${loader}`, { PLANNING_BRIEF: '1', ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
       await brief();
       // The Brief planned with the planning instruction, could raise cards and offer answers, and was told no health is shared.
       expect(model.briefAsked[0]).toContain(PLANNING_BRIEF_INSTRUCTION);
       expect(model.briefRequests[0]).toContain(NO_HEALTH);
-      for (const name of ['offer_replies', 'propose_calendar_change', 'propose_action']) expect(model.briefRequests[0]).toContain(name);
+      expect(model.briefTools[0]).toEqual(expect.arrayContaining(['offer_replies', 'propose_calendar_change', 'propose_action']));
       if (harness) expect(model.briefTools[0]).toEqual(expect.arrayContaining(['find_tools', 'use_tool']));
       expect(model.results.some(result => result.includes('"offered":true'))).toBe(true);
       const delivered = briefRow(await history());
