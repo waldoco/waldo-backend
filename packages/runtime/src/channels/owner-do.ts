@@ -77,7 +77,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_B
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nextWakeDue, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -2126,6 +2126,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
+  // With NEXT_DUE_ALARM on, a wake that finds no kept wake due runs nothing and asks the directory nothing: it re-arms for the
+  // earliest one. The check reads the arbiter's own bounds, so a wake it skips is one the arbiter would not have armed. The
+  // pass that is a failed lane's retry has spent its key already, and always runs.
+  private async nothingDue(retrying: AlarmLane | null): Promise<boolean> {
+    if (this.env.NEXT_DUE_ALARM !== '1' || retrying !== null) return false;
+    const now = Date.now();
+    let scheduleDue: number | null = NO_SCHEDULE_WAKE;
+    if (!this.ctx.storage.kv.get(LINK_MODE)) { ensureSchema(this.ctx.storage); scheduleDue = new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).nextWake(); }
+    const due = await nextWakeDue(this.ctx.storage, scheduleDue, now);
+    return due === null || due > now;
+  }
   // Every wake the owner keeps, with the schedule's next entry. Work outside the schedule (an app, iMessage, WhatsApp or Mac
   // step) re-arms through here, or its re-arm would drop the alarm for the owner's next scheduled job. A routing object has no
   // schedule.
@@ -2869,6 +2880,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number): Promise<void> {
     await this.browserReady;
+    if (await this.nothingDue(retrying)) { console.log(JSON.stringify({ hop: 'alarm', ok: true, code: 'nothing_due' })); await this.rearmEveryWake(); return; }
     await this.whatsappTurns(alarmEnd);
     if (held === 'pass') return;
     const lane: LaneRunner = (id, work) => runLane(id, held, work);

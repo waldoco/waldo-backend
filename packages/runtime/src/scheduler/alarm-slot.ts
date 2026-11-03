@@ -145,7 +145,8 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
 }
 
-async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, outside: boolean): Promise<void> {
+// When each kept wake can run: its due time, or the retry's for a lane a failed pass holds. `free` says one runs as due.
+async function wakeBounds(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<Readonly<{ bounds: number[]; free: boolean }>> {
   const retryDue = (await storage.get<number | null>(ALARM_RETRY_DUE_KEY)) ?? null;
   const held = heldLane(retryDue, await storage.get<AlarmLane>(ALARM_FAILED_LANE_KEY), now);
   const bounds: number[] = [];
@@ -159,6 +160,18 @@ async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | nu
     const due = (await storage.get<number | null>(key)) ?? null;
     if (due !== null) add(key === ALARM_RETRY_DUE_KEY ? held : LANE_OF.get(key), due);
   }
+  return { bounds, free };
+}
+
+// The earliest time any kept wake can run, as the arbiter arms it before its floor; null when none is kept. A pass that
+// finds this after now has nothing to run.
+export async function nextWakeDue(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<number | null> {
+  const { bounds } = await wakeBounds(storage, scheduleDue, now);
+  return bounds.length ? Math.min(...bounds) : null;
+}
+
+async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, outside: boolean): Promise<void> {
+  const { bounds, free } = await wakeBounds(storage, scheduleDue, now);
   if (!bounds.length) { if (outside) await storage.deleteAlarm(); return; }
   const wake = Math.max(Math.min(...bounds), now + retryDelayMs);
   if (outside && !free) {

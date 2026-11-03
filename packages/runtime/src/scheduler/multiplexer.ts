@@ -653,11 +653,13 @@ export class Scheduler {
     );
   }
 
+  // The schedule's next entry: the wake rearm() passes to the arbiter.
+  nextWake(): number | null {
+    return nextWakeBound(readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries);
+  }
+
   async rearm(): Promise<void> {
-    const bound = nextWakeBound(
-      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
-    );
-    await rearmSharedAlarm(this.storage, bound, this.deps.now());
+    await rearmSharedAlarm(this.storage, this.nextWake(), this.deps.now());
   }
 }
 
