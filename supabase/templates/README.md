@@ -17,6 +17,14 @@ to new ones.
   `Your Waldo sign-in code` (the preheader still leads with the code).
 - Variables used: `{{ .Token }}`, `{{ .Email }}`. No links, so the email stays
   code-only and phishing-shaped lookalikes have nothing to imitate.
+- Brand: tokens, type and mascot follow `DESIGN-SYSTEM.md` in `waldo-landing`.
+  Corben 400 for the heading and code, SF Pro Rounded (`ui-rounded`) for the
+  rest, ink pill as the primary surface, orange only in the dome.
+- Images: upload `assets/*.png` (2x, transparent corners) so they resolve at
+  `https://www.heywaldo.in/email/<name>.png` before pasting the template, or
+  change that base URL in the template. Gmail blocks SVG and data URIs.
+- Fonts: Corben loads from Google Fonts in Apple Mail and iOS Mail. Gmail does
+  not load web fonts and falls back to Georgia.
 - Email clients run no JavaScript, so there is no real copy button. The code is
   one selectable word with `user-select: all`, so one tap or double-click grabs
   all of it.

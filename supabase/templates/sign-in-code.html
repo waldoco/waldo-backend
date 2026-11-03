@@ -6,65 +6,61 @@
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <title>Your Waldo sign-in code</title>
+<link href="https://fonts.googleapis.com/css2?family=Corben&display=swap" rel="stylesheet">
 <style>
   body { margin: 0; padding: 0; }
   .code { -webkit-user-select: all; user-select: all; }
+  .logo-dark { display: none; }
   @media (max-width: 480px) {
-    .h1 { font-size: 28px !important; line-height: 34px !important; }
-    .code { font-size: 30px !important; letter-spacing: 6px !important; }
+    .h1 { font-size: 30px !important; line-height: 34px !important; }
   }
   @media (prefers-color-scheme: dark) {
-    .bg { background: #141210 !important; }
-    .sky { background: #2a1f1a !important; }
-    .ground { background: #1e1a17 !important; }
-    .ink { color: #f5f0eb !important; }
-    .muted { color: #a39a91 !important; }
-    .rule { border-color: #2e2925 !important; }
+    .bg { background: #1C1B1A !important; }
+    .ink { color: #FAFAF8 !important; }
+    .muted { color: #9A9A96 !important; }
+    .faint { color: #6B6B68 !important; }
+    .pill { background: #FAFAF8 !important; }
+    .pill .code { color: #1A1A1A !important; }
+    .rule { border-color: rgba(250,250,248,0.08) !important; }
+    .logo-light { display: none !important; }
+    .logo-dark { display: block !important; }
   }
 </style>
 </head>
-<body class="bg" style="margin:0;padding:0;background:#ffffff;">
+<body class="bg" style="margin:0;padding:0;background:#F4F3F0;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ .Token }} is your Waldo sign-in code.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
 <div style="display:none;max-height:0;overflow:hidden;">Reading the source? Hi. Some codes come with a note.</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="bg" style="background:#ffffff;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="bg" style="background:#F4F3F0;">
 <tr><td align="center" style="padding:40px 20px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px;font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 
   <tr><td align="center" style="padding-bottom:32px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td valign="middle"><div style="width:22px;height:22px;border-radius:50%;background:#ef5b3f;"></div></td>
-      <td valign="middle" class="ink" style="padding-left:8px;font-size:22px;font-weight:700;letter-spacing:-0.4px;color:#2b2622;">waldo</td>
-    </tr></table>
+    <img class="logo-light" src="https://www.heywaldo.in/email/waldo-logo.png" width="142" height="44" alt="Waldo" style="display:block;border:0;outline:none;font-family:Corben,Georgia,serif;font-size:28px;color:#1A1A1A;">
+    <div class="logo-dark" style="display:none;mso-hide:all;"><img src="https://www.heywaldo.in/email/waldo-logo-dark.png" width="142" height="44" alt="Waldo" style="display:block;border:0;outline:none;font-family:Corben,Georgia,serif;font-size:28px;color:#FAFAF8;"></div>
   </td></tr>
 
-  <tr><td style="padding:0 20px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-      <tr><td class="sky" align="center" style="height:112px;padding:0 0 0;border-radius:24px 24px 0 0;background:#ffe6d8;vertical-align:bottom;">
-        <div style="font-size:14px;line-height:14px;color:#ef5b3f;padding:0 0 18px 120px;">&#10022;</div>
-        <div style="width:112px;height:56px;margin:0 auto;border-radius:56px 56px 0 0;background:#ef5b3f;"></div>
-      </td></tr>
-      <tr><td class="ground" style="height:36px;border-radius:0 0 24px 24px;background:#fff6f0;"></td></tr>
-    </table>
+  <tr><td align="center">
+    <img src="https://www.heywaldo.in/email/sign-in-hero.png" width="440" alt="" style="display:block;width:100%;max-width:440px;height:auto;border:0;outline:none;border-radius:24px;">
   </td></tr>
 
-  <tr><td align="center" class="h1 ink" style="padding:36px 12px 12px;font-size:34px;line-height:40px;font-weight:800;letter-spacing:-0.6px;color:#2b2622;">Here&rsquo;s your<br>sign-in code</td></tr>
-  <tr><td align="center" class="muted" style="padding:0 16px;font-size:16px;line-height:26px;color:#5f5750;">Enter it in Waldo to pick up where you left off. It&rsquo;s only good for a little while.</td></tr>
+  <tr><td align="center" class="h1 ink" style="padding:28px 12px 12px;font-family:Corben,Georgia,serif;font-size:34px;line-height:38px;font-weight:400;letter-spacing:-0.02em;color:#1A1A1A;">Here&rsquo;s your<br>sign-in code</td></tr>
+  <tr><td align="center" class="muted" style="padding:0 16px;font-size:16px;line-height:24px;letter-spacing:-0.01em;color:#6B6B68;">Enter it in Waldo to pick up where you left off. It&rsquo;s only good for a little while.</td></tr>
 
-  <tr><td align="center" style="padding:32px 0 10px;">
+  <tr><td align="center" style="padding:32px 0 12px;">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td align="center" style="padding:16px 30px 16px 38px;border-radius:999px;background:#ef5b3f;">
-        <span class="code" style="font-family:'SF Mono',Menlo,Consolas,'Roboto Mono',monospace;font-size:34px;line-height:40px;font-weight:700;letter-spacing:8px;color:#ffffff;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
+      <td class="pill" align="center" style="padding:14px 28px 14px 36px;border-radius:999px;background:#1A1A1A;">
+        <span class="code" style="font-family:Corben,Georgia,serif;font-size:34px;line-height:42px;font-weight:400;letter-spacing:0.2em;color:#FAFAF8;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
       </td>
     </tr></table>
   </td></tr>
-  <tr><td align="center" class="muted" style="font-size:13px;line-height:20px;color:#8f857c;">Tap the code to select it</td></tr>
+  <tr><td align="center" class="muted" style="font-size:14px;line-height:17px;font-weight:500;letter-spacing:-0.01em;color:#6B6B68;">Tap here to copy OTP</td></tr>
 
-  {{ if eq .Token "123456" }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td align="center" class="muted" style="padding-top:20px;font-size:14px;line-height:20px;color:#5f5750;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
+  {{ if eq .Token "123456" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
 
   <tr><td align="center" style="padding:48px 0 0;">
-    <table role="presentation" width="160" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid #ece6e0;font-size:0;line-height:0;">&nbsp;</td></tr></table>
+    <table role="presentation" width="160" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid rgba(26,26,26,0.08);font-size:0;line-height:0;">&nbsp;</td></tr></table>
   </td></tr>
-  <tr><td align="center" class="muted" style="padding:20px 16px 0;font-size:12px;line-height:19px;color:#8f857c;">
+  <tr><td align="center" class="faint" style="padding:20px 16px 0;font-size:12px;line-height:18px;letter-spacing:-0.01em;color:#9A9A96;">
     Didn&rsquo;t ask for this? You can ignore it. Nothing happens without the code.<br>
     Waldo will never ask you for this code. Not in chat, not by email, not even nicely.<br><br>
     Sent to {{ .Email }}
