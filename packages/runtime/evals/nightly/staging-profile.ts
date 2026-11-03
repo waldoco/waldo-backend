@@ -29,6 +29,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_MODEL_PROVIDER: mapped("the profile's chat model is that provider's; a live run refuses a Claude staging, since its judge is Claude"),
   WALDO_TOOL_LOADER: mapped("'harness' loads core tools up front and the rest through find_tools and use_tool"),
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
+  WALDO_TASK_ASK: gap('a background worker\'s held step raises its card and waits; the trial runs no background workers'),
+  WALDO_TASK_NOTES: inert('background jobs that stop say so outside any turn, and a parked task retries once; the trial runs no background jobs'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
