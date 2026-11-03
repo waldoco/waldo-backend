@@ -337,15 +337,34 @@ export type AppMessage = AppMessageV1;
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
 // to a run also carries the approval cards presented for that run.
 const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
+const shownRow = (entry: ConversationEntry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant';
+const pageWindow = (cursor: string | null, limit: number) => ({
+  taken: cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0, // old consumers can finish an offset page
+  size: Math.min(Math.max(Math.trunc(limit) || 20, 1), 50),
+  before: cursor?.startsWith('before:') ? cursor.slice(7) : null,
+});
+// Whether the rows read so far, newest first, are enough for this page: every row newer than it (a reply's cards go on the
+// newest reply to its message), the page itself, and one older shown row, which says whether there is a next page.
+export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
+  const { taken, size, before } = pageWindow(cursor, limit);
+  return (newestFirst: readonly ConversationEntry[]): boolean => {
+    let found = before === null, older = 0;
+    for (const entry of newestFirst) {
+      if (!shownRow(entry)) continue;
+      if (!found) { found = entry.id === before; continue; }
+      if (++older > (before === null ? taken : 0) + size) return true;
+    }
+    return false;
+  };
+};
 // consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
   consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
-  const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
-  const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
-  const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
-  const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
-  const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
+  const shown = entries.filter(shownRow);
+  const { taken, size, before: beforeId } = pageWindow(cursor, limit);
+  const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
+  const end = beforeId !== null ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
