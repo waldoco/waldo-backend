@@ -217,7 +217,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
-import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
@@ -1408,7 +1408,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return delivery ? [[id, delivery] as const] : [];
     }));
     if (!delivered.size) return view.cards.map(card => ({ ...marked(card), latest: null }));
-    const shown = await this.appMainChatShown(name, hash, 'app_cards_latest');
+    const shown = await this.appMainChatShown(name, hash, 'app_cards_latest', new Set([...delivered.values()].map(delivery => delivery.message_id)));
     if (shown === null) return view.cards.map(card => delivered.has(card.id) ? marked(card) : { ...marked(card), latest: null });
     return view.cards.map(card => {
       const delivery = delivered.get(card.id);
@@ -1416,16 +1416,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
-  // What the Main chat shows for each of its rows, read under the app session's own admission, or null when it cannot be
-  // read: the failure is logged by code only, never a row.
-  private async appMainChatShown(name: string, hash: string, hop: string): Promise<ReadonlyMap<string, string> | null> {
+  // What the Main chat shows for each of the rows `ids` names that still exist, read under the app session's own admission
+  // newest first until every one is found, or null when it cannot be read: the failure is logged by code only, never a row.
+  private async appMainChatShown(name: string, hash: string, hop: string, ids: ReadonlySet<string>): Promise<ReadonlyMap<string, string> | null> {
     const now = Date.now(), abort = new AbortController();
     const scope: RunEffectScope = { runId: 'app-cards-read', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
       admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); }, commit: work => this.ctx.storage.transactionSync(work) };
     try {
       const admission = await this.appAdmission(name, hash, 'Read my main conversation.', `cards:${scope.attempt}`, now, scope);
-      const { entries } = await canonicalOwnerConversationStore(this.ctx.storage, admission).readForDisplay();
-      return new Map(entries.map(entry => [entry.id, entry.appPayload]));
+      const { entries } = await canonicalOwnerConversationStore(this.ctx.storage, admission)
+        .readForDisplay(rows => { const read = new Set(rows.map(entry => entry.id)); return [...ids].every(id => read.has(id)); });
+      return new Map(entries.filter(entry => ids.has(entry.id)).map(entry => [entry.id, entry.appPayload]));
     } catch (error) {
       const code = error instanceof ClosedRunError ? 'closed' : error instanceof OwnerAdmissionError ? `admission_${error.code}` : canonicalHistoryFault(error) ?? 'read_failed';
       console.error(JSON.stringify({ hop, ok: false, code }));
@@ -1447,7 +1448,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async appDays(runtime: OwnerRuntime, name: string, hash: string, date?: string): Promise<DaysList | DayDetail | null> {
     const deps: DayHistoryDeps = { book: dayPlanBook(this.ctx.storage.sql), updates: runtime.updates, runs: runtime.runs, kv: this.ctx.storage.kv,
       timezone: this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', now: Date.now(),
-      shown: () => this.appMainChatShown(name, hash, 'app_days') };
+      shown: ids => this.appMainChatShown(name, hash, 'app_days', ids) };
     return date === undefined ? dayHistoryList(deps) : dayHistoryDay(deps, date);
   }
 
@@ -1776,7 +1777,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try{
         return await appRatingRequest(request,id,{ratings:replyRatings(this.ctx.storage.sql),requests:requestBook(this.ctx.storage.sql,Date.now),now:Date.now,
           transaction:work=>this.ctx.storage.transactionSync(work),
-          isReply:async messageId=>(await this.appChatRows(name,hash,undefined,at)).some(entry=>entry.id===messageId&&entry.role==='assistant'),
+          isReply:async messageId=>(await this.appChatRows(name,hash,undefined,at,rows=>rows.some(entry=>entry.id===messageId))).some(entry=>entry.id===messageId&&entry.role==='assistant'),
           ...(langfuseOtlpConfig(this.env)?{scored:(change:RatingScoreChange)=>this.scoreRating(change)}:{})});
       }catch(error){logAppReadFailure('app_rating',at.step,error);return fail(503);}
     }
@@ -1849,7 +1850,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
   private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false) {
-    const entries=await this.appChatRows(name,hash,thread,at);
+    const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
     // Only main chat has a rating route, so only main rows are read against the ratings, and only for a build that names them.
@@ -1857,14 +1858,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
   }
   // The rows an app chat's page shows, read under a read admission.
-  private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }) {
+  private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
     const now=Date.now(),abort=new AbortController();
     const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
     try{
       at.step='context';
       const context=await this.appContext(name,hash,thread?'Read a thread.':'Read my main conversation.','history:'+scope.attempt,now,scope);
       at.step='history';
-      const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context,undefined,thread).readForDisplay();
+      const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context,undefined,thread).readForDisplay(enough);
       for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
       return entries;
     }finally{abort.abort();}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConversationTree, type ConversationCovers, type ConversationEntry, type ConversationModelMessage } from '@waldo/contracts';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
+import { appTranscriptPage, appTranscriptPageRead } from '../src/channels/app-api';
 import { COMPACTION, compactedHistory, compactionPlan, liveCompaction, ownerRowsSince, supersededCompaction, type CompactionSettings } from '../src/conversation/compaction';
 
 const PRINCIPAL = 'prn_10000000000000000000000000000001', TENANT = 'tnt_1', THREAD = 'thr_bounded';
@@ -344,6 +345,74 @@ describe('writes after a window read', () => {
     expect(view.messages[0]!.content).toContain(`Summary through ${MAIN}-u2300-reply.`);
     // Back to the covered row, 199 rounds behind the head, and at most one page past it.
     expect(fresh.reads.rows).toBeLessThanOrEqual(2 * 200 + 128);
+  });
+});
+
+// The app's chat page, read whole and read back only as far as the page needs: the same messages and cursor, from fewer rows.
+const displayPage = async (data: Map<string, unknown>, cursor: string | null, limit: number, thread?: string) => {
+  const whole = await canonicalOwnerConversationStore(countingStorage(new Map(data)), contextFor(), undefined, thread).readForDisplay();
+  const bounded = countingStorage(new Map(data));
+  const read = await canonicalOwnerConversationStore(bounded, contextFor(), undefined, thread).readForDisplay(appTranscriptPageRead(cursor, limit));
+  const page = appTranscriptPage(read.entries, cursor, limit);
+  expect(page).toEqual(appTranscriptPage(whole.entries, cursor, limit));
+  return { page, reads: bounded.reads };
+};
+
+describe('the app chat page reads back only as far as the page it shows', () => {
+  it('the newest page of a 5,000-row chain reads one page of rows, and shows what a whole-chain read shows', async () => {
+    const data = stored(chain(2_500), `${MAIN}-u2499-reply`);
+    const { page, reads } = await displayPage(data, null, 20);
+    expect(page.messages).toHaveLength(20);
+    expect(page.next_cursor).toBe(`before:${MAIN}-u2490`);
+    expect(reads.rows).toBeLessThanOrEqual(128);
+    expect(reads.lists).toBe(1);
+    expect(reads.keys).toBeLessThanOrEqual(reads.rows + 1);
+    const whole = countingStorage(new Map(data));
+    await canonicalOwnerConversationStore(whole, contextFor()).readForDisplay();
+    expect(whole.reads.rows).toBe(5_000);
+  });
+
+  it('every page down to the oldest, by before: cursor and by the older offset cursor, matches the whole-chain page', async () => {
+    const data = stored(chain(150), `${MAIN}-u149-reply`);
+    let cursor: string | null = null, pages = 0;
+    do { const { page, reads } = await displayPage(data, cursor, 50); cursor = page.next_cursor; pages += 1; expect(reads.rows).toBeLessThanOrEqual(300); } while (cursor !== null);
+    expect(pages).toBe(6);
+    for (const offset of ['0', '40', '120', '299', '300', '999']) await displayPage(data, offset, 50);
+    for (const unknown of ['before:', 'before:nobody']) expect((await displayPage(data, unknown, 50)).page.messages).toEqual([]);
+  });
+
+  it("a reply's cards stay on the newest reply to its message when a newer reply lies on the page before", async () => {
+    const rows = chain(100);
+    const later = row('late-reply', `${MAIN}-u10`, 'assistant', 'one more thing');
+    const data = stored([...rows, later], 'late-reply');
+    for (const cursor of [null, `before:${MAIN}-u12`, `before:${MAIN}-u11`]) await displayPage(data, cursor, 5);
+  });
+
+  it('compaction rows and a thread chain page the same way', async () => {
+    const rows = chain(60, THREAD_CHAT);
+    const summary: Row = { ...row('summary-1', `${THREAD_CHAT}-u29-reply`, 'assistant', ''), chatId: THREAD_CHAT, role: 'compaction', appPayload: '',
+      modelProjection: { mode: 'include' }, covers: { from_id: `${THREAD_CHAT}-u0`, to_id: `${THREAD_CHAT}-u29-reply`, rows: 60 } } as Row;
+    const data = stored([...rows.slice(0, 60), summary, ...rows.slice(60)], `${THREAD_CHAT}-u59-reply`, { thread: THREAD });
+    let cursor: string | null = null;
+    do cursor = (await displayPage(data, cursor, 7, THREAD)).page.next_cursor; while (cursor !== null);
+  });
+
+  it('a stored leaf the newest rows do not hold is read back to, and a leaf no row holds still fails the read', async () => {
+    const rows = chain(500);
+    const older = stored(rows, `${MAIN}-u10-reply`);
+    const { reads } = await displayPage(older, null, 20);
+    expect(reads.rows).toBeGreaterThan(900);
+    const gone = stored(rows, 'no-such-row');
+    await expect(canonicalOwnerConversationStore(countingStorage(new Map(gone)), contextFor()).readForDisplay(appTranscriptPageRead(null, 20))).rejects.toThrow('canonical history leaf mismatch');
+  });
+
+  it('a missing or different witness fails the pages that read that row, not a page that stops before it', async () => {
+    const rows = chain(500);
+    const data = stored(rows, `${MAIN}-u499-reply`, { witness: { [`${MAIN}-u100`]: { ...rows[200]!, modelPayload: 'changed' } } });
+    const pageRead = (cursor: string | null) => canonicalOwnerConversationStore(countingStorage(new Map(data)), contextFor()).readForDisplay(appTranscriptPageRead(cursor, 20));
+    await expect(pageRead(null)).resolves.toBeDefined();
+    await expect(pageRead(`before:${MAIN}-u105`)).rejects.toThrow('canonical history witness mismatch');
+    await expect(canonicalOwnerConversationStore(countingStorage(new Map(data)), contextFor()).readForDisplay()).rejects.toThrow('canonical history witness mismatch');
   });
 });
 
