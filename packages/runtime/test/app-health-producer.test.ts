@@ -119,7 +119,17 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(history.map(r => r.body.p_payload)).toEqual(['{"days":90}']);
     expect(history[0]!.body.p_sig).toBe(await routerSignature(SECRET, history[0]!.body.p_at as number, `health.scores_history.owner-1.${md5Hex('{"days":90}')}`));
     expect(rpcs.filter(r => r.fn === 'health_scores_read')).toHaveLength(2);
-    expect(rpcs.filter(r => r.fn === 'health_context_write').length).toBeGreaterThan(2);
+    // The two live rows are written singly; every late day goes in one batched call, signed over its own payload.
+    expect(rpcs.filter(r => r.fn === 'health_context_write')).toHaveLength(2);
+    const batches = rpcs.filter(r => r.fn === 'health_context_write_batch');
+    expect(batches).toHaveLength(1);
+    const rows = JSON.parse(batches[0]!.body.p_payload as string) as { day: string; backfilled: boolean }[];
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.every(row => row.backfilled === true)).toBe(true);
+    expect(rows.map(row => row.day)).toEqual(rows.map(row => row.day).sort());
+    expect(batches[0]!.body.p_sig).toBe(await routerSignature(SECRET, batches[0]!.body.p_at as number, `health.context_write_batch.owner-1.${md5Hex(batches[0]!.body.p_payload as string)}`));
+    // Seven calls and a batch: the ingest, two series reads, the history read, two stored-row reads, two live writes, one batch.
+    expect(rpcs.map(r => r.fn).sort()).toEqual(['health_context_write', 'health_context_write', 'health_context_write_batch', 'health_ingest', 'health_scores_history', 'health_scores_read', 'health_scores_read', 'health_series_read', 'health_series_read']);
   });
 
   it('reads the owner\'s health settings only with the coaching switch on, signed, and computes on the need they stated', async () => {

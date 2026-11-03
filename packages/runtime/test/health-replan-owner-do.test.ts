@@ -139,6 +139,12 @@ beforeEach(() => {
       world.trace.push(`context_write:${row.day}:${changed.join('+') || 'none'}`);
       return Response.json({ written: true, changed });
     }
+    if (fn === 'health_context_write_batch') {
+      const sent = JSON.parse(String(body.p_payload)) as (Record<string, Record<string, unknown>> & { day: string })[];
+      for (const row of sent) world.rows.set(row.day, { recovery: row.recovery, form: row.form, weight: row.weight, basis: row.basis });
+      world.trace.push(`batch_write:${sent.length}`);
+      return Response.json({ results: sent.map(() => ({ written: true, changed: [] })) });
+    }
     if (fn === 'health_context_read') {
       world.trace.push('context_read');
       const today = world.rows.get(TODAY), before = world.rows.get(newestBefore(TODAY) ?? '');
@@ -222,7 +228,11 @@ describe('the owner object backfills from one read of the stored days', () => {
       await o.pass();
       expect(world.trace.filter(step => step.startsWith('history_read:'))).toEqual(['history_read:{"days":90}']);
       expect(world.trace.filter(step => step.startsWith('scores_read:') && step.slice('scores_read:'.length) < addDays(TODAY, -1))).toEqual([]);
-      expect(world.trace.filter(step => step.startsWith('context_write:')).length).toBeGreaterThan(2);
+      // The two live days are written singly; the late days, all together in one batch.
+      expect(world.trace.filter(step => step.startsWith('context_write:'))).toHaveLength(2);
+      const batches = world.trace.filter(step => step.startsWith('batch_write:'));
+      expect(batches).toHaveLength(1);
+      expect(Number(batches[0]!.slice('batch_write:'.length))).toBeGreaterThan(1);
     }, true, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1' });
   });
 });

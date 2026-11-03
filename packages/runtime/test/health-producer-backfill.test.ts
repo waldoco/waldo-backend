@@ -23,33 +23,49 @@ const series = (nights: number, source = 'apple') => ({
   sources: [{ source, consent_epoch: 3, truncated: false, samples: Array.from({ length: nights }, (_, i) => dayOfReadings(addDays(TODAY, -i), i)).flat() }],
 });
 type Row = Record<string, any>;
-type Run = Readonly<{ rows: Row[]; zoneNotices: string[]; scoreReads: string[]; historyReads: number[]; outcome: string }>;
+type Run = Readonly<{ rows: Row[]; zoneNotices: string[]; scoreReads: string[]; historyReads: number[]; outcome: string; batches: Row[][]; singleLate: Row[] }>;
 // The stored-day read as the database answers it: every stored day in the window, oldest first, with its pillars.
 const historyOf = (stored: ReadonlySet<string>) => stored.size
   ? { history: { from: addDays(TODAY, -89), to: TODAY, days: [...stored].sort().map(day => ({ day, recovery: { reason: 'no_readings' }, form: { reason: 'no_readings' }, weight: { reason: 'no_readings' } })) } }
   : { unavailable: 'no_readings' };
 // `stored` is the set of days that already hold a row; the fake writer adds to it, as the database would.
-const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown; historyAnswer?: () => Promise<unknown> } = {}): Promise<Run> => {
+const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown; historyAnswer?: () => Promise<unknown>; batch?: { refuseAt?: number } } = {}): Promise<Run> => {
   const samples = over.samples ? { access: 'granted', read_at: READ_AT, sources: [{ source: over.source ?? 'apple', consent_epoch: 3, truncated: false, samples: over.samples }] } : series(nights, over.source);
-  const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [], historyReads: number[] = [];
+  const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [], historyReads: number[] = [], batches: Row[][] = [], singleLate: Row[] = [];
   const stored = over.stored ?? new Set<string>();
+  const store = (row: Row): unknown => {
+    if (row.backfilled === true && over.lateAnswer !== undefined) return over.lateAnswer;
+    if (row.backfilled === true && stored.has(row.day)) return { written: false, stale: true };
+    stored.add(row.day);
+    return { written: true, changed: over.changed ?? [] };
+  };
   const outcome = await produceHealthScores({
     readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => {
       const row = JSON.parse(payload) as Row;
       rows.push(row);
-      if (row.backfilled === true && over.lateAnswer !== undefined) return over.lateAnswer;
-      if (row.backfilled === true && stored.has(row.day)) return { written: false, stale: true };
-      stored.add(row.day);
-      return { written: true, changed: over.changed ?? [] };
+      if (row.backfilled === true) singleLate.push(row);
+      return store(row);
     },
+    ...(over.batch ? { writeContextBatch: async (payload: string) => {
+      // As the database's batch writer answers: each row in order, and nothing after a refusal.
+      const sent = JSON.parse(payload) as Row[];
+      batches.push(sent);
+      const results: unknown[] = [];
+      for (const [index, row] of sent.entries()) {
+        if (index === over.batch!.refuseAt) { results.push({ error: 'consent_required' }); break; }
+        rows.push(row);
+        results.push(store(row));
+      }
+      return { results };
+    } } : {}),
     readScores: async day => { scoreReads.push(day); return stored.has(day) ? { scores: { day } } : { unavailable: 'no_readings' }; },
     readHistory: async days => { historyReads.push(days); return over.historyAnswer ? over.historyAnswer() : historyOf(stored); },
     compute: dailyScoresFor(flag),
     onZoneChange: async day => { zoneNotices.push(day); },
     ...(over.backfillLimit === undefined ? {} : { backfillLimit: over.backfillLimit }),
   }, { now: NOW, timezone: 'UTC' });
-  return { rows, zoneNotices, scoreReads, historyReads, outcome };
+  return { rows, zoneNotices, scoreReads, historyReads, outcome, batches, singleLate };
 };
 const live = (rows: Row[]) => rows.filter(r => r.backfilled === undefined);
 const late = (rows: Row[]) => rows.filter(r => r.backfilled === true);
@@ -187,5 +203,118 @@ describe('backfilled rows: one read of the stored days a run', () => {
     expect(late(rows)).toEqual([]);
     expect(live(rows)).toHaveLength(2);
     expect(outcome).toBe('written');
+  });
+});
+
+describe('backfilled rows: one batched write a run', () => {
+  it('sends every late row in one call, oldest first, and writes none of them singly', async () => {
+    const { rows, batches, singleLate } = await run('1', 25, { batch: {} });
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.every(row => row.backfilled === true)).toBe(true);
+    const days = batches[0]!.map(row => row.day);
+    expect(days.length).toBeGreaterThan(10);
+    expect(days).toEqual([...days].sort());
+    expect(singleLate).toEqual([]);
+    expect(live(rows).map(r => r.day).sort()).toEqual([addDays(TODAY, -1), TODAY]);
+  });
+  it('sends the rows it would have written one by one, and no others', async () => {
+    const alone = await run('1', 25);
+    const batched = await run('1', 25, { batch: {} });
+    expect(batched.batches[0]).toEqual(late(alone.rows));
+  });
+  it('leaves a day it cannot score out of the batch', async () => {
+    const { batches } = await run('1', 0, { samples: [
+      ...[0, 1, 2, 3, 7, 8].flatMap(back => dayOfReadings(addDays(TODAY, -back), back)),
+      sample('sleep_duration', addDays(TODAY, -10), { start_at: at(addDays(TODAY, -11), 23), end_at: at(addDays(TODAY, -10), 7), value: 450, method: 'asleep_duration' }),
+    ], batch: {} });
+    expect(batches[0]!.map(r => r.day)).toEqual([addDays(TODAY, -8), addDays(TODAY, -7), addDays(TODAY, -3), addDays(TODAY, -2)]);
+  });
+  it('sends nothing when no day is missing', async () => {
+    const all = await run('1', 25);
+    const stored = new Set(all.rows.map(r => r.day as string));
+    const { batches, singleLate } = await run('1', 25, { stored, batch: {} });
+    expect(batches).toEqual([]);
+    expect(singleLate).toEqual([]);
+  });
+  it('takes the rows before a refusal as written and nothing after it, and the live rows stand', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a record */ } });
+    const { rows, batches, outcome } = await run('1', 25, { batch: { refuseAt: 3 } });
+    spy.mockRestore();
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.length).toBeGreaterThan(4);
+    expect(late(rows).map(r => r.day)).toEqual(batches[0]!.slice(0, 3).map(r => r.day));
+    expect(live(rows)).toHaveLength(2);
+    expect(outcome).toBe('written');
+    expect(lines.filter(line => line.hop === 'health_scores')).toHaveLength(rows.length);
+  });
+  it('ignores answers the batch writer did not give for a row, and logs no row it did not confirm', async () => {
+    const samples = series(25);
+    const lines: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a record */ } });
+    const answers = [null, { error: 'unavailable' }, { results: 'x' }, { results: [{ written: true }] }];
+    const seen: number[] = [];
+    for (const answer of answers) {
+      lines.length = 0;
+      const outcome = await produceHealthScores({
+        readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
+        writeContext: async () => ({ written: true }),
+        writeContextBatch: async () => answer,
+        readScores: async () => ({ unavailable: 'no_readings' }),
+        readHistory: async () => ({ unavailable: 'no_readings' }),
+        compute: dailyScoresFor('1'),
+      }, { now: NOW, timezone: 'UTC' });
+      expect(outcome).toBe('written');
+      seen.push(lines.filter(line => line.hop === 'health_scores').length);
+    }
+    spy.mockRestore();
+    expect(seen).toEqual([2, 2, 2, 3]);
+  });
+  it('splits a run longer than the database accepts at once into batches of at most thirty', async () => {
+    const { batches } = await run('1', 40, { batch: {}, backfillLimit: 45 });
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.every(batch => batch.length <= BACKFILL_DAYS_PER_RUN)).toBe(true);
+    const days = batches.flat().map(r => r.day);
+    expect(days).toEqual([...days].sort());
+  });
+  it('does not fail the live rows when the batch write throws', async () => {
+    const samples = series(25);
+    const outcome = await produceHealthScores({
+      readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
+      writeContext: async () => ({ written: true }),
+      writeContextBatch: async () => { throw new Error('database down'); },
+      readScores: async () => ({ unavailable: 'no_readings' }),
+      readHistory: async () => ({ unavailable: 'no_readings' }),
+      compute: dailyScoresFor('1'),
+    }, { now: NOW, timezone: 'UTC' });
+    expect(outcome).toBe('written');
+  });
+});
+
+describe('backfilled rows: database calls in a first sync', () => {
+  // A first sync holds no stored day, so every late day is missing. Every dependency is one signed call to the database.
+  const calls = async (batched: boolean) => {
+    const made: string[] = [], samples = series(25);
+    const count = <T>(name: string, answer: T) => async () => { made.push(name); return answer; };
+    await produceHealthScores({
+      readSeries: async range => { made.push('series'); return { ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }; },
+      writeContext: count('write', { written: true }),
+      ...(batched ? { writeContextBatch: async (payload: string) => { made.push('batch'); return { results: (JSON.parse(payload) as unknown[]).map(() => ({ written: true })) }; } } : {}),
+      readScores: count('score', { unavailable: 'no_readings' }),
+      readHistory: count('history', { unavailable: 'no_readings' }),
+      readSettings: count('settings', { sleep_need_minutes: null, updated_at: null }),
+      compute: dailyScoresFor('1'),
+    }, { now: NOW, timezone: 'UTC' });
+    return made;
+  };
+  it('goes from one call for each late day to one call for all of them', async () => {
+    const before = await calls(false), after = await calls(true);
+    const late = before.filter(call => call === 'write').length - 2;
+    expect(late).toBeGreaterThan(20);
+    // Two series reads, two settings reads, two stored-row reads, the history read and the two live writes: nine either way.
+    expect(before.length).toBe(9 + late);
+    expect(after.length).toBe(10);
+    expect(after.filter(call => call === 'batch')).toHaveLength(1);
+    expect(after.filter(call => call === 'write')).toHaveLength(2);
   });
 });
