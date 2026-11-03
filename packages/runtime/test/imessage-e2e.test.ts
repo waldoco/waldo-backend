@@ -37,6 +37,7 @@ import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 import { unfinishedReply } from '../src/conversation/tool-loop';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -1511,11 +1512,13 @@ it('an iMessage-only owner\'s follow-up the bridge proves it never sent fails, s
 });
 
 // An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only
-// owner's runtime does. An owner who also has the app keeps the native-chat rule: an iMessage turn arms nothing for them.
+// owner's runtime does. The event sweep needs a Google grant. An owner who also has the app keeps the native-chat rule: an
+// iMessage turn arms nothing for them.
 const armedKinds = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<{ kind: string }>("SELECT kind FROM schedule WHERE status = 'armed' ORDER BY kind").toArray().map((row) => row.kind));
 it('an iMessage-only owner\'s first turn arms their own scheduled work', async () => {
   const w = await world();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE); });
   await afterOneReply(w);
   expect(await armedKinds(w)).toEqual(expect.arrayContaining(['dreaming', 'heartbeat', 'pre_activity_spot']));
   await clearOwnerAlarm(w.ownerStub);
