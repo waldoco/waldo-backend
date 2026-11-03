@@ -466,6 +466,33 @@ export const SCHEDULE_RUNS_RUNNING_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS schedule_runs_running;'],
 };
 
+// The history archive: rows retention moves out of the hot background_runs, task_jobs and schedule_runs tables, never
+// deleted, so search_history and the forget paths still reach them. One row per moved row: the columns search reads, and
+// the whole hot row as JSON. The archive writer runs this DDL itself, in the same transaction as its first move.
+export const HISTORY_ARCHIVE_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS history_archive (
+    id          TEXT PRIMARY KEY,
+    source      TEXT NOT NULL CHECK (source IN ('background_runs', 'task_jobs', 'schedule_runs')),
+    source_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    started_at  INTEGER NOT NULL,
+    ended_at    INTEGER,
+    summary     TEXT,
+    row_json    TEXT NOT NULL,
+    archived_at INTEGER NOT NULL,
+    CHECK (id = source || ':' || source_id)
+  );`,
+  'CREATE INDEX IF NOT EXISTS history_archive_by_source ON history_archive (source, started_at);',
+] as const;
+
+export const HISTORY_ARCHIVE_MIGRATION: DoMigration = {
+  version: 16,
+  name: 'history-archive',
+  up: HISTORY_ARCHIVE_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS history_archive_by_source;', 'DROP TABLE IF EXISTS history_archive;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -478,6 +505,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RETIRE_MEMORY_HALLS_MIGRATION,
   CALENDAR_LAST_SEEN_MIGRATION,
   SCHEDULE_RUNS_RUNNING_MIGRATION,
+  HISTORY_ARCHIVE_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

@@ -13,6 +13,8 @@ import {
   RETIRE_MEMORY_HALLS_MIGRATION,
   CALENDAR_LAST_SEEN_MIGRATION,
   SCHEDULE_RUNS_RUNNING_MIGRATION,
+  HISTORY_ARCHIVE_MIGRATION,
+  HISTORY_ARCHIVE_TABLE_SCHEMA,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   TASK_JOBS_SCHEMA_MIGRATION,
   applyDoMigration,
@@ -205,7 +207,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
@@ -214,6 +216,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       { version: 13, name: 'retire-memory-halls' },
       { version: 14, name: 'calendar-last-seen' },
       { version: 15, name: 'schedule-runs-running-index' },
+      { version: 16, name: 'history-archive' },
     ]);
     expect(result.tables).toContain('calendar_last_seen');
     expect(result.tables).toContain('task_jobs');
@@ -238,6 +241,23 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.ensured).toEqual(result.provisioned);
   });
 
+  it('creates the history archive from the chain with the same DDL its writer runs, and its down drops it', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'history_archive%' ORDER BY name").toArray();
+      provisionDoSchema(state.storage);
+      const provisioned = objects();
+      applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
+      const down = objects();
+      for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) state.storage.sql.exec(statement);
+      return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
+    });
+    expect(result.provisioned.map(row => row.name)).toEqual(['history_archive', 'history_archive_by_source']);
+    expect(result.down).toEqual([]);
+    expect(result.written).toEqual(result.provisioned);
+    expect(result.version).toBe(15);
+  });
+
   it('drops the memory hall tables a V1 database created, and its down restores them empty', async () => {
     const stub = freshStub();
 
@@ -250,6 +270,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const atV1 = objects();
       provisionDoSchema(state.storage);
       const current = objects();
+      applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
       applyDoMigration(state.storage, SCHEDULE_RUNS_RUNNING_MIGRATION, 'down');
       applyDoMigration(state.storage, CALENDAR_LAST_SEEN_MIGRATION, 'down');
       applyDoMigration(state.storage, RETIRE_MEMORY_HALLS_MIGRATION, 'down');
