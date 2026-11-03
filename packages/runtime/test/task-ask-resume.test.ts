@@ -49,7 +49,7 @@ const withWorld = <T,>(work: (world: World) => Promise<T>): Promise<T> =>
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope: RunEffectScope, run) => { const next = queue.then(run); queue = next.catch(() => undefined); return next; },
-      releaseBrowser: () => undefined, log: entry => { log.push(entry); }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
+      releaseBrowser: () => undefined, log: entry => { log.push(entry); }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); }, endAsks: jobId => { withdrawn.push(`ask:${jobId}`); },
       replayApproval: async () => { throw new Error('a task runs its own approved step, never as a replay job'); },
       settleAsk: (_row, id, status) => { settled.push({ id, status }); },
       askOwner: async (row: JobRow, call: LLMToolCall) => { if (!ask.on) return null; ask.during?.(row); cards.push({ tool: call.name, runRef: `task:${row.id}` }); return `p${cards.length}`; },
@@ -127,7 +127,7 @@ describe('a task worker that needs the owner mid-task', () => {
       await runTaskAttempt(t, { brain: host, model: scripted([{ call: 'browse_act', args: BOOK }], []), sliceEnd: T0 + 60_000 });
       expect(book.cancel(t.jobId, 'owner')).toBe(true);
       host.cancelled(t.jobId);
-      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(withdrawn).toEqual([`task:${t.jobId}`, `ask:${t.jobId}`]);
       expect(book.get(t.jobId)).toMatchObject({ status: 'cancelled', checkpoint_json: null });
       // A late answer finds no job to resume.
       expect(book.resume('p1', 'approved')).toBe(false);
@@ -160,7 +160,7 @@ describe('a task worker that needs the owner mid-task', () => {
       host.cancelled(t.jobId);
       expect(await host.claim(next)).toBe('fenced');
       expect(ran).toEqual([]);
-      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(withdrawn).toEqual([`task:${t.jobId}`, `ask:${t.jobId}`]);
     });
   });
 
@@ -185,7 +185,7 @@ describe('a task worker that needs the owner mid-task', () => {
       ask.during = row => { expect(book.cancel(row.id, 'owner')).toBe(true); };
       expect(await host.tool(t, step(), CANARIES)).toBe('fenced');
       expect(cards).toHaveLength(1);
-      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(withdrawn).toEqual([`ask:${t.jobId}`]);
       expect(book.get(t.jobId)!.status).toBe('cancelled');
     });
   });

@@ -1,4 +1,4 @@
-import { endRunCards, taskAskCard, withdrawRunCards, type ApprovalDesk } from '../channels/approvals';
+import { endAskCards, taskAskCard, taskAskRef, withdrawRunCards, type ApprovalDesk } from '../channels/approvals';
 import type { JobBook } from './jobs';
 
 // The cards a background task raises for its own steps (WALDO_TASK_ASK), between the owner's approval desk and the job book.
@@ -17,12 +17,12 @@ export const taskAsks = (sql: SqlStorage, book: () => JobBook) => ({
   // How a card a task asked on stands.
   card: (desk: Pick<ApprovalDesk, 'waiting'>, approvalId: string): 'waiting' | 'approved' | 'declined' =>
     desk.waiting().some(card => card.approval_id === approvalId) ? 'waiting' : taskAskCard(sql, approvalId)?.status === 'running' ? 'approved' : 'declined',
-  // A task that stopped (cancelled, forgotten, parked): its waiting cards are withdrawn, and one approved whose step it will
-  // not now answer leaves running, as unknown if the step was in flight.
-  end(runRef: string, now: number): void {
-    withdrawRunCards(sql, runRef, now);
-    const job = book().get(runRef.slice('task:'.length));
-    endRunCards(sql, runRef, job?.inflight_json != null ? 'uncertain' : 'skipped', now);
+  // A task that stopped (cancelled, forgotten, parked) or moved on while it raised a card: a card it asked on and the owner
+  // has not decided is withdrawn, and one approved whose step it will not now answer leaves running, as unknown if the step
+  // was in flight.
+  end(jobId: string, now: number): void {
+    withdrawRunCards(sql, taskAskRef(jobId), now);
+    endAskCards(sql, jobId, book().get(jobId)?.inflight_json != null ? 'uncertain' : 'skipped', now);
   },
 });
 export type TaskAsks = ReturnType<typeof taskAsks>;

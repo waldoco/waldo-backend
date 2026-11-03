@@ -209,7 +209,7 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
@@ -641,7 +641,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log: entry => self.taskLog(entry),
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
-      withdrawCards: runRef => { self.asks.end(runRef, Date.now()); },
+      withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      endAsks: jobId => { self.asks.end(jobId, Date.now()); },
+      askCurrent: (row, approvalId, argsDigest) => self.setup(row.surface as ChannelKind).desk.replayCurrent(approvalId, argsDigest),
       settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
@@ -656,7 +658,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
         const args_digest = await sha256Hex(stableJson(args));
         return self.serial(() => self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest,
-          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: `task:${row.id}` }));
+          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: taskAskRef(row.id) }));
       },
     });
   })();
@@ -3264,7 +3266,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         approvals: { replays: () => this.asks.replays(runtime.desk),
           replayReceipt: (id, status, message) => runtime.desk.replayReceipt(id, status, message), settleReplay: (id, status) => runtime.desk.settleReplay(id, status) },
         followUp: this.env.WALDO_TASK_NOTES === '1',
-        ...(this.env.WALDO_TASK_ASK === '1' ? { askedCard: (id: string) => this.asks.card(runtime.desk, id) } : {}),
+        // Read whatever the switch says, so a job already waiting when the switch is turned off still resumes.
+        askedCard: id => this.asks.card(runtime.desk, id),
       });
       next = ran;
     } finally {

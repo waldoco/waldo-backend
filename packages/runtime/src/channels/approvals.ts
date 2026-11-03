@@ -501,19 +501,25 @@ export const withdrawRunCards = (sql: SqlStorage, runRef: string, now: number): 
   return ids.length;
 };
 
-// A card a background task raised for one of its own steps (a tainted action bound to task:<id>). An approval of it runs in
-// the task's resumed attempt, under the task's own scope, never as a replay job. Answers the task's id and the card's status.
+// The run ref of the card a background task raised for one of its own steps. Its own ref, apart from task:<id>, which any card
+// raised while the task's scope is active carries: an approval of an asked step runs in the task's resumed attempt, under the
+// task's own scope, never as a replay job.
+export const taskAskRef = (jobId: string): string => `task:${jobId}:ask`;
+const ASK_REF = /^task:(.+):ask$/;
+
+// The task a card asked for, and the card's status; null for every other card.
 export const taskAskCard = (sql: SqlStorage, id: string): Readonly<{ jobId: string; status: string }> | null => {
   if (sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'origin_run_ref'").toArray().length === 0) return null;
   const card = sql.exec<{ status: string; ref: string | null }>("SELECT status, origin_run_ref AS ref FROM ledger WHERE id = ? AND kind = 'tainted_action'", id).toArray()[0];
-  return card?.ref?.startsWith('task:') ? { jobId: card.ref.slice('task:'.length), status: card.status } : null;
+  const jobId = card?.ref ? ASK_REF.exec(card.ref)?.[1] : undefined;
+  return jobId ? { jobId, status: card!.status } : null;
 };
 
 // A task that stopped after its owner approved its asked step: the card leaves running, as unknown when the step was in
 // flight, else as stopped before it ran.
-export const endRunCards = (sql: SqlStorage, runRef: string, status: 'skipped' | 'uncertain', now: number): void => {
+export const endAskCards = (sql: SqlStorage, jobId: string, status: 'skipped' | 'uncertain', now: number): void => {
   if (sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'origin_run_ref'").toArray().length === 0) return;
-  sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE origin_run_ref = ? AND kind = 'tainted_action' AND status = 'running'", status, now, runRef);
+  sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE origin_run_ref = ? AND kind = 'tainted_action' AND status = 'running'", status, now, taskAskRef(jobId));
 };
 
 // The surface was bound to another number, or unbound: a card that waited for the owner's next message there was made for the

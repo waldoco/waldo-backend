@@ -2,13 +2,13 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { browseActArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolTurn, type TaskResult, type ToolHandler, type ToolName } from '@waldo/contracts';
-import { approvalDesk, type ApprovalDesk } from '../src/channels/approvals';
+import { approvalDesk, taskAskRef, withdrawRunCards, type ApprovalDesk } from '../src/channels/approvals';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskAsks } from '../src/tasks/asks';
 import { taskHost, type TaskHost } from '../src/tasks/brain';
-import { jobBook, jobCheckpoint, replayKey, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
+import { jobBook, jobCheckpoint, REPLAY_DEADLINE_MS, replayKey, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { runJobsLane } from '../src/tasks/lane';
 import { BROWSER_TOOLS, FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
@@ -57,7 +57,11 @@ const withDesk = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       commit: work => state.storage.transactionSync(work),
       replayLater: {
         takes: tool => BROWSER_TOOLS.has(tool as ToolName),
-        enqueue: (approvalId) => { if (!asks.approved(approvalId)) throw new Error('only task cards are approved here'); },
+        enqueue: (approvalId, call) => {
+          if (asks.approved(approvalId)) return;
+          book.create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: 'app',
+            brief: { approval_id: approvalId, ...call, approved_at: T0 }, dueAt: T0, deadlineAt: T0 + REPLAY_DEADLINE_MS, taint: 'external' });
+        },
         wake: async () => undefined,
         declined: async approvalId => { book.resume(approvalId, 'declined'); },
       },
@@ -71,12 +75,13 @@ const withDesk = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       }),
       releaseBrowser: () => undefined, log: entry => { log.push(entry); }, wake: async () => undefined,
       replayApproval: async () => { throw new Error('a task runs its own approved step'); },
-      withdrawCards: runRef => { asks.end(runRef, T0); },
+      withdrawCards: runRef => { withdrawRunCards(sql, runRef, T0); }, endAsks: jobId => { asks.end(jobId, T0); },
+      askCurrent: (_row, approvalId, argsDigest) => desk.replayCurrent(approvalId, argsDigest),
       settleAsk: (_row, approvalId, status) => { desk.settleReplay(approvalId, status); },
       askOwner: async (row, call) => {
         const args = JSON.parse(call.arguments) as Record<string, unknown>;
         const args_digest = (await argumentDigest(args))!;
-        const id = await serial(() => desk.proposeTaintedAction({ tool: call.name, args, args_digest, reasoning: 'A task reached this step.', source: 'external' }, { runRef: `task:${row.id}` }));
+        const id = await serial(() => desk.proposeTaintedAction({ tool: call.name, args, args_digest, reasoning: 'A task reached this step.', source: 'external' }, { runRef: taskAskRef(row.id) }));
         await raising.during?.(id);
         return id;
       },
@@ -88,7 +93,7 @@ const withDesk = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const pass = async () => { await runJobsLane({
       book, host, now: () => T0, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket); }, turn: async () => 'ok', applyTools: () => [], deliver: async (_id, _trace, _text, commit) => { state.storage.transactionSync(commit); },
-      room: () => true, heldTopics: () => [], startReplay: () => { throw new Error('no replay job is made for a task card'); },
+      room: () => true, heldTopics: () => [], startReplay: () => undefined,
       approvals: { replays: () => asks.replays(desk), replayReceipt: (id, status, message) => desk.replayReceipt(id, status, message), settleReplay: (id, status) => desk.settleReplay(id, status) },
       askedCard: id => asks.card(desk, id),
     }); };
@@ -187,6 +192,38 @@ describe('a task asks the owner through the real desk', () => {
       await serial(() => desk.decide(id, 'a', 'console:approval'));
       expect(status(sql, id)).toBe('skipped');
       expect(ran).toEqual([]);
+    });
+  });
+
+  it('the card changed after the approval: the resumed attempt runs nothing, the card fails and the worker is told', async () => {
+    await withDesk(async ({ desk, book, sql, host, ran, serial, task }) => {
+      const t = task();
+      await blocks(host, t);
+      const id = jobCheckpoint(book.get(t.jobId)!).asked!.approval_id;
+      await serial(() => desk.decide(id, 'a', 'console:approval'));
+      sql.exec("UPDATE ledger SET proposal_digest = 'changed' WHERE id = ?", id);
+      const seen: LLMToolTurn[][] = [];
+      expect(await runTaskAttempt(book.startAttempt(t.jobId)!, { brain: host, model: scripted([{ name: FINISH_TASK, args: { ...done('Not booked.'), status: 'partial' } }], seen), sliceEnd: T0 + 60_000 })).toBe('reported');
+      expect(ran).toEqual([]);
+      expect(status(sql, id)).toBe('failed');
+      expect(JSON.parse(seen[0]![0]!.output)).toMatchObject({ ok: false, error_code: 'approval_denied' });
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+    });
+  });
+
+  it('a card raised while the task\'s scope was active, not asked by the task: approved, it is a replay job as before, and a park keeps it', async () => {
+    await withDesk(async ({ desk, book, sql, host, serial, task }) => {
+      const t = task();
+      const args_digest = (await argumentDigest(BOOK))!;
+      const other = await serial(() => desk.proposeTaintedAction({ tool: 'browse_act', args: BOOK, args_digest, reasoning: 'Raised in the task run.', source: 'external' }, { runRef: `task:${t.jobId}` }));
+      const later = { ...BOOK, task: 'Book 9pm instead.' }, laterDigest = (await argumentDigest(later))!;
+      const waiting = await serial(() => desk.proposeTaintedAction({ tool: 'browse_act', args: later, args_digest: laterDigest, reasoning: 'Also raised in the task run.', source: 'external' }, { runRef: `task:${t.jobId}` }));
+      await serial(() => desk.decide(other, 'a', 'console:approval'));
+      expect(book.byKey(replayKey(other))).toMatchObject({ kind: 'approval_replay', status: 'queued' });
+      expect(book.park(t.jobId, 'crashed')).toBe(true);
+      host.endAsk(book.get(t.jobId)!);
+      expect(status(sql, other)).toBe('running');
+      expect(status(sql, waiting)).toBe('open');
     });
   });
 });

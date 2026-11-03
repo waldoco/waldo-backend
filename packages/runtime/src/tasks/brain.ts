@@ -41,15 +41,18 @@ export type TaskHostDeps = Readonly<{
   // Runs an approved card's frozen call once, on the surface whose desk froze it, under the given scope. The host checks
   // the card is still the one approved; the outcome claims only what the replay established.
   replayApproval(surface: string, brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
-  // Ends the approval cards a run raised, for a job that was cancelled, forgotten or parked: one still waiting is withdrawn,
-  // and one approved whose step the job will not now answer leaves running.
+  // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
-  // Raises the owner's card for a worker's step that needs their approval, on the job's surface, with the job's run ref
-  // (task:<id>), and answers its id; null when this deploy does not ask mid-task (WALDO_TASK_ASK), and the worker then hands
+  // Raises the owner's card for a worker's step that needs their approval, on the job's surface, as the job's ask
+  // (taskAskRef), and answers its id; null when this deploy does not ask mid-task (WALDO_TASK_ASK), and the worker then hands
   // the step back in its result as before.
   askOwner?(row: JobRow, call: LLMToolCall): Promise<string | null>;
+  // Whether the card is still the approved one for exactly this call, asked as the step is about to run.
+  askCurrent?(row: JobRow, approvalId: string, argsDigest: string): Promise<boolean>;
   // Moves the card a resumed attempt answered off running, once, to how its step ended.
   settleAsk?(row: JobRow, approvalId: string, status: ReplayCardStatus): void;
+  // Ends the cards a job asked on, for a job that stopped or moved on (asks.end).
+  endAsks?(jobId: string): void;
   // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
   // checkpoint that carries one cancels its job rather than write it back.
   heldTopics?(): readonly string[];
@@ -263,7 +266,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         const asked = deps.askOwner ? await deps.askOwner(row, call).catch(() => null) : null;
         if (asked !== null) {
           if (!deps.book.await(ticket, { approval_id: asked, call: { call_id: call.call_id, name: call.name, arguments: call.arguments } })) {
-            deps.withdrawCards?.(`task:${row.id}`);
+            deps.endAsks?.(row.id);
             return 'fenced';
           }
           fence(row.id);
@@ -286,7 +289,7 @@ export const taskHost = (deps: TaskHostDeps) => {
 
   // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
   // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
-  const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); };
+  const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); deps.endAsks?.(jobId); };
 
   // A resumed attempt of a job the owner answered, before the worker sees anything. An approved step runs once here, under
   // this attempt's own scope (the owner's browser acts only for a live run), exactly as the card froze it: its intent is on
@@ -313,12 +316,18 @@ export const taskHost = (deps: TaskHostDeps) => {
       busy.set(key, (busy.get(key) ?? 0) + 1);
       let result: LoopToolResult;
       try {
-        const run = async () => {
+        const run = async (): Promise<LoopToolResult | 'changed'> => {
           scope.admit();
+          if (deps.askCurrent && !await deps.askCurrent(row, asked.approval_id, digest)) return 'changed';
           if (!deps.book.beginEffect(ticket, { tool: asked.call.name, call_id: asked.call.call_id })) throw new ClosedRunError();
           return dispatchLoopTool(asked.call, { handlers, ctx, offload: outputs });
         };
-        result = BROWSER_TOOLS.has(asked.call.name as never) ? await deps.serialBrowser(scope, run) : await run();
+        const ran = BROWSER_TOOLS.has(asked.call.name as never) ? await deps.serialBrowser(scope, run) : await run();
+        // The card no longer holds this exact call (it ended, or what it stores changed): nothing ran.
+        if (ran === 'changed') {
+          deps.settleAsk?.(row, asked.approval_id, 'failed');
+          result = { ok: false, error: 'The approved step no longer matches its card, so it did not run.', error_code: 'approval_denied', retryable: false, code: 'rejected' };
+        } else result = ran;
       } catch (error) {
         // Fenced before its intent was written: nothing ran, and whatever fenced it (a cancel, a lapse) settles the job.
         if (error instanceof ClosedRunError && deps.book.get(row.id)?.inflight_json == null) { fence(row.id); return 'fenced'; }
@@ -335,7 +344,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: asked.call.name });
         return 'fenced';
       }
-      deps.settleAsk?.(row, asked.approval_id, result.ok ? 'done' : result.code === 'rejected' || result.error_code === 'taint_needs_approval' ? 'rejected' : 'failed');
+      if (result.error_code !== 'approval_denied') deps.settleAsk?.(row, asked.approval_id, result.ok ? 'done' : result.code === 'rejected' || result.error_code === 'taint_needs_approval' ? 'rejected' : 'failed');
       turn = { call: asked.call, output: JSON.stringify(result), prior_items: [], ...(result.source_taint === 'external' ? { source_taint: 'external' as const } : {}) };
     }
     if (deps.book.checkpoint(ticket, row.checkpoint_seq + 1, { turns: [...jobCheckpoint(row).turns, turn] }, { rounds: 0, costUsd: 0 }) !== 'ok') { fence(row.id); return 'fenced'; }
@@ -343,8 +352,8 @@ export const taskHost = (deps: TaskHostDeps) => {
     hop(row, 'task_resumed', { code: asked.decision ?? 'declined', detail: asked.call.name });
     return 'ok';
   };
-  // A task that parked: a card it asked on that the owner approved and its step did not answer leaves running.
-  const endAsk = (row: JobRow): void => { deps.withdrawCards?.(`task:${row.id}`); };
+  // A task that parked: a card it asked on ends (asks.end).
+  const endAsk = (row: JobRow): void => { deps.endAsks?.(row.id); };
 
 
   return {
