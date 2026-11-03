@@ -231,6 +231,7 @@ describe('hook registry', () => {
       tool_permissions: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_communication',

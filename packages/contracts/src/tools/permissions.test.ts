@@ -131,6 +131,7 @@ describe('toolName', () => {
       'connect_app',
       'send_agent_mail',
       'search_history',
+      'get_screen_time',
     ]);
   });
 
@@ -166,6 +167,7 @@ describe('TOOL_PERMISSIONS', () => {
       brief: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_communication',
@@ -182,11 +184,12 @@ describe('TOOL_PERMISSIONS', () => {
         'send_message',
         'skills_load',
       ],
-      fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
-      patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
+      fetch_alert: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+      patrol: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
       pre_brief_sweep: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_communication',
@@ -204,6 +207,7 @@ describe('TOOL_PERMISSIONS', () => {
       handoff_explore: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_communication',
@@ -224,7 +228,7 @@ describe('TOOL_PERMISSIONS', () => {
         'search_tools',
         'skills_load',
       ],
-      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
+      handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
       handoff_act: [
         'execute_action',
         'write_task',
@@ -241,6 +245,7 @@ describe('TOOL_PERMISSIONS', () => {
       handoff_replan: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_tasks',
@@ -248,11 +253,12 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_action',
         'skills_load',
       ],
-      intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
+      intervention: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
       user_message: [
         'use_mac',
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'send_console_link',

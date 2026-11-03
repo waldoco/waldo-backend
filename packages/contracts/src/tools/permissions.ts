@@ -126,6 +126,8 @@ export const toolNameSchema = z.enum([
   'send_agent_mail',
   // search_history: the owner's past runs, tasks, scheduled runs and decided cards, hot and archived; owner turns only, read-only.
   'search_history',
+  // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
+  'get_screen_time',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -139,6 +141,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   brief: [
     'get_crs',
     'get_health',
+    'get_screen_time',
     'query_calendar',
     'connect_service',
     'get_communication',
@@ -155,11 +158,12 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_message',
     'skills_load',
   ],
-  fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
-  patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
+  fetch_alert: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+  patrol: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
   pre_brief_sweep: [
     'get_crs',
     'get_health',
+    'get_screen_time',
     'query_calendar',
     'connect_service',
     'get_communication',
@@ -177,6 +181,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   handoff_explore: [
     'get_crs',
     'get_health',
+    'get_screen_time',
     'query_calendar',
     'connect_service',
     'get_communication',
@@ -197,7 +202,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'search_tools',
     'skills_load',
   ],
-  handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
+  handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
   // The mutation cluster: execute_action + writes + send_message, reachable only after
   // explicit user approval through propose_action (ADR-0008).
   handoff_act: [
@@ -216,6 +221,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   handoff_replan: [
     'get_crs',
     'get_health',
+    'get_screen_time',
     'query_calendar',
     'connect_service',
     'get_tasks',
@@ -223,12 +229,13 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_action',
     'skills_load',
   ],
-  intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
+  intervention: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
     'use_mac',
     'get_crs',
     'get_health',
+    'get_screen_time',
     'query_calendar',
     'connect_service',
     'send_console_link',
