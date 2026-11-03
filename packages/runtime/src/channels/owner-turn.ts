@@ -34,7 +34,7 @@ import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
-import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
+import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, toolActivity, toolsWhere } from '../tools/records';
@@ -240,6 +240,8 @@ export const createOwnerResponder = (
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
   let ownerTurnStartedAt = 0;
+  // The running turn's request sanitisation results, begun again when a forget lands (this turn's or the console's).
+  let turnSanitise: Readonly<{ forgets: string; memo: TurnSanitiseMemo }> | undefined;
   // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
   let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
@@ -297,7 +299,7 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
-    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })) }).complete({
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })), ...(turnSanitise ? { sanitiseMemo: turnSanitise.memo } : {}) }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
@@ -595,6 +597,7 @@ export const createOwnerResponder = (
           const frozen = turnSuffix;
           const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
           const generation = forgettingState?.forgetGeneration() ?? 0;
+          if (turnSanitise && turnSanitise.forgets !== `${forgetEpoch}:${generation}`) turnSanitise = { forgets: `${forgetEpoch}:${generation}`, memo: new TurnSanitiseMemo() };
           const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
             && frozen.health === admittedHealth && frozen.held === heldKey;
           // A rebuild reads recall, earlier results and receipts afresh; a reused round reads none of them.
@@ -813,6 +816,7 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
+    turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
     turnToolEvents = [];
@@ -863,7 +867,7 @@ export const createOwnerResponder = (
       try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
       throw error;
-    } finally { activeOwnerTurn = undefined; turnLoopCtx = undefined; }
+    } finally { activeOwnerTurn = undefined; turnLoopCtx = undefined; turnSanitise = undefined; }
   };
   // What the owner said in conversation about to leave the window, kept as memory first: the same admission gate as the
   // nightly pass, in this turn's scope, never forgetting or pinning. Returns the claims it wrote.
