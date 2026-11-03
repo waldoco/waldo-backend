@@ -80,7 +80,9 @@ If 10021 returns:
    `verify:guards`) checks that the entry's static imports are exactly those two files and names any
    module that got pulled in. `node scripts/startup-profile.mjs` gives the per-package breakdown.
 2. Measure the built bundle. `wrangler check startup` ignores `--env`, so build the staging bundle
-   first and pass it with `--worker`. From `packages/runtime`:
+   first and pass it with `--worker`. The staging config serves `../dashboard-app/dist`, so on a fresh
+   checkout run `pnpm --filter @waldo/dashboard-app build` from the repo root first. Then, from
+   `packages/runtime`:
 
    ```sh
    npx wrangler deploy --dry-run --env staging --outfile /tmp/worker.bundle
