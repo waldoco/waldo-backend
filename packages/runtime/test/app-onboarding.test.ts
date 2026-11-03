@@ -463,20 +463,13 @@ describe('chat channels in the first run', () => {
     const response = await send('/app/v1/onboarding/channel-link', { provider: 'telegram' });
     expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
   }, { chat: { offered: async () => true, linked: async () => 'not_linked', issue: async () => null } }));
-  it('issues no code to a session signed in over two hours ago, and asks it to confirm', () => {
+  it('issues a code to a session signed in over two hours ago, without asking for a fresh email code', () => {
     const { issued, channels } = chat({});
-    let recent = true;
     return owner(async ({ send, act }) => {
       await act({ action: 'start' }); await act(agree);
-      recent = false;
-      for (const provider of ['imessage', 'whatsapp', 'telegram']) {
-        const response = await send('/app/v1/onboarding/channel-link', { provider });
-        expect([provider, response.status, await response.json()]).toEqual([provider, 403, { error: 'step_up_required' }]);
-      }
-      expect(issued).toEqual([]);
-      recent = true;
-      expect((await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' })).status).toBe(200);
-    }, { chat: channels, signedInRecently: async () => recent });
+      for (const provider of ['imessage', 'whatsapp', 'telegram']) expect([provider, (await send('/app/v1/onboarding/channel-link', { provider })).status]).toEqual([provider, 200]);
+      expect(issued).toEqual(['imessage', 'whatsapp', 'telegram']);
+    }, { chat: channels, signedInRecently: async () => false });
   });
   it('issues nothing when the app session is no longer current', () => {
     const { issued, channels } = chat({});

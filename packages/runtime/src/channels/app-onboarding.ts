@@ -24,7 +24,7 @@ export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
   chat: ChatChannels;
-  // Whether this app session signed in within the last two hours, as a link code needs.
+  // Whether this app session signed in within the last two hours, for a link code the step-up table gates.
   signedInRecently(): Promise<boolean>;
   // Setup is done: the first-run complete action or the setup answers landed. Starts the owner's one welcome build; a repeat starts nothing.
   setupDone?(): void;
@@ -100,7 +100,9 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
-    if (!await host.signedInRecently()) return problem('step_up_required');
+    // Loaded lazily: the step-up table reaches Durable Object modules, which cannot load in plain Node.
+    const { stepUpGated, appLinkStepUpAction } = await import('./console-step-up');
+    if (stepUpGated(appLinkStepUpAction(link.data.provider)) && !await host.signedInRecently()) return problem('step_up_required');
     if (!host.consent.stepsOpen()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');

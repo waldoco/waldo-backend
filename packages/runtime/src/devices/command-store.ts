@@ -22,6 +22,8 @@ export class DeviceCommandStore {
     storage.sql.exec('CREATE TABLE IF NOT EXISTS mac_deliveries(id TEXT PRIMARY KEY, body TEXT NOT NULL, admitted INTEGER NOT NULL DEFAULT 0)');
     storage.sql.exec('CREATE TABLE IF NOT EXISTS mac_issues(request_id TEXT PRIMARY KEY, issued_at INTEGER NOT NULL)');
     storage.sql.exec('CREATE TABLE IF NOT EXISTS notify_issues(notification_id TEXT PRIMARY KEY, issued_at INTEGER NOT NULL)');
+    storage.sql.exec('CREATE INDEX IF NOT EXISTS mac_issues_issued_at ON mac_issues(issued_at)');
+    storage.sql.exec('CREATE INDEX IF NOT EXISTS notify_issues_issued_at ON notify_issues(issued_at)');
   }
   // `offline`: the device has no live connection now. A new Mac request is then refused instead of queued; a retry of a request
   // already admitted still answers with that request, so a refusal never hides work that was sent.
@@ -124,6 +126,8 @@ export class DeviceCommandStore {
   }
   deliveries(): {id:string;body:string}[] {return this.storage.sql.exec<{id:string;body:string}>('SELECT id,body FROM mac_deliveries WHERE admitted=0 ORDER BY rowid LIMIT 20').toArray();}
   delivered(id: string): void {this.storage.sql.exec('UPDATE mac_deliveries SET admitted=1 WHERE id=?',id);}
+  // Permanent: the device is gone or now belongs to another owner, so no owner may take this row. Kept for audit, never retried.
+  setAside(id: string): void {this.storage.sql.exec('UPDATE mac_deliveries SET admitted=2 WHERE id=? AND admitted=0',id);}
   deliveryDue(): number | null {return this.deliveries().length?Date.now()+1000:null;}
   nextExpiry(): number | null {const n=this.storage.sql.exec("SELECT min(expires_at) AS next FROM commands WHERE state='queued'").one().next;return n===null?null:Number(n)*1000;}
   cancelQueued(): void { this.storage.sql.exec("UPDATE commands SET state='cancelled',wire=NULL WHERE state='queued'"); }

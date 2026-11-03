@@ -173,7 +173,7 @@ export function resolveRunLoopAdapters(
       deliveryTextFallback: RUN_LOOP_DELIVERY_TEXT,
       providerMode: 'fake',
       safety: localPermissiveSafety(),
-      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health, options.localSystemSkills, options.onComposerPhase),
+      contextComposer: localTrustedBriefContextComposer(options),
       replayArtifacts: localTrustedBriefReplayArtifacts(),
     };
   }
@@ -317,11 +317,9 @@ export function localTrustedBriefScheduleInput(): Readonly<{
   };
 }
 
-function createLocalTrustedBriefContextComposer(
-  toolOutputs: () => Promise<readonly ContextFragment[]> = async () => [],
-  health: () => Promise<ContextHealthMaterial | null> = async () => null,
-  hostSkills?: LocalSystemSkillBinding,
-  phaseObserver?: (phase: string, previousMs: number) => void,
+// The fixed local composer on its own, for an owner turn that has no composed owner context.
+export function localTrustedBriefContextComposer(
+  { toolOutputs = async () => [], health = async () => null, localSystemSkills: hostSkills, onComposerPhase: phaseObserver }: Omit<ResolveRunLoopAdaptersOptions, 'deps'> = {},
 ): ContextComposer {
   const dependencies: ContextComposerDependencies = {
     staged_inputs: {

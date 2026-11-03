@@ -428,7 +428,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
     const highest = this.sql
       .exec<{ n: number }>(
-        'SELECT COALESCE(MAX(attempt), 0) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
+        'SELECT COALESCE(MAX(attempt), 0) AS n FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?',
         entry.id,
         lower,
         upper,
@@ -456,7 +456,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ id: string }>(
-        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
+        `SELECT id FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -472,7 +472,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ delivery: string }>(
-        `SELECT delivery FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
+        `SELECT delivery FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -525,7 +525,9 @@ export class Scheduler {
   private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     // Preserve crashed attempts as evidence; a later terminal attempt of that exact
-    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix.
+    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix,
+    // and that prefix's occurrence range lets the lookup search the primary key.
+    const prefix = 'substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT)))';
     return (
       this.sql
         .exec(
@@ -533,10 +535,11 @@ export class Scheduler {
             WHERE running.schedule_id = ? AND running.outcome = 'running' AND NOT (running.id >= ? AND running.id < ?)
               AND NOT EXISTS (
                 SELECT 1 FROM schedule_runs AS recovered
-                 WHERE recovered.schedule_id = running.schedule_id
+                 WHERE recovered.id >= ${prefix} AND recovered.id < substr(${prefix}, 1, length(${prefix}) - 1) || ';'
+                   AND +recovered.schedule_id = running.schedule_id
                    AND recovered.attempt > running.attempt
                    AND (recovered.outcome = 'ok' OR recovered.delivery IN ('sent', 'failed'))
-                   AND recovered.id = substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT))) || recovered.attempt
+                   AND recovered.id = ${prefix} || recovered.attempt
               )
             LIMIT 1`,
           scheduleId,
@@ -555,7 +558,7 @@ export class Scheduler {
       `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, settled_at, duration_ms)
        SELECT ?, ?, ?, ?, 0, 'missed', ?, 0
        WHERE NOT EXISTS (
-         SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?
+         SELECT 1 FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?
        )`,
       `${entry.id}:${occurrenceAt}:0`,
       entry.id,
@@ -659,6 +662,8 @@ export class Scheduler {
   }
 }
 
+// Queries over this range write `+schedule_id = ?`: the unary plus keeps the exact-schedule filter but stops SQLite from
+// choosing the schedule_id index, which walks every run the schedule ever had, over the primary-key range it bounds.
 // workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
 // (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
 // ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot
