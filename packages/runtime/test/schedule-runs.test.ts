@@ -116,6 +116,21 @@ describe('schedule_runs history (C4)', () => {
     expect(runs.map((r) => [r.attempt, r.outcome])).toEqual([[1, 'running'], [2, 'ok']]);
     expect(runs.every((r) => r.schedule_id === longId)).toBe(true);
   });
+
+  it('numbers the next run past the highest ordinal, so a gap left by a moved row never collides', async () => {
+    const runs = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(1_000));
+      await scheduler.schedule({ id: 's6', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      const crash = { brief: async () => { throw new Error('crash-injection: forced'); } } as ScheduleExecutors;
+      await expect(scheduler.dispatchDue(crash)).rejects.toThrow('crash-injection');
+      await expect(scheduler.dispatchDue(crash)).rejects.toThrow('crash-injection');
+      // :1 leaves the hot table (archived) while :2 stays as crash evidence.
+      state.storage.sql.exec("DELETE FROM schedule_runs WHERE id = 's6:900:1'");
+      await scheduler.dispatchDue({ brief: async () => undefined } as ScheduleExecutors);
+      return state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY id').toArray();
+    });
+    expect(runs.map((r) => [r.id, r.outcome])).toEqual([['s6:900:2', 'running'], ['s6:900:3', 'ok']]);
+  });
 });
 
 // The decision + delivery columns are generic run-history shape (heartbeat is their first
