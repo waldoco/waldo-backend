@@ -5,9 +5,11 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
-  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema,
+  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema, HEALTH_SIGNALS_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { healthHistoryView, historyWindowOf, partsOfShownPillars } from './app-health-history';
+import { healthSignalsView, signalsQueryOf } from './app-health-signals';
+import { SERIES_READS } from '../health/signals';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
@@ -36,6 +38,8 @@ export type AppHealthInput = Readonly<{
   // rows already hold: setting a switch back to off is the rollback.
   scoreParts?: boolean;
   usual?: boolean;
+  // On, GET /app/v1/health/signals is served to a build that names health revision 9. Off, the route is not there.
+  signalsRead?: boolean;
   // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
   coaching?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
@@ -217,6 +221,21 @@ const scoresHistory = async ({ request, url, doName, rpc, scoreParts }: AppHealt
   return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days, ...(readers.parts ? { parts: true } : {}) })), days, readers));
 };
 
+// One reading's daily series exists only for a build that names health revision 9, while the switch is on; otherwise the route is
+// not there. It spends the same per-owner health budget as every route under /app/v1/health. The owner's usual for the signal is
+// shown beside it only while the usual is served too, so this route never gives back what the scores withhold.
+const signals = async ({ request, url, doName, rpc, usual }: AppHealthInput): Promise<Response> => {
+  if (appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') < HEALTH_SIGNALS_REVISION_V1) return refuse('invalid_request', 404);
+  if (request.method !== 'GET') return refuse('unavailable', 405);
+  const query = signalsQueryOf(url);
+  if (!query) return refuse('invalid_request');
+  const [answered, stored] = await Promise.all([
+    invokeHealth(rpc, doName, 'signal_read', JSON.stringify({ days: query.days, signals: SERIES_READS[query.signal].stored })),
+    usual === true ? invokeHealth(rpc, doName, 'scores_read', '{}') : Promise.resolve(undefined),
+  ]);
+  return answer(healthSignalsView(answered, query, failureCode, stored));
+};
+
 // The owner's stated sleep need. The health plane answers with when it last changed too; the app is shown the need alone.
 // A saved need asks the owner's object for a recompute after the answer, so the app's rows move to it before the next upload.
 const settings = async ({ request, doName, rpc, readBody, defer, notifySettings }: AppHealthInput): Promise<Response> => {
@@ -292,6 +311,7 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
     return answer(healthConsentView(await invokeHealth(rpc, doName, 'consent_list', '{}'), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health')));
   }
   if (route === '/scores/history') return scoresHistory(input);
+  if (route === '/signals') return input.signalsRead === true ? signals(input) : refuse('invalid_request', 404);
   // The stated need is stored only while the coaching switch is on; off, the route is not served.
   if (route === '/settings') return input.coaching === true ? settings(input) : refuse('unavailable', 404);
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);

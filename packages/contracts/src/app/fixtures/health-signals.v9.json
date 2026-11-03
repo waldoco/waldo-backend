@@ -1,0 +1,61 @@
+{
+  "notes": [
+    "Synthetic values only. Send x-waldo-app-contract: health=9 (or later) to GET /app/v1/health/signals?signal=<one>&days=7|30|90; a build below revision 9 gets no such route (404), and the route is also absent while the server's switch is off.",
+    "Each day's value is the number the owner's scores used for that day: the same reduction of the same readings, from the source the scores took for the day (source says which). It is not a second derivation, so the app draws it and never recomputes it.",
+    "A day with no value is left out of days, so a chart shows a gap and never a zero. days is oldest first, inside from..to, which spans window_days ending on the owner's own today (the zone of their newest reading).",
+    "method is the reading's method where it has one (the HRV method, the resting-rate method, absolute or baseline_delta for wrist temperature) and null otherwise; never mix methods in one line.",
+    "used_in says which scores the signal feeds. An empty list means it feeds none (stage minutes, efficiency): a chart of it is information, never an input to a score.",
+    "hours is today's hourly values, oldest first, for the three signals made of hourly windows (daylight, movement, active_energy). Those three are served to 30 days; days=90 for them is a 400.",
+    "usual is the owner's usual for this signal as of today, exactly as /scores serves it (revision 8), and only while the usual is served; a signal with no band (sleep_asleep, the stages, sleep_efficiency) has none.",
+    "sleep_asleep and the stage minutes come from the night's asleep reading, whether or not a score used that night; sleep_midpoint is the one the scores used.",
+    "Not served yet: steps, VO2 max, heart rate and HRV by the hour."
+  ],
+  "nightly": {
+    "state": "available",
+    "signal": "overnight_hrv",
+    "unit": "milliseconds",
+    "used_in": ["recovery", "form"],
+    "window_days": 7,
+    "from": "2026-10-27",
+    "to": "2026-11-02",
+    "days": [
+      { "day": "2026-10-27", "value": 44.1, "method": "rmssd", "source": "apple" },
+      { "day": "2026-10-28", "value": 39.8, "method": "rmssd", "source": "apple" },
+      { "day": "2026-10-30", "value": 47.2, "method": "rmssd", "source": "apple" },
+      { "day": "2026-11-01", "value": 41.5, "method": "rmssd", "source": "apple" },
+      { "day": "2026-11-02", "value": 45.3, "method": "rmssd", "source": "apple" }
+    ],
+    "usual": {
+      "signal": "overnight_hrv",
+      "method": "rmssd",
+      "state": "personal",
+      "low": 34.1,
+      "centre": 41.6,
+      "high": 50.7,
+      "own_days": 21,
+      "own_share": 0.91,
+      "days_until_personal": 0,
+      "window_days": 30,
+      "estimator": "shrunk_predictive"
+    }
+  },
+  "hourly": {
+    "state": "available",
+    "signal": "daylight",
+    "unit": "minutes",
+    "used_in": ["form"],
+    "window_days": 7,
+    "from": "2026-10-27",
+    "to": "2026-11-02",
+    "days": [
+      { "day": "2026-11-01", "value": 142, "method": null, "source": "apple" },
+      { "day": "2026-11-02", "value": 96, "method": null, "source": "apple" }
+    ],
+    "hours": [
+      { "at": "2026-11-02T08:00:00.000Z", "value": 22 },
+      { "at": "2026-11-02T09:00:00.000Z", "value": 31 },
+      { "at": "2026-11-02T10:00:00.000Z", "value": 43 }
+    ]
+  },
+  "unavailable": { "state": "unavailable", "signal": "spo2", "reason": "no_readings" }
+}

@@ -27,7 +27,7 @@ const awakeRestingBuckets = (day: DayRecord): readonly HourlyBucket[] =>
   });
 // The phone sends a summed signal only for hours that hold some of it, so on a day that carries the signal an hour
 // without it is none. A day with no reading for it is unknown, not zero: the source may not measure it at all.
-const dayTotal = (day: DayRecord, pick: (bucket: HourlyBucket) => number | null): number | null => {
+export const dayTotal = (day: DayRecord, pick: (bucket: HourlyBucket) => number | null): number | null => {
   const readings = day.hourly.flatMap(bucket => { const value = pick(bucket); return value === null ? [] : [value]; });
   return day.hourly.length >= MIN_DAY_BUCKETS && readings.length > 0 ? readings.reduce((total, value) => total + value, 0) : null;
 };

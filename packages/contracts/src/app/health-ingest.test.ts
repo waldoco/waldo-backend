@@ -6,6 +6,7 @@ import {
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
   HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
+  HEALTH_SIGNALS_REVISION_V1, HEALTH_SERIES_SIGNALS_V1, healthSeriesSignalV1Schema, healthSignalsQueryV1Schema, healthSignalsResponseV1Schema, healthSignalsUnavailableV1Schema, healthSignalsV1Schema, healthSeriesDayV1Schema, healthSeriesHourV1Schema,
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
   healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
@@ -450,7 +451,7 @@ describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
-      'GET /app/v1/health/scores/history', 'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
+      'GET /app/v1/health/scores/history', 'GET /app/v1/health/signals', 'GET /app/v1/health/settings', 'PUT /app/v1/health/settings',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);
@@ -772,5 +773,67 @@ describe('health revision 8: days left and grouped rows', async () => {
       parts({ groups: [{ key: 'circadian', pillar: 'recovery', state: 'unavailable', reason: 'no_reading' }] }), parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_data' }] }),
       parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_reading', score: 0 }] }), parts({ groups: 'resting_state' }),
     ]);
+  });
+});
+
+describe('health revision 9: one reading\'s daily series', async () => {
+  const fixture = (await import('./fixtures/health-signals.v9.json')).default as unknown as { nightly: Record<string, any>; hourly: Record<string, any>; unavailable: Record<string, any> };
+  const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+  it('is revision 9, after the parts and bands, and names the route', () => {
+    expect(HEALTH_SIGNALS_REVISION_V1).toBe(9);
+    expect(HEALTH_SIGNALS_REVISION_V1).toBeGreaterThan(HEALTH_PARTS_REVISION_V1);
+  });
+  it('reads the fixture\'s nightly, hourly and unavailable bodies as each schema and as the response', () => {
+    for (const body of [fixture.nightly, fixture.hourly]) {
+      expect(healthSignalsV1Schema.safeParse(body).success).toBe(true);
+      expect(healthSignalsResponseV1Schema.safeParse(body).success).toBe(true);
+    }
+    expect(healthSignalsUnavailableV1Schema.safeParse(fixture.unavailable).success).toBe(true);
+    expect(healthSignalsResponseV1Schema.safeParse(fixture.unavailable).success).toBe(true);
+  });
+  it('names sixteen signals, each with a unit and the scores it feeds, and an hourly flag on exactly the three made of windows', () => {
+    expect(healthSeriesSignalV1Schema.options).toHaveLength(16);
+    expect(Object.keys(HEALTH_SERIES_SIGNALS_V1).sort()).toEqual([...healthSeriesSignalV1Schema.options].sort());
+    expect(Object.entries(HEALTH_SERIES_SIGNALS_V1).filter(([, signal]) => signal.hourly).map(([name]) => name).sort()).toEqual(['active_energy', 'daylight', 'movement']);
+    for (const name of healthUsualSignalV1Schema.options.filter(usual => (healthSeriesSignalV1Schema.options as readonly string[]).includes(usual))) expect(healthSeriesSignalV1Schema.safeParse(name).success, name).toBe(true);
+  });
+  it('takes one signal and one window, and a signal made of hourly windows only to thirty days', () => {
+    expect(healthSignalsQueryV1Schema.safeParse({ signal: 'overnight_hrv', days: '90' }).success).toBe(true);
+    expect(healthSignalsQueryV1Schema.safeParse({ signal: 'movement', days: '30' }).success).toBe(true);
+    rejected(healthSignalsQueryV1Schema, [
+      { signal: 'movement', days: '90' }, { signal: 'overnight_hrv', days: '14' }, { signal: 'overnight_hrv', days: 7 }, { signal: 'steps', days: '7' }, { signal: 'overnight_hrv' }, { days: '7' },
+      { signal: 'overnight_hrv', days: '7', extra: '1' }, {}, null,
+    ]);
+  });
+  it('refuses a body whose pieces do not agree: a window that is not the span, days out of order or outside, a wrong unit or use', () => {
+    const bad = (edit: (body: Record<string, any>) => void) => { const body = clone(fixture.nightly); edit(body); return body; };
+    rejected(healthSignalsV1Schema, [
+      bad(body => { body.window_days = 30; }), bad(body => { body.window_days = 9; }), bad(body => { body.from = '2026-10-28'; }),
+      bad(body => { body.days = [body.days[1], body.days[0]]; }), bad(body => { body.days = [body.days[0], body.days[0]]; }), bad(body => { body.days[0].day = '2026-10-01'; }),
+      bad(body => { body.unit = 'minutes'; }), bad(body => { body.used_in = []; }), bad(body => { body.used_in = ['recovery']; }),
+      bad(body => { body.hours = [{ at: '2026-11-02T08:00:00.000Z', value: 1 }]; }), bad(body => { body.usual.signal = 'resting_heart_rate'; body.usual.method = 'overnight_resting'; }),
+      bad(body => { body.state = 'partial'; }), bad(body => { body.extra = 1; }), bad(body => { delete body.signal; }),
+    ]);
+  });
+  it('refuses a day without a number, with a method that is not a reading\'s, with a source that is not one, or with a key it does not name', () => {
+    const day = fixture.nightly.days[0];
+    expect(healthSeriesDayV1Schema.safeParse(day).success).toBe(true);
+    expect(healthSeriesDayV1Schema.safeParse({ ...day, method: null }).success).toBe(true);
+    rejected(healthSeriesDayV1Schema, [
+      { ...day, value: null }, { ...day, value: '44' }, { ...day, value: Infinity }, { ...day, method: 'good' }, { ...day, source: 'fitbit' }, { ...day, day: '27-10-2026' }, { ...day, extra: 1 }, { day: day.day, value: 1, method: null },
+    ]);
+  });
+  it('takes an hour as an instant and a number, at most a day of them, oldest first or not at all', () => {
+    expect(healthSeriesHourV1Schema.safeParse(fixture.hourly.hours[0]).success).toBe(true);
+    rejected(healthSeriesHourV1Schema, [{ at: 'noon', value: 1 }, { at: '2026-11-02T08:00:00.000Z', value: null }, { at: '2026-11-02T08:00:00.000Z', value: 1, min: 0 }, { value: 1 }]);
+    const body = clone(fixture.hourly);
+    body.hours = Array.from({ length: 25 }, (_, i) => ({ at: `2026-11-02T${String(i % 24).padStart(2, '0')}:00:00.000Z`, value: 1 }));
+    expect(healthSignalsV1Schema.safeParse(body).success).toBe(false);
+  });
+  it('refuses an unavailable body with an unknown reason, a missing signal or any other key', () => {
+    rejected(healthSignalsUnavailableV1Schema, [
+      { ...fixture.unavailable, reason: 'stale' }, { state: 'unavailable', reason: 'no_readings' }, { ...fixture.unavailable, day: null }, { ...fixture.unavailable, state: 'available' }, { ...fixture.unavailable, signal: 'steps' },
+    ]);
+    for (const reason of ['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings']) expect(healthSignalsUnavailableV1Schema.safeParse({ ...fixture.unavailable, reason }).success, reason).toBe(true);
   });
 });

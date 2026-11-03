@@ -100,4 +100,7 @@ export const producerPayloads = async (compute: ProducerDeps['compute'], spec: G
 };
 
 // The same builders for tests that need an owner of their own shape.
+export const goldenReadingsOfDay = dayOfReadings;
+export const goldenSample = sample;
+export const GOLDEN_READ_AT = READ_AT;
 export { run as syntheticRun, day as syntheticDay, input as syntheticInput, addDays as syntheticAddDays, wobble as syntheticWobble, TARGET as SYNTHETIC_TARGET };

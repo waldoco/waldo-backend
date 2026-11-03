@@ -82,7 +82,7 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // for a reader that checks it. Null for any other signal.
 export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
-type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
+export type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
@@ -160,7 +160,7 @@ const withVitals = (series: Series, vitals: Series | null): Series => (!vitals ?
   }),
 });
 
-const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
+export const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
   readings.reduce<T | undefined>((best, r) => (!best || (r.startAt ?? '') >= (best.startAt ?? '') ? r : best), undefined);
 const hrvMethod = (method: string | null): HrvMethod | null => (method === 'rmssd' || method === 'sdnn' ? method : null);
 // The contract leaves a resting reading's method optional; an unlabelled one is unknown, never another method.
@@ -176,7 +176,7 @@ const span = (r: Reading): Span | null => (r.startAt && r.endAt ? { startAt: r.s
 
 // The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled duration is
 // time asleep by the contract; a duration labelled time in bed or unknown is not taken for it.
-const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
+export const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
 const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   const asleep = asleepOf(readings);
   const midpoint = newest(readings.filter(r => r.signal === 'sleep_midpoint'));
@@ -255,7 +255,7 @@ const asleepLow = (sleep: DayRecord['sleep'], hours: readonly Reading[], overlap
 
 // Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged. A day
 // holding an overlapping window keeps no hourly windows, so its window-based parts read as unknown, never doubled.
-const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
+export const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
   const byDay = new Map<string, Reading[]>();
   for (const r of readings) byDay.set(r.day, [...(byDay.get(r.day) ?? []), r]);
   const zoneChanged = new Set<string>();
@@ -473,6 +473,16 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
   return a?.error === 'epoch_conflict' || a?.error === 'consent_required' ? 'refused' : 'failed';
 };
 
+// One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
+// day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading. The series' own
+// reads and the owner's signal series choose a day's source here, so a chart and the score it sits beside read one source.
+export const sourcePicker = (series: Series): Readonly<{ present: readonly Source[]; chooseFor: (day: string) => Source }> => {
+  const present = series.sources.filter(s => s.readings.length > 0);
+  const rank = (source: string) => { const at = SOURCE_RANK.indexOf(source); return at < 0 ? SOURCE_RANK.length : at; };
+  const sleptOn = (s: Source, day: string) => s.readings.some(r => r.signal === 'sleep_duration' && r.day === day);
+  return { present, chooseFor: day => [...present].sort((a, b) => Number(sleptOn(b, day)) - Number(sleptOn(a, day)) || rank(a.source) - rank(b.source) || a.source.localeCompare(b.source))[0]! };
+};
+
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
   let pending: Promise<unknown> | undefined;
   try {
@@ -490,13 +500,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
     const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
-    // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
-    // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
-    const present = [...series.sources].filter(s => s.readings.length > 0);
+    const { present, chooseFor } = sourcePicker(series);
     if (!present.length) return 'no_readings';
-    const rank = (source: string) => { const at = SOURCE_RANK.indexOf(source); return at < 0 ? SOURCE_RANK.length : at; };
-    const sleptOn = (s: Source, day: string) => s.readings.some(r => r.signal === 'sleep_duration' && r.day === day);
-    const chooseFor = (day: string): Source => [...present].sort((a, b) => Number(sleptOn(b, day)) - Number(sleptOn(a, day)) || rank(a.source) - rank(b.source) || a.source.localeCompare(b.source))[0]!;
     const read = demand && await demand;
     if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
     const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);

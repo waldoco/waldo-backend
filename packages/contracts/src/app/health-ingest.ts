@@ -615,6 +615,74 @@ export const healthScoresHistoryV1Schema = z.strictObject({
 export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
 export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
 
+// Revision 9: one reading's daily values over the last 7, 30 or 90 local days, for the app's charts. Each day's value is the number
+// the owner's scores used for that day (the same reduction of the same readings, from the source the scores took for the day), not a
+// second derivation. A day with no value is left out, so a chart shows a gap and never a zero. The signal names are the usual bands'
+// where there is one, so a series and its band are matched by name. Served only to a build that names revision 9, while the
+// switch is on; the readings are the owner's own and are shown to the owner, like /scores, under the storage_compute consent.
+// Steps, VO2 max, heart rate and HRV by the hour are not served yet. The three signals made from hourly windows are served to 30 days.
+export const HEALTH_SIGNALS_REVISION_V1 = 9;
+export const healthSeriesSignalV1Schema = z.enum([
+  'sleep_asleep', 'sleep_light', 'sleep_deep', 'sleep_rem', 'awake_time', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate',
+  'breathing_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate', 'daylight', 'movement', 'active_energy',
+]);
+const usedInV1Schema = z.enum(['recovery', 'form', 'weight', 'drivers']);
+export const healthSeriesUnitV1Schema = z.enum(['minutes', 'ratio', 'local_minute', 'milliseconds', 'beats_per_minute', 'breaths_per_minute', 'percent', 'celsius', 'kilocalories']);
+export const HEALTH_SERIES_SIGNALS_V1: Readonly<Record<z.infer<typeof healthSeriesSignalV1Schema>, Readonly<{ unit: z.infer<typeof healthSeriesUnitV1Schema>; hourly: boolean; used_in: readonly z.infer<typeof usedInV1Schema>[] }>>> = {
+  sleep_asleep: { unit: 'minutes', hourly: false, used_in: ['recovery', 'form'] },
+  sleep_light: { unit: 'minutes', hourly: false, used_in: [] },
+  sleep_deep: { unit: 'minutes', hourly: false, used_in: [] },
+  sleep_rem: { unit: 'minutes', hourly: false, used_in: [] },
+  awake_time: { unit: 'minutes', hourly: false, used_in: ['drivers'] },
+  sleep_efficiency: { unit: 'ratio', hourly: false, used_in: [] },
+  sleep_midpoint: { unit: 'local_minute', hourly: false, used_in: ['form'] },
+  overnight_hrv: { unit: 'milliseconds', hourly: false, used_in: ['recovery', 'form'] },
+  resting_heart_rate: { unit: 'beats_per_minute', hourly: false, used_in: ['recovery', 'form'] },
+  breathing_rate: { unit: 'breaths_per_minute', hourly: false, used_in: ['drivers'] },
+  spo2: { unit: 'percent', hourly: false, used_in: ['drivers'] },
+  wrist_temperature: { unit: 'celsius', hourly: false, used_in: ['drivers'] },
+  walking_heart_rate: { unit: 'beats_per_minute', hourly: false, used_in: ['drivers'] },
+  daylight: { unit: 'minutes', hourly: true, used_in: ['form'] },
+  movement: { unit: 'minutes', hourly: true, used_in: ['form'] },
+  active_energy: { unit: 'kilocalories', hourly: true, used_in: ['weight'] },
+};
+export const healthSignalsQueryV1Schema = z.strictObject({ signal: healthSeriesSignalV1Schema, days: z.enum(['7', '30', '90']) })
+  .refine(query => !(HEALTH_SERIES_SIGNALS_V1[query.signal].hourly && query.days === '90'), { error: 'a signal made from hourly windows is served to 30 days', path: ['days'] });
+// The reading's method where it has one: the HRV method, the resting-rate method, the wrist temperature kind. Never a score word.
+const seriesMethodV1Schema = z.enum(['rmssd', 'sdnn', 'overnight_resting', 'provider_resting_daily', 'resting_measurement', 'asleep_hours_low', 'unknown', 'absolute', 'baseline_delta']);
+export const healthSeriesDayV1Schema = z.strictObject({
+  day: healthDayV1Schema,
+  value: z.number().finite(),
+  method: seriesMethodV1Schema.nullable(),
+  source: healthSourceV1Schema,
+});
+export const healthSeriesHourV1Schema = z.strictObject({ at: z.iso.datetime(), value: z.number().finite() });
+export const healthSignalsV1Schema = z.strictObject({
+  state: z.literal('available'),
+  signal: healthSeriesSignalV1Schema,
+  unit: healthSeriesUnitV1Schema,
+  used_in: z.array(usedInV1Schema).max(4),
+  window_days: historyWindowDays,
+  from: healthDayV1Schema,
+  to: healthDayV1Schema,
+  days: z.array(healthSeriesDayV1Schema).max(90),
+  // Today's hours of a signal made from hourly windows, oldest first; absent for the others and when today has none.
+  hours: z.array(healthSeriesHourV1Schema).max(24).optional(),
+  // The owner's usual for this signal as of today, when the usual is served.
+  usual: healthUsualV1Schema.optional(),
+}).refine(series => dayNumber(series.to) - dayNumber(series.from) + 1 === series.window_days, { error: 'from to to spans the window', path: ['to'] })
+  .refine(series => series.days.every((row, i) => row.day >= series.from && row.day <= series.to && (i === 0 || series.days[i - 1]!.day < row.day)),
+    { error: 'days fall inside the window, oldest first, once each', path: ['days'] })
+  .refine(series => series.unit === HEALTH_SERIES_SIGNALS_V1[series.signal].unit && series.used_in.join() === HEALTH_SERIES_SIGNALS_V1[series.signal].used_in.join(), { error: 'the unit and use belong to the signal', path: ['unit'] })
+  .refine(series => series.hours === undefined || HEALTH_SERIES_SIGNALS_V1[series.signal].hourly, { error: 'only an hourly signal has hours', path: ['hours'] })
+  .refine(series => series.usual === undefined || series.usual.signal === series.signal, { error: 'the usual is the signal\'s own', path: ['usual'] });
+export const healthSignalsUnavailableV1Schema = z.strictObject({
+  state: z.literal('unavailable'),
+  signal: healthSeriesSignalV1Schema,
+  reason: healthScoresUnavailableV1Schema.shape.reason,
+});
+export const healthSignalsResponseV1Schema = z.union([healthSignalsV1Schema, healthSignalsUnavailableV1Schema]);
+
 export const healthSettingsV1Schema = z.strictObject({ sleep_need_minutes: healthSleepNeedMinutesV1Schema.nullable() });
 
 // The runtime may attach a short message; a client acts on `error` only.
@@ -630,6 +698,7 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/signals', query: healthSignalsQueryV1Schema, response: healthSignalsResponseV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/health/settings', response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
   { method: 'PUT', path: '/app/v1/health/settings', request: healthSettingsV1Schema, response: healthSettingsV1Schema, authenticated: true, success_status: 200 },
 ] as const;
