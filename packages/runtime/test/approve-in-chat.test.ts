@@ -3,6 +3,8 @@
 // guards that hold whatever the model decides. Each falsifier changes one input from a passing approval and expects nothing
 // sent and the card still waiting.
 import { env } from 'cloudflare:workers';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { searchEpisodesArgsSchema, readThreadArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, buildSessionState, type ToolName } from '@waldo/contracts';
@@ -24,7 +26,8 @@ const SHOWN_AT = Date.UTC(2026, 10, 3, 9, 0, 0);
 const OWNER = 447700900123;
 type Surface = 'whatsapp' | 'imessage' | 'telegram' | 'app';
 
-const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ inWords?: boolean; thread?: () => string | undefined; now?: () => number }> = {}) => {
+// arrived: when the owner's message reached Waldo; closed: whether the surface refuses Waldo writing first (WhatsApp's window).
+const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ inWords?: boolean; thread?: () => string | undefined; now?: () => number; arrived?: () => number | undefined; closed?: () => boolean }> = {}) => {
   const { sql } = state.storage;
   const messages: { text: string; buttons: string[] }[] = [], sent: string[] = [], created: unknown[] = [];
   let n = 0, ref = 0;
@@ -36,8 +39,10 @@ const harness = (state: DurableObjectState, surface: Surface, options: Readonly<
   const desk = approvalDesk(sql, {
     owner: OWNER, surface: surface === 'app' ? 'app' : surface, appIdentity: () => true, appLink: appApprovalLink,
     approvesInChat: () => options.inWords !== false, conversationRef: options.thread ?? (() => undefined),
+    ownerMessageAt: options.arrived ?? (() => SHOWN_AT + 30_000), writesFirstNow: () => options.closed?.() !== true,
     call: async (method: string, body: object) => {
       if (method !== 'sendMessage') return true;
+      if (options.closed?.()) return undefined;
       const message = body as { text: string; reply_markup?: { inline_keyboard: { text: string }[][] } };
       messages.push({ text: message.text, buttons: (message.reply_markup?.inline_keyboard[0] ?? []).map(button => button.text) });
       ref += 1;
@@ -82,9 +87,15 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
     await owner('in-words-calendar', async state => {
       const f = harness(state, 'whatsapp');
       const id = await f.desk.propose(HOLD);
-      expect(await f.desk.approveShown(id, said(), 'trace')).toMatchObject({ outcome: 'decided' });
+      expect(await f.desk.approveShown(id, said(), 'trace')).toMatchObject({ outcome: 'decided', receipt_sent: true });
       expect(f.created).toHaveLength(1);
       expect(f.status(id)).toBe('done');
+      const inWords = f.messages.at(-1)!;
+      // The same receipt a tap on the card gets, Undo included.
+      const tapped = await f.desk.propose({ ...HOLD, title: 'Focus 2' });
+      await f.desk.callback({ id: 'tap', from: { id: OWNER }, data: `a:${tapped}`, message: { message_id: 0, chat: { id: OWNER } } }, 'trace');
+      expect(inWords.buttons).toEqual(f.messages.at(-1)!.buttons);
+      expect(inWords.buttons).toContain('Undo');
     });
   });
 
@@ -130,6 +141,46 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
       expect(await f.desk.approveShown(id, said({ receivedAt: SHOWN_AT }), 'trace')).toEqual({ outcome: 'shown_after_message' });
       expect(f.sent).toEqual([]);
       expect(f.status(id)).toBe('open');
+    });
+  });
+
+  it('a card that waited for the owner\'s message and went out with it is not approved by that message', async () => {
+    await owner('in-words-waited', async state => {
+      let clock = SHOWN_AT, closed = true;
+      const f = harness(state, 'whatsapp', { now: () => clock, closed: () => closed, arrived: () => SHOWN_AT + 10_000 });
+      const id = await f.desk.proposeSendMessage(message());
+      const onWhatsApp = () => f.sql.exec("SELECT presented_at FROM approval_presentations WHERE approval_id = ? AND surface = 'whatsapp'", id).toArray();
+      expect(onWhatsApp()).toEqual([]);
+      // The owner writes at +10s; their message opens the window and the waiting card goes out at +20s, before their turn.
+      clock = SHOWN_AT + 20_000; closed = false;
+      await f.desk.ownerWrote();
+      expect(onWhatsApp()).toEqual([{ presented_at: SHOWN_AT + 20_000 }]);
+      expect(await f.desk.approveShown(id, said({ receivedAt: SHOWN_AT + 30_000 }), 'trace')).toEqual({ outcome: 'shown_after_message' });
+      expect(f.sent).toEqual([]);
+      expect(f.status(id)).toBe('open');
+    });
+  });
+
+  it('a queued message cannot approve a card the turn before it raised', async () => {
+    await owner('in-words-queued', async state => {
+      let arrived = SHOWN_AT - 5_000;
+      const f = harness(state, 'app', { thread: () => 'chain:thread-a', arrived: () => arrived });
+      const id = await f.desk.proposeSendMessage(message());
+      // The second message reached Waldo before the first turn raised the card, though its own turn starts after.
+      expect(await f.desk.approveShown(id, said({ receivedAt: SHOWN_AT + 60_000 }), 'trace')).toEqual({ outcome: 'shown_after_message' });
+      expect(f.sent).toEqual([]);
+      arrived = SHOWN_AT + 5_000;
+      expect(await f.desk.approveShown(id, said({ receivedAt: SHOWN_AT + 60_000 }), 'trace')).toMatchObject({ outcome: 'decided' });
+      expect(f.sent).toEqual(['On my way']);
+    });
+  });
+
+  it('a surface with no record of when the owner\'s message arrived approves nothing in words', async () => {
+    await owner('in-words-no-arrival', async state => {
+      const f = harness(state, 'telegram', { arrived: () => undefined });
+      const id = await f.desk.proposeSendMessage(message());
+      expect(await f.desk.approveShown(id, said(), 'trace')).toEqual({ outcome: 'shown_after_message' });
+      expect(f.sent).toEqual([]);
     });
   });
 
@@ -290,7 +341,8 @@ describe('only the owner\'s own message, in a turn that read no outside text, re
 const timer = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const allowed = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
 const turnHarness = (state: DurableObjectState, onProbe: (ctx: ToolDispatcherContext) => Promise<void> = async () => undefined) => {
-  const f = harness(state, 'whatsapp', { now: () => Date.now() });
+  // The owner's message reaches Waldo as its turn starts.
+  const f = harness(state, 'whatsapp', { now: () => Date.now(), arrived: () => Date.now() });
   const calls: { name: string; arguments: string }[] = [];
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const reply = (text: string, call?: { name: string; arguments: string }) => ({ ok: true as const, data: { model: request.request.model, text, ...(call ? { tool_calls: [{ call_id: `c${calls.length}`, ...call }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
@@ -386,4 +438,13 @@ describe('through the owner turn', () => {
     expect(f.sent).toEqual([]);
     expect(f.status(raised)).toBe('open');
   }));
+});
+
+type Vars = Readonly<Record<string, string>>;
+describe('APPROVE_IN_CHAT in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+    const parsed = parseJsonc(config) as { vars: Vars; env: { staging: { vars: Vars } } };
+    expect(parsed.vars.APPROVE_IN_CHAT).toBe('0');
+    expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('0');
+  });
 });

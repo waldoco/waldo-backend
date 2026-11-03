@@ -595,6 +595,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   approvesInChat?: () => boolean;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
   conversationRef?: () => string | undefined;
+  // When the owner's message this turn answers reached Waldo, from its inbox row. A card shown after that, such as one that
+  // waited for this very message or one an earlier queued message's turn raised, is not what the message is about.
+  ownerMessageAt?: () => number | undefined;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -1569,8 +1572,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (!entry || !PROPOSAL_KINDS.includes(entry.kind) || !entry.id.startsWith('p')) return { outcome: 'not_waiting', state: 'not_found' };
       if (!approvesInWords(entry)) return refused('app_only');
       if (entry.status !== 'open') return { outcome: 'not_waiting', state: stateNow(entry) };
-      if (!presentedTo(entry, { surface }, said)) return refused(shownInFullHere(entry).length ? 'shown_after_message' : 'not_shown_here');
-      const decision = await decideOnce(id, 'a', trace, { surface }, said);
+      // No arrival on record (a surface without an owner inbox) fails closed.
+      const arrived = deps.ownerMessageAt?.();
+      const at: OwnerSaid = { ...said, receivedAt: arrived === undefined ? -Infinity : Math.min(said.receivedAt, arrived) };
+      if (!presentedTo(entry, { surface }, at)) return refused(shownInFullHere(entry).length ? 'shown_after_message' : 'not_shown_here');
+      const decision = await decideOnce(id, 'a', trace, { surface }, at);
       if (decision === CHANGED_SINCE_SHOWN) return refused('changed_since_shown');
       deps.log({ trace: id, hop: 'approval_in_words', ms: 0, ok: true, code: row(id)?.status ?? 'unknown' });
       if (!messages) return { outcome: 'decided', decision, receipt_sent: false };
