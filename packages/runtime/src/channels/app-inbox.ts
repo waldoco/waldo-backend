@@ -33,6 +33,8 @@ export type AppInboxRecord = {
   landed?: string;
   // A thread message's thread revision when it was admitted: its turn stops once the thread is archived or deleted.
   threadRevision?: number;
+  // A message the model folded into an earlier message's running turn: the id of that message, whose reply answers both.
+  foldedInto?: string;
 };
 // The reply a running message's turn has written so far. Memory only, one per owner object (its turns run one at a time),
 // and served on that message's receipt only while the same attempt runs.
@@ -139,6 +141,14 @@ export class AppInbox {
       this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
       return row;
     });
+  }
+  // The running turn's model folded a waiting message into its own answer: the message completes without a turn of its own,
+  // and its answer is the reply to `into`. Only a message still admitted folds. Runs inside the running turn's commit.
+  fold(id:string,into:string):boolean {
+    const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted')return false;
+    row.state='completed';row.foldedInto=into;row.closedAt=this.now();clear(row);
+    this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+    return true;
   }
   claim(id:string,sessionCurrent:boolean,deadline=this.now()+APP_TURN_DEADLINE_MS):AppInboxRecord|null {
     return this.storage.transactionSync(()=>{
