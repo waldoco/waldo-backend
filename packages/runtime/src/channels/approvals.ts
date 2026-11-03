@@ -329,11 +329,12 @@ const REVIEW_BUDGET = 3800;
 const EMAIL_TAIL_ROOM = 300;
 // Whether a card shows the whole review: present() and placement() both decide it here, so they never disagree.
 const reviewFits = (entry: LedgerRow) => reviewText(entry).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
-const reviewEmail = (p: EmailSendProposal) =>
+// signed: the owner reviews the words the recipient reads; the model reads its own draft, so a rewrite never signs twice.
+const reviewEmail = (p: EmailSendProposal, signed: boolean) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
     ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
     ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
-    `Subject: ${p.subject}`, '', emailWords(p)].join('\n');
+    `Subject: ${p.subject}`, '', signed ? emailWords(p) : p.body].join('\n');
 const reviewMessage = (p: MessageSendProposal) => p.content;
 const reviewAgentMail = (p: AgentMailSendProposal) =>
   [`From: ${p.from.name} <${p.from.address}>`, `To: ${p.to.join(', ')}`, ...(p.cc.length ? [`Cc: ${p.cc.join(', ')}`] : []), `Subject: ${p.subject}`, '', p.body].join('\n');
@@ -390,9 +391,9 @@ const summaryOf = (entry: LedgerRow) => {
   catch { return CARDS[entry.kind]!.title; }
 };
 // The full review a card shows for each kind, rebuilt from the frozen payload.
-const reviewText = (entry: LedgerRow): string => {
+const reviewText = (entry: LedgerRow, signed = true): string => {
   const p = JSON.parse(entry.payload_json);
-  if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
+  if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p, signed)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
@@ -1607,7 +1608,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         .filter(entry => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p'))
         .map(entry => {
           let card: string;
-          try { card = reviewText(entry); } catch { card = summaryOf(entry); }
+          try { card = reviewText(entry, false); } catch { card = summaryOf(entry); }
           return { approval_id: entry.id, kind: entry.kind, summary: summaryOf(entry), state: APP_APPROVAL_STATE[entry.status as DeskStatus] as WaitingApproval['state'],
             put_off: entry.deferred_at != null, raised_at: when(new Date(entry.created_at).toISOString()), ...senderOf(entry), card, ...(entry.replaces ? { replaces: entry.replaces } : {}),
             ...(raisedOutside(entry) || OUTSIDE_TEXT_KINDS.includes(entry.kind) ? { outside_text: true as const } : {}) };
