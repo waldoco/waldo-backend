@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { raiseApprovalArgsSchema } from './approvals';
+import { raiseApprovalArgsSchema, whyArgSchema, whyStepArgSchema } from './approvals';
 import { proposeCalendarChangeArgsSchema } from './calendar';
 import { draftEmailArgsSchema, sendAgentMailArgsSchema, sendEmailArgsSchema } from './writes';
 import { toolNameSchema, TOOL_PERMISSIONS } from '../permissions';
@@ -63,5 +63,25 @@ describe('replaces on a proposing tool', () => {
 
   it('a Gmail draft replaces nothing: it raises no card', () => {
     expect(draftEmailArgsSchema.safeParse({ ...email, replaces: ID }).success).toBe(false);
+  });
+});
+
+describe('the steps a proposing tool takes', () => {
+  const step = { verb: 'checked', label: 'Found the 3pm clash', source: { kind: 'calendar_event', ref: 'evt_3pm' } } as const;
+  it('accepts a step naming what was read, and up to eight of them', () => {
+    expect(whyStepArgSchema.safeParse(step).success).toBe(true);
+    expect(whyArgSchema.safeParse(Array.from({ length: 8 }, () => step)).success).toBe(true);
+  });
+  it.each([
+    ['no source', { verb: 'checked', label: 'Found the 3pm clash' }],
+    ['a source without its ref', { ...step, source: { kind: 'calendar_event' } }],
+    ['a time of its own', { ...step, at: Date.UTC(2026, 10, 3, 1, 0, 0) }],
+    ['an unknown verb', { ...step, verb: 'approved' }],
+  ] as const)('rejects a step with %s', (_shape, value) => {
+    expect(whyStepArgSchema.safeParse(value).success).toBe(false);
+  });
+  it('rejects an empty list and one past eight', () => {
+    expect(whyArgSchema.safeParse([]).success).toBe(false);
+    expect(whyArgSchema.safeParse(Array.from({ length: 9 }, () => step)).success).toBe(false);
   });
 });

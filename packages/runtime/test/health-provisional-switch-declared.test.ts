@@ -59,6 +59,13 @@ describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
   });
 });
 
+describe('WHY_TRAIL in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+    expect(parsed.vars.WHY_TRAIL).toBe('0');
+    expect(parsed.env.staging.vars.WHY_TRAIL).toBe('0');
+  });
+});
+
 describe('MEDICATIONS in the Worker config', () => {
   it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
     expect(parsed.vars.MEDICATIONS).toBe('0');
