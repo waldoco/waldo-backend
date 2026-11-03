@@ -1,9 +1,10 @@
-import { EffectNotAppliedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import type { GrantUse, StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
-import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
-import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
+import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs, type RunOrigin } from '@waldo/contracts';
+import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type CalendarItem, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
 import { ownerMailText, renderOwnerMail } from './agent-mail/render';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
@@ -24,12 +25,13 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 // A move that renamed the event keeps the old title, so undo gives it back.
-type Undo = ({ op: 'cancel'; id: string } | { op: 'restore'; id: string } | { op: 'move'; id: string; start: string; end: string; title?: string; name_kept?: true }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
+// until: when undo closes, for a change a standing grant made; a change the owner approved keeps the desk's window.
+type Undo = ({ op: 'cancel'; id: string } | { op: 'restore'; id: string } | { op: 'move'; id: string; start: string; end: string; title?: string; name_kept?: true }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none'; until?: number };
 // card_waits_on: the surface whose card for this request waits for the owner's next message there.
 // replaces: the earlier card this one revises, closed when this one is first shown. withdrawn_reason and replaced_by: why
 // Waldo withdrew a card, and the newer card that closed it when one did.
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null; card_waits_on?: string | null;
-  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null };
+  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null; grant_json?: string | null };
 // running: approved, and its frozen call waits for or runs on the jobs lane. withdrawn: Waldo closed its own card while it
 // still waited on the owner; nothing ever moves a withdrawn card.
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'running' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone' | 'withdrawn';
@@ -59,6 +61,8 @@ const SENT_RESEARCHES = 2;
 const SENT_RESEARCH_GAP_MS = 1_500;
 export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
+// A standing grant's own block stays undoable until it would have started, and at most this long.
+export const GRANT_UNDO_MAX_MS = 24 * 60 * 60_000;
 
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
 // time_zone: the zone the review's times were written in.
@@ -227,7 +231,8 @@ export type WithdrawOutcome = Readonly<{ outcome: 'withdrawn'; still_shown_on: r
 export type Replacement = Readonly<{ approval_id: string; replaced: boolean; state: AppApprovalStateV1; card: 'waiting' | 'unapprovable' | 'shown' }>;
 // Options a proposal takes beyond its payload: the earlier card it revises.
 // outside: the proposing turn had read outside text (an email, a page, a tool's answer), so the card's words may carry it.
-export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean }>;
+// origin: what started the run proposing it, which a standing grant needs before it can act without a card.
+export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin }>;
 // Whether a tool call runs in a turn that has read outside text.
 export const turnReadOutside = (ctx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined): boolean => ctx?.toolArgSourceTaint === 'external';
 // A card Waldo closes in a turn that read outside text gets these fixed words, never a reason the model wrote there.
@@ -267,6 +272,8 @@ export type ApprovalDesk = Readonly<{
   // that card (by its message ref) is still Waldo's latest message in the chat the reply came from; anything else is a turn (null).
   numberedReply(text: string, trace: string, latest: (messageRef: string) => boolean): Promise<ApprovalDecision | null>;
   placement(id: string): CardPlacement;
+  // What a standing grant did with a proposal it made without a card, for the turn to report; null for a card.
+  grantOutcome(id: string): Readonly<{ state: 'done' | 'not_done' | 'outcome_unknown'; message: string }> | null;
   // Approved cards whose call runs on the jobs lane and has not settled.
   replays(): readonly string[];
   // The owner's receipt for a settled replay, from the card's own frozen call.
@@ -306,6 +313,10 @@ const sameInstant = (a: string, b: string) => a === b || Date.parse(a) === Date.
 // the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
 // button, because approving would send content the owner never saw.
 const REVIEW_BUDGET = 3800;
+// Room an email card keeps for its closing lines: "Nothing has been sent." and the console review link.
+const EMAIL_TAIL_ROOM = 300;
+// Whether a card shows the whole review: present() and placement() both decide it here, so they never disagree.
+const reviewFits = (entry: LedgerRow) => reviewText(entry).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
 const reviewEmail = (p: EmailSendProposal) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
     ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
@@ -330,6 +341,8 @@ const expiresAt = (entry: LedgerRow) => {
 };
 // A request closes at expires_at; one with no readable expiry is closed.
 const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
+const undoUntil = (entry: LedgerRow): number | null =>
+  entry.undo_json && entry.decided_at !== null ? (JSON.parse(entry.undo_json) as Undo).until ?? entry.decided_at + UNDO_WINDOW_MS : null;
 const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
 // The statuses a request can still be decided or edited from, which its expiry closes.
 const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
@@ -483,7 +496,7 @@ export const forgetWaitingCards = (sql: SqlStorage, texts: readonly string[], no
   const waiting = () => sql.exec<{ id: string; summary: string; payload_json: string }>(`SELECT id, summary, payload_json FROM ledger WHERE card_waits_on IS NOT NULL AND ${CARD_WAITING}`).toArray().filter(carries);
   let ended = 0;
   for (const { id } of waiting()) {
-    ended += sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ?, card_waits_on = NULL WHERE id = ? AND card_waits_on IS NOT NULL AND ${CARD_WAITING}`, now, id).rowsWritten;
+    ended += sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ?, card_waits_on = NULL WHERE id = ? AND card_waits_on IS NOT NULL AND ${CARD_WAITING}`, now, id).rowsWritten > 0 ? 1 : 0;
   }
   return { ended, remaining: waiting().length };
 };
@@ -580,16 +593,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   renames?: boolean;
   // Whether a cancel can be undone, by putting the event back on the version the cancel left.
   undoCancels?: boolean;
+  // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger.
+  grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
-  for (const column of ['proposal_digest', 'origin_run_ref', 'card_waits_on', 'replaces', 'withdrawn_reason', 'replaced_by']) {
+  for (const column of ['proposal_digest', 'origin_run_ref', 'card_waits_on', 'replaces', 'withdrawn_reason', 'replaced_by', 'grant_json']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} TEXT`);
   }
   for (const column of ['deferred_at', 'raised_outside', 'withdrawn_outside']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} INTEGER`);
   }
+  // Rows are never pruned, so every read by status, kind or recency goes through an index rather than a scan and sort.
+  // An update's rowsWritten counts these index entries too, so a count of rows changed is taken as rowsWritten > 0 per id.
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_status ON ledger (status, created_at)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_decided ON ledger (status, decided_at)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_kind ON ledger (kind, status)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_settled ON ledger (COALESCE(decided_at, created_at))');
   const presentationsExisted = sql.exec('PRAGMA table_info(approval_presentations)').toArray().length > 0;
   sql.exec(`CREATE TABLE IF NOT EXISTS approval_presentations (
     approval_id TEXT NOT NULL, surface TEXT NOT NULL, message_ref TEXT NOT NULL, presented_at INTEGER NOT NULL, approvable INTEGER NOT NULL,
@@ -603,9 +624,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (!origin || origin.length > 256 || /[\u0000-\u001f]/.test(origin)) throw new Error('invalid approval origin');
     sql.exec('UPDATE ledger SET origin_run_ref = ? WHERE id = ? AND origin_run_ref IS NULL', origin, id);
   };
-  const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>) => {
+  // A grant's use counts against its day's budget and is rechecked in the reserve; without the ledger nothing is granted.
+  const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>, grant?: GrantUse) => {
     if (!deps.effects) return dispatch();
-    return deps.effects.execute({ operationId, owner_ref: deps.ownerRef?.() ?? String(deps.owner), tool, payload }, { dispatch, reconcile }, undefined, deps.ownerRefAliases?.());
+    return deps.effects.execute({ operationId, owner_ref: deps.ownerRef?.() ?? String(deps.owner), tool, payload, ...(grant ? { quota: grant.quota } : {}) },
+      { dispatch, reconcile, ...(grant ? { authorize: grant.authorize } : {}) }, undefined, deps.ownerRefAliases?.());
   };
   // Owner turns run serially; keep only the current turn, never a cross-turn cache.
   let proposalTurn: string | undefined;
@@ -723,6 +746,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const entry = row(id)!;
     const deferrable = raise !== undefined || entry.deferred_at == null;
     const card = reviewText(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
+    // An email's card also links its console review; the lookup runs while the app card is built, not ahead of the card.
+    const reviewing = entry.kind === 'email_send' ? deps.reviewUrl?.().catch(() => null) ?? null : null;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     const shown: { surface: string; message_ref: string; approvable: boolean }[] = [];
     let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, waits = false;
@@ -742,11 +767,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
     }
     if (surface !== 'app') {
-      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
-      const review = entry.kind === 'email_send' ? await deps.reviewUrl?.().catch(() => null) : null;
+      const review = await reviewing;
       // An app handoff that cannot approve already ends with "Nothing was done."
       const unsent = entry.kind !== 'email_send' ? '' : [...(handsToApp && inApp?.approvable !== true ? [] : ['Nothing has been sent.']), ...(review ? [`You can also review it at ${review}.`] : [])].join(' ');
+      const fits = reviewFits(entry), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
@@ -831,11 +856,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
     const actions = state === 'open' ? withDefer(entry, inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'])
       : state === 'review_only' ? withDefer(entry, ['skip'])
-        : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
+        : state === 'done' && entry.undo_json && entry.decided_at !== null && now <= undoUntil(entry)! ? ['undo'] as const : [];
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
-      ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: entry.decided_at + UNDO_WINDOW_MS } : {}),
+      ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: undoUntil(entry)! } : {}),
       ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry) };
   };
   const describeAny = (entry: LedgerRow) => {
@@ -866,7 +891,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       let closes: boolean;
       try { closes = pastExpiry(entry, now) && !applyOnRecord(entry); }
       catch { deps.log({ trace: entry.id, hop: 'approval_expiry', ms: 0, ok: false, code: 'unreadable' }); continue; }
-      if (closes) closed += sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status).rowsWritten;
+      if (closes && sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status).rowsWritten > 0) closed += 1;
     }
     if (closed) deps.log({ trace: 'approvals', hop: 'approvals_sweep', ms: 0, ok: true, code: 'approvals_expired', detail: String(closed) });
   };
@@ -895,7 +920,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const target = p.calendar_id || p.send_updates ? { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) } : undefined;
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
+      // While grants can act, every event Waldo creates carries its mark, so a later grant can tell Waldo's blocks from the owner's.
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...(deps.grants?.enabled() ? { made: true } : {}), ...target,
         ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}), ...(p.block ? { block: p.block } : {}) });
       return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
     }
@@ -935,6 +961,79 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
+  // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change is
+  // claimed (uncertain) before it gets here, as an owner's approval claims nothing and keeps the row open.
+  const applyCalendar = async (id: string, proposal: Stored, operationRef: string, client: GoogleClient, trace: string, recovering: boolean, grant?: GrantUse): Promise<ApprovalDecision> => {
+    let out: ApprovalDecision;
+      const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
+      const marker = await sha256Hex(`${operationRef}:apply`);
+      // A read may have closed the request during the awaits above. The effect is reserved synchronously
+      // from here, so a later read sees it on record and leaves the request open.
+      if (!recovering && row(id)?.status !== (grant ? 'uncertain' : 'open')) return noLongerOpen(id);
+      const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
+        const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
+        return { provider_id: eventId, result: undo };
+      }, async () => {
+        try {
+          const current = await client.event(eventId, proposal.calendar_id);
+          if (current.operation_marker !== marker) return {status:'unknown'};
+          if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && (!proposal.rename_to || current.title === proposal.rename_to) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
+            && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
+            // A marker can survive a later owner edit. Recovery proves the effect, but
+            // cannot establish the exact applied ETag needed for safe Undo.
+            return { status: 'done', receipt: { provider_id: current.id, result: null } };
+          }
+          if (proposal.action === 'cancel' && current.status === 'cancelled') return { status: 'done', receipt: { provider_id: eventId, result: null } };
+        } catch (error) {
+          deps.log({ trace, hop: 'calendar_readback', ms: 0, ok: false, error: String(error) });
+        }
+        return { status: 'unknown' };
+      }, grant);
+      const undo = receipt.result as Undo | 'stale' | null;
+      if (undo === 'stale') {
+        setStatus(id, 'stale');
+        out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
+      } else if (undo?.op === 'move' && undo.name_kept) {
+        const moved = !sameInstant(undo.start, proposal.start!) || !sameInstant(undo.end, proposal.end!);
+        setStatus(id, 'done', moved ? undo : null);
+        const name = proposal.title ? `"${proposal.title}"` : 'its old name';
+        out = { toast: 'Not renamed', message: `Not renamed: the calendar kept the name ${name}, so ${moved ? `it only moved to ${span(proposal.start!, proposal.end!)}. Undo is available for 10 minutes.` : 'nothing changed.'}` };
+      } else {
+        const until = grant && undo ? Math.min(Date.parse(proposal.seen_start ?? proposal.start!), deps.now() + GRANT_UNDO_MAX_MS) : undefined;
+        setStatus(id, 'done', undo && until !== undefined ? { ...undo, until } : undo);
+        out = { toast: 'Done', message: `Done${grant ? ' under your standing grant' : ''}: ${describe(proposal)}.${!undo ? " This one can't be undone from here." : until !== undefined ? ` Undo is available until ${when(new Date(until).toISOString())}.` : ' Undo is available for 10 minutes.'}` };
+      }
+    return out;
+  };
+  // A change a standing grant covers runs now, with no card: claimed, applied through the ledger's recheck, reported by the
+  // turn. Refused at dispatch (revoked, expired, paused, changed, or the day's budget used) it becomes the ordinary card.
+  const granted = async (id: string, stored: Stored, client: GoogleClient, origin: RunOrigin | undefined, before: CalendarItem | undefined): Promise<boolean> => {
+    if (!deps.grants || !deps.effects) return false;
+    // A grant removes a block only where the remove can be put back.
+    if (stored.action === 'cancel' && !deps.undoCancels) { deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'no_undo' }); return false; }
+    const decision = deps.grants.ownBlock({ ...stored, ...(before?.recurring_event_id !== undefined ? { seen_recurring: true } : {}), ...(before?.waldo_made ? { seen_made: true } : {}) }, origin);
+    deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'use' in decision ? 'granted' : decision.refused });
+    if (!('use' in decision)) return false;
+    const use = decision.use;
+    sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ?, grant_json = ? WHERE id = ? AND status = 'card_unconfirmed'", deps.now(), JSON.stringify({ class: use.class, grant_id: use.grant_id, revision: use.revision }), id);
+    const started = deps.now();
+    try {
+      await applyCalendar(id, stored, operationRefOf(row(id)!), client, id, false, use);
+    } catch (error) {
+      if (error instanceof EffectRefusedError || error instanceof EffectQuotaError) {
+        sql.exec("UPDATE ledger SET status = 'card_unconfirmed', decided_at = NULL, grant_json = NULL WHERE id = ? AND status = 'uncertain'", id);
+        deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: false, code: error instanceof EffectQuotaError ? 'budget' : 'refused' });
+        return false;
+      }
+      const known = error instanceof EffectNotAppliedError;
+      setStatus(id, known ? 'failed' : 'uncertain');
+      deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: false, code: known ? 'not_done' : 'unknown' });
+      return true;
+    }
+    const status = row(id)?.status;
+    deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: status === 'done', code: status === 'done' ? 'done' : status === 'uncertain' ? 'unknown' : 'not_done' });
+    return true;
+  };
   const replayAccepted = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'Approved', message: `Approved: ${describeAny(entry)}. It runs in the background, and I'll tell you how it went.` });
   const decide = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
@@ -1375,44 +1474,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (client === null || (proposal.account && client.account?.email?.toLowerCase() !== proposal.account.toLowerCase())) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
-          const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
-          const marker = await sha256Hex(`${operationRef}:apply`);
-          // A read may have closed the request during the awaits above. The effect is reserved synchronously
-          // from here, so a later read sees it on record and leaves the request open.
-          if (!recovering && row(id)?.status !== 'open') return noLongerOpen(id);
-          const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
-            const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
-            return { provider_id: eventId, result: undo };
-          }, async () => {
-            try {
-              const current = await client.event(eventId, proposal.calendar_id);
-              if (current.operation_marker !== marker) return {status:'unknown'};
-              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && (!proposal.rename_to || current.title === proposal.rename_to) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
-                && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
-                // A marker can survive a later owner edit. Recovery proves the effect, but
-                // cannot establish the exact applied ETag needed for safe Undo.
-                return { status: 'done', receipt: { provider_id: current.id, result: null } };
-              }
-              if (proposal.action === 'cancel' && current.status === 'cancelled') return { status: 'done', receipt: { provider_id: eventId, result: null } };
-            } catch (error) {
-              deps.log({ trace, hop: 'calendar_readback', ms: 0, ok: false, error: String(error) });
-            }
-            return { status: 'unknown' };
-          });
-          const undo = receipt.result as Undo | 'stale' | null;
-          if (undo === 'stale') {
-            setStatus(id, 'stale');
-            out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
-          } else if (undo?.op === 'move' && undo.name_kept) {
-            const moved = !sameInstant(undo.start, proposal.start!) || !sameInstant(undo.end, proposal.end!);
-            setStatus(id, 'done', moved ? undo : null);
-            const name = proposal.title ? `"${proposal.title}"` : 'its old name';
-            out = { toast: 'Not renamed', message: `Not renamed: the calendar kept the name ${name}, so ${moved ? `it only moved to ${span(proposal.start!, proposal.end!)}. Undo is available for 10 minutes.` : 'nothing changed.'}` };
-          } else {
-            setStatus(id, 'done', undo);
-            out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
-          }
-        } else if (entry.undo_json && entry.decided_at !== null && (recovering || deps.now() - entry.decided_at <= UNDO_WINDOW_MS)) {
+          out = await applyCalendar(id, proposal, operationRef, client, trace, recovering);
+        } else if (entry.undo_json && entry.decided_at !== null && (recovering || deps.now() <= undoUntil(entry)!)) {
           const undo = JSON.parse(entry.undo_json) as Undo;
           const marker = await sha256Hex(`${operationRef}:undo`);
           const receipt = await effect(`${operationRef}:undo`, 'calendar_undo', undo,
@@ -1719,6 +1782,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
         bindOptions(id, options);
+        if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);
         return id;
       };
@@ -1781,8 +1845,19 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...open.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'open' as const, undoable: false, review: review(r) })),
         ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'unconfirmed' as const, undoable: false, review: review(r) })),
         ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'review_only' as const, undoable: false, review: review(r) })),
-        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
+        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now <= undoUntil(r)!, review: review(r) })),
       ];
+    },
+    grantOutcome(id) {
+      const entry = row(id);
+      if (!entry?.grant_json) return null;
+      const proposal = JSON.parse(entry.payload_json) as Stored;
+      if (entry.status === 'done' || entry.status === 'undone') {
+        const until = undoUntil(entry);
+        return { state: 'done', message: `Done under your standing grant: ${describe(proposal)}.${until !== null ? ` The owner can undo it until ${when(new Date(until).toISOString())}.` : ''}` };
+      }
+      if (entry.status === 'uncertain') return { state: 'outcome_unknown', message: `Waldo is checking whether this landed; nothing was retried: ${describe(proposal)}.` };
+      return { state: 'not_done', message: `Not done; nothing changed: ${describe(proposal)}.` };
     },
     placement(id) {
       const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
@@ -1791,7 +1866,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
       const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
       // A card handed to the app shows the review whenever it fits, as present() decides.
-      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewText(entry!).length <= REVIEW_BUDGET);
+      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!));
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}) };
     },
     async approvals(now, filter = {}) {
@@ -1801,7 +1876,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
       // that moves the row ends the deferral.
       const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
-      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
+      // A change a standing grant made was never the owner's approval, so the list leaves it out; its receipt is its record.
+      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ['grant_json IS NULL']), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
         deps.log({ trace: entry.id, hop: 'approval_projection', ms: 0, ok: false, code: 'dropped' });
@@ -1848,7 +1924,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
-        ...(done.length ? done.map((r) => `- ${r.status}: ${summaryOf(r)}${r.status === 'withdrawn' && r.withdrawn_reason ? ` (${r.withdrawn_reason})` : ''}`) : ['- nothing yet']),
+        ...(done.length ? done.map((r) => `- ${r.status}: ${summaryOf(r)}${r.status === 'withdrawn' && r.withdrawn_reason ? ` (${r.withdrawn_reason})` : ''}${r.grant_json ? ' (by the owner\'s standing grant, with no card)' : ''}`) : ['- nothing yet']),
       ];
       return lines.join('\n');
     },
