@@ -252,7 +252,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) state.storage.sql.exec(statement);
       return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
     });
-    expect(result.provisioned.map(row => row.name)).toEqual(['history_archive', 'history_archive_by_source']);
+    expect(result.provisioned.map(row => row.name)).toEqual(['history_archive', 'history_archive_by_ref', 'history_archive_by_source']);
     expect(result.down).toEqual([]);
     expect(result.written).toEqual(result.provisioned);
     expect(result.version).toBe(15);

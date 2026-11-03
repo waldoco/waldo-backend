@@ -28,7 +28,7 @@ it('redacts archived runs and tasks the way their hot tables are redacted, and t
     archive.retire('task_jobs', [job.id]);
     const held = claimStore(sql).forgetSources(topic).heldBy;
     const remaining = historyArchiveForgetStore({ sql, transaction }).run([topic]);
-    const rows = sql.exec<{ id: string; summary: string | null; row_json: string }>('SELECT id, summary, row_json FROM history_archive ORDER BY id').toArray();
+    const rows = sql.exec<{ id: string; summary: string | null; row_json: string }>("SELECT source || ':' || source_id AS id, summary, row_json FROM history_archive ORDER BY id").toArray();
     return { held, remaining, again: claimStore(sql).forgetSources(topic).heldBy ?? [], rows, jobId: job.id };
   });
   expect(result.held).toContainEqual({ table: 'history_archive', rule: 'projection', rows: 2 });

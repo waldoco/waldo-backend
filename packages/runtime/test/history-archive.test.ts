@@ -27,7 +27,7 @@ type Logged = Readonly<{ hop: string; source: string; count: number }>;
 const archiveFor = (state: DurableObjectState, mode: ArchiveMode, now: () => number = Date.now, logged: Logged[] = []) =>
   ({ sql: state.storage.sql, transaction: <T>(work: () => T) => state.storage.transactionSync(work), mode, now, log: (event: Logged) => { logged.push(event); } });
 const tables = (sql: SqlStorage) => sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").toArray().map(row => row.name);
-const archived = (sql: SqlStorage) => sql.exec<{ id: string; source: string; kind: string; status: string; summary: string | null; row_json: string }>('SELECT id, source, kind, status, summary, row_json FROM history_archive ORDER BY id').toArray();
+const archived = (sql: SqlStorage) => sql.exec<{ id: string; source: string; kind: string; status: string; summary: string | null; row_json: string }>("SELECT source || ':' || source_id AS id, source, kind, status, summary, row_json FROM history_archive ORDER BY id").toArray();
 
 // 500 settled runs a minute apart, the oldest first, then one start past the cap.
 const fillRuns = (state: DurableObjectState, mode: ArchiveMode, logged: Logged[] = [], runningOldest = false) => {
@@ -58,6 +58,17 @@ describe('background_runs past the cap', () => {
     expect(moved.rows).toHaveLength(1);
     expect(moved.rows[0]).toMatchObject({ id: 'background_runs:bg:r0001', source: 'background_runs', kind: 'reminder', status: 'completed', summary: 'reminder sent: dentist' });
     expect(JSON.parse(moved.rows[0]!.row_json)).toEqual({ id: 'bg:r0001', kind: 'reminder', status: 'completed', summary: 'reminder sent: dentist', parent_id: null, started_at: 1_000_000, ended_at: 1_000_000 });
+  });
+
+  it('archives a run whose short id repeats one already archived, so start never wedges', async () => {
+    const result = await runInDurableObject(stub(), (_instance, state) => {
+      // The second 'dup' starts after the first is archived, then itself passes the cap.
+      let at = 1_000, n = 0;
+      const book = runBook(state.storage.sql, { timezone: 'UTC', now: () => new Date(at) }, () => (n += 1) === 1 || n === MAX_RUN_ROWS + 2 ? 'dup' : `x${n}`, historyArchive(archiveFor(state, 'on', () => at)));
+      for (let i = 0; i < 2 * MAX_RUN_ROWS + 3; i += 1) { at += 1_000; const run = book.start('loop', null); book.finish(run.id, 'completed', 'ok'); }
+      return state.storage.sql.exec<{ ref: string; n: number }>("SELECT source || ':' || source_id AS ref, COUNT(*) AS n FROM history_archive WHERE source_id = 'bg:dup' GROUP BY ref").toArray();
+    });
+    expect(result).toEqual([{ ref: 'background_runs:bg:dup', n: 2 }]);
   });
 
   it('never moves a running run, so its finish still lands', async () => {

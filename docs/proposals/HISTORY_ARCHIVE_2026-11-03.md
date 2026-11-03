@@ -21,7 +21,7 @@ The table lives in the owner object's own SQLite. It is not in R2: run summaries
 
 | Column | What it holds |
 |---|---|
-| `id` | `source:source_id`; a `CHECK` pins this shape |
+| `seq` | the rowid key. A hot id is unique only among rows still hot (a run id has 32 bits), so the archive may hold one source id twice; a unique key there would make a later move fail on every `start()` |
 | `source` | `background_runs`, `task_jobs` or `schedule_runs` |
 | `source_id` | the hot row's id |
 | `kind` | the hot row's kind |
@@ -32,15 +32,15 @@ The table lives in the owner object's own SQLite. It is not in R2: run summaries
 | `row_json` | the whole hot row; a `*_json` column is kept as JSON, not as a string of it |
 | `archived_at` | when the row moved |
 
-There is one index, `history_archive_by_source (source, started_at)`. FTS5 is not added; add it only if a measurement shows it is needed.
+Two indexes: `history_archive_by_source (source, started_at)` and `history_archive_by_ref (source, source_id)`, which is not unique. FTS5 is not added; add it only if a measurement shows it is needed.
 
-The DDL is one exported constant, `HISTORY_ARCHIVE_TABLE_SCHEMA`. The v16 migration's `up` uses it, and so does the archive writer's first move, which runs it inside the move's transaction. The owner object never calls `provisionDoSchema`, which is why v15's index also ships through `ensureSchema`. The migration's down drops the index and the table.
+The DDL is one exported constant, `HISTORY_ARCHIVE_TABLE_SCHEMA`. The v16 migration's `up` uses it, and so does the archive writer's first move, which runs it inside the move's transaction. The owner object never calls `provisionDoSchema`, which is why v15's index also ships through `ensureSchema`. The migration's down drops both indexes and the table.
 
 ### Moves: `src/history/archive.ts`
 
 `retire(source, ids)` selects the ids first. It then runs `INSERT INTO history_archive … SELECT … WHERE id IN (ids)` followed by `DELETE … WHERE id IN (ids)`, inside one `transactionSync` with no I/O.
 
-- The insert is a plain `INSERT`. A conflict throws and rolls the whole move back, so the delete can never remove a row the archive did not receive.
+- Any failed insert throws and rolls the whole move back, so the delete can never remove a row the archive did not receive.
 - The move compares the rows returned by both statements with `RETURNING`, not `rowsWritten`, which also counts index entries.
 
 | Hot table | What moves | When |
@@ -56,7 +56,7 @@ A `schedule_runs` occurrence moves only when **all** of these hold:
 - its newest fire and its newest settle are more than 30 days old;
 - it is neither its schedule's current occurrence nor its `quarantined_until` occurrence (`occurrenceDelivery`, `recordMissed` and `recordRunStart` read those).
 
-The sweep's day stamp is written only after a sweep finishes. A sweep that throws is logged with a content-free code and runs again on the next wake.
+The sweep's day stamp is written only after a sweep under `1` finishes, never under `dry`. A sweep that throws is logged with a content-free code and runs again on the next wake.
 
 The **ledger** is never moved. It is the audit record; it stays hot and is indexed (#1847). **`health_trigger_runs`** is not in this PR.
 
@@ -98,7 +98,7 @@ It is `"0"` in both wrangler blocks and is declared in the `Env` type. A switch 
 - **Result:** `entries` newest first, `total` (every match) and `next_cursor`.
 - **Entries:** each has a `ref`, its `kind`, its `type` (the row's own kind), `status`, `summary`, `started_at`, `ended_at` and `archived`. There are never payloads, bodies or health values.
 - **Approval summaries:** these are the desk's own `summaryOf` projection. "Decided" uses the desk's own Recent list definition. Open cards stay the desk's to show.
-- **Cursor:** it is `<time>:<ref>`, and a ref stays the same when a row moves. A row that moves between two pages is therefore neither repeated nor skipped.
+- **Cursor:** it is `<time>:<ref>`, where a ref is `source:source_id` and stays the same when a row moves. A row that moves between two pages is therefore neither repeated nor skipped.
 - **Matching:** it uses `instr`, never `LIKE`, because workerd caps LIKE pattern length.
 - **Forget barrier:** `search_history` is an owner-store read (`OWNER_STORE_TOOLS`, plus the retained-read path in `owner-turn.ts`). An entry that carries a topic still being forgotten is dropped whole.
 - **Contracts:** it has Zod valid and invalid pairs, a tool record, an activity kind and a hooks-registry schema. It needs no app.v1 or controls revision, because no app surface reads it.
@@ -107,7 +107,7 @@ It is `"0"` in both wrangler blocks and is declared in the `Env` type. A switch 
 
 | Falsifier | Test |
 |---|---|
-| A row past a cap is in the archive, not gone. | `history-archive.test.ts`: runs and both task trims |
+| A row past a cap is in the archive, not gone, even when its short id repeats an archived one. | `history-archive.test.ts`: runs (the repeated-id case observed red first) and both task trims |
 | The ordinal collision | `schedule-runs.test.ts`: "numbers the next run past the highest ordinal" (observed red first) |
 | A running run or a running or current occurrence is never moved. | `history-archive.test.ts` |
 | Forget redacts archived rows, and the archive holds the forget until it does. | `forget-history-archive.test.ts`; the owner-DO `forget_memory` case and the full-store scan in `memory-forget-do-provider.test.ts` |
@@ -115,7 +115,7 @@ It is `"0"` in both wrangler blocks and is declared in the `Env` type. A switch 
 | A dry run writes nothing. | `history-archive.test.ts`: runs, tasks and schedule runs |
 | Hot reads are byte-equal with the archive on and off. | `history-archive.test.ts`: `list`, `listPage`, `latestActivity`, `between` |
 
-A mutation that deletes without archiving turns 9 of these tests red.
+Observed red before their fix: the ordinal test and the repeated-id test. The rest were written with the code; a mutation that deletes without archiving turns 9 of them red.
 
 ## Rollback
 

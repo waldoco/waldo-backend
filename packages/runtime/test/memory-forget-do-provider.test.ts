@@ -851,8 +851,8 @@ positiveStore('task_jobs', 'POSTASK769', (sql, text) => {
 }, sql => JSON.stringify(sql.exec('SELECT status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()));
 positiveStore('history_archive', 'POSARCHIVE769', (sql, text) => {
   for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) sql.exec(statement);
-  sql.exec('INSERT INTO history_archive (id, source, source_id, kind, status, started_at, ended_at, summary, row_json, archived_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    'background_runs:pos-769-old', 'background_runs', 'pos-769-old', 'event', 'completed', 1, 2, text, JSON.stringify({ id: 'pos-769-old', summary: text }), 3);
+  sql.exec('INSERT INTO history_archive (source, source_id, kind, status, started_at, ended_at, summary, row_json, archived_at) VALUES (?,?,?,?,?,?,?,?,?)',
+    'background_runs', 'pos-769-old', 'event', 'completed', 1, 2, text, JSON.stringify({ id: 'pos-769-old', summary: text }), 3);
 }, sql => JSON.stringify(sql.exec('SELECT summary, row_json FROM history_archive').toArray()));
 
 it('forget_memory cancels an open task whose brief carried the topic, so its worker cannot report it back', async () => {

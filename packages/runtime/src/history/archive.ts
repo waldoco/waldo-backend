@@ -51,14 +51,13 @@ export const historyArchive = (deps: ArchiveDeps): HistoryArchive => ({
     if (!ids.length || deps.mode === 'off') return 0;
     if (deps.mode === 'dry') { deps.log({ hop: 'history_archive_dry', source, count: ids.length }); return 0; }
     const list = JSON.stringify(ids), p = PROJECTION[source];
-    // A plain INSERT: a row already archived under the same id throws and rolls the move back, so the DELETE can never
-    // remove a row the archive did not receive.
+    // Any failed INSERT throws and rolls the move back, so the DELETE can never remove a row the archive did not receive.
     const moved = deps.transaction(() => {
       for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) deps.sql.exec(statement);
       const inserted = deps.sql.exec(
-        `INSERT INTO history_archive (id, source, source_id, kind, status, started_at, ended_at, summary, row_json, archived_at)
-         SELECT '${source}:' || id, '${source}', id, ${p.kind}, ${p.status}, ${p.started}, ${p.ended}, ${p.summary}, ${rowJson(deps.sql, source)}, ?
-           FROM ${source} WHERE ${IDS} RETURNING id`, deps.now(), list,
+        `INSERT INTO history_archive (source, source_id, kind, status, started_at, ended_at, summary, row_json, archived_at)
+         SELECT '${source}', id, ${p.kind}, ${p.status}, ${p.started}, ${p.ended}, ${p.summary}, ${rowJson(deps.sql, source)}, ?
+           FROM ${source} WHERE ${IDS} RETURNING seq`, deps.now(), list,
       ).toArray().length;
       // Rows, not rowsWritten, which counts index entries too.
       const deleted = deps.sql.exec(`DELETE FROM ${source} WHERE ${IDS} RETURNING id`, list).toArray().length;
@@ -93,15 +92,15 @@ export const scheduleRunsToArchive = (sql: Sql, now: number): readonly string[] 
   return sql.exec<{ id: string }>(`SELECT id FROM schedule_runs WHERE ${OCCURRENCE} IN (SELECT value FROM json_each(?)) ORDER BY id`, JSON.stringify(occurrences)).toArray().map(row => row.id);
 };
 
-// The once-a-day sweep of settled schedule runs. The stamp is written in the same transaction as the move, so a sweep that
-// throws runs again on the next try.
+// The once-a-day sweep of settled schedule runs. The stamp is written only after the sweep returns, so a sweep that throws
+// runs again on the next wake. A dry run writes no stamp either, and counts again on each wake.
 export const SCHEDULE_RUNS_SWEEP_EVERY_MS = 24 * 60 * 60_000;
 export const sweepScheduleRuns = (deps: ArchiveDeps & Readonly<{ kv: Pick<SyncKvStorage, 'get' | 'put'> }>): number => {
   if (deps.mode === 'off') return 0;
   const last = deps.kv.get<number>('history_archive:schedule_runs_swept_at') ?? 0;
   if (deps.now() - last < SCHEDULE_RUNS_SWEEP_EVERY_MS) return 0;
   const moved = historyArchive(deps).retire('schedule_runs', scheduleRunsToArchive(deps.sql, deps.now()));
-  deps.kv.put('history_archive:schedule_runs_swept_at', deps.now());
+  if (deps.mode === 'on') deps.kv.put('history_archive:schedule_runs_swept_at', deps.now());
   return moved;
 };
 
@@ -113,16 +112,16 @@ const redactLeaves = (value: unknown, redact: (text: string) => string): unknown
     : Array.isArray(value) ? value.map(child => redactLeaves(child, redact))
       : value !== null && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactLeaves(child, redact)]))
         : value;
-type ArchivedText = Readonly<{ id: string; source: ArchiveSource; summary: string | null; row_json: string }>;
+type ArchivedText = Readonly<{ seq: number; source: ArchiveSource; summary: string | null; row_json: string }>;
 const forgetTopics = (texts: readonly string[]) => [...new Set(texts.map(text => text.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
 const holdsAny = (topics: readonly string[]) => (value: unknown) => topics.some(topic => projectionValueHolds(value, topic));
 // Archived rows that carry one of the texts, by the forget's own predicate: the prefilter selects a superset.
 const carrying = (sql: Sql, topics: readonly string[]): ArchivedText[] => {
   if (!topics.length || !tableExists(sql, 'history_archive')) return [];
-  const holds = holdsAny(topics), seen = new Map<string, ArchivedText>();
+  const holds = holdsAny(topics), seen = new Map<number, ArchivedText>();
   for (const topic of topics) {
     const like = likePrefilter(topic);
-    for (const row of sql.exec<ArchivedText>(`SELECT id, source, summary, row_json FROM history_archive WHERE ${projectionPredicate(['summary', 'row_json'])}`, like, like, like, like, like, like).toArray()) seen.set(row.id, row);
+    for (const row of sql.exec<ArchivedText>(`SELECT seq, source, summary, row_json FROM history_archive WHERE ${projectionPredicate(['summary', 'row_json'])}`, like, like, like, like, like, like).toArray()) seen.set(row.seq, row);
   }
   return [...seen.values()].filter(row => holds(row.summary) || holds(row.row_json));
 };
@@ -144,7 +143,7 @@ export const historyArchiveForgetStore = (deps: Readonly<{ sql: Sql; transaction
         fields = redactLeaves(fields, redact) as Record<string, unknown>;
         if (row.source === 'background_runs' && 'summary' in fields) fields.summary = summary;
         for (const [column, value] of Object.entries(fields)) if (holds(typeof value === 'string' ? value : JSON.stringify(value))) fields[column] = column === 'brief_json' ? {} : null;
-        deps.sql.exec('UPDATE history_archive SET summary = ?, row_json = ? WHERE id = ?', summary, JSON.stringify(fields), row.id);
+        deps.sql.exec('UPDATE history_archive SET summary = ?, row_json = ? WHERE seq = ?', summary, JSON.stringify(fields), row.seq);
       }
       return carrying(deps.sql, topics).length;
     });
@@ -166,7 +165,7 @@ export const searchHistory = (sql: Sql, args: SearchHistoryArgs, approvalSummary
   }
   if (tableExists(sql, 'history_archive')) {
     const archived = SOURCES.filter(source => kinds.has(GROUP[source]));
-    if (archived.length) parts.push(`SELECT id, CASE source ${archived.map(source => `WHEN '${source}' THEN '${GROUP[source]}'`).join(' ')} END, kind, status, started_at, ended_at, summary, 1
+    if (archived.length) parts.push(`SELECT source || ':' || source_id, CASE source ${archived.map(source => `WHEN '${source}' THEN '${GROUP[source]}'`).join(' ')} END, kind, status, started_at, ended_at, summary, 1
       FROM history_archive WHERE source IN (${archived.map(source => `'${source}'`).join(', ')})`);
   }
   if (kinds.has('approval') && tableExists(sql, 'ledger')) {
