@@ -98,13 +98,13 @@ const connectFrom = async (app: App, credential: string) => {
   return app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-request-0002' }, credential);
 };
 
-it('a session signed in over two hours ago cannot start Google connect: it is asked to confirm and no ticket is issued', async () => {
+it('a session signed in over two hours ago still starts Google connect and is issued a ticket', async () => {
   await fixture(true, async (app, issued) => {
     const credential = await signIn(app);
     const response = await connectFrom(app, credential);
-    expect([response.status, await response.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(issued).toEqual([]);
-    expect((await app('/actions/connect-request-0002', undefined, credential)).status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(appControlResultV1Schema.parse(await response.json()).receipt.state).toBe('recorded');
+    expect(issued).toHaveLength(1);
   }, 3 * 60 * 60_000);
 });
 

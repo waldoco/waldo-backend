@@ -72,7 +72,8 @@ const owner = async (name: string) => {
   return { stub, token, codeAge, read, post, get };
 };
 
-// Each action posts the same request twice, once with a code older than two hours and once with a fresh one.
+// Each action posts the same request twice, once with a code older than two hours and once with a fresh one. Only deleting the
+// account needs the fresh one.
 const actions: ReadonlyArray<{ name: string; path: string; read: string; fields: Record<string, string>; ran: (calls: readonly string[], body: Record<string, unknown>) => boolean }> = [
   { name: 'device.pair', path: CONTROL_ACTION_PATH, read: `${CONTROLS_PATH}?view=devices`, fields: { view: 'devices', action: 'device.pair' },
     ran: calls => calls.includes('issue_device_pairing_code_owned') },
@@ -93,7 +94,8 @@ const actions: ReadonlyArray<{ name: string; path: string; read: string; fields:
 describe('a fresh email code before an action that creates lasting access', () => {
   for (const action of actions) {
     for (const [age, fresh] of [[3 * HOUR, false], [60_000, true]] as const) {
-      it(`${action.name} ${fresh ? 'runs with a code from the last two hours' : 'is refused once the code is over two hours old'}`, async () => {
+      const gated = action.name === 'account.delete';
+      it(`${action.name} ${fresh ? 'runs with a code from the last two hours' : gated ? 'is refused once the code is over two hours old' : 'runs even when the code is over two hours old'}`, async () => {
         const calls = directory();
         const o = await owner(`step-up-${action.name}-${fresh ? 'fresh' : 'stale'}`);
         await o.codeAge(age);
@@ -101,7 +103,7 @@ describe('a fresh email code before an action that creates lasting access', () =
         calls.length = 0;
         const response = await o.post(action.path, { csrf: current.csrf, revision: current.revision, request_id: `step-up-${action.name.replace('.', '-')}-request`, ...action.fields });
         const body = await response.json() as Record<string, unknown>;
-        if (fresh) {
+        if (fresh || !gated) {
           expect(body.error, action.name).not.toBe('step_up_required');
           expect(action.ran(calls, body), action.name).toBe(true);
         } else {
@@ -113,19 +115,22 @@ describe('a fresh email code before an action that creates lasting access', () =
     }
   }
 
-  it('refuses the same actions on the classic console form and the admin invite, with a way to confirm', async () => {
+  it('refuses account deletion on the classic console form with an old code, with a way to confirm, and takes the other actions', async () => {
     const calls = directory();
     const o = await owner('step-up-classic');
     await o.codeAge(3 * HOUR);
-    for (const fields of [{ action: 'device.pair' }, { action: 'google.connect', value: 'calendar' }, { action: 'invite.create', value: 'friend@example.test' }, { action: 'account.delete', value: 'DELETE' }] as Record<string, string>[]) {
+    for (const fields of [{ action: 'device.pair' }, { action: 'google.connect', value: 'calendar' }, { action: 'invite.create', value: 'friend@example.test' }] as Record<string, string>[]) {
       const page = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', ...fields }, { accept: 'text/html' });
-      expect(page.status, fields.action).toBe(403);
-      expect(await page.text(), fields.action).toContain('/console/signin?confirm=1');
+      expect(await page.text(), fields.action).not.toContain('/console/signin?confirm=1');
     }
-    const admin = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'invite.create', value: 'friend@example.test' });
-    expect(admin.status).toBe(403);
-    expect(await admin.json()).toEqual({ error: 'step_up_required' });
-    expect(calls.filter(name => ['issue_device_pairing_code', 'issue_device_pairing_code_owned', 'admin_invite', 'delete_owner'].includes(name))).toEqual([]);
+    calls.length = 0;
+    const page = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'account.delete', value: 'DELETE' }, { accept: 'text/html' });
+    expect(page.status).toBe(403);
+    expect(await page.text()).toContain('/console/signin?confirm=1');
+    const json = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'account.delete', value: 'DELETE' });
+    expect(json.status).toBe(403);
+    expect(await json.json()).toEqual({ error: 'step_up_required' });
+    expect(calls).toEqual([]);
   });
 
   it('leaves ordinary console actions alone when the code is old', async () => {
@@ -149,8 +154,7 @@ const everyAction = (): readonly string[] => {
 };
 const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
 const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown; startsFlow?: unknown }>>>;
-const LASTING = ['account.delete', 'agent_mail.claim', 'claim.edit', 'claim.pin', 'device.pair', 'google.connect', 'granola.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
-  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'node.correct', 'phone.set', 'spot.area', 'spot.edit', 'spot.pin', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
+const GATED = ['account.delete'];
 const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
 
 describe('every console action is classified before it ships', () => {
@@ -163,16 +167,21 @@ describe('every console action is classified before it ships', () => {
     }
   });
 
-  it('needs a fresh code for exactly the actions that create or widen lasting access', () => {
-    expect(Object.entries(table()).filter(([, rule]) => rule.gated === true).map(([action]) => action).sort()).toEqual(LASTING);
+  it('needs a fresh code for exactly the actions that cannot be undone', () => {
+    expect(Object.entries(table()).filter(([, rule]) => rule.gated === true).map(([action]) => action).sort()).toEqual(GATED);
   });
 
-  it('classifies the console routes that start access or consent outside an action', () => {
+  it('gates an action the table does not name', () => {
+    expect(stepUp.stepUpGated('account.delete')).toBe(true);
+    expect(stepUp.stepUpGated('google.connect')).toBe(false);
+    expect(stepUp.stepUpGated('unlisted.action')).toBe(true);
+  });
+
+  it('classifies the console routes that start access or consent outside an action, and gates none', () => {
     const classified = routes();
-    expect(classified[CONSOLE_PHOTON_START_PATH]?.gated).toBe(true);
-    expect(classified[BROWSER_TRIAL_PATH]?.gated).toBe(false);
-    expect(classified[CONSOLE_GOOGLE_START_PATH]?.gated, 'the Google start follows a link only a gated google.connect mints').toBe(false);
+    expect(classified[CONSOLE_PHOTON_START_PATH]).toBeDefined();
     for (const [path, rule] of Object.entries(classified)) {
+      expect([path, rule.gated]).toEqual([path, false]);
       expect(typeof rule.gated, path).toBe('boolean');
       expect(typeof rule.startsFlow, path).toBe('boolean');
       expect(oneLine(rule.why), path).toBe(true);
@@ -195,8 +204,8 @@ describe('every console action is classified before it ships', () => {
   });
 });
 
-// Linking a chat number lets that chat mint console sign-ins, pairing a Mac binds a host to the owner, and mcp.runs lets a
-// tool run without asking: each outlives the session, so each needs a code from the last two hours.
+// Linking a chat number, pairing a Mac and letting a tool run once needed a code from the last two hours; by owner ruling
+// (beta) a signed-in session does each without one.
 const IMESSAGE_FIELDS: Readonly<Record<string, Record<string, string>>> = {
   'imessage.enroll': { phone: '+15555550100' }, 'imessage.link': {}, 'imessage.pair': {}, 'imessage.pair_shared': {},
   'imessage.verify': { id: `imb_${'a'.repeat(32)}`, subject: 'owner@example.test', chat: 'iMessage;-;owner@example.test' },
@@ -215,72 +224,49 @@ const classicRequests = [
   { action: WHATSAPP_LINK_CONFIRM_ACTION, fields: { action: WHATSAPP_LINK_CONFIRM_ACTION, token: WHATSAPP_TOKEN, subject: '15555550100' } },
 ];
 
-describe('linking a chat, pairing a Mac and letting a tool run need a fresh code too', () => {
+describe('linking a chat, pairing a Mac and letting a tool run need no fresh code', () => {
   for (const [age, fresh] of [[3 * HOUR, false], [60_000, true]] as const) {
-    it(`the dashboard's ${fresh ? 'fresh code passes the check' : 'old code is refused before anything runs'}`, async () => {
-      const calls = directory();
+    it(`the dashboard's ${fresh ? 'fresh' : 'old'} code passes the check`, async () => {
+      directory();
       const o = await owner(`step-up-dashboard-${fresh ? 'fresh' : 'stale'}`);
       await o.codeAge(age);
       for (const request of controlsRequests) {
-        calls.length = 0;
         const response = await o.post(CONTROL_ACTION_PATH, { csrf: 'c'.repeat(64), revision: 'r'.repeat(64), request_id: `step-up-${request.action.replace('.', '-')}`, ...request.fields });
         const body = await response.json() as Record<string, unknown>;
-        if (fresh) expect(body.error, request.action).not.toBe('step_up_required');
-        else {
-          expect([request.action, response.status, body]).toEqual([request.action, 403, { error: 'step_up_required' }]);
-          expect(calls, request.action).toEqual([]);
-        }
+        expect(body.error, request.action).not.toBe('step_up_required');
       }
     });
 
-    it(`the classic console's ${fresh ? 'fresh code passes the check' : 'old code gets the confirm page before anything runs'}`, async () => {
-      const calls = directory();
+    it(`the classic console's ${fresh ? 'fresh' : 'old'} code passes the check`, async () => {
+      directory();
       const o = await owner(`step-up-classic-chat-${fresh ? 'fresh' : 'stale'}`);
       await o.codeAge(age);
       for (const request of classicRequests) {
-        calls.length = 0;
         const page = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', ...request.fields }, { accept: 'text/html' });
-        const text = await page.text();
-        if (fresh) expect(text, request.action).not.toContain('/console/signin?confirm=1');
-        else {
-          expect([request.action, page.status]).toEqual([request.action, 403]);
-          expect(text, request.action).toContain('/console/signin?confirm=1');
-          expect(calls, request.action).toEqual([]);
-        }
+        expect(await page.text(), request.action).not.toContain('/console/signin?confirm=1');
       }
     });
 
-    it(`starting a Photon connect ${fresh ? 'passes the check with a fresh code' : 'is refused with an old code before Photon is asked'}`, async () => {
-      const calls = directory();
+    it(`starting a Photon connect passes the check with a${fresh ? ' fresh' : 'n old'} code`, async () => {
+      directory();
       const o = await owner(`step-up-photon-${fresh ? 'fresh' : 'stale'}`);
       await o.codeAge(age);
-      calls.length = 0;
       const response = await o.get(CONSOLE_PHOTON_START_PATH);
-      const text = await response.text();
-      if (fresh) expect(text).not.toContain('/console/signin?confirm=1');
-      else {
-        expect(response.status).toBe(403);
-        expect(text).toContain('/console/signin?confirm=1');
-        expect(calls).toEqual([]);
-      }
+      expect(await response.text()).not.toContain('/console/signin?confirm=1');
     });
   }
 
-  it('the confirm page sends the owner back to the page that asked', async () => {
+  it('the confirm page for account deletion links to the email-code sign-in', async () => {
     directory();
     const o = await owner('step-up-return');
     await o.codeAge(3 * HOUR);
-    const devices = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'device.pair' }, { accept: 'text/html' })).text();
-    expect(devices).toContain('/console/signin?confirm=1&amp;return_to=%2Fconsole%2Fdevices');
-    const whatsapp = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: WHATSAPP_LINK_CONFIRM_ACTION, token: WHATSAPP_TOKEN, subject: '15555550100' }, { accept: 'text/html' })).text();
-    expect(whatsapp).toContain(`/console/signin?confirm=1&amp;return_to=%2Fconsole%2Fwhatsapp%2Flink%2F${WHATSAPP_TOKEN}`);
-    const forged = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: WHATSAPP_LINK_CONFIRM_ACTION, token: '../admin', subject: '15555550100' }, { accept: 'text/html' })).text();
-    expect(forged).toContain('href="/console/signin?confirm=1"');
+    const deletion = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'account.delete', value: 'DELETE' }, { accept: 'text/html' })).text();
+    expect(deletion).toContain('href="/console/signin?confirm=1"');
   });
 });
 
 describe('a session a sign-in replaced in this browser', () => {
-  it('keeps ordinary actions while it runs out, but cannot take a gated one even though its code was fresh', async () => {
+  it('keeps ordinary actions while it runs out, but cannot delete the account even though its code was fresh', async () => {
     const calls = directory();
     const o = await owner('step-up-replaced');
     await o.codeAge(60_000);
@@ -291,9 +277,14 @@ describe('a session a sign-in replaced in this browser', () => {
     const devices = await o.read(`${CONTROLS_PATH}?view=devices`);
     calls.length = 0;
     const pair = await o.post(CONTROL_ACTION_PATH, { csrf: devices.csrf, revision: devices.revision, request_id: 'replaced-pair', view: 'devices', action: 'device.pair' });
-    expect(pair.status).toBe(403);
-    expect(await pair.json()).toEqual({ error: 'step_up_required' });
-    expect(calls).toEqual([]);
+    expect((await pair.json() as Record<string, unknown>).error).not.toBe('step_up_required');
+    expect(calls).toContain('issue_device_pairing_code_owned');
+    const account = await o.read(`${OWNER_CONTROLS_PATH}?view=account`);
+    calls.length = 0;
+    const remove = await o.post(OWNER_CONTROLS_ACTION_PATH, { csrf: account.csrf, revision: account.revision, request_id: 'replaced-delete', view: 'account', action: 'account.delete', confirmation: 'DELETE' });
+    expect(remove.status).toBe(403);
+    expect(await remove.json()).toEqual({ error: 'step_up_required' });
+    expect(calls).not.toContain('delete_owner');
   });
 });
 
@@ -312,10 +303,10 @@ describe('every app action and approval decision is classified by the same table
     for (const action of ['claim.pin', 'claim.unpin', 'claim.edit']) expect(stepUp.appControlStepUpAction({ action })).toBe(action);
   });
 
-  it('names each chat channel the app can link by its gated console link action', () => {
+  it('names each chat channel the app can link by its console link action, which needs no fresh code', () => {
     for (const provider of appChatProviderV1Schema.options) {
       const named = stepUp.appLinkStepUpAction(provider);
-      expect([provider, table()[named]?.gated]).toEqual([provider, true]);
+      expect([provider, table()[named]?.gated]).toEqual([provider, false]);
     }
   });
 
@@ -356,8 +347,8 @@ describe('every app action and approval decision is classified by the same table
   });
 
   it('classifies the app routes with no console action of their own', () => {
-    expect(stepUp.APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated).toBe(true);
-    for (const [path, rule] of Object.entries(stepUp.APP_STEP_UP_ROUTES)) expect([path, typeof rule.gated, oneLine(rule.why)]).toEqual([path, 'boolean', true]);
+    expect(Object.keys(stepUp.APP_STEP_UP_ROUTES)).toEqual([`${APP_PROVIDERS_PATH}/connect`]);
+    for (const [path, rule] of Object.entries(stepUp.APP_STEP_UP_ROUTES)) expect([path, rule.gated, oneLine(rule.why)]).toEqual([path, false, true]);
   });
 
   it('counts an app session as recent proof for two hours after it signs in, and an unreadable sign-in time as none', () => {

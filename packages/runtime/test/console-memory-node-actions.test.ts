@@ -69,15 +69,10 @@ describe('console pattern confirm and correct', () => {
     ]);
   });
 
-  it('correct needs a recent email code, then rewrites both the label and the summary in the owner\'s words', async () => {
+  it('correct needs no recent email code, and rewrites both the label and the summary in the owner\'s words', async () => {
     const o = await owner('console-node-correct');
     const id = await o.seedRead(), target = await o.scoped(id);
     await o.codeAge(3 * 60 * 60_000);
-    const refused = await o.act(target, 'node.correct', 'Writes to investors after standup');
-    expect(refused.status).toBe(403);
-    expect(await refused.json()).toEqual({ error: 'step_up_required' });
-    expect(await o.node(id)).toMatchObject({ label: 'Investor mornings', summary: 'Clears investor mail first thing' });
-    await o.codeAge(60_000);
     const corrected = await o.act(target, 'node.correct', '  Writes to investors after standup  ');
     expect(corrected.status).toBe(200);
     expect(await o.node(id)).toMatchObject({ label: 'Writes to investors after standup', summary: 'Writes to investors after standup', status: 'active' });

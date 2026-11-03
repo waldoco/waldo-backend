@@ -37,6 +37,7 @@ import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 import { unfinishedReply } from '../src/conversation/tool-loop';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -226,6 +227,22 @@ const cardTurn = async (w: Awaited<ReturnType<typeof world>>, t0: number) => {
   await w.pump(2);
   return card as { commandId: string; text: string };
 };
+
+it('an owner that cannot take the message yet: the bridge retries after its interval, and host pulls in between do not pull the retry closer', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const full = vi.spyOn(OwnerDO.prototype, 'admitIMessageTurn').mockResolvedValue('capacity');
+  const alarmIn = async () => { const at = await runInDurableObject(w.bridgeStub(), async (_i, state) => state.storage.getAlarm()); return at === null ? null : at - Date.now(); };
+  expect((await w.host.send(w.host.message('Are you there?'))).status).toBe(200);
+  await runDurableObjectAlarm(w.bridgeStub()); // the platform may already have run the wake the event armed
+  await vi.waitFor(() => expect(full).toHaveBeenCalled());
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  for (let i = 0; i < 3; i++) expect((await w.host.pull()).status).toBe(200);
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  full.mockRestore();
+  await w.pump();
+  expect(proof.turns).toHaveLength(1);
+});
 
 it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead of the reply, numbered; a tapback leaves it, and "1" moves the event once', async () => {
   const w = await world();
@@ -1511,11 +1528,13 @@ it('an iMessage-only owner\'s follow-up the bridge proves it never sent fails, s
 });
 
 // An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only
-// owner's runtime does. An owner who also has the app keeps the native-chat rule: an iMessage turn arms nothing for them.
+// owner's runtime does. The event sweep needs a Google grant. An owner who also has the app keeps the native-chat rule: an
+// iMessage turn arms nothing for them.
 const armedKinds = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<{ kind: string }>("SELECT kind FROM schedule WHERE status = 'armed' ORDER BY kind").toArray().map((row) => row.kind));
 it('an iMessage-only owner\'s first turn arms their own scheduled work', async () => {
   const w = await world();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE); });
   await afterOneReply(w);
   expect(await armedKinds(w)).toEqual(expect.arrayContaining(['dreaming', 'heartbeat', 'pre_activity_spot']));
   await clearOwnerAlarm(w.ownerStub);
