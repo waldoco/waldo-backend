@@ -160,6 +160,39 @@ change below keeps that.
   the Adjustment.
 - Push all of them, not just the Brief, through the delivery gate and its daily budget.
 
+### 4.10 Approve in the conversation (owner direction, 3 Nov 2026)
+
+The owner, 3 Nov: once the owner has seen a card, Waldo shows it right there in the conversation, and the owner can just tell
+Waldo to go ahead. No trip to a waiting queue, and no button required.
+
+**Today** [verified at `beta-mvp` 270d9740]:
+- Only a tap approves.
+- Changes to the owner's own things are one tap in chat.
+- Anything that reaches other people (sends, shared calendar events, web forms, external tools, tainted actions) is handed to
+  the app: "approved in the Waldo app, not in chat" (`channels/approvals.ts:450`, `channels/approval-step-up.ts`).
+- The model has no way to approve, so "yes, send it" in chat does nothing.
+
+**Proposed:**
+- **Show it in place.** When Waldo raises a card, the conversation it belongs to shows the exact version: the recipients and
+  every word of a send, or the before and after of a change. The `approval` reply part already carries the review; WhatsApp
+  and iMessage get the full text.
+- **The owner's words approve.** A new owner-turn-only tool, `approve_shown(approval_id)`. The model judges whether the owner
+  said to go ahead and which card they meant, and asks when it is unclear: "never act on a vague yes/no" (design system B14).
+- **Deterministic guards.** These are security boundaries, not judgment calls:
+  - The card was shown in full on this surface, in this thread.
+  - Its payload digest is unchanged since it was shown; a changed card asks again.
+  - The triggering message is the owner's own, on an authenticated channel.
+  - The call happens before the turn reads any outside text. Text from an email or page can never approve.
+  - The approval records the owner's message id as its evidence.
+- **Then Waldo acts,** through the existing approval-replay path, with the same receipt and Undo window as a tap.
+- **The app hand-off becomes a choice, not a wall.** A send can be approved in chat once its exact text was shown there. The app
+  stays the place to edit, and the place for anything too long to show in chat.
+- **Standing autonomy (4.7) is separate.** This is per item, while grants cover whole classes of action.
+- **Falsifiers:**
+  - injected text that claims approval, in a mail the turn read, approves nothing;
+  - "yes" after two cards were shown asks which;
+  - a card edited after it was shown is not approved by an earlier "go ahead".
+
 ### 4.9 What does not need to change
 
 - **Cloudflare primitives.** Durable Objects with one alarm, SQLite, and short-lived worker DOs fit this. Cloudflare
