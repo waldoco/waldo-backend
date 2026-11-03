@@ -1,6 +1,6 @@
 # Autonomy opt-in: Waldo acts for you, within grants you set, with receipts (27 October 2026)
 
-> **Approved 3 Nov 2026, with Waldo's own calendar as the first area** (`PROACTIVE_AGENT_RUNTIME_2026-11-03.md` §6). The §11 recommendations stand as defaults. Rebased onto `beta-mvp` `270d9740`; the 3 Nov amendments are in §3.2, §3.4 and §4. Source first read at `beta-mvp` `43b99d24`.
+> **Approved 3 Nov 2026, with Waldo's own blocks on the primary calendar as the first area** (`PROACTIVE_AGENT_RUNTIME_2026-11-03.md` §6). The §11 recommendations stand as defaults. Rebased onto `beta-mvp` `270d9740`; the 3 Nov amendments are in §3.2, §3.4 and §4. Source first read at `beta-mvp` `43b99d24`.
 >
 > **Was:** Design for review. Status: Proposed. The contract in this PR (`packages/contracts/src/app/autonomy.ts`) is additive and has no runtime caller. Nothing here changes runtime behaviour. Building starts only after the gate reviews this design and the owner answers §11. Where this design extends ADR-0018, ADR-0049 and ADR-0074, the brain PR drafting ADR-0086 governs.
 

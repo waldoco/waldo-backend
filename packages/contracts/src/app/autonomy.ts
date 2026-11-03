@@ -25,8 +25,8 @@ const purpose = visibleText(200).regex(/^[^\n\r\u2028\u2029]*$/);
 const DAY_MS = 86_400_000;
 export const AUTONOMY_GRANT_MAX_DAYS = 90;
 
-// Waldo's own blocks on the calendar Waldo made on this account: placed or moved, times only, on one local day, with no
-// guests. A write to any other calendar of the owner's keeps its card.
+// Blocks Waldo itself created on this account's primary calendar, marked as Waldo's and with no guests: placed, moved or
+// removed, times only, on one local day. Any other event, and any event with guests, keeps its card.
 const moveOwnBlock = z.strictObject({
   class: z.literal('calendar.move_own_block'), account: z.email(),
   window: z.strictObject({ from: localTime, to: localTime }).refine(({ from, to }) => from < to, 'the window ends after it starts'),
