@@ -2132,14 +2132,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
+  // A delivery record the pass still acts on: one not yet sent, sent and awaiting its report, or ended and not yet settled. Its
+  // own wake can be weeks out (a message held for WhatsApp's window), while what the pass does with it (sending it to the app
+  // once WhatsApp is no longer the surface, settling a forget or a lapse) depends on the directory and on changes no key names.
+  private outboxOpen(): boolean {
+    return new TelegramFinalOutbox(this.ctx.storage.kv).records().some(r => r.status === 'pending' || r.status === 'accepted' || r.status === 'attempting' || r.settled === false);
+  }
   // With NEXT_DUE_ALARM on, a wake that finds no kept wake due runs its local lanes and stops before the directory: it asks it
   // nothing and re-arms for the earliest wake. The check reads the arbiter's own bounds, so a wake it stops is one the arbiter
-  // would not have armed. Three passes always run in full: a failed lane's retry, which has spent its key already; the pass
-  // after one that never finished, whose turns were cut off with no key left to name them; and the first on a release, so a
-  // deploy's boot work reaches every owner on their next wake. It reads only.
+  // would not have armed. Some passes always run in full: a failed lane's retry, which has spent its key already; the pass
+  // after one that never finished, whose turns were cut off with no key left to name them; the first on a release, so a
+  // deploy's boot work reaches every owner on their next wake; and any pass while a delivery record is open. It reads only.
   private async nothingDue(retrying: AlarmLane | null, resumed: boolean): Promise<boolean> {
     if (this.env.NEXT_DUE_ALARM !== '1' || retrying !== null || resumed) return false;
-    if (this.ctx.storage.kv.get<string>(ALARM_FULL_RELEASE) !== (this.env.WALDO_RELEASE ?? 'unknown')) return false;
+    if (this.ctx.storage.kv.get<string>(ALARM_FULL_RELEASE) !== (this.env.WALDO_RELEASE ?? 'unknown') || this.outboxOpen()) return false;
     const scheduled = !this.ctx.storage.kv.get(LINK_MODE) && this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length > 0;
     const scheduleDue = scheduled ? new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).nextWake() : NO_SCHEDULE_WAKE;
     return nothingDueBy(this.ctx.storage, scheduleDue, Date.now());
@@ -2165,7 +2171,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const has = (table: string) => sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length > 0;
       if (!['schedule', 'loops', 'loop_mail_sources', 'heartbeat_notified'].every(has)
         || !sql.exec('SELECT 1 FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray().length) return;
-      if (this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) return;
+      // While a delivery record is open the heartbeat keeps its grid, so its pass reaches that record as often as with the switch off.
+      if ((this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) || this.outboxOpen()) return;
       const scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
       const found = scheduler.lookup(HEARTBEAT_ID);
       if (found.state !== 'entry') return;

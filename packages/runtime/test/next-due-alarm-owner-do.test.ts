@@ -346,6 +346,19 @@ describe('a pass the platform cut off, and an owner the directory no longer admi
     });
   });
 
+  it('while a delivery record is open (a message held for WhatsApp\'s window), every wake runs in full and the heartbeat keeps its grid', async () => {
+    await withOwner('next-due-held-record', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z') + 30 * 60_000);
+      const held = Date.now() + 30 * 24 * 3_600_000;
+      state.storage.kv.put('telegram_final_outbox_v1', [{ id: 'reminder:held', trace: 'held', status: 'pending', reason: 'window_refused', dueAt: held, createdAt: Date.now(), attempts: 1, payload: { chat_id: 7, text: 'Time to stretch.' } }]);
+      state.storage.kv.put('telegram_final_outbox_due_v1', held);
+      await alarm();
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-10T10:30:00Z'));
+    });
+  });
+
   it('a revoked owner\'s daily tick holds the schedule, and no later wake is armed for it', async () => {
     await withOwner('next-due-revoked', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm, clock }) => {
       confirmZone(state, 'UTC');
