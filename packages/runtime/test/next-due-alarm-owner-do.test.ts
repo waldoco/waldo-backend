@@ -63,6 +63,8 @@ const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at:
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
+    // An owner whose boot work already ran on this release.
+    state.storage.kv.put('owner_alarm_full_release_v1', env.WALDO_RELEASE ?? 'unknown');
     if (surface === 'app') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     else state.storage.kv.put('telegram_subject', '7');
     const owner = new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: flag, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
@@ -325,6 +327,19 @@ describe('a pass the platform cut off, and an owner the directory no longer admi
       await alarm();
       expect(authorityCalls()).toContain('owner_runtime_authority');
       expect(state.storage.kv.get('owner_alarm_pass_open_v1')).toBeUndefined();
+      wire.asked = [];
+      await alarm();
+      expect(authorityCalls()).toEqual([]);
+    });
+  });
+
+  it('runs the first wake on a new release in full, so its boot work reaches the owner, then stops again', async () => {
+    await withOwner('next-due-release', 'app', '1', '2027-03-10T10:00:00Z', async ({ state, scheduler, alarm }) => {
+      await armHeartbeat(scheduler, Date.now() - 10 * 60_000);
+      state.storage.kv.put('owner_alarm_full_release_v1', 'an-earlier-release');
+      await alarm();
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+      expect(state.storage.kv.get('owner_alarm_full_release_v1')).toBe(env.WALDO_RELEASE ?? 'unknown');
       wire.asked = [];
       await alarm();
       expect(authorityCalls()).toEqual([]);

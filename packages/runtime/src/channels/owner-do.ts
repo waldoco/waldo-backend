@@ -367,6 +367,8 @@ const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): strin
   [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
 const ALARM_FAILURES = 'owner_alarm_failures_v1';
 const ALARM_PASS_OPEN = 'owner_alarm_pass_open_v1';
+// The release whose boot work the last full pass ran.
+const ALARM_FULL_RELEASE = 'owner_alarm_full_release_v1';
 // The round-robin lanes of an owner alarm pass, by their index in owner_alarm_last_v1.
 const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
 type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
@@ -2132,10 +2134,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // With NEXT_DUE_ALARM on, a wake that finds no kept wake due runs its local lanes and stops before the directory: it asks it
   // nothing and re-arms for the earliest wake. The check reads the arbiter's own bounds, so a wake it stops is one the arbiter
-  // would not have armed. Two passes always run in full: a failed lane's retry, which has spent its key already, and the
-  // pass after one that never finished, whose turns were cut off with no key left to name them. It reads only.
+  // would not have armed. Three passes always run in full: a failed lane's retry, which has spent its key already; the pass
+  // after one that never finished, whose turns were cut off with no key left to name them; and the first on a release, so a
+  // deploy's boot work reaches every owner on their next wake. It reads only.
   private async nothingDue(retrying: AlarmLane | null, resumed: boolean): Promise<boolean> {
     if (this.env.NEXT_DUE_ALARM !== '1' || retrying !== null || resumed) return false;
+    if (this.ctx.storage.kv.get<string>(ALARM_FULL_RELEASE) !== (this.env.WALDO_RELEASE ?? 'unknown')) return false;
     const scheduled = !this.ctx.storage.kv.get(LINK_MODE) && this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length > 0;
     const scheduleDue = scheduled ? new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).nextWake() : NO_SCHEDULE_WAKE;
     return nothingDueBy(this.ctx.storage, scheduleDue, Date.now());
@@ -2934,6 +2938,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await lane('app', () => this.drainApp(alarmEnd));
       await lane('imessage', () => this.drainIMessage(alarmEnd));
       if (await this.nothingDue(retrying, resumed)) { console.log(JSON.stringify({ hop: 'alarm', ok: true, code: 'nothing_due' })); await this.rearmEveryWake(); return; }
+      if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
       // An owner with no Telegram link runs on the app when the directory still admits their account, and an owner whose only
