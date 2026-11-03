@@ -50,6 +50,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   NEXT_DUE_ALARM: inert('decides only whether an owner alarm with nothing due runs its pass; a trial turn is not an alarm pass'),
   AUTONOMY_OWN_CALENDAR: gap('no trial holds a standing grant, and this build creates none; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
+  HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it off'),
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it off'),

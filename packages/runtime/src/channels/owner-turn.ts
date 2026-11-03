@@ -453,7 +453,7 @@ export const createOwnerResponder = (
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
-          const retainedRead = ['read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
+          const retainedRead = ['read_memory', 'search_episodes', 'search_history', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }

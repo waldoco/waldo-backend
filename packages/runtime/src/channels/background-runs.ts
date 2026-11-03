@@ -1,4 +1,5 @@
 import type { HealthTriggerOutcome } from '../health/trigger';
+import type { HistoryArchive } from '../history/archive';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // A5b (BUILD_PLAN_2026-09-25: "Background task tracking - tasks table, trace hops, console
@@ -37,11 +38,12 @@ export type RunBook = Readonly<{
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
-// Runs are audit residue, not operational state: the oldest rows trim past the cap so a chatty
-// loop can never grow the table without bound. The console list reads the newest page.
+// Runs are audit residue, not operational state: the oldest rows leave the hot table past the cap so a chatty loop can
+// never grow it without bound. The console list reads the newest page. With the history archive on, they move there
+// (never a running row, which finish() still writes); off, they are deleted as before.
 export const MAX_RUN_ROWS = 500;
 
-export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBook => {
+export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string, archive?: HistoryArchive): RunBook => {
   sql.exec(`CREATE TABLE IF NOT EXISTS background_runs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT,
     parent_id TEXT, started_at INTEGER NOT NULL, ended_at INTEGER)`);
@@ -55,10 +57,17 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
         'INSERT INTO background_runs (id, kind, status, summary, parent_id, started_at, ended_at) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
         run.id, run.kind, run.status, run.parent_id, run.started_at,
       );
-      sql.exec(
-        'DELETE FROM background_runs WHERE id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)',
-        MAX_RUN_ROWS,
-      );
+      if (archive === undefined || archive.mode === 'off') {
+        sql.exec(
+          'DELETE FROM background_runs WHERE id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)',
+          MAX_RUN_ROWS,
+        );
+      } else {
+        archive.retire('background_runs', sql.exec<{ id: string }>(
+          "SELECT id FROM background_runs WHERE status <> 'running' AND id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)",
+          MAX_RUN_ROWS,
+        ).toArray().map(row => row.id));
+      }
       return run;
     },
     finish(id, status, summary) {

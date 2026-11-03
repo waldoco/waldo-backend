@@ -62,6 +62,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
+  // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
+  // and logs per-source counts; anything else keeps the deletes.
+  HISTORY_ARCHIVE?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

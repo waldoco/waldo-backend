@@ -433,11 +433,12 @@ export class Scheduler {
   private recordRunStart(entry: ScheduleEntry, now: number): string {
     // The id's run ordinal comes from the append-only history, not schedule.attempts:
     // policy state resets (schedule upsert, quarantine reap) but history never does, so
-    // a retry after a reset can never collide with a crashed run's row.
+    // a retry after a reset can never collide with a crashed run's row. The highest ordinal, not the count: a settled row
+    // moved to the history archive leaves a gap that a count would land back on.
     const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
     const prior = this.sql
       .exec<{ n: number }>(
-        'SELECT count(*) AS n FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?',
+        'SELECT COALESCE(MAX(attempt), 0) AS n FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?',
         entry.id,
         lower,
         upper,
