@@ -1,9 +1,9 @@
 import type { ScheduleEntry } from '@waldo/contracts';
-import type { Scheduler, ScheduleExecutor } from '../scheduler/multiplexer';
+import { nextOccurrence, type Scheduler, type ScheduleExecutor } from '../scheduler/multiplexer';
 import type { MachineEnqueued } from '../tasks/machine';
 import type { DayPlanBook } from './day-cards';
 import { isQuiet, type Loop, type LoopBook } from './loops';
-import { localIso } from './reminders';
+import { localIso, localToEpoch } from './reminders';
 import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
 // H1 of the heartbeat/cron plan: a periodic check-in tick that scans due work, stays silent when
@@ -47,6 +47,40 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 };
 
 export type Sql = Pick<SqlStorage, 'exec'>;
+
+// The heartbeat's next tick worth running, on its own grid: the first slot at or after the earliest of a held card, a past-due
+// loop out of its cooldown (both now), a cooldown's end, or a future loop's due time; past quiet hours, and never more than a
+// day out. A loop's due is the owner's wall clock, so a slot counts once the tick's own scan would see the loop due there. A
+// time at or before now means the tick should run now. Null when a due time cannot be read: the row keeps its slot.
+export const heartbeatWake = (deps: Readonly<{ sql: Sql; loops: Pick<LoopBook, 'proactivity'>; heldCards: (day: string) => readonly string[];
+  releaseHeldCards: boolean; timezone: string; now: number; every_ms: number; phase_ms: number }>): number | null => {
+  const { sql, timezone, now, every_ms } = deps;
+  const slotFrom = (at: number) => nextOccurrence({ type: 'interval', every_ms, phase_ms: deps.phase_ms }, at - 1);
+  const local = (at: number) => localIso(at, timezone).slice(0, 16);
+  const localNow = local(now), settings = deps.loops.proactivity();
+  let at = deps.releaseHeldCards && deps.heldCards(localNow.slice(0, 10)).length ? now : Infinity;
+  if (settings.volume !== 'low') {
+    const open = sql.exec<{ due: string; told: number | null }>(
+      `SELECT l.due, (SELECT MAX(n.notified_at) FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due) AS told
+         FROM loops l WHERE l.status = 'open' AND l.due IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)`).toArray();
+    for (const { due, told } of open) {
+      if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(due)) return null;
+      const cooled = told === null ? -Infinity : told + RENOTIFY_COOLDOWN_MS + 1;
+      let seen = now;
+      if (due > localNow) {
+        seen = slotFrom(localToEpoch(due.length === 10 ? `${due}T00:00` : due, timezone));
+        for (let step = 0; step < 4 && local(seen) < due; step++) seen += every_ms;
+        for (let step = 0; step < 4 && local(seen - every_ms) >= due && seen - every_ms > now; step++) seen -= every_ms;
+      }
+      at = Math.min(at, Math.max(seen, cooled));
+    }
+  }
+  const backstop = slotFrom(now + DAY_MS);
+  let wake = at === Infinity ? backstop : at <= now ? now : slotFrom(at);
+  for (let step = 0; step < 2 * DAY_MS / every_ms && wake < backstop && isQuiet(settings, wake, timezone); step++) wake = slotFrom(wake + 1);
+  return Math.min(wake, backstop);
+};
 
 // The past-due loops a check-back may name: open, past due, not from a mail source (those have their own review), and not
 // told about within the cooldown. The cooldown filter lives in SQL BEFORE the LIMIT: paging the earliest-due loops and

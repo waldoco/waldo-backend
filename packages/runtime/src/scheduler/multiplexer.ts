@@ -148,6 +148,17 @@ export class Scheduler {
     return moved;
   }
 
+  // Moves an armed entry with no retry pending to `at`, earlier or later; nothing else about it changes. Returns whether it moved.
+  async retime(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = MAX(?, updated_at + 1)
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at != ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   // The owner lifts a pause: the row runs now, with a fresh count. Only a paused row moves.
   async resume(id: string): Promise<boolean> {
     const now = this.deps.now();

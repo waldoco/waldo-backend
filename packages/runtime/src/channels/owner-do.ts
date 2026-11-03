@@ -104,7 +104,7 @@ import { ownerName, recordSignupName } from '../onboarding/first-run';
 import { lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
-import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, LOOP_CHECK_BACK_TOOLS, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
@@ -133,7 +133,7 @@ import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
-import { Scheduler } from '../scheduler/multiplexer';
+import { nextOccurrence, Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
 import { semanticRecallFromEnv, semanticTraceEntry } from '../memory/semantic-recall';
 import { reviewedThrough } from '../memory/select-memory';
@@ -1920,6 +1920,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }};
   }
   override async fetch(request: Request): Promise<Response> {
+    try { return await this.route(request); } finally { await this.alignHeartbeat(false); }
+  }
+  private async route(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname;
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
@@ -2142,7 +2145,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // schedule.
   private async rearmEveryWake(): Promise<void> {
     if (this.ctx.storage.kv.get(LINK_MODE)) await rearmSharedAlarm(this.ctx.storage, NO_SCHEDULE_WAKE, Date.now());
-    else await this.rearmWithSchedule();
+    else { await this.alignHeartbeat(false); await this.rearmWithSchedule(); }
+  }
+  // With NEXT_DUE_ALARM on, the heartbeat row runs at its next tick worth running (heartbeatWake), on its own grid. An alarm
+  // pass moves it either way, before its due check and after its work; any other change (a request, a turn's re-arm) only
+  // pulls it earlier, so a loop, card, quiet-hours or zone change made there wakes it in time. A row retrying, paused or
+  // unreadable, a zone that is not valid, or a due time that cannot be read leaves the row on its slot, as with the switch off.
+  private async alignHeartbeat(later: boolean): Promise<void> {
+    if (this.env.NEXT_DUE_ALARM !== '1' || this.ctx.storage.kv.get(LINK_MODE)) return;
+    try {
+      ensureSchema(this.ctx.storage);
+      const sql = this.ctx.storage.sql, scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
+      const found = scheduler.lookup(HEARTBEAT_ID);
+      if (found.state !== 'entry') return;
+      const { entry } = found, recurrence = entry.recurrence;
+      if (entry.status !== 'armed' || entry.attempts !== 0 || recurrence?.type !== 'interval') return;
+      const timezone = this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+      if (!validZone(timezone)) return;
+      const now = Date.now();
+      const loops = loopBook(sql, { newId: () => crypto.randomUUID(), now: Date.now });
+      const wake = heartbeatWake({ sql, loops, heldCards: day => dayPlanBook(sql).heldToday(day),
+        releaseHeldCards: schedulePreferences(sql, loops).enabled('daily_brief'), timezone, now, every_ms: recurrence.every_ms, phase_ms: recurrence.phase_ms });
+      if (wake === null || (wake <= now && entry.due_at <= now)) return;
+      const at = wake <= now ? nextOccurrence(recurrence, now - 1) : wake;
+      if (later ? at !== entry.due_at : at < entry.due_at) await scheduler.retime(HEARTBEAT_ID, at);
+    } catch { console.error(JSON.stringify({ hop: 'heartbeat_wake', ok: false, code: 'kept_slot' })); }
   }
 
   // WhatsApp turns, one inbox row at a time, under the alarm's own wall clock (whatsapp-inbox). A message that arrives while a
@@ -2861,7 +2888,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!held && retryDue !== undefined) kv.delete(ALARM_RETRY_DUE_KEY);
     try {
       const alarmEnd = Date.now() + ALARM_TURN_BUDGET_MS;
-      await alarmPass(this.ctx.storage, () => this.alarmWork(held, held ? null : failed ?? null, alarmEnd));
+      await alarmPass(this.ctx.storage, async () => { await this.alignHeartbeat(true); await this.alarmWork(held, held ? null : failed ?? null, alarmEnd); await this.alignHeartbeat(true); });
       if (!held) for (const key of [ALARM_FAILURES, ALARM_FAILED_LANE_KEY]) if (kv.get(key) !== undefined) kv.delete(key);
     } catch (error) {
       // The lane that threw is recorded unless a lane is held: a held pass failing elsewhere holds the whole pass, because

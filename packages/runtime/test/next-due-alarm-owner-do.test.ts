@@ -55,7 +55,7 @@ const authorityCalls = () => wire.asked.filter(fn => AUTHORITY.has(fn));
 
 // One owner object under a fixed clock. `alarm` stands in for the platform's invocation, which consumes the alarm that fired.
 const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at: string,
-  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void }>) => Promise<T>) => {
+  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void; request: () => Promise<unknown> }>) => Promise<T>) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(Date.parse(at));
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -66,7 +66,9 @@ const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at:
     const owner = new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: flag, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const alarm = async () => { await state.storage.deleteAlarm(); await owner.alarm(); return state.storage.getAlarm(); };
     const clock = (to: string | number) => vi.setSystemTime(typeof to === 'number' ? to : Date.parse(to));
-    try { return await work({ state, scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), alarm, clock }); }
+    // Any request the object answers; the heartbeat's pull-forward runs after each one.
+    const request = () => owner.fetch(new Request('https://telegram-owner/app/v1/chat/main'));
+    try { return await work({ state, scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), alarm, clock, request }); }
     finally { await state.storage.deleteAlarm(); }
   });
 };
@@ -147,33 +149,142 @@ describe('due work under the switch keeps its time', () => {
     });
   });
 
-  it('keeps the heartbeat on its interval phase, and holds it in quiet hours and inside a loop\'s cooldown', async () => {
-    await withOwner('next-due-heartbeat', 'app', '1', '2027-03-13T21:50:00Z', async ({ state, scheduler, alarm, clock }) => {
-      state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
-      await armHeartbeat(scheduler, Date.parse('2027-03-13T21:30:00Z'));
-      const first = dueOf(state, HEARTBEAT_ID);
-      expect(first).toBe(Date.parse('2027-03-13T22:00:00Z'));
-      const checks = () => state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'machine_check' ORDER BY id").toArray().map(row => row.note);
-      const loops = loopBook(state.storage.sql, { newId: () => 'loop-1', now: Date.now });
-      loops.setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
-      expect(await alarm()).toBe(first);
+});
+
+const Z = (iso: string) => Date.parse(iso);
+const onGrid = (at: number) => at % HEARTBEAT_EVERY_MS === 0;
+const loop = (state: DurableObjectState, id: string, due: string) =>
+  state.storage.sql.exec("INSERT INTO loops (id, title, due, status, created_at) VALUES (?, 'send the deck', ?, 'open', ?)", id, due, Date.now());
+const checks = (state: DurableObjectState) =>
+  state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'machine_check' ORDER BY id").toArray().map(row => row.note);
+const confirmZone = (state: DurableObjectState, zone: string) => { loopBook(state.storage.sql, { newId: () => 'unused', now: Date.now }); state.storage.kv.put('timezone', zone); state.storage.kv.put('timezone_confirmed', true); };
+
+describe('the heartbeat under the switch runs at its next tick worth running, on its own grid', () => {
+  const idleDay = (flag: '0' | '1') => withOwner(`next-due-idle-day-${flag}`, 'app', flag, '2027-03-10T00:05:00Z', async ({ state, scheduler, alarm, clock }) => {
+    confirmZone(state, 'UTC');
+    await armHeartbeat(scheduler, Date.now() - 5 * 60_000);
+    const end = Date.now() + 24 * 3_600_000;
+    let armed = await alarm(), wakes = 0;
+    const boot = authorityCalls().length;
+    while (armed !== null && armed < end && wakes < 100) { clock(armed); wakes++; armed = await alarm(); }
+    return { wakes, authority: authorityCalls().length - boot, ticks: runs(state, HEARTBEAT_ID).length, next: dueOf(state, HEARTBEAT_ID) };
+  });
+
+  it('an idle owner: 48 wakes and 48 directory calls a day with the switch off, none with it on', async () => {
+    const off = await idleDay('0');
+    expect(off).toMatchObject({ wakes: 48, ticks: 48 });
+    expect(off.authority).toBeGreaterThanOrEqual(48);
+    const on = await idleDay('1');
+    expect(on).toEqual({ wakes: 0, authority: 0, ticks: 0, next: Z('2027-03-11T00:30:00Z') });
+    expect(onGrid(on.next)).toBe(true);
+  });
+
+  it('arms for a loop due on the owner\'s wall clock across both daylight saving changes, gap and overlap included', async () => {
+    const cases: readonly (readonly [string, string, string])[] = [
+      ['2027-03-13T18:00:00Z', '2027-03-14T09:00', '2027-03-14T13:00:00Z'], // after the spring change: EDT
+      ['2027-03-13T18:00:00Z', '2027-03-14T02:30', '2027-03-14T07:00:00Z'], // 02:30 never happens; 03:00 EDT is the first tick past it
+      ['2027-11-06T18:00:00Z', '2027-11-07T09:00', '2027-11-07T14:00:00Z'], // after the autumn change: EST
+      ['2027-11-06T18:00:00Z', '2027-11-07T01:30', '2027-11-07T05:30:00Z'], // 01:30 happens twice; the first one counts
+    ];
+    for (const [i, [at, due, wake]] of cases.entries()) {
+      wire.asked = [];
+      await withOwner(`next-due-dst-loop-${i}`, 'app', '1', at, async ({ state, scheduler, alarm, clock }) => {
+        confirmZone(state, 'America/New_York');
+        await armHeartbeat(scheduler, Date.now() - 5 * 60_000);
+        loop(state, 'loop-1', due);
+        expect(await alarm()).toBe(Z(wake));
+        expect(authorityCalls()).toEqual([]);
+        clock(Z(wake) - 60_000);
+        expect(await alarm()).toBe(Z(wake));
+        clock(Z(wake));
+        await alarm();
+        expect(checks(state)).toEqual(['enqueued']);
+      });
+    }
+  });
+
+  it('follows a time zone change while armed: earlier at once, later at the next wake, which asks nothing', async () => {
+    await withOwner('next-due-zone-change', 'app', '1', '2027-03-20T00:00:00Z', async ({ state, scheduler, alarm, clock, request }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Date.now() - 5 * 60_000);
+      loop(state, 'loop-1', '2027-03-20T09:00');
+      expect(await alarm()).toBe(Z('2027-03-20T09:00:00Z'));
+      state.storage.kv.put('timezone', 'Asia/Kolkata');
+      await request();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-20T03:30:00Z'));
+      expect(await state.storage.getAlarm()).toBe(Z('2027-03-20T03:30:00Z'));
+      state.storage.kv.put('timezone', 'America/Los_Angeles');
+      await request();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-20T03:30:00Z'));
+      clock(Z('2027-03-20T03:30:00Z'));
+      expect(await alarm()).toBe(Z('2027-03-20T16:00:00Z'));
       expect(authorityCalls()).toEqual([]);
-      // Due in quiet hours: the tick runs, holds, and the next one stays on the grid.
-      clock(first);
-      expect(await alarm()).toBe(first + HEARTBEAT_EVERY_MS);
-      expect(state.storage.sql.exec<{ heartbeat_result: string }>('SELECT heartbeat_result FROM schedule_runs WHERE schedule_id = ?', HEARTBEAT_ID).one().heartbeat_result).toBe('quiet');
-      expect(checks()).toEqual(['held_quiet']);
-      expect((dueOf(state, HEARTBEAT_ID) - first) % HEARTBEAT_EVERY_MS).toBe(0);
-      // Out of quiet hours, a past-due loop told about within its cooldown writes no check-back.
-      loops.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal' });
-      state.storage.sql.exec("INSERT INTO loops (id, title, due, status, created_at) VALUES ('loop-1', 'send the deck', '2027-03-13T20:00', 'open', ?)", Date.now());
-      state.storage.sql.exec("INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES ('loop-1', '2027-03-13T20:00', ?)", Date.now());
-      clock(dueOf(state, HEARTBEAT_ID));
-      const after = await alarm();
-      expect(after).toBe(first + 2 * HEARTBEAT_EVERY_MS);
-      expect(state.storage.sql.exec<{ heartbeat_result: string }>('SELECT heartbeat_result FROM schedule_runs WHERE schedule_id = ? ORDER BY fired_at DESC LIMIT 1', HEARTBEAT_ID).one().heartbeat_result).toBe('quiet');
-      expect(checks()).toEqual(['held_quiet', 'unchanged']);
-      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs").one().n).toBe(0);
+      expect(runs(state, HEARTBEAT_ID)).toEqual([]);
+    });
+  });
+
+  it('waits out quiet hours that span midnight, then checks back', async () => {
+    await withOwner('next-due-quiet', 'app', '1', '2027-03-13T23:10:00Z', async ({ state, scheduler, alarm, clock }) => {
+      confirmZone(state, 'UTC');
+      loopBook(state.storage.sql, { newId: () => 'unused', now: Date.now }).setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
+      await armHeartbeat(scheduler, Z('2027-03-13T22:30:00Z'));
+      loop(state, 'loop-1', '2027-03-13T21:00');
+      expect(await alarm()).toBe(Z('2027-03-14T07:00:00Z'));
+      expect(authorityCalls()).toEqual([]);
+      clock(Z('2027-03-14T07:00:00Z'));
+      await alarm();
+      expect(checks(state)).toEqual(['enqueued']);
+    });
+  });
+
+  it('runs at the first tick after a cooldown that ends between ticks', async () => {
+    await withOwner('next-due-cooldown', 'app', '1', '2027-03-13T11:00:00Z', async ({ state, scheduler, alarm, clock }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-13T10:30:00Z'));
+      loop(state, 'loop-1', '2027-03-13T08:00');
+      state.storage.sql.exec("INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES ('loop-1', '2027-03-13T08:00', ?)", Z('2027-03-13T10:10:00Z'));
+      expect(await alarm()).toBe(Z('2027-03-13T14:30:00Z'));
+      expect(authorityCalls()).toEqual([]);
+      clock(Z('2027-03-13T14:30:00Z'));
+      await alarm();
+      expect(checks(state)).toEqual(['enqueued']);
+    });
+  });
+
+  it('pulls the wake earlier for a loop added after it was armed, and for a card held for today', async () => {
+    await withOwner('next-due-pull', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm, request }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Date.now() - 5 * 60_000);
+      expect(await alarm()).toBe(Z('2027-03-11T10:30:00Z'));
+      loop(state, 'loop-1', '2027-03-10T12:15');
+      await request();
+      expect(await state.storage.getAlarm()).toBe(Z('2027-03-10T12:30:00Z'));
+      state.storage.sql.exec("INSERT INTO day_plan (day, card, time, reason, sent) VALUES ('2027-03-10', 'midday', '11:00', 'default time', 2)");
+      await request();
+      expect(await state.storage.getAlarm()).toBe(Z('2027-03-10T10:30:00Z'));
+      expect(authorityCalls()).toEqual([]);
+    });
+  });
+
+  it('keeps the grid slot on a loop due time it cannot read', async () => {
+    await withOwner('next-due-fallback-due', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z'));
+      loop(state, 'loop-1', 'next week');
+      expect(await alarm()).toBe(Z('2027-03-10T10:30:00Z'));
+      expect(runs(state, HEARTBEAT_ID)).toEqual(['ok']);
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+    });
+  });
+
+  it('keeps the grid slot on a time zone it cannot read', async () => {
+    await withOwner('next-due-fallback-zone', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
+      confirmZone(state, 'Not/AZone');
+      await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z'));
+      await alarm();
+      // The row is left due on its slot and the pass runs, exactly as with the switch off.
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-10T10:00:00Z'));
+      expect(authorityCalls()).toContain('owner_runtime_authority');
     });
   });
 });
