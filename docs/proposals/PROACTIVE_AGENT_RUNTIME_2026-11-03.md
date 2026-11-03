@@ -1,6 +1,6 @@
 # What the runtime needs for the agent heywaldo.in describes
 
-Status: **proposed**, for the owner's review. It is a companion to
+Status: **approved** by the owner on 3 Nov 2026 (section 6). It is a companion to
 [PROACTIVE_CONCIERGE_2026-11-02.md](PROACTIVE_CONCIERGE_2026-11-02.md), which covers the day loop. This note covers the
 machinery underneath: concurrency, background work, events, autonomy and the record of what Waldo did.
 
@@ -175,9 +175,12 @@ change below keeps that.
 | Then | 4.3 deferred and conditional tasks; 4.8 day rhythm | 4.2 and 4.4 first |
 | Owner decision | 4.7 autonomy levels (#1630) and Waldo's own calendar | Owner yes; brain ADR for levels |
 
-## 6. Decisions for the owner
+## 6. Owner decisions (approved 3 Nov 2026)
 
-1. Approve #1630's three levels per area, with Waldo's own calendar as the first area.
-2. Owner messages pre-empt queued machine work (4.1).
-3. Workers may raise a card mid-task and resume (4.2).
-4. The "Why this changed" trail is stored per item (4.6). This needs an additive contract and app rendering by Suyash.
+1. **Autonomy (#1630) is approved, with Waldo's own calendar as the first area.**
+   - #1630's own recommended answers to its §11 questions A1–A6 stand as defaults, and each is cheap to reverse.
+   - The site's "three levels per area" is how the app presents #1630's grants: no grant means ask; a grant means act and
+     tell. The design keeps grants and adds no level store.
+2. **Owner messages pre-empt queued machine work** (4.1).
+3. **Workers may raise a card mid-task and resume** (4.2).
+4. **The "Why this changed" trail is stored per item** (4.6). This needs an additive contract and app rendering by Suyash.
