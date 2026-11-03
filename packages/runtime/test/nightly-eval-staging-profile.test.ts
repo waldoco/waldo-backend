@@ -144,19 +144,19 @@ const availability = { name: 'query_availability', arguments: { date_range: { fr
 const offered = (gateway: ReturnType<typeof scriptedGateway>) => gateway.requests().filter((request) => request.request.response_format === undefined).flatMap((request) => (request.request.tools ?? []).map((tool) => tool.name));
 
 describe('the harness loader in a trial', () => {
-  const rules: readonly ScriptRule[] = [{ match: /open tasks/, rounds: [
-    { toolCalls: [{ name: 'find_tools', arguments: { groups: ['calendar'] } }] },
-    { toolCalls: [{ name: 'use_tool', arguments: { name: 'get_tasks', arguments: {} } }] },
-    { text: 'Nothing open.' },
+  const rules: readonly ScriptRule[] = [{ match: /standing orders/, rounds: [
+    { toolCalls: [{ name: 'find_tools', arguments: { groups: ['settings'] } }] },
+    { toolCalls: [{ name: 'use_tool', arguments: { name: 'list_standing_orders', arguments: {} } }] },
+    { text: 'None set.' },
   ] }];
 
   it('reaches a deferred tool through find_tools and use_tool, and counts the rounds', async () => {
     const gateway = scriptedGateway({ rules });
-    const run = await runTrial(scenario([{ say: 'Any open tasks?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
+    const run = await runTrial(scenario([{ say: 'Do I have any standing orders?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
     expect(run.status).toBe('ran');
-    expect(run.tools).toEqual([{ name: 'get_tasks', ok: true }]);
+    expect(run.tools).toEqual([{ name: 'list_standing_orders', ok: true }]);
     expect(offered(gateway)).toEqual(expect.arrayContaining(['find_tools', 'use_tool']));
-    expect(offered(gateway)).not.toContain('get_tasks');
+    expect(offered(gateway)).not.toContain('list_standing_orders');
     expect(run.metrics).toMatchObject({ rounds: 3, find_tools: 1, use_tool: 1, groups_loaded: 1 });
     expect(run.metrics.peak_result_chars).toBeGreaterThan(0);
   });
