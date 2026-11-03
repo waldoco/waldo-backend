@@ -23,3 +23,9 @@ const OWNER_INBOX_DUE_KEYS = [APP_INBOX_DUE_KEY, IMESSAGE_INBOX_DUE_KEY, WHATSAP
 export const ownerMessageWaiting = (kv: Pick<SyncKvStorage, 'get'>, now: number): boolean =>
   OWNER_INBOX_DUE_KEYS.some(key => { const due = kv.get<number | null>(key); return typeof due === 'number' && due <= now + DUE_GRACE_MS; })
   || (kv.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? []).some(row => row.state === 'admitted' && !row.control);
+
+// An owner message holds machine work back for this long at most, counted from the first machine turn it held back. One the
+// chain cannot run (its drain keeps failing) then stops holding, so it never stops the owner's background work for good.
+export const OWNER_FIRST_MAX_HOLD_MS = 2 * 60_000;
+export const ownerHold = (waiting: boolean, since: number | null, now: number): Readonly<{ hold: boolean; since: number | null }> =>
+  !waiting ? { hold: false, since: null } : { hold: now - (since ?? now) < OWNER_FIRST_MAX_HOLD_MS, since: since ?? now };

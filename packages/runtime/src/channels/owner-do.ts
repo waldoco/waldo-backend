@@ -75,7 +75,7 @@ import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/o
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
-import { OWNER_ACK, ownerAck, ownerFirst, ownerMessageWaiting } from './owner-first';
+import { OWNER_ACK, ownerAck, ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -3128,8 +3128,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // and the pass's re-arm brings it back once the owner's turn has had the chain.
   private machineRoom(alarmEnd: number | undefined): boolean {
     if (alarmEnd !== undefined && alarmEnd - Date.now() < ALARM_JOB_MIN_MS) return false;
-    return !ownerFirst(this.env) || !ownerMessageWaiting(this.ctx.storage.kv, Date.now());
+    if (!ownerFirst(this.env)) return true;
+    const now = Date.now(), held = ownerHold(ownerMessageWaiting(this.ctx.storage.kv, now), this.ownerHeldSince, now);
+    this.ownerHeldSince = held.since;
+    return !held.hold;
   }
+  private ownerHeldSince: number | null = null;
 
   // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
   // nothing while it waits, so once too little of its budget is left it gives up its place, and its wakes, still due,

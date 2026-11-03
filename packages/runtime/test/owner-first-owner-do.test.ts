@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { traceBook } from '../src/channels/harness';
-import { ownerMessageWaiting } from '../src/channels/owner-first';
+import { OWNER_FIRST_MAX_HOLD_MS, ownerHold, ownerMessageWaiting } from '../src/channels/owner-first';
 import { claimStore } from '../src/memory/claims';
 import { APP_INBOX_DUE_KEY, TASK_JOBS_DUE_KEY, WHATSAPP_INBOX_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { jobBook } from '../src/tasks/jobs';
@@ -114,4 +114,14 @@ it('a message whose wake was put off is not waiting, so it never holds machine w
   expect(ownerMessageWaiting(store, now)).toBe(false);
   kv.set('telegram_owner_inbox_v1', [{ state: 'admitted' }]);
   expect(ownerMessageWaiting(store, now)).toBe(true);
+});
+
+it('a waiting message that never runs holds machine work back for a bounded time only', () => {
+  const now = 5_000_000;
+  const first = ownerHold(true, null, now);
+  expect(first).toEqual({ hold: true, since: now });
+  expect(ownerHold(true, first.since, now + OWNER_FIRST_MAX_HOLD_MS - 1).hold).toBe(true);
+  expect(ownerHold(true, first.since, now + OWNER_FIRST_MAX_HOLD_MS)).toEqual({ hold: false, since: now });
+  // Once nothing waits, the next message starts its own hold.
+  expect(ownerHold(false, first.since, now + OWNER_FIRST_MAX_HOLD_MS)).toEqual({ hold: false, since: null });
 });
