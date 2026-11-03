@@ -75,6 +75,7 @@ import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/o
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
+import { ownerFirst, ownerMessageWaiting } from './owner-first';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
@@ -2960,7 +2961,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       // The failing lane goes first in its retry pass, so its streak clears only when it has run.
       let selected = -1;
-      for (const candidate of [ROUND_ROBIN.findIndex(kind => kind === retrying), ...[1, 2, 3, 4].map(n => (last + n) % 4)]) {
+      // With owner-first on, a waiting Telegram message comes before the rotation; a failing lane's retry still goes first.
+      const ownerTurn = ownerFirst(this.env) && dueInbox ? 0 : -1;
+      for (const candidate of [ROUND_ROBIN.findIndex(kind => kind === retrying), ownerTurn, ...[1, 2, 3, 4].map(n => (last + n) % 4)]) {
         if (candidate >= 0 && readyKinds[candidate] && ROUND_ROBIN[candidate] !== held) { selected = candidate; break; }
       }
       if (selected < 0) { await scheduler.rearm(); return; }
@@ -3022,7 +3025,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           };
           // Each job starts only with time for its turn left in this alarm; the rest stay due for a fresh one.
           fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld),
-            () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS);
+            () => this.machineRoom(alarmEnd));
         } catch (error) {
           // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
           log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
@@ -3075,6 +3078,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       imessage: inner => iMessageScheduledRoute(inner, (id, text) => this.queueIMessageCopy(id, text)),
     };
     return windowed[surface]?.(route) ?? route;
+  }
+
+  // Whether the pass may start its next machine turn (a task report, a check-back, a day card, a mail turn): it needs time
+  // for the turn left in the alarm, and, with owner-first on, no owner message waiting to run. A turn it holds back stays due,
+  // and the pass's re-arm brings it back once the owner's turn has had the chain.
+  private machineRoom(alarmEnd: number | undefined): boolean {
+    if (alarmEnd !== undefined && alarmEnd - Date.now() < ALARM_JOB_MIN_MS) return false;
+    return !ownerFirst(this.env) || !ownerMessageWaiting(this.ctx.storage.kv, Date.now());
   }
 
   // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
@@ -3140,7 +3151,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         runtime.macFollowup(`mail:${row.id}`, runtime.owner, mail.text, async (_hop, work) => work(), AGENT_MAIL_TURN_TOOLS, current, undefined, undefined, 'external', false, mail.attachments)),
       deliver: (row, text, commit) => runtime.finalOutbox.enqueueFenced({ id: `mail:${row.id}`, trace: `mail:${row.id}`, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text },
         ownerSubject: String(runtime.owner), doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => this.ctx.storage.transactionSync(() => { work(); commit(); })),
-      room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
+      room: () => this.machineRoom(alarmEnd),
       log: code => console.log(JSON.stringify({ hop: 'agent_mail_turn', code })),
     });
     await this.rearmEveryWake();
@@ -3242,7 +3253,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await runtime.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text }, ownerSubject: String(runtime.owner),
             doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
         },
-        room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
+        room: () => this.machineRoom(alarmEnd),
         heldTopics: () => heldTopicsOf(claimStore(storage.sql)),
         machine: runtime.machine,
         // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
