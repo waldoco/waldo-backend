@@ -347,7 +347,7 @@ describe('every app action and approval decision is classified by the same table
   });
 
   it('classifies the app routes with no console action of their own', () => {
-    expect(stepUp.APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated).toBe(false);
+    expect(Object.keys(stepUp.APP_STEP_UP_ROUTES)).toEqual([`${APP_PROVIDERS_PATH}/connect`]);
     for (const [path, rule] of Object.entries(stepUp.APP_STEP_UP_ROUTES)) expect([path, rule.gated, oneLine(rule.why)]).toEqual([path, false, true]);
   });
 

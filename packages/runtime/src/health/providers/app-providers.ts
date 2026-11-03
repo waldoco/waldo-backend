@@ -29,8 +29,8 @@ const readJson = async <T>(request: Request, schema: ZodType<T>): Promise<T | nu
   return key !== null && key !== (parsed.data as { request_id?: string }).request_id ? null : parsed.data;
 };
 
-// signedInRecently: whether this app session signed in within the last two hours, which starting a connection needs.
-export const handleAppHealthProviders = async (input: Readonly<{ request: Request; url: URL; doName: string; owners: OwnerNamespace; secret: string | undefined; signedInRecently(): Promise<boolean> }>): Promise<Response> => {
+// mayConnect: whether this app session may start a connection, which the step-up table decides.
+export const handleAppHealthProviders = async (input: Readonly<{ request: Request; url: URL; doName: string; owners: OwnerNamespace; secret: string | undefined; mayConnect(): Promise<boolean> }>): Promise<Response> => {
   const { request, url, doName, owners, secret } = input;
   const route = url.pathname.slice(APP_PROVIDERS_PATH.length);
   // A build that does not name health revision 2 has no providers to show or start.
@@ -57,9 +57,9 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
   if (request.method !== 'POST') return refuse('invalid_request', 405);
   if (route === '/connect') {
     if (!await readJson(request, healthProviderConnectV1Schema)) return refuse('invalid_request', 400);
-    const recent = await input.signedInRecently().catch(() => null);
-    if (recent === null) return refuse('unavailable', 503);
-    return recent ? settle('connect', {}, healthProviderConnectResultV1Schema) : refuse('step_up_required', 403);
+    const allowed = await input.mayConnect().catch(() => null);
+    if (allowed === null) return refuse('unavailable', 503);
+    return allowed ? settle('connect', {}, healthProviderConnectResultV1Schema) : refuse('step_up_required', 403);
   }
   return await readJson(request, healthProviderDisconnectV1Schema) ? settle('disconnect', {}, healthProviderDisconnectResultV1Schema) : refuse('invalid_request', 400);
 };

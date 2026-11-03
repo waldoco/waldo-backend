@@ -15,7 +15,8 @@ type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 // email code: connecting accounts and tools, linking chats, pairing devices, editing memory and sending. Only deleting the
 // account, which cannot be undone, still needs an email code from the last two hours. Each reason says what the action
 // reaches, so the table stays the place to gate one again.
-// A test fails when a registry gains an action this table does not name, and an unnamed action stays gated.
+// A test fails when a registry gains an action this table does not name. The app's stepUpGated treats an unnamed action as
+// gated; the console gates only the actions marked gated here.
 export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
@@ -111,11 +112,9 @@ const GATED_ACTIONS = gated(STEP_UP_ACTIONS), GATED_ROUTES = gated(STEP_UP_ROUTE
 const ACTION_PATHS = new Set([CONSOLE_ACTION_PATH, CONTROL_ACTION_PATH, OWNER_CONTROLS_ACTION_PATH]);
 export const CONSOLE_CONFIRM_HREF = '/console/signin?confirm=1';
 
-const confirmPage = () => {
-  const href = CONSOLE_CONFIRM_HREF;
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Confirm it's you</title></head><body><h1>Confirm it's you</h1><p>This needs an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. You stay signed in.</p><p><a href="${href}">Get an email code</a></p></body></html>`,
+const confirmPage = () =>
+  new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Confirm it's you</title></head><body><h1>Confirm it's you</h1><p>This needs an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. You stay signed in.</p><p><a href="${CONSOLE_CONFIRM_HREF}">Get an email code</a></p></body></html>`,
     { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } });
-};
 
 // Refuses a gated action or route unless this browser proved an email code recently. It runs before any handler and reads
 // only the action name or path, so every console path passes through it.

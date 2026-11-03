@@ -17,6 +17,7 @@ import { bodyDigest, requestBook, type RequestBook } from '../onboarding/request
 import { loopBook } from './loops';
 import { md5Hex } from './md5';
 import { proactiveSurface, setProactiveSurface } from './proactive-surface';
+import { appLinkStepUpAction, stepUpGated } from './console-step-up';
 
 const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link', ANSWERS_PATH = '/app/v1/onboarding/answers';
 export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', ANSWERS_PATH, CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
@@ -24,7 +25,7 @@ export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
   chat: ChatChannels;
-  // Whether this app session signed in within the last two hours, as a link code needs.
+  // Whether this app session signed in within the last two hours, for a link code the step-up table gates.
   signedInRecently(): Promise<boolean>;
   // Setup is done: the first-run complete action or the setup answers landed. Starts the owner's one welcome build; a repeat starts nothing.
   setupDone?(): void;
@@ -100,7 +101,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
-    if (!await host.signedInRecently()) return problem('step_up_required');
+    if (stepUpGated(appLinkStepUpAction(link.data.provider)) && !await host.signedInRecently()) return problem('step_up_required');
     if (!host.consent.stepsOpen()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');
