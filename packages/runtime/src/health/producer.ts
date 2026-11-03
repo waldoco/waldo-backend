@@ -13,6 +13,10 @@ export type ProducerOutcome = 'written' | 'stale' | 'refused' | 'no_consent' | '
 export type ProducerDeps = Readonly<{
   readSeries: (range: { from: string; to: string; signals: readonly string[] }) => Promise<unknown>;
   writeContext: (payload: string) => Promise<unknown>;
+  // Writes a run's backfilled rows in one database call (waldo.health_context_write_batch). The payload is a JSON array of
+  // the rows, oldest first; the answer is { results } in the same order, ending at the first refusal. Absent, each backfilled
+  // row goes through writeContext one at a time.
+  writeContextBatch?: (payload: string) => Promise<unknown>;
   compute: (input: DailyScoresInput) => DailyScores;
   // Busy minutes per local day across the owner's calendars, for Weight. Absent, failing or late, Weight is unavailable.
   readDemand?: (range: { from: string; to: string; timezone: string }) => Promise<unknown>;
@@ -462,6 +466,19 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
   return a?.error === 'epoch_conflict' || a?.error === 'consent_required' ? 'refused' : 'failed';
 };
 
+// The batch writer's answers are read by position against the rows sent: a row it did not answer was not written, and a
+// refusal ends the batch. Anything but the closed answer shape is a batch that wrote nothing we know of.
+const writeBatch = async (write: NonNullable<ProducerDeps['writeContextBatch']>, rows: readonly object[]): Promise<'refused' | 'done'> => {
+  const answered = asRecord(await write(JSON.stringify(rows)))?.results;
+  const results: readonly unknown[] = Array.isArray(answered) ? answered : [];
+  for (const [index, row] of rows.entries()) {
+    const outcome = writeOutcome(results[index]);
+    if (outcome === 'written') logWritten(row);
+    if (outcome === 'refused') return 'refused';
+  }
+  return 'done';
+};
+
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
   let pending: Promise<unknown> | undefined;
   try {
@@ -510,6 +527,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const held = await heldDays(readHistory);
       if (!held) return;
       const missing = candidates.filter(day => !held.has(day)).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
+      const sendBatch = deps.writeContextBatch, batched: object[] = [];
       for (const day of missing) {
         const chosen = chooseFor(day);
         const records = recordsBySource.get(chosen.source) ?? recordsOf(chosen);
@@ -519,10 +537,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         const unavailable = (reason: 'intraday_inputs_unavailable' | 'calendar_demand_unavailable') => ({ state: 'unavailable' as const, reason });
         const late = { ...scores, form: unavailable('intraday_inputs_unavailable'), weight: unavailable('calendar_demand_unavailable') };
         const row = { ...rowOf(day, late, { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, [], false), backfilled: true };
+        if (sendBatch) { batched.push(row); continue; }
         const outcome = writeOutcome(await deps.writeContext(JSON.stringify(row)));
         if (outcome === 'written') logWritten(row);
         // A consent or epoch the database refuses is refused for every later day too.
         if (outcome === 'refused') break;
+      }
+      // One call for the run's rows, in the database's own batch size. A refusal in one is a refusal for the rest.
+      for (let from = 0; sendBatch && from < batched.length; from += BACKFILL_DAYS_PER_RUN) {
+        if (await writeBatch(sendBatch, batched.slice(from, from + BACKFILL_DAYS_PER_RUN)) === 'refused') break;
       }
     };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];

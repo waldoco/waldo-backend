@@ -222,6 +222,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
   const here = async () => compute && produceHealthScores({
     readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
+    writeContextBatch: payload => invokeHealth(rpc, doName, 'context_write_batch', payload),
     readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
