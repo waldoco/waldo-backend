@@ -6,6 +6,7 @@ import { PUSHES, pushTitle } from './expo-push';
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from './reminders';
+import type { WatchGrants } from './watch-upkeep';
 
 // Pre-event prep notes (owner ask 2026-09-23): a sweep every few minutes finds timed events
 // starting soon and has Waldo send one short brief per event occurrence, in chat.
@@ -15,6 +16,10 @@ export const BRIEF_LEAD_MS = 40 * 60_000;
 export const CALENDAR_PREP_FORMAT = { name: 'calendar_prep', schema: { type: 'object', additionalProperties: false, required: ['kind', 'text'], properties: { kind: { type: 'string', enum: ['notify', 'no_op'] }, text: { type: 'string', maxLength: 1600 } } } };
 
 export type BriefSender = (id: string, event: CalendarItem, prompt: string) => Promise<void>;
+
+// Prep briefs and update cards both start from the owner's Google account, so the sweep is kept only while a mail or
+// calendar grant exists: an owner with none is not woken every ten minutes for a sweep that can only find nothing.
+export const briefSweepRuns = (grants: WatchGrants): boolean => grants.mail || grants.calendar;
 
 export const armBriefSweep = async (scheduler: Scheduler, now: number): Promise<void> => {
   if (scheduler.lookup(BRIEF_SWEEP_ID).state !== 'absent') return;

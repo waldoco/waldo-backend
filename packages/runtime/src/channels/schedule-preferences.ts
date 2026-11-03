@@ -135,7 +135,7 @@ export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: Sched
 
 const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_schedule_preference'));
 
-export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext) => [
+export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>) => [
   {
     name: 'set_schedule_preference',
     description: "Turn one of Waldo's own scheduled behaviors off or back on, or reset all of them to the out-of-the-box defaults. Only when the owner asks. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on.",
@@ -147,7 +147,7 @@ export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context
       if (args.action !== 'reset' && args.kind === undefined) return { ok: false, code: 'invalid_args', error: 'kind is required for on and off', source_taint: null };
       if (args.action === 'reset') book.reset(); else book.set(args.kind!, args.action === 'on');
       if (args.mode) book.setHealthMode(args.mode);
-      await applySchedulePreferences(book.all(), context(), args.action === 'reset' ? undefined : args.kind);
+      await applySchedulePreferences(book.all(), await context(), args.action === 'reset' ? undefined : args.kind);
       return { ok: true, data: { preferences: book.all() }, source_taint: null };
     },
   } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences }, ToolDispatcherContext>,
