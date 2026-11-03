@@ -145,12 +145,13 @@ export const dayPlanBook = (sql: Sql) => {
     waiting(day: string, card: CardId): void {
       sql.exec('UPDATE day_plan SET sent = 0 WHERE day = ? AND card = ? AND sent IN (2, 3)', day, card);
     },
-    heldToday(day: string): readonly CardId[] {
-      return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
-    },
+    heldToday: (day: string): readonly CardId[] => heldCardsOn(sql, day),
   };
 };
 export type DayPlanBook = ReturnType<typeof dayPlanBook>;
+// The cards held on `day` for quiet hours, read only.
+export const heldCardsOn = (sql: Sql, day: string): readonly CardId[] =>
+  sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
 
 export const defaultPlan = (cards: readonly DayCard[]): readonly CardPlan[] =>
   cards.map((card) => ({ card: card.id, time: card.defaultTime, reason: 'default time' }));

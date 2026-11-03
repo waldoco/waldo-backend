@@ -131,7 +131,7 @@ export async function alarmPass(storage: DurableObjectStorage, work: () => Promi
   let last: PassRearm | null | undefined;
   try { await work(); last = passRearms.get(storage); } finally { passRearms.delete(storage); }
   const now = Date.now();
-  if (last || heldLane(await storage.get<number>(ALARM_RETRY_DUE_KEY), null, now)) await arbitrate(storage, last?.scheduleDue ?? null, now, last?.retryDelayMs ?? 250, false);
+  if (last || heldLane(await storage.get<number>(ALARM_RETRY_DUE_KEY), null, now)) await arbitrate(storage, last?.scheduleDue ?? null, now, last?.retryDelayMs ?? REARM_FLOOR_MS, false);
 }
 
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
@@ -140,7 +140,7 @@ export async function alarmPass(storage: DurableObjectStorage, work: () => Promi
 // wake already in the slot stays (the platform's retry of a pass that died, or an admission's); otherwise the retry goes in.
 // With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it. The schedule's next entry is not a
 // persisted key, so a caller passes it (Scheduler.rearm reads it) or the re-arm drops that wake.
-export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
+export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = REARM_FLOOR_MS): Promise<void> {
   if (passRearms.has(storage)) { passRearms.set(storage, { scheduleDue, retryDelayMs }); return; }
   await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
 }
@@ -163,11 +163,13 @@ async function wakeBounds(storage: DurableObjectStorage, scheduleDue: number | n
   return { bounds, free };
 }
 
-// The earliest time any kept wake can run, as the arbiter arms it before its floor; null when none is kept. A pass that
-// finds this after now has nothing to run.
-export async function nextWakeDue(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<number | null> {
+// The soonest a re-arm sets the alarm. A wake written for now (an admission's now + 250 ms) is due by then.
+const REARM_FLOOR_MS = 250;
+// Whether no kept wake can run before the arbiter's floor. A pass that finds none has nothing to run: its re-arm would set
+// the alarm for the same wake, no sooner.
+export async function nothingDueBy(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<boolean> {
   const { bounds } = await wakeBounds(storage, scheduleDue, now);
-  return bounds.length ? Math.min(...bounds) : null;
+  return !bounds.length || Math.min(...bounds) > now + REARM_FLOOR_MS;
 }
 
 async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, outside: boolean): Promise<void> {

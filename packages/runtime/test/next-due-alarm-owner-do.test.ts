@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
+import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
 import { claimStore } from '../src/memory/claims';
@@ -27,15 +28,16 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const AUTHORITY = new Set(['owner_runtime_authority', 'common_owner_authority', 'assert_channel_presence']);
 
 // Every request the owner object makes: the directory's authority calls by name, anything else by host.
-const wire = { asked: [] as string[], fetches: 0 };
+const wire = { asked: [] as string[], fetches: 0, revoked: false };
 beforeEach(() => {
-  wire.asked = []; wire.fetches = 0;
+  wire.asked = []; wire.fetches = 0; wire.revoked = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     wire.fetches += 1;
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn) wire.asked.push(fn);
     if (fn === 'owner_runtime_authority') {
+      if (wire.revoked) return Response.json(null);
       const asked = JSON.parse(String(init?.body)) as { p_do_name: string };
       return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     }
@@ -160,22 +162,32 @@ const checks = (state: DurableObjectState) =>
 const confirmZone = (state: DurableObjectState, zone: string) => { loopBook(state.storage.sql, { newId: () => 'unused', now: Date.now }); state.storage.kv.put('timezone', zone); state.storage.kv.put('timezone_confirmed', true); };
 
 describe('the heartbeat under the switch runs at its next tick worth running, on its own grid', () => {
-  const idleDay = (flag: '0' | '1') => withOwner(`next-due-idle-day-${flag}`, 'app', flag, '2027-03-10T00:05:00Z', async ({ state, scheduler, alarm, clock }) => {
+  const DAYS = 3;
+  // Drives every wake the owner object arms for three days. `idle` counts the wakes that found no schedule row due and still
+  // asked the directory.
+  const idle = (flag: '0' | '1') => withOwner(`next-due-idle-${flag}`, 'app', flag, '2027-03-10T00:05:00Z', async ({ state, scheduler, alarm, clock }) => {
     confirmZone(state, 'UTC');
     await armHeartbeat(scheduler, Date.now() - 5 * 60_000);
-    const end = Date.now() + 24 * 3_600_000;
-    let armed = await alarm(), wakes = 0;
+    const end = Date.now() + DAYS * 24 * 3_600_000;
+    let armed = await alarm(), wakes = 0, idleAsked = 0;
     const boot = authorityCalls().length;
-    while (armed !== null && armed < end && wakes < 100) { clock(armed); wakes++; armed = await alarm(); }
-    return { wakes, authority: authorityCalls().length - boot, ticks: runs(state, HEARTBEAT_ID).length, next: dueOf(state, HEARTBEAT_ID) };
+    while (armed !== null && armed < end && wakes < 500) {
+      clock(armed); wakes++;
+      const due = state.storage.sql.exec('SELECT 1 FROM schedule WHERE due_at <= ?', armed + 250).toArray().length > 0, before = authorityCalls().length;
+      armed = await alarm();
+      if (!due && authorityCalls().length > before) idleAsked++;
+    }
+    return { wakes, idleAsked, authority: authorityCalls().length - boot, ticks: runs(state, HEARTBEAT_ID).length, next: dueOf(state, HEARTBEAT_ID) };
   });
 
-  it('an idle owner: 48 wakes and 48 directory calls a day with the switch off, none with it on', async () => {
-    const off = await idleDay('0');
-    expect(off).toMatchObject({ wakes: 48, ticks: 48 });
-    expect(off.authority).toBeGreaterThanOrEqual(48);
-    const on = await idleDay('1');
-    expect(on).toEqual({ wakes: 0, authority: 0, ticks: 0, next: Z('2027-03-11T00:30:00Z') });
+  it('an idle owner: the heartbeat ticks 48 times a day with the switch off and once a day with it on', async () => {
+    const off = await idle('0'), on = await idle('1');
+    expect(off.ticks).toBe(48 * DAYS);
+    // The daily tick, a day after the first one; the day's cards and the nightly jobs still wake as they are due.
+    expect(on.ticks).toBe(DAYS - 1);
+    expect(on.idleAsked).toBe(0);
+    expect(on.wakes * 5).toBeLessThan(off.wakes);
+    expect(on.authority * 3).toBeLessThan(off.authority);
     expect(onGrid(on.next)).toBe(true);
   });
 
@@ -259,6 +271,7 @@ describe('the heartbeat under the switch runs at its next tick worth running, on
       loop(state, 'loop-1', '2027-03-10T12:15');
       await request();
       expect(await state.storage.getAlarm()).toBe(Z('2027-03-10T12:30:00Z'));
+      dayPlanBook(state.storage.sql);
       state.storage.sql.exec("INSERT INTO day_plan (day, card, time, reason, sent) VALUES ('2027-03-10', 'midday', '11:00', 'default time', 2)");
       await request();
       expect(await state.storage.getAlarm()).toBe(Z('2027-03-10T10:30:00Z'));
@@ -285,6 +298,52 @@ describe('the heartbeat under the switch runs at its next tick worth running, on
       // The row is left due on its slot and the pass runs, exactly as with the switch off.
       expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-10T10:00:00Z'));
       expect(authorityCalls()).toContain('owner_runtime_authority');
+    });
+  });
+
+  it('moves the heartbeat for a loop a lane writes inside the pass', async () => {
+    const drain = vi.spyOn(OwnerDO.prototype as unknown as { drainApp: () => Promise<void> }, 'drainApp').mockImplementation(async function (this: { ctx: DurableObjectState }) {
+      if (!this.ctx.storage.sql.exec("SELECT 1 FROM loops WHERE id = 'loop-lane'").toArray().length) loop(this.ctx, 'loop-lane', '2027-03-10T12:15');
+    });
+    try {
+      await withOwner('next-due-lane-loop', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
+        confirmZone(state, 'UTC');
+        await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z') + 24 * 3_600_000 - 30 * 60_000);
+        expect(await alarm()).toBe(Z('2027-03-10T12:30:00Z'));
+        expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-10T12:30:00Z'));
+        expect(authorityCalls()).toEqual([]);
+      });
+    } finally { drain.mockRestore(); }
+  });
+});
+
+describe('a pass the platform cut off, and an owner the directory no longer admits', () => {
+  it('runs the pass after an unfinished one in full, then marks it finished', async () => {
+    await withOwner('next-due-resumed', 'app', '1', '2027-03-10T10:00:00Z', async ({ state, scheduler, alarm }) => {
+      await armHeartbeat(scheduler, Date.now() - 10 * 60_000);
+      state.storage.kv.put('owner_alarm_pass_open_v1', true);
+      await alarm();
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+      expect(state.storage.kv.get('owner_alarm_pass_open_v1')).toBeUndefined();
+      wire.asked = [];
+      await alarm();
+      expect(authorityCalls()).toEqual([]);
+    });
+  });
+
+  it('a revoked owner\'s daily tick holds the schedule, and no later wake is armed for it', async () => {
+    await withOwner('next-due-revoked', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm, clock }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z'));
+      wire.revoked = true;
+      const daily = await alarm();
+      expect(daily).toBe(Z('2027-03-11T10:30:00Z'));
+      expect(authorityCalls()).toEqual([]);
+      clock(daily!);
+      expect(await alarm()).toBeNull();
+      expect(authorityCalls()).toEqual(['owner_runtime_authority']);
+      clock(Z('2027-03-13T00:00:00Z'));
+      expect(await alarm()).toBeNull();
     });
   });
 });

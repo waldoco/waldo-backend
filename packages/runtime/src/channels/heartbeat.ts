@@ -2,7 +2,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { nextOccurrence, type Scheduler, type ScheduleExecutor } from '../scheduler/multiplexer';
 import type { MachineEnqueued } from '../tasks/machine';
 import type { DayPlanBook } from './day-cards';
-import { isQuiet, type Loop, type LoopBook } from './loops';
+import { isQuiet, type Loop, type LoopBook, type Proactivity } from './loops';
 import { localIso, localToEpoch } from './reminders';
 import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
@@ -49,16 +49,18 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 export type Sql = Pick<SqlStorage, 'exec'>;
 
 // The heartbeat's next tick worth running, on its own grid: the first slot at or after the earliest of a held card, a past-due
-// loop out of its cooldown (both now), a cooldown's end, or a future loop's due time; past quiet hours, and never more than a
-// day out. A loop's due is the owner's wall clock, so a slot counts once the tick's own scan would see the loop due there. A
-// time at or before now means the tick should run now. Null when a due time cannot be read: the row keeps its slot.
-export const heartbeatWake = (deps: Readonly<{ sql: Sql; loops: Pick<LoopBook, 'proactivity'>; heldCards: (day: string) => readonly string[];
-  releaseHeldCards: boolean; timezone: string; now: number; every_ms: number; phase_ms: number }>): number | null => {
-  const { sql, timezone, now, every_ms } = deps;
+// loop out of its cooldown (both now), a cooldown's end, or a future loop's due time; past quiet hours. It still ticks a day
+// after its last tick, so the alarm pass that tick runs keeps its daily upkeep. A loop's due is the owner's wall clock, so a
+// slot counts once the tick's own scan would see the loop due there. A time at or before now means the tick should run now.
+// Null when a due time cannot be read: the row keeps its slot. Reads only.
+export const heartbeatWake = (deps: Readonly<{ sql: Sql; proactivity: Proactivity; heldCards: (day: string) => readonly string[];
+  timezone: string; now: number; lastTick: number; every_ms: number; phase_ms: number }>): number | null => {
+  const { sql, timezone, now, every_ms, proactivity: settings } = deps;
   const slotFrom = (at: number) => nextOccurrence({ type: 'interval', every_ms, phase_ms: deps.phase_ms }, at - 1);
   const local = (at: number) => localIso(at, timezone).slice(0, 16);
-  const localNow = local(now), settings = deps.loops.proactivity();
-  let at = deps.releaseHeldCards && deps.heldCards(localNow.slice(0, 10)).length ? now : Infinity;
+  const localNow = local(now), daily = deps.lastTick + DAY_MS;
+  if (daily <= now) return now;
+  let at = deps.heldCards(localNow.slice(0, 10)).length ? now : Infinity;
   if (settings.volume !== 'low') {
     const open = sql.exec<{ due: string; told: number | null }>(
       `SELECT l.due, (SELECT MAX(n.notified_at) FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due) AS told
@@ -76,7 +78,7 @@ export const heartbeatWake = (deps: Readonly<{ sql: Sql; loops: Pick<LoopBook, '
       at = Math.min(at, Math.max(seen, cooled));
     }
   }
-  const backstop = slotFrom(now + DAY_MS);
+  const backstop = slotFrom(daily);
   let wake = at === Infinity ? backstop : at <= now ? now : slotFrom(at);
   for (let step = 0; step < 2 * DAY_MS / every_ms && wake < backstop && isQuiet(settings, wake, timezone); step++) wake = slotFrom(wake + 1);
   return Math.min(wake, backstop);

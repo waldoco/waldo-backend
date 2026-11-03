@@ -77,7 +77,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_B
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nextWakeDue, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -103,7 +103,7 @@ import { signupName } from '../identity/console-signup';
 import { ownerName, recordSignupName } from '../onboarding/first-run';
 import { lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
-import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
+import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, LOOP_CHECK_BACK_TOOLS, reminderFloorText } from './check-back';
@@ -150,7 +150,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
-import { applyDayPlan, applyReplan, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, heldCardsOn, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -366,6 +366,7 @@ const LOOKUP_STARTED_KEY = 'owner_lookup_started';
 const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
   [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
 const ALARM_FAILURES = 'owner_alarm_failures_v1';
+const ALARM_PASS_OPEN = 'owner_alarm_pass_open_v1';
 // The round-robin lanes of an owner alarm pass, by their index in owner_alarm_last_v1.
 const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
 type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
@@ -2129,16 +2130,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
-  // With NEXT_DUE_ALARM on, a wake that finds no kept wake due runs nothing and asks the directory nothing: it re-arms for the
-  // earliest one. The check reads the arbiter's own bounds, so a wake it skips is one the arbiter would not have armed. The
-  // pass that is a failed lane's retry has spent its key already, and always runs.
-  private async nothingDue(retrying: AlarmLane | null): Promise<boolean> {
-    if (this.env.NEXT_DUE_ALARM !== '1' || retrying !== null) return false;
-    const now = Date.now();
-    let scheduleDue: number | null = NO_SCHEDULE_WAKE;
-    if (!this.ctx.storage.kv.get(LINK_MODE)) { ensureSchema(this.ctx.storage); scheduleDue = new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).nextWake(); }
-    const due = await nextWakeDue(this.ctx.storage, scheduleDue, now);
-    return due === null || due > now;
+  // With NEXT_DUE_ALARM on, a wake that finds no kept wake due runs its local lanes and stops before the directory: it asks it
+  // nothing and re-arms for the earliest wake. The check reads the arbiter's own bounds, so a wake it stops is one the arbiter
+  // would not have armed. Two passes always run in full: a failed lane's retry, which has spent its key already, and the
+  // pass after one that never finished, whose turns were cut off with no key left to name them. It reads only.
+  private async nothingDue(retrying: AlarmLane | null, resumed: boolean): Promise<boolean> {
+    if (this.env.NEXT_DUE_ALARM !== '1' || retrying !== null || resumed) return false;
+    const scheduled = !this.ctx.storage.kv.get(LINK_MODE) && this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length > 0;
+    const scheduleDue = scheduled ? new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).nextWake() : NO_SCHEDULE_WAKE;
+    return nothingDueBy(this.ctx.storage, scheduleDue, Date.now());
   }
   // Every wake the owner keeps, with the schedule's next entry. Work outside the schedule (an app, iMessage, WhatsApp or Mac
   // step) re-arms through here, or its re-arm would drop the alarm for the owner's next scheduled job. A routing object has no
@@ -2149,26 +2149,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // With NEXT_DUE_ALARM on, the heartbeat row runs at its next tick worth running (heartbeatWake), on its own grid. An alarm
   // pass moves it either way, before its due check and after its work; any other change (a request, a turn's re-arm) only
-  // pulls it earlier, so a loop, card, quiet-hours or zone change made there wakes it in time. A row retrying, paused or
-  // unreadable, a zone that is not valid, or a due time that cannot be read leaves the row on its slot, as with the switch off.
+  // pulls it earlier, so a loop, card, quiet-hours or zone change made there wakes it in time. Only a move earlier re-arms: a
+  // pass re-arms after a later one itself, and one that re-armed to hold its schedule keeps that hold. It reads before it writes and
+  // writes nothing but that row: an object without the heartbeat's tables, or without the row, is left as it is. A row
+  // retrying, paused or unreadable, a zone that is not valid or not yet confirmed on the app, or a due time that cannot be
+  // read leaves the row on its slot, as with the switch off.
   private async alignHeartbeat(later: boolean): Promise<void> {
     if (this.env.NEXT_DUE_ALARM !== '1' || this.ctx.storage.kv.get(LINK_MODE)) return;
     try {
-      ensureSchema(this.ctx.storage);
-      const sql = this.ctx.storage.sql, scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
+      const sql = this.ctx.storage.sql, kv = this.ctx.storage.kv;
+      const has = (table: string) => sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length > 0;
+      if (!['schedule', 'loops', 'loop_mail_sources', 'heartbeat_notified'].every(has)
+        || !sql.exec('SELECT 1 FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray().length) return;
+      if (this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) return;
+      const scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
       const found = scheduler.lookup(HEARTBEAT_ID);
       if (found.state !== 'entry') return;
       const { entry } = found, recurrence = entry.recurrence;
       if (entry.status !== 'armed' || entry.attempts !== 0 || recurrence?.type !== 'interval') return;
-      const timezone = this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+      const timezone = kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
       if (!validZone(timezone)) return;
       const now = Date.now();
-      const loops = loopBook(sql, { newId: () => crypto.randomUUID(), now: Date.now });
-      const wake = heartbeatWake({ sql, loops, heldCards: day => dayPlanBook(sql).heldToday(day),
-        releaseHeldCards: schedulePreferences(sql, loops).enabled('daily_brief'), timezone, now, every_ms: recurrence.every_ms, phase_ms: recurrence.phase_ms });
+      // A held card counts whatever the owner's brief setting: a tick that then releases nothing is only a wake.
+      const wake = heartbeatWake({ sql, proactivity: has('proactivity') ? storedProactivity(sql) : DEFAULT_PROACTIVITY,
+        heldCards: day => has('day_plan') ? heldCardsOn(sql, day) : [], timezone, now,
+        lastTick: entry.last_fired_at ?? entry.created_at, every_ms: recurrence.every_ms, phase_ms: recurrence.phase_ms });
       if (wake === null || (wake <= now && entry.due_at <= now)) return;
       const at = wake <= now ? nextOccurrence(recurrence, now - 1) : wake;
-      if (later ? at !== entry.due_at : at < entry.due_at) await scheduler.retime(HEARTBEAT_ID, at);
+      if ((later ? at !== entry.due_at : at < entry.due_at) && scheduler.retime(HEARTBEAT_ID, at) && at < entry.due_at) await scheduler.rearm();
     } catch { console.error(JSON.stringify({ hop: 'heartbeat_wake', ok: false, code: 'kept_slot' })); }
   }
 
@@ -2886,10 +2894,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = this.ctx.storage.kv, failed = kv.get<AlarmLane>(ALARM_FAILED_LANE_KEY), retryDue = kv.get<number>(ALARM_RETRY_DUE_KEY);
     const held = heldLane(retryDue, failed, Date.now());
     if (!held && retryDue !== undefined) kv.delete(ALARM_RETRY_DUE_KEY);
+    // With NEXT_DUE_ALARM on, a pass marks itself open until it returns or its catch completes; a pass that finds the mark was
+    // preceded by one the platform cut off, and runs in full.
+    const marking = this.env.NEXT_DUE_ALARM === '1', resumed = marking && kv.get<boolean>(ALARM_PASS_OPEN) === true;
+    if (marking) kv.put(ALARM_PASS_OPEN, true);
     try {
       const alarmEnd = Date.now() + ALARM_TURN_BUDGET_MS;
-      await alarmPass(this.ctx.storage, async () => { await this.alignHeartbeat(true); await this.alarmWork(held, held ? null : failed ?? null, alarmEnd); await this.alignHeartbeat(true); });
+      await alarmPass(this.ctx.storage, async () => { await this.alignHeartbeat(true); await this.alarmWork(held, held ? null : failed ?? null, alarmEnd, resumed); await this.alignHeartbeat(true); });
       if (!held) for (const key of [ALARM_FAILURES, ALARM_FAILED_LANE_KEY]) if (kv.get(key) !== undefined) kv.delete(key);
+      if (marking) kv.delete(ALARM_PASS_OPEN);
     } catch (error) {
       // The lane that threw is recorded unless a lane is held: a held pass failing elsewhere holds the whole pass, because
       // keeping either lane would let the two take turns at the floor. That hold lasts one step; its retry runs every lane.
@@ -2903,11 +2916,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // already, so a failure here leaves it.
       try { await alarmPass(this.ctx.storage, () => this.rearmEveryWake()); }
       catch { console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'rearm_deferred', lane })); }
+      if (marking) kv.delete(ALARM_PASS_OPEN);
     }
   }
-  private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number): Promise<void> {
+  private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number, resumed = false): Promise<void> {
     await this.browserReady;
-    if (await this.nothingDue(retrying)) { console.log(JSON.stringify({ hop: 'alarm', ok: true, code: 'nothing_due' })); await this.rearmEveryWake(); return; }
     await this.whatsappTurns(alarmEnd);
     if (held === 'pass') return;
     const lane: LaneRunner = (id, work) => runLane(id, held, work);
@@ -2920,6 +2933,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const entered = await this.serialWithin(alarmEnd, async () => {
       await lane('app', () => this.drainApp(alarmEnd));
       await lane('imessage', () => this.drainIMessage(alarmEnd));
+      if (await this.nothingDue(retrying, resumed)) { console.log(JSON.stringify({ hop: 'alarm', ok: true, code: 'nothing_due' })); await this.rearmEveryWake(); return; }
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
       // An owner with no Telegram link runs on the app when the directory still admits their account, and an owner whose only
