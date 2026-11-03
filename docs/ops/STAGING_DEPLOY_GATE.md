@@ -68,44 +68,61 @@ Cloudflare limits how much CPU a Worker may spend evaluating its script before t
 Worker builds every contract schema when its modules load. That cost sat close to the limit and varied
 from one measurement to the next, so `wrangler deploy` was refused at random.
 
-The deployed entry is now `packages/runtime/src/lazy-entry.ts`. It evaluates almost nothing at startup and
+The deployed entries are `packages/runtime/src/entry.ts` (production) and `src/staging-entry.ts`
+(staging). Each statically imports only `src/lazy-entry.ts` and `src/retired-durable-objects.ts`, and
 loads the full Worker on the first event, once per isolate. Durable Object classes are forwarders that
 build the real object inside `blockConcurrencyWhile`. Cloudflare measured startup at about 25 ms after
 this change, against roughly 300 to 950 ms before.
 
 If 10021 returns:
 
-1. Measure locally on the built bundle. `wrangler check startup` ignores `--env`, so point it at the
-   bundle: `npx wrangler check startup --worker <path to the built bundle>`.
-2. Look for new work at module scope: a schema, table or client built at import time, or a new import
-   in `lazy-entry.ts` that pulls in the full Worker.
-3. To ship while the cause is being fixed, upload the version and deploy it as a separate step. Run
-   these from `packages/runtime` in a clean checkout at the reviewed SHA. Build the console assets first,
-   as `scripts/deploy-runtime.sh` does.
+1. Find what crept into startup. `scripts/tests/runtime-bundle-startup.test.mjs` (part of
+   `verify:guards`) checks that the entry's static imports are exactly those two files and names any
+   module that got pulled in. `node scripts/startup-profile.mjs` gives the per-package breakdown.
+2. Measure the built bundle. `wrangler check startup` ignores `--env`, so build the staging bundle
+   first and pass it with `--worker`. From `packages/runtime`:
 
    ```sh
+   npx wrangler deploy --dry-run --env staging --outfile /tmp/worker.bundle
+   npx wrangler check startup --worker /tmp/worker.bundle
+   ```
+
+3. To ship while the cause is being fixed, upload the version and deploy it as a separate step. Upload
+   is checked for startup too, so it can also be refused with 10021. Retrying works only while the cost
+   sits near the limit; it is not a fix. Use a clean checkout at the reviewed SHA, since this path skips
+   `deploy-runtime.sh`'s dirty-tree refusal. From the repo root, then `packages/runtime`:
+
+   ```sh
+   pnpm --filter @waldo/dashboard-app build
+   pnpm --filter @waldo/dashboard-app verify:assets
+   cd packages/runtime
    npx wrangler versions upload --env staging --var "WALDO_RELEASE:$(git rev-parse --short HEAD)"
    npx wrangler versions deploy <version-id>@100% --env staging --yes
    ```
 
-   This applies no trigger changes. If the commit changes crons or routes, also run
-   `wrangler triggers deploy --env staging`.
+   This path cannot ship a commit that adds a Durable Object migration. wrangler refuses
+   `versions upload` then, and such a commit must go out with `wrangler deploy`. It also applies no
+   trigger changes. Staging has a cron and a custom-domain route, so if the commit changes either, also
+   run `npx wrangler triggers deploy --env staging`.
 
 ### Startup passes but the Worker fails on live traffic
 
 Because the full Worker now loads on the first event, an error in that load does not show at upload.
-It shows on the first request, alarm or message each isolate serves. Nothing can be tested before
-traffic moves, because Cloudflare generates no version URLs for a Worker that implements a Durable
-Object ([Cloudflare docs](https://developers.cloudflare.com/workers/configuration/previews/)). Our
-version subdomain answers 404.
+It shows on the first request, alarm or message each isolate serves. A failed load stays failed in that
+isolate until Cloudflare recycles it, so a bad version does not heal itself.
+
+Nothing can be tested before traffic moves. Cloudflare generates no version URLs for a Worker that
+implements a Durable Object ([Cloudflare docs](https://developers.cloudflare.com/workers/configuration/previews/)).
+On 3 Nov 2026 the staging version subdomain answered 404.
 
 So the check comes straight after the switch:
 
-1. Deploy, then immediately run the gate with `--expect-sha`. `healthz` loads the full Worker, so a
-   load error fails it.
-2. If `healthz` fails, roll back at once with `scripts/staging-rollback.sh` (above) to the version the
-   gate printed, then run the gate again.
+1. Deploy, then immediately run the gate with `--expect-sha`. `/healthz` is served by the full Worker,
+   so a load error fails it.
+2. If `healthz` fails, roll back at once with `scripts/staging-rollback.sh` (above), then run the gate
+   again. With the Cloudflare credentials the gate prints the previous version id. Without them, find
+   it with `npx wrangler deployments list --env staging`.
 3. Read the cause with `npx wrangler tail --env staging` while sending one `GET /healthz`.
 
-Durable Object events wait inside `blockConcurrencyWhile` until the real object is built. A load error
-there resets the object rather than half-running it, so a failed load does not corrupt owner state.
+A load error inside a Durable Object's `blockConcurrencyWhile` should reset the object rather than leave
+it half-built. No test covers this.
