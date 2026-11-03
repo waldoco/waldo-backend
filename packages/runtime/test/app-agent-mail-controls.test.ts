@@ -139,12 +139,13 @@ it('a build below the agent_mail revision is refused the view and its actions', 
   }, { revision: APP_CONTROLS_AGENT_MAIL_REVISION - 1 });
 });
 
-it('a claim needs a recent sign-in', async () => {
+it('a claim needs no recent sign-in', async () => {
   const w = world();
   await app('1', async ({ read, act }) => {
     const { revision } = appControlProjectionV1Schema.parse((await read()).body);
-    expect((await act({ view: 'agent_mail', action: 'agent_mail.claim', value: 'priya', notice: NOTICE, revision, request_id: 'mail-request-10' })).body).toMatchObject({ error: 'step_up_required' });
-    expect(w.rpc.filter(fn => fn === 'claim_agent_mail_handle')).toEqual([]);
+    const claimed = await act({ view: 'agent_mail', action: 'agent_mail.claim', value: 'priya', notice: NOTICE, revision, request_id: 'mail-request-10' });
+    expect(receipt(claimed.body)).toEqual(APP_AGENT_MAIL_RECEIPTS_V1.claimed);
+    expect(w.rpc.filter(fn => fn === 'claim_agent_mail_handle')).toHaveLength(1);
   }, { signedInAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString() });
 });
 

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import { calendarPushBook } from '../src/channels/calendar-push';
-import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
+import { armBriefSweep, BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { gmailPushBook } from '../src/channels/gmail-push';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
@@ -11,6 +11,8 @@ import { WATCH_UPKEEP_ID } from '../src/channels/watch-upkeep';
 import { startConsent, type ConsentFlow } from '../src/connectors/google-consent';
 import { CALENDAR_WATCH_URL, verifyCalendarChannel } from '../src/connectors/google-push';
 import { armAlarm } from '../src/scheduler/alarm-slot';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
@@ -471,6 +473,52 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       await w.pass();
       expect(w.watches('calendar_watch')).toEqual(['conn-1']);
       expect(edge.ops.filter(body => body.op === 'events_watch')).toEqual([]);
+    });
+  });
+});
+
+describe('the brief sweep follows the Google grant', () => {
+  // The wakes a day the armed recurring schedule asks for, read from each entry's own recurrence.
+  const wakesPerDay = (w: World) => w.state.storage.sql.exec<{ id: string; recurrence: string | null }>("SELECT id, recurrence_json AS recurrence FROM schedule WHERE status = 'armed'").toArray()
+    .reduce((n, row) => { const r = row.recurrence ? JSON.parse(row.recurrence) as { type: string; every_ms?: number } : null; return n + (r === null ? 0 : r.type === 'interval' ? DAY / r.every_ms! : 1); }, 0);
+  const boot = (w: World) => (w.owner.setup('telegram') as unknown as { ready: Promise<void> }).ready;
+
+  it('an owner with no grant is not woken for it, an armed one is ended at boot, a connect arms it and a disconnect ends it again', async () => {
+    let granted = 0;
+    await world('sweep-with-grant', { accounts: [{ id: 'conn-1', email: EMAIL, scopes: MAIL }] }, async w => {
+      await boot(w);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
+      granted = wakesPerDay(w);
+    });
+    await world('sweep-follows-grant', {}, async w => {
+      // A sweep an earlier Worker armed for this owner, who has no Google account.
+      await armBriefSweep(new Scheduler(w.state.storage.sql, w.state.storage, productionDeps()), Date.now());
+      await boot(w);
+      expect(w.row(BRIEF_SWEEP_ID)?.status ?? 'none').not.toBe('armed');
+      const bare = wakesPerDay(w);
+      // The ten-minute sweep and the hourly watch upkeep are gone; the rest of the owner's own jobs stay.
+      expect(granted - bare).toBe(144 + 24);
+      expect(w.row('heartbeat-tick')?.status).toBe('armed');
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
+      expect(wakesPerDay(w)).toBe(granted);
+      expect(await w.owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
+      expect(w.row(BRIEF_SWEEP_ID)?.status ?? 'none').not.toBe('armed');
+      expect(wakesPerDay(w)).toBe(bare);
+    });
+  });
+
+  it('a connect with event briefs turned off, or turning them on with no grant, arms no sweep', async () => {
+    await world('sweep-briefs-off', { off: ['event_briefs'] }, async w => {
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
+    });
+    await world('sweep-on-without-grant', { off: ['event_briefs'] }, async w => {
+      await boot(w);
+      expect(await w.owner.setup('telegram').act({ action: 'schedule.set', id: 'event_briefs', value: 'on' })).toBe(true);
+      expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
     });
   });
 });

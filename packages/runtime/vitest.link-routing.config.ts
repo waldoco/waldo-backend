@@ -5,6 +5,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: { include: ['test/telegram-link-routing-do.test.ts', 'test/telegram-relink-owner-do.test.ts', 'test/alarm-lane-backoff.test.ts', 'test/schedule-pause-end.test.ts', 'test/schedule-failure-notice.test.ts'] },
   plugins: [cloudflareTest({
+    // The full Worker, whose Durable Object instances these tests reach into; wrangler's main is the lazy deployed entry.
+    main: './src/index.ts',
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
       RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
