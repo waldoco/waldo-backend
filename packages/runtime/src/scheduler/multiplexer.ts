@@ -427,7 +427,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
     const prior = this.sql
       .exec<{ n: number }>(
-        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
+        'SELECT count(*) AS n FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?',
         entry.id,
         lower,
         upper,
@@ -455,7 +455,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ id: string }>(
-        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
+        `SELECT id FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -471,7 +471,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ delivery: string }>(
-        `SELECT delivery FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
+        `SELECT delivery FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -554,7 +554,7 @@ export class Scheduler {
       `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, settled_at, duration_ms)
        SELECT ?, ?, ?, ?, 0, 'missed', ?, 0
        WHERE NOT EXISTS (
-         SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?
+         SELECT 1 FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?
        )`,
       `${entry.id}:${occurrenceAt}:0`,
       entry.id,
@@ -658,6 +658,8 @@ export class Scheduler {
   }
 }
 
+// Queries over this range write `+schedule_id = ?`: the unary plus keeps the exact-schedule filter but stops SQLite from
+// choosing the schedule_id index, which walks every run the schedule ever had, over the primary-key range it bounds.
 // workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
 // (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
 // ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot
