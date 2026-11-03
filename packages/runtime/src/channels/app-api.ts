@@ -14,7 +14,6 @@ import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRe
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
 import { fenceSession } from './session-fence';
-import { APP_STEP_UP_ROUTES, appLinkStepUpAction, stepUpGated } from './console-step-up';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { APP_RATING_SUFFIX } from './app-rating';
@@ -233,13 +232,14 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (who === 'unauthenticated') return fail(401);
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
   // Whether this session signed in within the last two hours, for a link code or provider connection the step-up table gates.
-  // Throws when the directory cannot list the sessions.
+  // Throws when the directory cannot list the sessions. The table loads lazily: its routes reach Durable Object modules,
+  // which cannot load in plain Node.
   const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.signed_in_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
-    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
+    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', coaching: env.HEALTH_COACHING === '1',
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
@@ -266,6 +266,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
       // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
       const { iMessageNumberView } = await import('./imessage/enrollment');
+      const { stepUpGated, appLinkStepUpAction } = await import('./console-step-up');
       if (stepUpGated(appLinkStepUpAction('imessage')) && !await signedIn()) return ok({ error: 'step_up_required', code: 'step_up_required' }, 403);
       const address = (await iMessageNumberView(env as never, who.doName)).number;
       if (!address) return fail(503);
