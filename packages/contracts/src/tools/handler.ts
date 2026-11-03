@@ -128,6 +128,10 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'list_owner_findings',
 ];
 
+// Tools whose result is outside text on some calls only: each result carries its own stamp, and the dispatcher accepts
+// either. raise_approval: its list shows card text Waldo raised while working with outside text, such as an MCP card.
+export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval'];
+
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,
 // external send_message, the MCP write bridge, the copilot writes, and every message/thread

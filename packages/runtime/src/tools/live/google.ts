@@ -9,8 +9,10 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
-import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
+import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
+import { agentMailFirstName } from '../../channels/agent-mail/handles';
+import { renderOwnerMail } from '../../channels/agent-mail/render';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
@@ -22,10 +24,12 @@ export type GoogleAccess = Readonly<{
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string, options?: ProposeOptions): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal, options?: ProposeOptions): Promise<string>;
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   placement?(id: string): CardPlacement;
+  replacement?(id: string): Replacement | null;
+  grantOutcome?(id: string): ReturnType<ApprovalDesk['grantOutcome']>;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -327,7 +331,8 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
   return result;
 };
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
+// ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null) => [
   {
     name: 'query_calendar',
     description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
@@ -358,7 +363,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       }
       if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
       // The operation marker is for the desk's reconciliation of its own writes, not for the model.
-      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, ...event }) => event);
+      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, waldo_made: _made, ...event }) => event);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
       // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
       // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
@@ -539,10 +544,22 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      // replaces is the desk's to act on, never part of the change the owner approves.
+      const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {
-        const proposal_id = await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx));
-        return { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.'), applied: false };
+        try {
+          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}) });
+          // A change the owner's standing grant covers ran without a card; the reply tells them what was done.
+          const granted = desk.grantOutcome?.(proposal_id) ?? null;
+          if (granted) return { proposal_id, status: granted.message, applied: granted.state === 'done' };
+          return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
+        } catch (error) {
+          if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(replaces!, error) };
+          throw error;
+        }
       }, args.account);
+      const refused = result.ok && 'refused' in result.data ? result.data.refused : undefined;
+      if (refused !== undefined) return { ok: false, code: 'rejected', error: refused, source_taint: null };
       return result.ok ? {...result, source_taint:null} : result;
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
@@ -578,7 +595,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists even for one address: [\"sam@example.com\"]. Write the body up to your closing word (\"Thanks,\"): Waldo's signature is added below it and shown on the card, so never sign with your name or role. Drafting an email to send once they approve is this tool: the card is that draft. Use draft_email only for a saved Gmail draft they will edit themselves. An earlier send of unknown outcome does not block a new one the owner asks for: the card says if an identical email may have gone out. To email the owner, read their address with connect_service rather than asking. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -600,24 +617,25 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // may request an identical email deliberately; their distinct turn IDs stay independent.
       const dedupe_key = ctx?.turnId ? await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, args])) : undefined;
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
-      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME.
-      // (buildMime returns the MIME TEXT; messages/send rejects it unencoded - google 400
-      // "Base64 decoding failed" on the approved send path.)
-      const raw = b64url(new TextEncoder().encode(buildMime({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, messageId: message_id, ...gate.data.reply,
-      })));
+      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME, the draft and Waldo's signature.
+      // (messages/send rejects MIME text unencoded - google 400 "Base64 decoding failed" on the approved send path.)
+      const signature = { first_name: agentMailFirstName(ownerName()) };
+      const rendered = renderOwnerMail({ subject: args.subject, body_markdown: args.body_markdown }, signature.first_name,
+        { to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}) }, { messageId: message_id, ...gate.data.reply });
+      if (!rendered.ok) return { ok: false, code: 'invalid_args', error: `The email could not be prepared (${rendered.code}), so nothing was proposed. Fix it and propose it again.`, source_taint: null };
+      const raw = b64url(new TextEncoder().encode(rendered.mime));
       try {
         const proposal_id = await desk.proposeSendEmail({
           operation_ref: await ownerEffectOperationRef(ctx),
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-          subject: args.subject, body: args.body_markdown,
+          subject: rendered.subject, body: args.body_markdown,
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
-        });
-        return { ok: true, data: { account: gate.data.account, proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
+          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
+        }, { replaces: args.replaces, outside: turnReadOutside(ctx) });
+        return { ok: true, data: { account: gate.data.account, proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
       } catch (error) {
+        if (error instanceof ApprovalReplaceError) return { ok: false, code: 'rejected', error: replaceRefusal(args.replaces!, error), source_taint: null };
         // A channel timeout may have delivered the card, but no email was sent and the
         // proposal remains blocked. Database/other faults are not card-delivery evidence.
         if (!(error instanceof EmailProposalError)) return { ok: false, code: 'transient', error: 'The email proposal could not be prepared. No email was sent; check chat before retrying.', source_taint: 'external' };

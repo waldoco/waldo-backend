@@ -17,6 +17,7 @@ import { shiftDay } from '../src/health/scores/time';
 import { ensureSchema } from '../src/tracer/schema';
 import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { jobBook } from '../src/tasks/jobs';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
 const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
@@ -69,6 +70,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     if (stored.zone) state.storage.kv.put('timezone', stored.zone);
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
+    await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }

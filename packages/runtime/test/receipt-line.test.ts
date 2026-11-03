@@ -71,6 +71,14 @@ describe('receiptLine', () => {
     expect(receiptLine([ev(1, 'propose_calendar_change', true), ev(2, 'workspace_write', true, {}, { path: 'notes.md' })]))
       .toBe('Done: workspace file written notes.md. Needs your yes: calendar change');
   });
+  // The model passed to as a string: the argument check refused the call before the handler, so nothing was proposed.
+  it('leaves off a call the argument check refused, and keeps a handler refusal and a transient failure', () => {
+    const refused = { code: 'invalid_args', reason: 'invalid_args' };
+    expect(receiptLine([ev(1, 'send_email', false, refused, { to: 'sam@example.com' }), ev(2, 'send_email', true)])).toBe('Needs your yes: email send');
+    expect(receiptLine([ev(1, 'send_email', false, refused)])).toBeNull();
+    expect(receiptLine([ev(1, 'remember', false, { code: 'invalid_args', reason: 'tool_result_error' })])).toBe('Receipts: memory stored (failed)');
+    expect(receiptLine([ev(1, 'send_email', false, { code: 'transient', reason: 'invalid_args' })])).toBe('Receipts: email send proposed (failed)');
+  });
   it('keeps a proposal labelled as one once any entry is not accepted', () => {
     expect(receiptLine([ev(1, 'propose_calendar_change', false, { code: 'rejected' })])).toBe('Receipts: calendar change proposed (failed)');
   });

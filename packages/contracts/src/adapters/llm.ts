@@ -57,6 +57,8 @@ export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
 export const llmToolTurnSchema = z.strictObject({
   call: llmToolCallSchema,
   output: z.string().max(32_768),
+  // The dispatcher's stamp on this result: outside text reaches the model labelled and sanitised as external.
+  source_taint: z.literal('external').optional(),
   // Raw provider output items (encrypted reasoning, function calls) from the round that
   // produced this call; replayed verbatim so the model continues its own reasoning.
   prior_items: z.array(z.record(z.string(), z.unknown())).optional(),

@@ -56,6 +56,7 @@ const ZONE = /^[0-9a-f]{32}$/;
 const RULE_ID = /^[A-Za-z0-9]{1,64}$/;
 // While agent mail is off, recorded rule work waits and is looked at again daily: a claim or a view wakes it sooner.
 const DEFER_MS = 24 * 60 * 60_000;
+const DEFERRED_KEY = 'agent_mail_rule_deferred_v1';
 
 // Null unless agent mail is on and every part of the rule API is configured: with any of it missing no Cloudflare call is made.
 export const agentMailRouting = (env: AgentMailRoutingEnv, fetcher: typeof fetch = fetch): AgentMailRouting | null => {
@@ -159,10 +160,20 @@ export const intendAgentMailRule = (kv: Kv, handle: string, now = Date.now()): v
 };
 export const agentMailRuleHandles = (kv: Pick<Kv, 'get'>): string[] => Object.keys(kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {});
 
-// Agent mail is off or unconfigured: no Cloudflare call, and recorded work waits rather than waking every pass.
+// Agent mail is off or unconfigured: no Cloudflare call, and recorded work waits rather than waking every pass. A wait for
+// the configuration ends on the first pass that finds it configured, not a day later. It is marked. An unmarked wait longer
+// than the directory backoff with no attempt counted is one too: every other backoff counts an attempt.
 export const deferAgentMailRules = (kv: Kv, now = Date.now()): void => {
-  if (agentMailRuleHandles(kv).length) kv.put(AGENT_MAIL_RULE_DUE_KEY, now + DEFER_MS);
-  else kv.delete(AGENT_MAIL_RULE_DUE_KEY);
+  if (agentMailRuleHandles(kv).length) { kv.put(AGENT_MAIL_RULE_DUE_KEY, now + DEFER_MS); kv.put(DEFERRED_KEY, true); }
+  else { kv.delete(AGENT_MAIL_RULE_DUE_KEY); kv.delete(DEFERRED_KEY); }
+};
+export const agentMailRulesDue = (kv: Pick<Kv, 'get'>, configured: boolean, now = Date.now()): boolean => {
+  const due = kv.get<number>(AGENT_MAIL_RULE_DUE_KEY);
+  if (due == null) return false;
+  if (due <= now) return true;
+  if (!configured) return false;
+  return kv.get<boolean>(DEFERRED_KEY) === true
+    || (due - now > BACKOFF_FIRST_MS && Object.keys(kv.get<Record<string, number>>(TRIES_KEY) ?? {}).length === 0);
 };
 
 export async function reconcileAgentMailRules(deps: Readonly<{
@@ -170,6 +181,7 @@ export async function reconcileAgentMailRules(deps: Readonly<{
   log(code: AgentMailRuleCode, cloudflare?: readonly number[]): void;
 }>): Promise<void> {
   const { kv, setup, directory } = deps;
+  kv.delete(DEFERRED_KEY);
   const started = kv.get<Intents>(AGENT_MAIL_RULE_HANDLES_KEY) ?? {}, handles = Object.keys(started);
   if (!handles.length) { kv.delete(AGENT_MAIL_RULE_DUE_KEY); kv.delete(TRIES_KEY); return; }
   const tries = kv.get<Record<string, number>>(TRIES_KEY) ?? {};

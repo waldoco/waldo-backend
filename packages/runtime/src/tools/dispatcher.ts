@@ -1,8 +1,10 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
+import type { RunOrigin } from '@waldo/contracts';
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
   EXTERNAL_ORIGIN_TOOLS,
+  VARYING_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
   rungBlockedOutcomeSchema,
@@ -67,6 +69,8 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   assertTaskSourceCurrent?: () => Promise<void>;
   ownerInitiated?: boolean;
+  // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
+  runOrigin?: RunOrigin;
   // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
   // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
   taintOrigins?: readonly string[];
@@ -1065,7 +1069,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
     if (!sourceTaint.success) return null;
     const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
-    if (expectsExternal !== (sourceTaint.data === 'external')) return null;
+    if (!VARYING_ORIGIN_TOOLS.includes(tool) && expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
       return { ok: true, data: value.data, source_taint: sourceTaint.data };
     }

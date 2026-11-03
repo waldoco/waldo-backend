@@ -76,7 +76,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
   });
 });
 
-it('approving a send, or a calendar change that reaches guests, needs a sign-in from the last two hours; a hold on the owner\'s own calendar and declining do not', async () => {
+it('a session signed in hours ago approves a send and a calendar change that reaches guests without a fresh code, each once', async () => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-step-up-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0, sends = 0, events = 0, moves = 0, seen: Record<string, unknown> = {};
@@ -89,47 +89,26 @@ it('approving a send, or a calendar change that reaches guests, needs a sign-in 
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_003, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `stepup${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0003' });
-    const host = (signedInAgo: number) => ({ csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date(Date.now() - signedInAgo).toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk });
-    const old = host(3 * 60 * 60_000), fresh = host(60_000);
-    const decide = (on: typeof old, body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), on);
+    const old = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), old);
     const digest = async (id: string) => (await desk.approvals(Date.now(), { id }))[0]!.payload_digest;
     const later = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString() as never;
+    const done = async (response: Response) => appApprovalDecisionResultV1Schema.parse(await response.json());
 
     const email = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<stepup@waldo-send>' }));
     const send = { approval_id: email, action: 'approve', expected_digest: await digest(email), request_id: 'step-up-send-0001' };
-    const refused = await decide(old, send);
-    expect([refused.status, await refused.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(sends).toBe(0);
-    expect(await state.storage.get('console:control-receipts') ?? {}).toEqual({});
+    expect(await done(await decide(send))).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false, approval_state: 'done' });
+    expect(await done(await decide(send))).toMatchObject({ duplicate: true, approval_state: 'done' });
+    expect(sends).toBe(1);
 
     const invite = await desk.propose({ action: 'create', title: 'Design review', start: later(1), end: later(2), reason: 'Sam asked', attendees: ['sam@example.test'], send_updates: 'all' });
-    const shared = await decide(old, { approval_id: invite, action: 'approve', expected_digest: await digest(invite), request_id: 'step-up-invite-0001' });
-    expect([shared.status, await shared.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(events).toBe(0);
-
-    const hold = await desk.propose({ action: 'create', title: 'Focus', start: later(3), end: later(4), reason: 'deep work' });
-    const held = await decide(old, { approval_id: hold, action: 'approve', expected_digest: await digest(hold), request_id: 'step-up-hold-0001' });
-    expect(appApprovalDecisionResultV1Schema.parse(await held.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
+    expect(await done(await decide({ approval_id: invite, action: 'approve', expected_digest: await digest(invite), request_id: 'step-up-invite-0001' }))).toMatchObject({ approval_state: 'done' });
     expect(events).toBe(1);
-    const skipped = await decide(old, { approval_id: invite, action: 'skip', expected_digest: await digest(invite), request_id: 'step-up-skip-0001' });
-    expect(appApprovalDecisionResultV1Schema.parse(await skipped.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'skipped' });
 
-    // Google gave the guest event's time without an offset, a detail the app's card schema drops; its guests still gate it.
-    const offsetless = (at: string) => at.slice(0, 19);
-    seen = { id: 'e9', title: 'Standup', start: offsetless(later(5)), end: offsetless(later(6)), all_day: false, etag: 'v1', attendees: 3 };
+    seen = { id: 'e9', title: 'Standup', start: (later(5) as string).slice(0, 19), end: (later(6) as string).slice(0, 19), all_day: false, etag: 'v1', attendees: 3 };
     const move = await desk.propose({ action: 'move', event_id: 'e9', title: 'Standup', start: later(7), end: later(8), reason: 'clash' });
-    const [card] = await desk.approvals(Date.now(), { id: move });
-    expect(card!.exact.changes?.guests ?? card!.exact.changes?.emails_guests).toBeUndefined();
-    expect(card!.actions).toContain('approve');
-    const moved = await decide(old, { approval_id: move, action: 'approve', expected_digest: await digest(move), request_id: 'step-up-move-0001' });
-    expect([moved.status, await moved.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(moves).toBe(0);
-
-    // The refusal recorded nothing, so the same request from a fresh sign-in sends exactly once.
-    const sent = await decide(fresh, send);
-    expect(sent.status).toBe(200);
-    expect(appApprovalDecisionResultV1Schema.parse(await sent.json())).toMatchObject({ request_id: 'step-up-send-0001', receipt: { state: 'recorded' }, duplicate: false, approval_state: 'done' });
-    expect(sends).toBe(1);
+    expect(await done(await decide({ approval_id: move, action: 'approve', expected_digest: await digest(move), request_id: 'step-up-move-0001' }))).toMatchObject({ approval_state: 'done' });
+    expect(moves).toBe(1);
   });
 });
 
@@ -199,7 +178,7 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_004, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `refused${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0004' });
     // A decision that raced this one: the desk answers that the row was already handled.
-    const raced = { approvals: desk.approvals, stepUp: desk.stepUp, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
+    const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
     const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
     const id = await desk.proposeSendEmail(await emailProposal({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>' }));

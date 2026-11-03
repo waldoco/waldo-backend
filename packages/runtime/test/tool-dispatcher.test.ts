@@ -6,6 +6,7 @@ import {
   executeActionArgsSchema,
   executeCodeArgsSchema,
   getCrsArgsSchema,
+  raiseApprovalArgsSchema,
   queryCalendarArgsSchema,
   sendMessageArgsSchema,
   webSearchArgsSchema,
@@ -407,6 +408,17 @@ describe('ToolDispatcher', () => {
     expect(result).toMatchObject({ ok: true });
     run.abort();
     expect(seen?.aborted).toBe(true);
+  });
+
+  it('a tool whose results are outside text on some calls only keeps each result\'s own stamp, clean or external', async () => {
+    for (const source_taint of [null, 'external'] as const) {
+      const list: ToolHandler<unknown, { approvals: unknown[] }, ToolDispatcherContext> = {
+        name: 'raise_approval', description: 'List the cards.', schema: raiseApprovalArgsSchema as never, trigger_allowlist: triggerAllowlistFor('raise_approval'), autonomy_gated: false,
+        async handle() { return { ok: true, data: { approvals: [] }, source_taint }; },
+      };
+      await expect(dispatchTool({ id: `call-varying-${String(source_taint)}`, name: 'raise_approval', args: { operation: 'list' } }, dispatcherContext('user_message'), { handlers: [list] }))
+        .resolves.toMatchObject({ ok: true, source_taint });
+    }
   });
 
   it('a non-external tool failure carrying source_taint null keeps its own error instead of invalid_handler_result', async () => {

@@ -112,6 +112,7 @@ const expectedMigrations = [
   '20261101070000_waldo_owner_google_signin.sql',
   '20261102010000_health_body_parts_usual.sql',
   '20261102020000_health_signal_read.sql',
+  '20261103090000_console_session_touch_throttle.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
