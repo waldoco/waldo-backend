@@ -107,7 +107,7 @@ describe('app screen-time routes', () => {
     expect([granted.status, rpcs.at(-1)!.fn]).toEqual([200, 'screen_time_consent_grant']);
     rpcResult = { consent: consent('storage_compute', 'withdrawn'), replayed: false, deletion_routed: true };
     const withdrawn = await post('/app/v1/screen-time/consents/withdraw', { request_id: 'st-withdraw-0001', purpose: 'storage_compute', expected_epoch: 1 });
-    expect([withdrawn.status, (await withdrawn.json()).deletion_routed, rpcs.at(-1)!.fn]).toEqual([200, true, 'screen_time_consent_withdraw']);
+    expect([withdrawn.status, (await withdrawn.json() as { deletion_routed: boolean }).deletion_routed, rpcs.at(-1)!.fn]).toEqual([200, true, 'screen_time_consent_withdraw']);
     expect((await get('/app/v1/screen-time/consents/withdraw')).status).toBe(405);
     expect((await get('/app/v1/screen-time/anything')).status).toBe(404);
   });
