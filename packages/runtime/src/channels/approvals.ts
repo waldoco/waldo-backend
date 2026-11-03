@@ -820,10 +820,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     else if (replaced) await afterWithdrawn(entry.replaces!, replaced);
     return shown;
   };
-  // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
-  // stored review itself, so any full-review presentation serves it, for the kinds it shows in full: a send's draft and a
-  // calendar change without invite details, the rules waitingMaySend and consoleMayApprove apply at the route. Every other kind is approved
-  // in chat or the app, whatever the route that asked. Answers the presentations that authorize the decision.
   // The cards that showed the whole review on this desk's surface and are still live; in the app, only those shown in this
   // turn's thread. A chat surface is one conversation with the owner.
   const shownInFullHere = (entry: LedgerRow) => {
@@ -833,7 +829,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       'SELECT surface, message_ref, approvable, payload_digest, presented_at FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL AND (? = 0 OR conversation_ref = ?)',
       entry.id, surface, surface === 'app' ? 1 : 0, thread).toArray();
   };
-  // An approval in the owner's words is authorized by a card that reached them here before the message that said so.
+  // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
+  // stored review itself, so any full-review presentation serves it, for the kinds it shows in full: a send's draft and a
+  // calendar change without invite details, the rules waitingMaySend and consoleMayApprove apply at the route. Every other kind is approved
+  // in chat or the app, whatever the route that asked. Answers the presentations that authorize the decision. An approval in
+  // the owner's words is authorized only by a card that reached them here in full before the message that said so.
   const deciding = (entry: LedgerRow, via: ApprovalVia, said?: OwnerSaid) => {
     if (said) return via.surface === surface ? shownInFullHere(entry).filter(p => p.presented_at < said.receivedAt) : [];
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number; payload_digest: string }>('SELECT surface, message_ref, approvable, payload_digest FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
