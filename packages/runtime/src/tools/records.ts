@@ -87,7 +87,7 @@ const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim null: a note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
   send_progress_note: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again') },
-  owner_message_heard: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: { replay: 'provider_idempotent', basis: 'keyed by the message id: the inbox folds only a message still admitted, so a re-run is refused as not_waiting and changes nothing', evidence: { file: 'channels/second-message.ts', needle: "reason: 'not_waiting'" } } },
+  owner_message_heard: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: { replay: 'provider_idempotent', basis: 'keyed by the message id: the inbox folds only a message still admitted, so a re-run is refused as not_waiting and changes nothing', evidence: { file: 'channels/second-message.ts', needle: "reason: 'not_waiting'" } } },
   // claim null: queued is not sent; the file leaves after the reply is written, so no done-claim can rest on this receipt.
   // core: offered only on an iMessage owner turn whose host verified tapbacks, where a tapback is a reply the model makes in
   // passing, so it is never behind a search. claim null: queued is not sent; it leaves with the reply.
@@ -243,7 +243,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', owner_message_heard: 'actions', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.

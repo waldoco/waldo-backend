@@ -3762,8 +3762,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const progressNoteRoute = progressNoteRoutes[channel];
     const progressNoteTools = progressNoteRoute ? [progressNoteHandler({ log, deliver: progressNoteRoute })] : [];
-    // owner_message_heard, on the surfaces whose running turn can see the owner's newer messages there.
-    const secondMessageTools = secondMessageEnabled(this.env) && (channel === 'app' || channel === 'imessage' || channel === 'whatsapp') ? [this.secondMessages.handler] : [];
+    // owner_message_heard; a turn whose chat offers no newer messages (ownerChat) is answered not_owner_turn.
+    const secondMessageTools = secondMessageEnabled(this.env) ? [this.secondMessages.handler] : [];
     // A tapback goes only where a host sends one: iMessage, while the turn's bridge reports tapbacks verified.
     // On WhatsApp the reaction, any one emoji, is held for the running turn and sent after its reply, on the owner's message it
     // answers.
