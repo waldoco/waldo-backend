@@ -3,6 +3,7 @@ import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_M
 import { consoleStepUpRefusal } from '../src/channels/console-step-up';
 import * as consoleAuthModule from '../src/identity/console-auth';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
+import { OWNER_CONTROLS_ACTION_PATH } from '../src/channels/dashboard-owner-controls';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 import { clearConsoleCookie, consoleAccess, consoleCookie, consoleSessionRows, signInPage } from '../src/channels/console';
 import { handleConsole } from '../src/channels/console-signin';
@@ -443,11 +444,13 @@ describe('when the browser last proved an email code', () => {
   it('a code counts for two hours and not a millisecond more', async () => {
     expect(CONSOLE_STEP_UP_MS).toBe(2 * HOUR);
     const now = 1_790_000_000_000;
-    const pair = () => new Request(`https://w.test${CONTROL_ACTION_PATH}`, { method: 'POST', headers: { accept: 'application/json' }, body: new URLSearchParams({ view: 'devices', action: 'device.pair' }) });
+    const request = (path: string, action: string) => new Request(`https://w.test${path}`, { method: 'POST', headers: { accept: 'application/json' }, body: new URLSearchParams({ view: 'account', action }) });
+    const remove = () => request(OWNER_CONTROLS_ACTION_PATH, 'account.delete');
     const session = (verified_at: number) => ({ token: 't', csrf: 'c', expires: now + HOUR, signed_in: verified_at, verified_at });
-    expect(await consoleStepUpRefusal(pair(), session(now - CONSOLE_STEP_UP_MS + 1), now)).toBeNull();
-    const refused = await consoleStepUpRefusal(pair(), session(now - CONSOLE_STEP_UP_MS), now);
+    expect(await consoleStepUpRefusal(remove(), session(now - CONSOLE_STEP_UP_MS + 1), now)).toBeNull();
+    const refused = await consoleStepUpRefusal(remove(), session(now - CONSOLE_STEP_UP_MS), now);
     expect(refused?.status).toBe(403);
     expect(await refused?.json()).toEqual({ error: 'step_up_required' });
+    expect(await consoleStepUpRefusal(request(CONTROL_ACTION_PATH, 'device.pair'), session(now - CONSOLE_STEP_UP_MS), now)).toBeNull();
   });
 });
