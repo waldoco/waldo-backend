@@ -623,6 +623,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Cards opened before presentations were recorded stay decidable where they were shown; the app can only skip them.
   if (!presentationsExisted) sql.exec("INSERT INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at) SELECT id, 'legacy', 'legacy', created_at, status = 'open', 'legacy', NULL FROM ledger WHERE status IN ('open', 'review_only')");
   const surface = deps.surface ?? 'telegram';
+  // Every surface but the app gets the desk's cards and receipts as messages; the app renders them from the ledger.
+  const messages = surface !== 'app';
   const commit = deps.commit ?? (<T>(work: () => T) => work());
   const bindOrigin = (id: string, origin: string | undefined) => {
     if (origin === undefined) return;
@@ -772,7 +774,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         deps.log({ trace: id, hop: 'approval_app_card', ms: 0, ok: false, code: 'unrepresentable' });
       }
     }
-    if (surface !== 'app') {
+    if (messages) {
       // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
       const review = await reviewing;
       // An app handoff that cannot approve already ends with "Nothing was done."
@@ -820,14 +822,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     else if (replaced) await afterWithdrawn(entry.replaces!, replaced);
     return shown;
   };
-  // The cards that showed the whole review on this desk's surface and are still live; in the app, only those shown in this
-  // turn's thread. A chat surface is one conversation with the owner.
+  // The cards that showed the whole review on this desk's surface, in this thread, and are still live. Only an app turn names
+  // a thread, so a chat surface is one conversation with the owner, and an app card shown outside any thread matches none.
   const shownInFullHere = (entry: LedgerRow) => {
     if (!approvesInWords(entry)) return [];
-    const thread = deps.conversationRef?.() ?? null;
     return sql.exec<{ surface: string; message_ref: string; approvable: number; payload_digest: string; presented_at: number }>(
-      'SELECT surface, message_ref, approvable, payload_digest, presented_at FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL AND (? = 0 OR conversation_ref = ?)',
-      entry.id, surface, surface === 'app' ? 1 : 0, thread).toArray();
+      'SELECT surface, message_ref, approvable, payload_digest, presented_at FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL AND conversation_ref IS ?',
+      entry.id, surface, deps.conversationRef?.() ?? null).toArray();
   };
   // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
   // stored review itself, so any full-review presentation serves it, for the kinds it shows in full: a send's draft and a
@@ -835,7 +836,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // in chat or the app, whatever the route that asked. Answers the presentations that authorize the decision. An approval in
   // the owner's words is authorized only by a card that reached them here in full before the message that said so.
   const deciding = (entry: LedgerRow, via: ApprovalVia, said?: OwnerSaid) => {
-    if (said) return via.surface === surface ? shownInFullHere(entry).filter(p => p.presented_at < said.receivedAt) : [];
+    if (said) return shownInFullHere(entry).filter(p => p.presented_at < said.receivedAt);
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number; payload_digest: string }>('SELECT surface, message_ref, approvable, payload_digest FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
     // Whatever its card recorded, even one shown before this rule: a kind the app gates is never approved from chat.
@@ -1572,7 +1573,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const decision = await decideOnce(id, 'a', trace, { surface }, said);
       if (decision === CHANGED_SINCE_SHOWN) return refused('changed_since_shown');
       deps.log({ trace: id, hop: 'approval_in_words', ms: 0, ok: true, code: row(id)?.status ?? 'unknown' });
-      if (surface === 'app') return { outcome: 'decided', decision, receipt_sent: false };
+      if (!messages) return { outcome: 'decided', decision, receipt_sent: false };
       const sent = await say(decision.message, undoButton(id, decision)).then(ack => ack != null, () => false);
       return { outcome: 'decided', decision, receipt_sent: sent };
     },
