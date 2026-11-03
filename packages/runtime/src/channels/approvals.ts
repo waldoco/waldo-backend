@@ -371,6 +371,11 @@ const summaryOf = (entry: LedgerRow) => {
   try { return entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json)) : entry.kind === 'mcp_call' ? describeMcp(JSON.parse(entry.payload_json)) : describeTaintedAction(JSON.parse(entry.payload_json)); }
   catch { return CARDS[entry.kind]!.title; }
 };
+// A card's one line as the desk's own ledger shows it, for search_history.
+export const ledgerSummary = (sql: Pick<SqlStorage, 'exec'>, id: string): string | null => {
+  const entry = sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
+  return entry ? summaryOf(entry) : null;
+};
 // The full review a card shows for each kind, rebuilt from the frozen payload.
 const reviewText = (entry: LedgerRow, signed = true): string => {
   const p = JSON.parse(entry.payload_json);
