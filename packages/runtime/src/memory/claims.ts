@@ -134,6 +134,8 @@ export const PROJECTION_STORES = [
   ['day_plan', ['reason']], ['standing_orders', ['scope', 'escalation']],
   ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
   ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
+  // Archived history: its own forget store redacts it the way its hot table's forget does.
+  ['history_archive', ['summary', 'row_json']],
 ] as const;
 export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\'`;
 export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
