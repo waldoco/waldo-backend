@@ -3,7 +3,7 @@ import { z } from 'zod';
 // owner_message_heard: while the owner's turn runs, the owner may write again on the same chat. The host shows the running
 // turn each newer message at its next round, and the model says what it is: fold (it changes or adds to this task, so this
 // answer covers it and it gets no turn of its own), queue (separate: it keeps its own turn after this one) or stop_current
-// (it replaces this task: this turn ends at its next round and the newer message runs next). A message the model never
+// (it replaces this task: it closes like a fold, and this turn drops what it was doing and answers it). A message the model never
 // answers stays queued. Which choice is right is the model's judgment; the host only checks the message is still waiting.
 export const OWNER_MESSAGE_CHOICES = ['fold', 'queue', 'stop_current'] as const;
 

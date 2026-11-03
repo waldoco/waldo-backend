@@ -59,7 +59,7 @@ import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type Repl
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
-import { STOPPED_FOR_NEWER, type SecondMessageRound } from './second-message';
+import type { SecondMessageRound } from './second-message';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
@@ -588,7 +588,6 @@ export const createOwnerResponder = (
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
-          if (newer?.stop) return { text: STOPPED_FOR_NEWER };
           const added = steered + (newer?.note ?? '');
           const contextSteering = control.revision();
           const visibleOwnerTexts = new Set(request.messages.filter(message => message.role === 'user').map(message => message.content));

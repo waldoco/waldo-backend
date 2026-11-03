@@ -3,7 +3,6 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appHistoryResultV1Schema, appMessageReceiptV1Schema } from '../../contracts/src/app/core';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { STOPPED_FOR_NEWER } from '../src/channels/second-message';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -115,15 +114,18 @@ it('queue: B keeps its own turn after A, and each message gets its own reply', a
   });
 });
 
-it('stop_current: A ends at its next round with an honest reply, and B runs next as its own turn', async () => {
+it('stop_current: B replaces A\'s task, closes with no turn of its own, and A\'s one reply answers it with no line about the stop', async () => {
   const name = 'second-choice-stop';
   await withOwner(name, async owner => {
     script.choice = 'stop_current';
-    const { a, b, replyTo, ranAsOwnTurn } = await secondWhileFirstRuns(owner, name, '0003');
-    // The turn ends at the round after the choice, so no model call reads the tool's result.
-    expect(replyTo(a.message_id).join('\n')).toContain(STOPPED_FOR_NEWER);
-    expect(ranAsOwnTurn).toBe(true);
-    expect(replyTo(b.message_id)).toEqual(['Reply to the second message.']);
+    const { a, b, page, replyTo, ranAsOwnTurn } = await secondWhileFirstRuns(owner, name, '0003');
+    expect(script.heard).toContain(JSON.stringify({ ok: true, data: { heard: true, choice: 'stop_current' } }));
+    expect(ranAsOwnTurn).toBe(false);
+    expect((await receipt(owner, name, 'choice-a-0003')).state).toBe('completed');
+    expect((await receipt(owner, name, 'choice-b-0003')).state).toBe('completed');
+    expect(replyTo(a.message_id)).toEqual(['Reply to the slow ask.']);
+    expect(replyTo(b.message_id)).toEqual([]);
+    expect(page.messages.filter(message => message.role === 'assistant').map(message => message.text)).toEqual(['Reply to the slow ask.']);
   });
 });
 
