@@ -21,7 +21,7 @@ import { ensureSchema } from '../src/tracer/schema';
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
 // Each scripted turn is a list of rounds; a request is the Brief's when it carries the scheduled-card header.
-const model = vi.hoisted(() => ({ brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], results: [] as string[] }));
+const model = vi.hoisted(() => ({ brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], briefRequests: [] as string[], ownerRequests: [] as string[], results: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -33,6 +33,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const brief = asked.includes('[Scheduled card "The Brief"');
     (brief ? model.briefTools : model.ownerTools).push((request.tools ?? []).map(tool => tool.name));
     if (brief) model.briefAsked.push(asked);
+    (brief ? model.briefRequests : model.ownerRequests).push(JSON.stringify(request));
     model.results.push(...(request.tool_turns ?? []).flatMap(turn => [turn.output]));
     const round = (brief ? model.brief : model.owner).shift();
     if (!round) return done('Noted.');
@@ -63,9 +64,23 @@ const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-sessi
 const STARTUP = { id: 'ev-startup', title: 'Startup time', start: `${DAY}T15:00:00Z`, end: `${DAY}T16:45:00Z`, status: 'confirmed' };
 const BLOCK = { action: 'create', title: 'Deck', start: `${DAY}T09:30:00Z`, end: `${DAY}T12:30:00Z`, block: 'deep_work', reason: 'Hold the morning for the deck' };
 const ANSWERS = ['Finish the deck', 'Gym first', 'Something else'];
+// The owner's shared health for one test; every other test shares none. Distinct words, so their absence from storage is a real check.
+const health = vi.hoisted(() => ({ shared: false }));
+const HEALTH_WORDS = ['Form zone:', 'slept 52 minutes under baseline', 'Recovery: low'];
+const NO_HEALTH = 'No derived health context is available for this invocation.';
+// Staging loads non-core tools through find_tools and use_tool; the default loader offers them directly.
+const via = (harness: boolean, name: string, args: Record<string, unknown>): Round[] => harness
+  ? [{ calls: [{ name: 'find_tools', arguments: { names: [name] } }] }, { calls: [{ name: 'use_tool', arguments: { name, arguments: args } }] }]
+  : [{ calls: [{ name, arguments: args }] }];
+// Every row the owner object keeps: KV values and the rows of each table it can read.
+const storedText = (state: DurableObjectState) => {
+  const kv = [...state.storage.kv.list()].map(([key, value]) => `${key} ${JSON.stringify(value)}`);
+  const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(row => row.name);
+  return [...kv, ...tables.flatMap(table => state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray().map(row => JSON.stringify(row)))].join('\n');
+};
 
 beforeEach(() => {
-  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.results = [];
+  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false;
   calendar.events = [STARTUP]; calendar.created = []; calendar.moved = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -73,7 +88,8 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_log_recent') return Response.json([]);
-    if (fn === 'health_context_read') return Response.json({ context: null, previous: null });
+    if (fn === 'health_context_read') return Response.json(health.shared ? { context: { id: 'planning-health', day: DAY, form: { score: 41, zone: 'low' }, recovery: { score: 38, zone: 'low' },
+      weight: { score: 70, zone: 'high' }, drivers: ['slept 52 minutes under baseline'], confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(AT - 3_600_000).toISOString() }, previous: null } : { context: null, previous: null });
     if (fn === 'assert_channel_presence') return Response.json(false);
     if (fn === 'console_session_inventory') {
       const created = new Date(AT - 3_600_000).toISOString();
@@ -145,15 +161,17 @@ const owned = async (name: string, settings: Readonly<Record<string, unknown>>, 
 const briefRow = (history: Awaited<ReturnType<Steps['history']>>) => history.messages.find(message => message.role === 'assistant' && message.text.startsWith('The Brief'))!;
 
 describe('the planning Brief on the app', { timeout: 30_000 }, () => {
-  it('asks one question with answers to tap; the answer puts a block on a card; the calendar changes only on yes', async () => {
+  it.each([['default', false], ['harness', true]] as const)('asks one question with answers to tap; the answer puts a block on a card; the calendar changes only on yes (%s loader)', async (loader, harness) => {
     const QUESTION = 'The Brief\nYour day is open until Startup time at 3. What do you want done this morning?';
-    model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: QUESTION }];
-    model.owner = [{ calls: [{ name: 'propose_calendar_change', arguments: BLOCK }] }, { text: 'It is on a card for your yes.' }];
-    await owned('planning-brief-ask', { PLANNING_BRIEF: '1' }, async ({ state, brief, say, history, approvals, decide, hops }) => {
+    model.brief = [...via(harness, 'offer_replies', { choices: ANSWERS }), { text: QUESTION }];
+    model.owner = [...via(harness, 'propose_calendar_change', BLOCK), { text: 'It is on a card for your yes.' }];
+    await owned(`planning-brief-ask-${loader}`, { PLANNING_BRIEF: '1', ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
       await brief();
-      // The Brief planned with the planning instruction and could raise cards and offer answers.
+      // The Brief planned with the planning instruction, could raise cards and offer answers, and was told no health is shared.
       expect(model.briefAsked[0]).toContain(PLANNING_BRIEF_INSTRUCTION);
-      expect(model.briefTools[0]).toEqual(expect.arrayContaining(['offer_replies', 'propose_calendar_change', 'propose_action']));
+      expect(model.briefRequests[0]).toContain(NO_HEALTH);
+      for (const name of ['offer_replies', 'propose_calendar_change', 'propose_action']) expect(model.briefRequests[0]).toContain(name);
+      if (harness) expect(model.briefTools[0]).toEqual(expect.arrayContaining(['find_tools', 'use_tool']));
       expect(model.results.some(result => result.includes('"offered":true'))).toBe(true);
       const delivered = briefRow(await history());
       expect(delivered.text).toBe(QUESTION);
@@ -163,8 +181,8 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
 
       // A tap sends the label as the owner's own message: an ordinary turn, which is not offered the card-only tool.
       await say(ANSWERS[0]!);
-      expect(model.ownerTools[0]).not.toContain('offer_replies');
-      expect(model.ownerTools[0]).toContain('propose_calendar_change');
+      expect(model.ownerRequests[0]).not.toContain('offer_replies');
+      expect(model.ownerRequests[0]).toContain('propose_calendar_change');
       const [card] = await approvals();
       expect(card).toMatchObject({ kind: 'calendar_change', state: 'open', exact: { changes: { action: 'create', title: 'Deck' } } });
       expect(calendar.created).toEqual([]);
@@ -214,6 +232,24 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
       expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM loops WHERE id = 'loop-synth'").one().status).toBe('open');
       expect(await approvals()).toEqual([]);
       expect(briefRow(await history()).parts.map(part => part.type)).toEqual(['text', 'quick_replies']);
+    });
+  });
+
+  it('with health shared, plans with it, and no stored row, card or answer keeps it', async () => {
+    health.shared = true;
+    const EASE = { action: 'create', title: 'Buffer', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour before Startup time' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: EASE }, { name: 'offer_replies', arguments: { choices: ['Keep it light', 'Push through'] } }] },
+      { text: 'The Brief\nA low day on your scores, so keep the morning gentle. I put a buffer before Startup time on a card for your yes. How do you want to take today?' }];
+    await owned('planning-brief-health', { PLANNING_BRIEF: '1' }, async ({ state, brief, history, approvals }) => {
+      await brief();
+      expect(model.briefRequests[0]).toContain('Form zone:');
+      expect(model.briefRequests[0]).not.toContain(NO_HEALTH);
+      const [card] = await approvals();
+      expect(card).toMatchObject({ kind: 'calendar_change', exact: { changes: { action: 'create', title: 'Buffer' } } });
+      expect(briefRow(await history()).parts.map(part => part.type)).toEqual(['text', 'quick_replies']);
+      const stored = storedText(state);
+      expect(stored).toContain('Keep it light');
+      for (const word of HEALTH_WORDS) expect(stored).not.toContain(word);
     });
   });
 
