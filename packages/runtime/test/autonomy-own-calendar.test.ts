@@ -13,7 +13,6 @@ import { googleHandlers } from '../src/tools/live/google';
 // Tuesday 3 Nov 2026, 09:00 in Kolkata.
 const NOW = Date.UTC(2026, 10, 3, 3, 30);
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
-const OWN = 'waldo-cal@group.calendar.google.com';
 const ACCOUNT = 'sam@example.com';
 const iso = (ms: number) => new Date(ms).toISOString() as never;
 const terms = (over: Partial<AppAutonomyGrantTermsV1> = {}): AppAutonomyGrantTermsV1 => ({
@@ -21,27 +20,34 @@ const terms = (over: Partial<AppAutonomyGrantTermsV1> = {}): AppAutonomyGrantTer
   limits: { max_per_day: 3, timezone: 'Asia/Kolkata' }, valid_from: NOW - DAY, expires_at: NOW + 30 * DAY, ...over,
 });
 const focus = (startMs = NOW + 5 * HOUR, over: Record<string, unknown> = {}) =>
-  ({ action: 'create' as const, title: 'Focus', start: iso(startMs), end: iso(startMs + HOUR), reason: 'plan the day', calendar_id: OWN, block: 'deep_work' as const, ...over });
+  ({ action: 'create' as const, title: 'Focus', start: iso(startMs), end: iso(startMs + HOUR), reason: 'plan the day', block: 'deep_work' as const, ...over });
+// Events as the primary calendar reads them back: e1 is a block Waldo created, r1 one in a series, x1 one Waldo created that has
+// since gained a guest, and u1 the owner's own event, with no mark.
+const MARKED = new Set(['e1', 'r1', 'x1']);
 
 type Grants = ReturnType<typeof standingGrants>;
-const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock'>; createThrows?: boolean }> = {}) => {
+const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock' | 'enabled'>; createThrows?: boolean; undoCancels?: boolean }> = {}) => {
   let now = NOW, n = 0, g = 0;
   const writes: unknown[][] = [];
   const cards: string[] = [];
   const logs: Record<string, unknown>[] = [];
+  // The version each event is at after Waldo's own writes, so an undo reads back the version it wrote.
+  const versions = new Map<string, string>();
   const client = {
     account: { connection_id: `local:${ACCOUNT}`, email: ACCOUNT },
-    event: async (id: string, calendarId?: string) => ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: id === 'e1' || id === 'r1' ? 'v1' : 'v2', calendar: calendarId, ...(id === 'r1' ? { recurring_event_id: 'series' } : {}) }),
+    event: async (id: string, calendarId?: string) => ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: versions.get(id) ?? (id === 'e1' || id === 'r1' || id === 'u1' ? 'v1' : 'v2'), calendar: calendarId,
+      ...(id === 'r1' ? { recurring_event_id: 'series' } : {}), ...(MARKED.has(id) ? { waldo_made: true } : {}), ...(id === 'x1' ? { attendees: 1 } : {}) }),
     createEvent: async (input: Record<string, unknown>) => { writes.push(['create', input]); if (options.createThrows) throw new Error('socket closed'); return { id: String(input.id), title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
     moveEvent: async (...args: unknown[]) => { writes.push(['move', ...args]); return { id: 'e1', title: 'Focus', start: '', end: '', all_day: false, etag: 'v3' }; },
-    cancelEvent: async (...args: unknown[]) => { writes.push(['cancel', ...args]); },
+    cancelEvent: async (...args: unknown[]) => { writes.push(['cancel', ...args]); versions.set(String(args[0]), 'v4'); return { id: String(args[0]), title: 'Focus', start: '', end: '', all_day: false, etag: 'v4', status: 'cancelled' }; },
+    restoreEvent: async (...args: unknown[]) => { writes.push(['restore', ...args]); return { id: String(args[0]), title: 'Focus', start: '', end: '', all_day: false, etag: 'v5' }; },
   } as unknown as GoogleClient;
-  const real = standingGrants(state.storage, { now: () => now, newId: () => `g${++g}`, enabled: () => true, ownerRef: () => 'owner-1', ownCalendar: account => account === ACCOUNT ? OWN : null });
+  const real = standingGrants(state.storage, { now: () => now, newId: () => `g${++g}`, enabled: () => true, ownerRef: () => 'owner-1' });
   const effects = ownerEffectLedger(state.storage, () => now);
   const desk = approvalDesk(state.storage.sql, {
     call: async (method, body) => { if (method === 'sendMessage') cards.push(String((body as { text?: string }).text)); return { message_id: cards.length }; },
     owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: entry => logs.push(entry as Record<string, unknown>),
-    effects, ownerRef: () => 'owner-1', grants: options.grants ? options.grants(real) : real,
+    effects, ownerRef: () => 'owner-1', grants: options.grants ? options.grants(real) : real, ...(options.undoCancels ? { undoCancels: true } : {}),
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
   const propose = (p: ReturnType<typeof focus>, ...origin: [RunOrigin | undefined] | []) => desk.propose(p, 'turn-1', `tool:${n + 1}`, { origin: origin.length ? origin[0] : 'owner' });
@@ -50,14 +56,18 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
 const inDo = (name: string, run: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => run(state));
 
-describe('calendar.move_own_block: Waldo places and moves its own blocks without a card', () => {
+const midway = (real: Grants, then: () => void): Pick<Grants, 'ownBlock' | 'enabled'> =>
+  ({ enabled: real.enabled, ownBlock: (change: OwnBlockChange, origin: RunOrigin | undefined) => { const decision = real.ownBlock(change, origin); then(); return decision; } });
+
+describe('calendar.move_own_block: Waldo places, moves and removes its own blocks on the primary calendar without a card', () => {
   it('golden path: evaluate, reserve with the recheck, write, report; then undo until the block starts', () => inDo('own-golden', async state => {
     const w = world(state);
     w.grants.grant(terms(), 'app');
     const id = await w.propose(focus());
     expect(w.cards).toEqual([]);
     expect(w.writes).toHaveLength(1);
-    expect(w.writes[0]![1]).toMatchObject({ calendarId: OWN, title: 'Focus' });
+    expect(w.writes[0]![1]).toMatchObject({ title: 'Focus', made: true });
+    expect(w.writes[0]![1]).not.toHaveProperty('calendarId');
     expect(w.status(id)).toBe('done');
     expect(w.desk.grantOutcome(id)).toMatchObject({ state: 'done' });
     expect(w.desk.grantOutcome(id)!.message).toMatch(/^Done under your standing grant: Add "Focus"/);
@@ -86,7 +96,7 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
     expect(w.writes.map(write => write[0])).toEqual(['create']);
   }));
 
-  it('moves an own block, keeping the move undoable', () => inDo('own-move', async state => {
+  it('moves a block Waldo created, keeping the move undoable', () => inDo('own-move', async state => {
     const w = world(state);
     w.grants.grant(terms(), 'app');
     const id = await w.propose({ ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'e1' } as never);
@@ -96,7 +106,7 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
   }));
 
   it('falls back to the ordinary card when the grant is revoked between evaluation and dispatch', () => inDo('own-revoke-mid', async state => {
-    const w = world(state, { grants: real => ({ ownBlock: (change: OwnBlockChange, origin: RunOrigin | undefined) => { const decision = real.ownBlock(change, origin); real.revoke('g1'); return decision; } }) });
+    const w = world(state, { grants: real => midway(real, () => real.revoke('g1')) });
     w.grants.grant(terms(), 'app');
     const id = await w.propose(focus());
     expect(w.writes).toEqual([]);
@@ -107,7 +117,7 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
   }));
 
   it('falls back to the card when the grant expires or the owner pauses before dispatch', () => inDo('own-expire-pause', async state => {
-    const expiring = world(state, { grants: real => ({ ownBlock: (change: OwnBlockChange, origin: RunOrigin | undefined) => { const decision = real.ownBlock(change, origin); expiring.clock.set(NOW + 2 * HOUR); return decision; } }) });
+    const expiring = world(state, { grants: real => midway(real, () => expiring.clock.set(NOW + 2 * HOUR)) });
     expiring.grants.grant(terms({ expires_at: NOW + HOUR }), 'app');
     const first = await expiring.propose(focus());
     expect(expiring.status(first)).toBe('open');
@@ -115,7 +125,7 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
   }));
 
   it('pausing between evaluation and dispatch cards it', () => inDo('own-pause-mid', async state => {
-    const w = world(state, { grants: real => ({ ownBlock: (change: OwnBlockChange, origin: RunOrigin | undefined) => { const decision = real.ownBlock(change, origin); real.pause('app'); return decision; } }) });
+    const w = world(state, { grants: real => midway(real, () => real.pause('app')) });
     w.grants.grant(terms(), 'app');
     expect(w.status(await w.propose(focus()))).toBe('open');
     expect(w.writes).toEqual([]);
@@ -145,9 +155,12 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
   const cardsAsToday: readonly [string, ReturnType<typeof focus>, RunOrigin | undefined][] = [
     ['an outside-text run', focus(), 'external'],
     ['a run of unknown origin', focus(), undefined],
-    ['the primary calendar', focus(undefined, { calendar_id: undefined }), 'owner'],
+    ['another calendar of the owner\'s', focus(undefined, { calendar_id: 'team@group.calendar.google.com' }), 'owner'],
     ['a block with a guest', focus(undefined, { attendees: ['ann@example.com'], send_updates: 'none' }), 'owner'],
-    ['a cancel of an own block', { action: 'cancel', event_id: 'e1', title: 'Focus', reason: 'x', calendar_id: OWN } as never, 'owner'],
+    ['a move of the owner\'s own event', { ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'u1' } as never, 'owner'],
+    ['a cancel of the owner\'s own event', { action: 'cancel', event_id: 'u1', title: 'Focus', reason: 'x' } as never, 'owner'],
+    ['a move of a block of Waldo\'s that now has a guest', { ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'x1' } as never, 'owner'],
+    ['a cancel of a block of Waldo\'s from an outside-text run', { action: 'cancel', event_id: 'e1', title: 'Focus', reason: 'x' } as never, 'external'],
   ];
   for (const [name, change, origin] of cardsAsToday) {
     it(`cards ${name} under a matching grant, exactly as a desk with no grants does`, () => inDo(`own-cards-${name.replace(/\W+/g, '-')}`, async state => {
@@ -158,7 +171,7 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
       expect(w.status(id)).toBe('open');
       const granted = state.storage.sql.exec<{ summary: string; payload_json: string }>('SELECT summary, payload_json FROM ledger WHERE id = ?', id).one();
       await inDo(`own-baseline-${name.replace(/\W+/g, '-')}`, async baselineState => {
-        const baseline = world(baselineState, { grants: () => ({ ownBlock: () => ({ refused: 'off' }) }) });
+        const baseline = world(baselineState, { grants: () => ({ enabled: () => false, ownBlock: () => ({ refused: 'off' }) }) });
         const baseId = await baseline.propose(change, origin);
         expect(baselineState.storage.sql.exec<{ summary: string; payload_json: string }>('SELECT summary, payload_json FROM ledger WHERE id = ?', baseId).one()).toEqual(granted);
         expect(baseline.cards).toEqual(w.cards);
@@ -176,14 +189,14 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
     expect(w.writes).toHaveLength(1);
   }));
 
-  it('a move of a recurring event on Waldo\'s calendar cards, and its stored change has only the keys a card had before', () => inDo('own-recurring', async state => {
+  it('a move of a recurring event Waldo created cards, and its stored change has only the keys a card had before', () => inDo('own-recurring', async state => {
     const w = world(state);
     w.grants.grant(terms(), 'app');
     const id = await w.propose({ ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'r1' } as never);
     expect(w.writes).toEqual([]);
     expect(w.status(id)).toBe('open');
     expect(Object.keys(JSON.parse(state.storage.sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', id).one().payload_json)).sort())
-      .toEqual(['account', 'action', 'block', 'calendar_id', 'end', 'event_id', 'operation_ref', 'reason', 'seen_end', 'seen_etag', 'seen_start', 'start', 'time_zone', 'title']);
+      .toEqual(['account', 'action', 'block', 'end', 'event_id', 'operation_ref', 'reason', 'seen_end', 'seen_etag', 'seen_start', 'start', 'time_zone', 'title']);
   }));
 
   it('a desk without the grant store cards every proposal', () => inDo('own-no-store', async state => {
@@ -193,6 +206,52 @@ describe('calendar.move_own_block: Waldo places and moves its own blocks without
     const id = await desk.propose(focus(), 'turn', 'tool:x', { origin: 'owner' });
     expect(writes).toEqual([]);
     expect(desk.grantOutcome(id)).toBeNull();
+  }));
+
+  it('falsifier: a grant-backed move of an event Waldo did not create raises a card, never a write', () => inDo('own-falsifier', async state => {
+    const w = world(state);
+    w.grants.grant(terms(), 'app');
+    const id = await w.propose({ ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'u1' } as never);
+    expect(w.writes).toEqual([]);
+    expect(w.cards).toHaveLength(1);
+    expect(w.status(id)).toBe('open');
+    expect(w.logs.find(entry => entry.hop === 'grant_eval')).toMatchObject({ detail: 'not_waldo_made' });
+    // The same move of Waldo's own block runs.
+    expect(w.status(await w.propose({ ...focus(NOW + 7 * HOUR), action: 'move', event_id: 'e1' } as never))).toBe('done');
+  }));
+
+  it('removes a block Waldo created, undoable until it would have started', () => inDo('own-cancel', async state => {
+    const w = world(state, { undoCancels: true });
+    w.grants.grant(terms(), 'app');
+    const id = await w.propose({ action: 'cancel', event_id: 'e1', title: 'Focus', reason: 'the day moved' } as never);
+    expect(w.cards).toEqual([]);
+    expect(w.writes.map(write => write.slice(0, 2))).toEqual([['cancel', 'e1']]);
+    expect(w.status(id)).toBe('done');
+    w.clock.set(NOW + 4 * HOUR);
+    expect((await w.desk.decide(id, 'u', 't')).toast).toBe('Undone');
+    expect(w.writes.at(-1)![0]).toBe('restore');
+  }));
+
+  it('a remove that could not be undone cards instead', () => inDo('own-cancel-no-undo', async state => {
+    const w = world(state);
+    w.grants.grant(terms(), 'app');
+    const id = await w.propose({ action: 'cancel', event_id: 'e1', title: 'Focus', reason: 'the day moved' } as never);
+    expect(w.writes).toEqual([]);
+    expect(w.status(id)).toBe('open');
+  }));
+
+  it('marks what Waldo creates only while grants can act', () => inDo('own-mark-off', async state => {
+    const w = world(state, { grants: real => ({ enabled: () => false, ownBlock: real.ownBlock }) });
+    const id = await w.propose(focus());
+    await w.desk.decide(id, 'a', 't', { surface: 'telegram', messageRef: '42:1' });
+    expect(w.status(id)).toBe('done');
+    expect(w.writes[0]![1]).not.toHaveProperty('made');
+    await inDo('own-mark-on', async onState => {
+      const on = world(onState);
+      const approved = await on.propose(focus(undefined, { attendees: ['ann@example.com'], send_updates: 'none' }));
+      await on.desk.decide(approved, 'a', 't', { surface: 'telegram', messageRef: '42:1' });
+      expect(on.writes[0]![1]).toMatchObject({ made: true });
+    });
   }));
 
   it('the 10-minute undo of a card the owner approved is unchanged', () => inDo('own-card-undo', async state => {

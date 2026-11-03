@@ -8,19 +8,15 @@ import type { GrantUsageKey } from './owner-effect-ledger';
 // origin, pause); whether an action serves the grant is the model's judgment, and nothing here reads titles or text.
 const GRANT = 'autonomy:grant:';
 const PAUSED = 'autonomy:paused';
-// The calendar Waldo made on an account, once it has made one. No writer yet: its creation needs Google's
-// calendar.app.created scope, which the owner has not approved, so every owner reads none and every change cards.
-export const ownCalendarId = (storage: DurableObjectStorage, account: string): string | null =>
-  storage.kv.get<string>(`autonomy:own_calendar:${account.toLowerCase()}`) ?? null;
-
-// A calendar change as the desk stores it, with what it read of the event before a move.
+// A calendar change as the desk stores it, with what it read of the event before a move or a cancel: its time, its guests,
+// whether it is part of a series, and whether it carries the private mark Waldo writes on the events it creates.
 export type OwnBlockChange = Readonly<{
   action: 'create' | 'move' | 'cancel'; account?: string; calendar_id?: string; event_id?: string | null; start?: string | null; end?: string | null;
   attendees?: readonly string[]; send_updates?: 'all' | 'none'; rename_to?: string; location?: string; description?: string; add_meet_link?: boolean;
-  seen_start?: string; seen_end?: string; seen_guests?: number; seen_recurring?: boolean;
+  seen_start?: string; seen_end?: string; seen_guests?: number; seen_recurring?: boolean; seen_made?: boolean;
 }>;
 // Closed, for traces: never a title, an id, a time or an address.
-export type GrantRefusal = 'off' | 'paused' | 'origin' | 'no_grant' | 'not_own_calendar' | 'shape' | 'outside_bounds' | 'lead';
+export type GrantRefusal = 'off' | 'paused' | 'origin' | 'no_grant' | 'not_primary' | 'not_waldo_made' | 'shape' | 'outside_bounds' | 'lead';
 export type GrantUse = Readonly<{
   grant_id: string; revision: number; class: AutonomyClassV1;
   quota: GrantUsageKey & Readonly<{ max_per_day: number }>;
@@ -29,9 +25,12 @@ export type GrantUse = Readonly<{
 }>;
 export type GrantDecision = Readonly<{ use: GrantUse }> | Readonly<{ refused: GrantRefusal }>;
 
-// Waldo's own calendar touches no one, is capped and undoable, so Waldo's own runs may use it as the owner's turns do.
-// A run woken by or replying to someone else's words never does.
+// Waldo's own guest-free blocks touch no one, are capped and undoable, so Waldo's own runs may use them as the owner's turns
+// do. A run woken by or replying to someone else's words never does, and neither does one with no origin (a health trigger).
 const OWN_BLOCK_ORIGINS: readonly RunOrigin[] = ['owner', 'owner_standing', 'waldo'];
+// The account's primary calendar: named by default, as 'primary', or by the account's own address.
+const onPrimary = (calendarId: string | undefined, account: string) =>
+  calendarId === undefined || calendarId === 'primary' || calendarId.toLowerCase() === account.toLowerCase();
 
 const localParts = (ms: number, timeZone: string) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' })
@@ -44,8 +43,6 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
   // The deployment switch; off, nothing authorizes and every proposal cards.
   enabled(): boolean;
   ownerRef(): string;
-  // The id of the calendar Waldo made on this account, or null when it has none.
-  ownCalendar(account: string): string | null;
 }>) => {
   const read = (grantId: string): StandingGrantRecord | null => {
     const parsed = standingGrantRecordSchema.safeParse(storage.kv.get(GRANT + grantId));
@@ -64,14 +61,16 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
     const grant = list().find(candidate => candidate.terms.scope.class === 'calendar.move_own_block' && holds(candidate, now)
       && candidate.terms.scope.account.toLowerCase() === change.account?.toLowerCase());
     if (!grant || grant.terms.scope.class !== 'calendar.move_own_block') return { refused: 'no_grant' };
-    const own = deps.ownCalendar(grant.terms.scope.account);
-    if (own === null || change.calendar_id !== own) return { refused: 'not_own_calendar' };
-    // Only a time on Waldo's own calendar: nothing that notifies, invites, renames, carries details or removes.
-    if ((change.action !== 'create' && change.action !== 'move') || change.attendees?.length || change.send_updates || change.rename_to !== undefined
-      || change.location !== undefined || change.description !== undefined || change.add_meet_link || change.seen_recurring || change.seen_guests) return { refused: 'shape' };
+    if (!onPrimary(change.calendar_id, grant.terms.scope.account)) return { refused: 'not_primary' };
+    // A create is Waldo's by making it; a move or a cancel only of an event read back carrying Waldo's mark.
+    if (change.action !== 'create' && change.seen_made !== true) return { refused: 'not_waldo_made' };
+    // Only a time: nothing that notifies, invites, renames or carries details, and nothing with guests or in a series.
+    if (change.attendees?.length || change.send_updates || change.rename_to !== undefined || change.location !== undefined || change.description !== undefined
+      || change.add_meet_link || change.seen_recurring || change.seen_guests) return { refused: 'shape' };
     const { window, weekdays, min_lead_minutes } = grant.terms.scope;
     const { timezone, max_per_day } = grant.terms.limits;
-    const start = Date.parse(change.start ?? ''), end = Date.parse(change.end ?? '');
+    // A cancel is bounded by where the block is now; a create or a move by where it goes, and a move by where it was too.
+    const start = Date.parse((change.action === 'cancel' ? change.seen_start : change.start) ?? ''), end = Date.parse((change.action === 'cancel' ? change.seen_end : change.end) ?? '');
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return { refused: 'outside_bounds' };
     const from = localParts(start, timezone), to = localParts(end, timezone);
     if (from.day !== to.day || !weekdays.includes(from.weekday) || from.time < window.from || to.time > window.to) return { refused: 'outside_bounds' };
@@ -92,6 +91,8 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
   };
 
   return {
+    // Whether Waldo marks the events it creates as its own, which only matters while grants can act.
+    enabled: deps.enabled,
     list,
     paused,
     ownBlock,

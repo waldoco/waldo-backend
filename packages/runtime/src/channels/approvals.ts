@@ -4,7 +4,7 @@ import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs, type RunOrigin } from '@waldo/contracts';
-import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
+import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type CalendarItem, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
 import { ownerMailText, renderOwnerMail } from './agent-mail/render';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
@@ -566,7 +566,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Whether a cancel can be undone, by putting the event back on the version the cancel left.
   undoCancels?: boolean;
   // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger.
-  grants?: Pick<StandingGrants, 'ownBlock'>;
+  grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -884,7 +884,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const target = p.calendar_id || p.send_updates ? { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) } : undefined;
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
+      // While grants can act, every event Waldo creates carries its mark, so a later grant can tell Waldo's blocks from the owner's.
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...(deps.grants?.enabled() ? { made: true } : {}), ...target,
         ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}), ...(p.block ? { block: p.block } : {}) });
       return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
     }
@@ -970,9 +971,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // A change a standing grant covers runs now, with no card: claimed, applied through the ledger's recheck, reported by the
   // turn. Refused at dispatch (revoked, expired, paused, changed, or the day's budget used) it becomes the ordinary card.
-  const granted = async (id: string, stored: Stored, client: GoogleClient, origin: RunOrigin | undefined, recurring: boolean): Promise<boolean> => {
+  const granted = async (id: string, stored: Stored, client: GoogleClient, origin: RunOrigin | undefined, before: CalendarItem | undefined): Promise<boolean> => {
     if (!deps.grants || !deps.effects) return false;
-    const decision = deps.grants.ownBlock({ ...stored, ...(recurring ? { seen_recurring: true } : {}) }, origin);
+    // A grant removes a block only where the remove can be put back.
+    if (stored.action === 'cancel' && !deps.undoCancels) { deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'no_undo' }); return false; }
+    const decision = deps.grants.ownBlock({ ...stored, ...(before?.recurring_event_id !== undefined ? { seen_recurring: true } : {}), ...(before?.waldo_made ? { seen_made: true } : {}) }, origin);
     deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'use' in decision ? 'granted' : decision.refused });
     if (!('use' in decision)) return false;
     const use = decision.use;
@@ -1742,7 +1745,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
         bindOptions(id, options);
-        if (client && await granted(id, stored, client, options.origin, before?.recurring_event_id !== undefined)) return id;
+        if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);
         return id;
       };
