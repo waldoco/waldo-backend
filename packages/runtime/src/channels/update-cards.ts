@@ -1,4 +1,4 @@
-import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type CalendarDeltaEvent, type CalendarItem, type GoogleClient, type MailItem, type MailLabelChange } from '../connectors/google';
+import { calendarPromptProjection, mailPromptProjection, sha256Hex, type CalendarChange, type CalendarDeltaEvent, type CalendarItem, type GoogleClient, type MailItem, type MailLabelChange } from '../connectors/google';
 import { CALENDAR_LAST_SEEN_TABLE_SCHEMA } from '../do-schema';
 import { localDayWindow } from '../health/scores/time';
 import { localIso } from './reminders';
@@ -101,13 +101,35 @@ export const updateBook = (sql: Sql) => {
     mark(key: WatchKey, now: number): void {
       setState(key, String(now));
     },
-    // The delta cursors: the mail history id ('mail') and each calendar's sync token ('cal:<calendar id>').
-    cursor(key: string): string | null { return state(`cursor:${key}`); },
-    moveCursor(key: string, from: string | null, to: string): void {
-      if (state(`cursor:${key}`) !== from) throw new CursorMovedError();
-      setState(`cursor:${key}`, to);
+    // Each delta source ('mail:<account>', 'cal:<account>:<calendar>'): its cursor (a history id or a sync token), when it was
+    // last read, and the push waiting on it (when the push came).
+    cursor(source: string): string | null { return state(`cursor:${source}`); },
+    moveCursor(source: string, from: string | null, to: string): void {
+      if (state(`cursor:${source}`) !== from) throw new CursorMovedError();
+      setState(`cursor:${source}`, to);
     },
-    dropCursor(key: string): void { sql.exec('DELETE FROM watch_state WHERE key = ?', `cursor:${key}`); },
+    readAt(source: string): number | null { const value = state(`read:${source}`); return value === null ? null : Number(value); },
+    pendingAt(source: string): string | null { return state(`pending:${source}`); },
+    pend(source: string, at: number): void { setState(`pending:${source}`, String(at)); },
+    sourceDue(source: string, now: number): boolean {
+      const read = state(`read:${source}`);
+      return read === null || state(`pending:${source}`) !== null || now - Number(read) >= SOURCE_POLL_MS;
+    },
+    // A push that came while the read ran is still waiting: only the one the read began with is cleared.
+    markRead(source: string, at: number, pending: string | null): void {
+      setState(`read:${source}`, String(at));
+      if (pending !== null) sql.exec('DELETE FROM watch_state WHERE key = ? AND value = ?', `pending:${source}`, pending);
+    },
+    // Forgets a source: a calendar no longer read, or each source of an account the owner disconnected.
+    dropSource(source: string): void {
+      for (const kind of ['cursor', 'read', 'pending']) sql.exec('DELETE FROM watch_state WHERE key = ?', `${kind}:${source}`);
+    },
+    dropAccount(account: string): void {
+      for (const kind of ['cursor', 'read', 'pending']) {
+        sql.exec('DELETE FROM watch_state WHERE key = ?', `${kind}:${mailSource(account)}`);
+        sql.exec('DELETE FROM watch_state WHERE substr(key, 1, ?) = ?', `${kind}:cal:${account}:`.length, `${kind}:cal:${account}:`);
+      }
+    },
     // Marks each key seen, and answers which were new.
     firstSeen(keys: readonly string[], at: number): ReadonlySet<string> {
       const fresh = new Set(keys.filter(key => sql.exec('INSERT INTO google_delta_seen (key, seen_at) VALUES (?, ?) ON CONFLICT (key) DO NOTHING RETURNING key', key, at).toArray().length > 0));
@@ -225,17 +247,26 @@ export type ChangeRead = Readonly<{
   // (null when it was cancelled), by id.
   // seedCapped: the day's read reached its cap, so the latest events in the window are not kept and their changes carry no before.
   seen?: Readonly<{ day: string; seed: readonly SeenEvent[] | null; seedCapped: boolean; changed: ReadonlyMap<string, SeenEvent | null> }>;
-  // With the delta reads: each change's dedupe key (null: never deduped), the cursors to move, and what each source did.
-  delta?: Readonly<{ keys: readonly (string | null)[]; cursors: readonly CursorMove[]; codes: readonly DeltaCode[] }>;
+  // With the delta reads: each change's dedupe key (null: never deduped), the cursors to move, the sources read (with the
+  // push that was waiting on each when its read began), and what each source did.
+  delta?: Readonly<{ keys: readonly (string | null)[]; cursors: readonly CursorMove[]; reads: readonly SourceRead[]; codes: readonly DeltaCode[] }>;
 }>;
 type CursorMove = Readonly<{ key: string; from: string | null; to: string }>;
-// What a delta read did, as a bounded code for logs: never an id or a calendar name.
+// at: when the source was read up to (null: this read). A source that failed before any read keeps the watermark it would
+// have read its gap from, since the shared watermark moves on without it.
+type SourceRead = Readonly<{ source: string; pending: string | null; at: number | null }>;
+// What a delta read did, as a bounded code for logs: never an id, an address or a calendar name.
 export type DeltaCode = `${'mail' | 'calendar'}_${'baseline' | 'rebased' | 'capped' | 'delta_failed' | 'read_failed'}`;
-// The calendars the delta reads, by Google id, and the account they are read through: cursors belong to one mailbox and
-// one account's calendars, so a different account starts every source from a baseline.
-export type DeltaSource = Readonly<{ calendars: readonly string[]; account: string }>;
+// One connected Google account the delta reads: its client, the calendars it reads by Google id, and whether its mail is read.
+// Cursors, read times and waiting pushes are kept per source, so no two accounts share one.
+export type DeltaAccount = Readonly<{ id: string; email: string; google: DeltaGoogle; calendars: readonly string[]; mail: boolean }>;
+export type DeltaSource = Readonly<{ accounts: readonly DeltaAccount[] }>;
 type DeltaGoogle = Pick<GoogleClient, 'newMail' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
-// What one tick reads the older way, for a calendar the delta could not read: a few pages of the window since the watermark.
+export const mailSource = (account: string) => `mail:${account}`;
+export const calendarSource = (account: string, calendarId: string) => `cal:${account}:${calendarId}`;
+// A source no push woke is read on the poll, at most this often; a push marks it to be read on the next tick.
+export const SOURCE_POLL_MS = 9 * 60_000;
+// What one tick reads the older way, for a calendar the delta could not read: a few pages of the window since its last read.
 const WINDOW_PAGES = 4;
 // A calendar cursor that holds this, and when, instead of a sync token: its baseline was past the page cap.
 const CAPPED = 'capped:';
@@ -264,7 +295,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const [from, to] = dayState ? [now - DAY_STATE_BACK_MS, now + DAY_STATE_AHEAD_MS] : [now, now + 2 * DAY_MS];
-  const found = delta ? await readDelta(book, google as DeltaGoogle, delta, { calendarSince, mailSince, from, to, now }) : null;
+  const found = delta ? await readDelta(book, delta, { calendarSince, mailSince, from, to, now }) : null;
   let items: readonly CalendarChange[], mailItems: readonly MailItem[];
   if (found) ({ items, mail: mailItems } = found);
   else {
@@ -280,17 +311,22 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
     items = [...window, ...movedOut];
     mailItems = mailSince === null ? [] : await google.newMail(mailSince, 10);
   }
-  const calendar = items.map((item) => toChange(item, calendarSince ?? now));
+  // With the delta reads a change names the owner's account it came from, so a reply or a card can act from that account.
+  const withAccount = (detail: object, account: string | undefined) => JSON.stringify(account === undefined ? detail : { ...detail, account });
+  const calendar = items.map((item) => {
+    const change = toChange(item, calendarSince ?? now);
+    return found ? { ...change, detail: withAccount(JSON.parse(change.detail) as object, found.eventAccounts.get(item.id)) } : change;
+  });
   const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];
   const mail = mailItems.map((item): Change => {
-    const detail = JSON.stringify(mailPromptProjection(item));
+    const detail = withAccount(mailPromptProjection(item), found?.mailAccounts.get(item.id));
     if (!sourceFollowups) return { source: 'mail', kind: 'new', detail, ref: `message:${item.id}` };
     const source_ref = `mail:${item.thread_id || item.id}`;
     observed.push({ source_ref, thread_id: item.thread_id, at: Date.parse(item.at), message_id: item.id });
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };
   });
   const changes = [...calendar, ...mail, ...(found?.after ?? [])];
-  const deltaFields = found ? { delta: { keys: [...items.map(item => `evt:${item.id}:${item.etag ?? item.status}`), ...mailItems.map(item => `msg:${item.id}`), ...(found.after.map(() => null))], cursors: found.cursors, codes: found.codes } } : {};
+  const deltaFields = found ? { delta: { keys: [...found.eventKeys, ...mailItems.map(item => `msg:${item.id}`), ...(found.after.map(() => null))], cursors: found.cursors, reads: found.reads, codes: found.codes } } : {};
   if (!dayState) return { changes, observed, now, ...deltaFields };
   const seed = book.seedDue(dayState.day)
     ? await Promise.all((await dayState.events(new Date(from).toISOString(), new Date(to).toISOString(), SEED_EVENTS, true)).map(seenOf(dayState.titleDigest))) : null;
@@ -298,83 +334,106 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   return { changes, observed, now, seen: { day: dayState.day, seed, seedCapped: (seed?.length ?? 0) >= SEED_EVENTS, changed }, ...deltaFields };
 };
 
-// The delta reads. Each calendar the owner reads from its sync token, then the mailbox from its history id. A source whose
-// cursor is new or re-based, or whose delta cannot be read, reads its gap once the older way (since the watermark), and a
-// failed delta leaves its cursor where it was: the overlap that follows is deduped, so nothing is lost or said twice.
-const readDelta = async (book: UpdateBook, google: DeltaGoogle, delta: DeltaSource,
+// The delta reads, account by account: each calendar it reads from its sync token, then its mailbox from its history id. A source
+// is read when a push marked it or the poll finds it due. A source whose cursor is new or re-based, or whose delta cannot be
+// read, reads its gap once the older way since its own last read; a source whose read fails moves no cursor, and the overlap
+// that follows is deduped, so nothing is lost or said twice. One account, or one calendar, that cannot be read holds no other
+// back: only when every source due fails does the tick fail, with nothing moved.
+const readDelta = async (book: UpdateBook, delta: DeltaSource,
   window: Readonly<{ calendarSince: number | null; mailSince: number | null; from: number; to: number; now: number }>) => {
-  const cursors: CursorMove[] = [], codes: DeltaCode[] = [];
-  const owner = book.cursor('account');
-  if (owner !== delta.account) cursors.push({ key: 'account', from: owner, to: delta.account });
-  // A cursor kept for another account is no cursor here; the write still checks it against what is stored.
-  const cursorOf = (key: string) => (owner === delta.account ? book.cursor(key) : null);
-  const events = new Map<string, CalendarDeltaEvent>();
+  const cursors: CursorMove[] = [], codes: DeltaCode[] = [], reads: SourceRead[] = [], after: Change[] = [];
+  const events = new Map<string, CalendarChange | CalendarDeltaEvent>(), eventAccounts = new Map<string, string>();
+  const mail = new Map<string, MailItem>(), mailAccounts = new Map<string, string>();
   // Google lists changes in no time window: only events in the read window are news, and an event the owner was shown that
   // moved out of it or was cancelled. A recurring series is news wherever its first instance falls.
   const inWindow = (event: CalendarDeltaEvent) => event.series === true || book.lastSeen(event.id) !== null
     || (event.status !== 'cancelled' && Date.parse(event.end) > window.from && Date.parse(event.start) < window.to);
-  const olderWay = async (calendarId: string): Promise<readonly CalendarChange[]> => {
-    if (window.calendarSince === null) return [];
-    const found: CalendarChange[] = [];
-    let page: string | undefined;
-    for (let i = 0; i < WINDOW_PAGES; i += 1) {
-      const read = await google.changedEventsPage!(calendarId, window.calendarSince, window.from, window.to, 50, page);
-      found.push(...read.events);
-      if (!read.next_page_token) break;
-      page = read.next_page_token;
+  let due = 0, done = 0, firstFailure: unknown;
+  // What is stored when a source's read begins, before any I/O: the write moves its cursor, and clears its push, only if
+  // each still holds this.
+  const read = async (source: string, since: number | null, body: (held: string | null, since: number | null, moves: CursorMove[]) => Promise<void>, failed: DeltaCode) => {
+    if (!book.sourceDue(source, window.now)) return;
+    due += 1;
+    const held = book.cursor(source), pending = book.pendingAt(source), readAt = book.readAt(source), moves: CursorMove[] = [];
+    try {
+      await body(held, readAt ?? since, moves);
+      cursors.push(...moves);
+      reads.push({ source, pending, at: null });
+      done += 1;
+    } catch (error) {
+      codes.push(failed);
+      firstFailure ??= error;
+      if (readAt === null && since !== null) reads.push({ source, pending: null, at: since });
     }
-    return found;
   };
-  let read = 0, firstFailure: unknown;
-  for (const calendarId of delta.calendars) {
-    // What is stored now, before any I/O: the write moves the cursor only if it still holds this.
-    const key = `cal:${calendarId}`, held = book.cursor(key), stored = cursorOf(key);
-    // A baseline past the page cap is tried again a day later, not on every tick; meanwhile the calendar is read the older way.
-    const cappedAt = stored?.startsWith(CAPPED) ? Number(stored.slice(CAPPED.length)) : null;
-    const token = cappedAt === null ? stored : null;
-    let gap = true;
-    try {
-      const found = cappedAt !== null && window.now - cappedAt < DAY_MS ? { state: 'capped' as const, held: true } : await google.calendarDelta!(calendarId, token, window.from);
-      if (found.state === 'capped') {
-        codes.push('calendar_capped');
-        if (!('held' in found)) cursors.push({ key, from: held, to: `${CAPPED}${window.now}` });
-      } else {
-        cursors.push({ key, from: held, to: found.sync_token });
-        if (found.state === 'delta') { gap = false; for (const event of found.events) if (!events.has(event.id) && inWindow(event)) events.set(event.id, event); }
-        else codes.push(token === null ? 'calendar_baseline' : 'calendar_rebased');
+  for (const account of delta.accounts) {
+    const { google } = account;
+    // The same meeting sits on each invited account's calendar under one event id: it is read once, from the first account.
+    const keep = (event: CalendarChange | CalendarDeltaEvent) => {
+      if (events.has(event.id)) return;
+      events.set(event.id, event);
+      eventAccounts.set(event.id, account.email);
+    };
+    for (const calendarId of account.calendars) await read(calendarSource(account.id, calendarId), window.calendarSince, async (held, since, moves) => {
+      const key = calendarSource(account.id, calendarId);
+      // A baseline past the page cap is tried again a day later, not on every tick; meanwhile the calendar is read the older way.
+      const cappedAt = held?.startsWith(CAPPED) ? Number(held.slice(CAPPED.length)) : null;
+      const token = cappedAt === null ? held : null;
+      let gap = true;
+      try {
+        const found = cappedAt !== null && window.now - cappedAt < DAY_MS ? null : await google.calendarDelta!(calendarId, token, window.from);
+        if (found === null || found.state === 'capped') {
+          codes.push('calendar_capped');
+          if (found) moves.push({ key, from: held, to: `${CAPPED}${window.now}` });
+        } else {
+          moves.push({ key, from: held, to: found.sync_token });
+          if (found.state === 'delta') { gap = false; for (const event of found.events) if (inWindow(event)) keep(event); }
+          else codes.push(token === null ? 'calendar_baseline' : 'calendar_rebased');
+        }
+      } catch { codes.push('calendar_delta_failed'); }
+      if (!gap || since === null) return;
+      let page: string | undefined;
+      for (let i = 0; i < WINDOW_PAGES; i += 1) {
+        const found = await google.changedEventsPage!(calendarId, since, window.from, window.to, 50, page);
+        found.events.forEach(keep);
+        if (!found.next_page_token) break;
+        page = found.next_page_token;
       }
-    } catch { codes.push('calendar_delta_failed'); }
-    try {
-      if (gap) for (const event of await olderWay(calendarId)) if (!events.has(event.id)) events.set(event.id, event);
-      read += 1;
-    } catch (error) { codes.push('calendar_read_failed'); firstFailure ??= error; }
+    }, 'calendar_read_failed');
+    if (account.mail) await read(mailSource(account.id), window.mailSince, async (held, since, moves) => {
+      let added: readonly MailItem[] | null = null, labels: readonly MailLabelChange[] = [], leftOut = 0;
+      try {
+        const found = await google.mailDelta!(held, 20);
+        moves.push({ key: mailSource(account.id), from: held, to: found.history_id });
+        if (found.state === 'delta') ({ added, labels, left_out: leftOut } = found);
+        else codes.push(held === null ? 'mail_baseline' : 'mail_rebased');
+      } catch { codes.push('mail_delta_failed'); }
+      added ??= since === null ? [] : await google.newMail(since, 10);
+      for (const item of added) if (!mail.has(item.id)) { mail.set(item.id, item); mailAccounts.set(item.id, account.email); }
+      for (const label of labels) {
+        const seen = added.find(item => item.id === label.message_id);
+        if (!seen && !book.seen(`msg:${label.message_id}`)) continue;
+        after.push({ source: 'mail', kind: label.change, detail: seen ? JSON.stringify({ ...mailPromptProjection(seen), account: account.email }) : book.mailDetail(label.message_id) ?? '{}', ref: `message:${label.message_id}` });
+      }
+      if (leftOut) after.push({ source: 'mail', kind: 'more', detail: JSON.stringify({ more_messages: leftOut, account: account.email }) });
+    }, 'mail_read_failed');
   }
-  // An outage, not one calendar: the tick fails as before and nothing moves.
-  if (delta.calendars.length && read === 0) throw firstFailure;
-  const heldMail = book.cursor('mail'), cursor = cursorOf('mail');
-  let mail: readonly MailItem[] | null = null, labels: readonly MailLabelChange[] = [], leftOut = 0;
-  try {
-    const found = await google.mailDelta!(cursor, 20);
-    cursors.push({ key: 'mail', from: heldMail, to: found.history_id });
-    if (found.state === 'delta') ({ added: mail, labels, left_out: leftOut } = found);
-    else codes.push(cursor === null ? 'mail_baseline' : 'mail_rebased');
-  } catch { codes.push('mail_delta_failed'); }
-  mail ??= window.mailSince === null ? [] : await google.newMail(window.mailSince, 10);
-  const added = new Set(mail.map(item => item.id));
-  const after: Change[] = [];
-  for (const label of labels) {
-    if (!added.has(label.message_id) && !book.seen(`msg:${label.message_id}`)) continue;
-    const detail = mail.find(item => item.id === label.message_id);
-    after.push({ source: 'mail', kind: label.change, detail: detail ? JSON.stringify(mailPromptProjection(detail)) : book.mailDetail(label.message_id) ?? '{}', ref: `message:${label.message_id}` });
-  }
-  if (leftOut) after.push({ source: 'mail', kind: 'more', detail: JSON.stringify({ more_messages: leftOut }) });
-  return { items: [...events.values()], mail, after, cursors, codes };
+  // An outage, not one source: the tick fails as before and nothing moves. A tick with nothing due reads nothing.
+  if (due > 0 && done === 0) throw firstFailure;
+  const items = [...events.values()];
+  // Each account's copy of a meeting has its own etag, link and reply: the key is the event id and what the owner is shown
+  // of it, so a change is said once whichever account reads it, in this tick or a later one.
+  const eventKeys = await Promise.all(items.map(async (event) => `evt:${event.id}:${(await sha256Hex(JSON.stringify([event.status, event.start, event.end,
+    event.all_day, event.title, event.location ?? null, event.description ?? null, event.attendees ?? null, event.attendee_names ?? null,
+    event.recurring_event_id ?? null, event.original_start ?? null, 'series' in event ? event.series ?? null : null]))).slice(0, 32)}`));
+  return { items, mail: [...mail.values()], after, cursors, reads, codes, eventKeys, eventAccounts, mailAccounts };
 };
 // Records what the read observed and moves the watermarks. With the day state it also keeps each event as last seen, and
 // returns each calendar change with what the event was before it, read before anything this read saw is kept.
 export const writeChanges = (book: UpdateBook, read: ChangeRead): readonly Change[] => {
   if (read.delta) {
     for (const move of read.delta.cursors) book.moveCursor(move.key, move.from, move.to);
+    for (const source of read.delta.reads) book.markRead(source.source, source.at ?? read.now, source.pending);
     const keys = read.delta.keys;
     const fresh = book.firstSeen(keys.filter((key): key is string => key !== null), read.now);
     // A key seen twice in one read is new only once.

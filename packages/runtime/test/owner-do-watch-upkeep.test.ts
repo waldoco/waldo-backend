@@ -455,7 +455,7 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       expect(w.watches('calendar_watch'), 'the primary calendar').toEqual(['conn-1']);
       const team = edge.ops.filter(body => body.op === 'events_watch');
       expect(team.map(body => body.calendar_id)).toEqual(['team@group.example.test']);
-      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:started=2:failed=0:stopped=0']);
+      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:accounts=1:started=2:failed=0:stopped=0']);
       for (const { raw } of w.lines('calendar_watch')) expect(raw).not.toMatch(/@|conn-|example/);
       const push = (channel: string, number: number) => w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
         headers: { 'x-waldo-gcal-channel': channel, 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': String(number) } }));
@@ -463,6 +463,40 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       expect(w.lines('calendar_push')).toHaveLength(1);
       expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
       expect(w.lines('calendar_push'), 'a redelivery wakes nothing').toHaveLength(1);
+    });
+  });
+
+  it('every connected account is watched on its own; a push marks only its account; a disconnect stops and forgets only that account', async () => {
+    edge.calendars = [listed(EMAIL, true)];
+    await world('upkeep-realtime-accounts', { off: ['event_briefs'], realtime: true }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.connect('conn-2', [...MAIL, CALENDAR], 'second@example.test');
+      for (let n = 0; n < 2 && w.watches('gmail_watch').length < 2; n++) await w.pass();
+      expect(w.watches('calendar_watch')).toEqual(['conn-1', 'conn-2']);
+      expect(w.watches('gmail_watch')).toEqual(['conn-1', 'conn-2']);
+      expect(codes(w, 'gmail_watch').at(-1)).toBe('gmail_watches:accounts=2:started=2:failed=0:skipped=0');
+      for (const { raw } of [...w.lines('gmail_watch'), ...w.lines('calendar_watch')]) expect(raw).not.toMatch(/@|conn-|example/);
+      const sql = w.state.storage.sql;
+      const waiting = () => sql.exec<{ key: string }>("SELECT key FROM watch_state WHERE key LIKE 'pending:%' ORDER BY key").toArray().map(row => row.key);
+      const second = edge.ops.find(body => body.op === 'calendar_watch' && body.connection === 'conn-2')!;
+      expect((await w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': String(second.channel_id), 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': '1' } }))).status).toBe(200);
+      expect(waiting()).toEqual(['pending:cal:conn-2:primary']);
+      expect(await w.push('conn-2', '600')).toBe('wake');
+      expect(waiting()).toEqual(['pending:cal:conn-2:primary', 'pending:mail:conn-2']);
+      expect(await w.push('conn-2', '600'), 'a redelivery').toBe('ignore');
+      await w.push('conn-9', '700');
+      expect(codes(w, 'gmail_push').at(-1), 'a mailbox no connected account holds').toBe('unknown_account');
+      for (const { raw } of w.lines('gmail_push')) expect(raw).not.toMatch(/@|conn-|example/);
+      sql.exec("INSERT INTO watch_state (key, value) VALUES ('cursor:mail:conn-1', '5'), ('cursor:cal:conn-1:primary', 's1'), ('cursor:mail:conn-2', '9')");
+      const first = edge.ops.find(body => body.op === 'calendar_watch' && body.connection === 'conn-1')!;
+      expect(await w.owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
+      expect(edge.ops.filter(body => body.op === 'channel_stop').map(body => [body.connection, body.channel_id])).toEqual([['conn-1', first.channel_id]]);
+      expect(sql.exec<{ key: string }>("SELECT key FROM watch_state WHERE key LIKE '%conn-%' ORDER BY key").toArray().map(row => row.key))
+        .toEqual(['cursor:mail:conn-2', 'pending:cal:conn-2:primary', 'pending:mail:conn-2']);
+      await w.push('conn-1', '800');
+      expect(codes(w, 'gmail_push').at(-1), 'a disconnected mailbox wakes nothing').toBe('unknown_account');
+      expect(waiting()).not.toContain('pending:mail:conn-1');
     });
   });
 

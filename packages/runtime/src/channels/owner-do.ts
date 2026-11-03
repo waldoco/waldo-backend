@@ -156,7 +156,7 @@ import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview,
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
 import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-changes';
-import { reviewMailFollowup, titleDigester, updateBook, type UpdateBook } from './update-cards';
+import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBook, type DeltaAccount, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
 import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
@@ -208,7 +208,7 @@ import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
-import { connectServiceHandler, googleHandlers } from '../tools/live/google';
+import { connectServiceHandler, googleHandlers, MAX_ACCOUNTS_PER_READ } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
 import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
@@ -232,7 +232,7 @@ import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
-import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
+import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
 import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
@@ -257,8 +257,9 @@ import { calendarPushBook, wakeBriefSweep } from './calendar-push';
 import { calendarSet, realtimeTriage } from './calendar-set';
 import { calendarChannelsBook } from './calendar-watches';
 import { gmailPushBook } from './gmail-push';
+import { gmailWatchesBook } from './gmail-watches';
 import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpkeep, WATCH_UPKEEP_ID } from './watch-upkeep';
-import { gmailPush } from '../connectors/google-push';
+import { gmailPush, stopChannel } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
@@ -2365,9 +2366,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const state = request.headers.get('x-waldo-gcal-state');
     const number = Number(request.headers.get('x-waldo-gcal-number'));
     if (!channel || (state !== 'sync' && state !== 'exists' && state !== 'not_exists') || !Number.isSafeInteger(number)) return new Response('ok');
-    // A channel per read calendar (GOOGLE_REALTIME_TRIAGE), else the older primary-only channel.
-    if (calendarChannelsBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake' && calendarPushBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake') return new Response('ok');
+    // A channel per read calendar on each account (GOOGLE_REALTIME_TRIAGE) marks that calendar to be read, else the older
+    // primary-only channel; until upkeep hands that one over, it marks the primary calendar of the account it was started on.
+    const kv = this.ctx.storage.kv, legacy = calendarPushBook(kv), legacyConnection = legacy.connection();
+    const admitted = calendarChannelsBook(kv).admit(channel, state, number);
+    if (!admitted && legacy.admit(channel, state, number) !== 'wake') return new Response('ok');
     ensureSchema(this.ctx.storage);
+    const heir = admitted ? null : realtimeTriage(this.env)
+      ? ((await this.ctx.storage.get<GoogleAccount[]>('google:accounts')) ?? []).find(account => legacyConnection === null ? account.refresh_token : account.id === legacyConnection) : undefined;
+    const source = admitted ? calendarSource(admitted.account, admitted.calendarId) : heir ? calendarSource(heir.id, 'primary') : null;
+    if (source) updateBook(this.ctx.storage.sql).pend(source, Date.now());
     const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
     console.log(JSON.stringify({ hop: 'calendar_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
     return new Response('ok');
@@ -2377,8 +2385,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async gmailPush(request: Request): Promise<Response> {
     const connection = request.headers.get('x-waldo-gmail-connection') ?? '';
     const history = request.headers.get('x-waldo-gmail-history') ?? '';
-    if (!connection || gmailPushBook(this.ctx.storage.kv).admit(connection, history) !== 'wake') return new Response('ok');
+    if (!connection) return new Response('ok');
+    const kv = this.ctx.storage.kv;
+    let source: string | null = null;
+    if (realtimeTriage(this.env)) {
+      // The ingress routed the push by its mailbox to this connection. A mailbox no connected account holds is dropped; a
+      // watched one marks that mailbox to be read. Until upkeep starts its own watch, the older watch's pushes still count.
+      if (!((await this.ctx.storage.get<GoogleAccount[]>('google:accounts')) ?? []).some(account => account.id === connection)) {
+        console.log(JSON.stringify({ hop: 'gmail_push', ok: false, code: 'unknown_account' }));
+        return new Response('ok');
+      }
+      const watches = gmailWatchesBook(kv);
+      if (watches.state(connection) ? watches.admit(connection, history) === null : gmailPushBook(kv).admit(connection, history) !== 'wake') return new Response('ok');
+      source = mailSource(connection);
+    } else if (gmailPushBook(kv).admit(connection, history) !== 'wake') return new Response('ok');
     ensureSchema(this.ctx.storage);
+    if (source) updateBook(this.ctx.storage.sql).pend(source, Date.now());
     const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
     console.log(JSON.stringify({ hop: 'gmail_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
     return new Response('ok');
@@ -3912,6 +3934,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const googleEnvironment = this.env;
     const welcomeAfterConnect = () => { runtime.welcome.googleConnected(); this.continueWelcome(runtime); };
+    // GOOGLE_REALTIME_TRIAGE reads and watches every connected account that holds a feature, the first MAX_ACCOUNTS_PER_READ.
+    const realtimeAccounts = async (feature: 'calendar' | 'mail') => (await accounts()).filter(account => googleHas(account.scopes, feature)).slice(0, MAX_ACCOUNTS_PER_READ);
+    // How push upkeep reaches Google as one account: a raw token held here mints a bearer, a Vault-held grant goes through the proxy.
+    const accountRoute = async (account: GoogleAccount): Promise<McpGoogleResolution | null> => {
+      if (account.refresh_token) {
+        const app = await googleApp();
+        return app ? { mode: 'bearer', token: await googleAccessToken(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error)) } : null;
+      }
+      return vault && vaultOwner() ? { mode: 'proxy', connection: account.id } : null;
+    };
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
       // A proxy link carries only the connection id. A raw token is kept here only when no proxy exists.
@@ -3969,6 +4001,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const [all, doName] = [await accounts(), vaultOwner()];
         const account = all.find((known) => known.id === id);
         if (!account) return false;
+        // The account's calendar channels stop while its grant can still stop them, its mail watch is forgotten (Gmail lets it
+        // lapse), and its cursors go, so a reconnect starts each source from a baseline. A stop that fails changes nothing.
+        const channels = calendarChannelsBook(identity).forgetAccount(id);
+        gmailWatchesBook(identity).forget(id);
+        updateBook(storage.sql).dropAccount(id);
+        const route = channels.length ? await accountRoute(account).catch(() => null) : null;
+        for (const live of route ? channels : []) {
+          const old = { channelId: live.channelId, resourceId: live.resourceId };
+          await (route!.mode === 'bearer' ? stopChannel(fetch, route!.token, old) : vault!.stopChannel(doName!, route!.connection, old)).catch(() => undefined);
+        }
         // Google is asked to revoke the grant first; whatever it answers, Waldo forgets the grant. Only a failed delete of a
         // Vault secret fails the disconnect, and keeps the account so the owner can try again. The outcome is one fixed word,
         // kept as the detail too: a trace that captures text keeps a row's detail, not its code.
@@ -4462,7 +4504,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
     const connectors = () => connectorsLine(this.mcp().list());
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
-      gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
+      gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone,
+      ...(realtimeTriage(this.env) ? { perAccount: { gmail: gmailWatchesBook(identity).misses(), calendar: calendarChannelsBook(identity).failures() } } : {}) });
     const dayCards = () => dayCardsLine({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now: Date.now(), queued: cardQueued });
     const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}), ...(this.env.MEMORY_SELECTION === '1' ? { memorySelection: { reviewed: () => reviewedThrough(storage.kv.get<number>(NIGHTLY_THROUGH_KEY)) } } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
@@ -5102,27 +5145,33 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch { return false; }
     };
     // Push-channel upkeep is its own scheduled job (watch-upkeep.ts). It sends the owner nothing, so it is not an owner job.
-    const watches = (entry: ScheduleEntry) => watchUpkeep({
+    // An account's calendar list, for the set of calendars read on it; null keeps the set as it was.
+    const calendarListOf = async (account: GoogleAccount): Promise<readonly CalendarListItem[] | null> => {
+      const client = await google.client('calendar', undefined, undefined, account.email);
+      if (!client?.calendarListsPage) return null;
+      const items: CalendarListItem[] = [];
+      let token: string | undefined;
+      for (let page = 0; page < 4; page += 1) {
+        const listed = await client.calendarListsPage(250, false, token);
+        items.push(...listed.items);
+        if (!listed.next_page_token) return items;
+        token = listed.next_page_token;
+      }
+      return null;
+    };
+    const watches = async (entry: ScheduleEntry) => watchUpkeep({
       accounts, cancel: () => scheduler.cancelReadable(WATCH_UPKEEP_ID),
       calendar: { book: calendarPushBook(identity), origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
         resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID() },
-      ...(realtimeTriage(this.env) ? { calendars: { book: calendarChannelsBook(identity), legacy: calendarPushBook(identity), set: calendarSet(identity),
-        origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
-        resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
-        listCalendars: async () => {
-          const client = await google.client();
-          if (!client?.calendarListsPage) return null;
-          const items: CalendarListItem[] = [];
-          let token: string | undefined;
-          for (let page = 0; page < 4; page += 1) {
-            const listed = await client.calendarListsPage(250, false, token);
-            items.push(...listed.items);
-            if (!listed.next_page_token) return items;
-            token = listed.next_page_token;
-          }
-          return null;
-        },
-        dropCursor: (calendarId: string) => { updates.dropCursor(`cal:${calendarId}`); } } } : {}),
+      ...(realtimeTriage(this.env) ? {
+        calendars: { book: calendarChannelsBook(identity), legacy: calendarPushBook(identity), set: calendarSet(identity),
+          origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
+          proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
+          accounts: (await realtimeAccounts('calendar')).map(account => ({ id: account.id, local: account.refresh_token !== undefined, route: () => accountRoute(account), listCalendars: () => calendarListOf(account) })),
+          dropSource: (account: string, calendarId: string) => { updates.dropSource(calendarSource(account, calendarId)); } },
+        gmails: { book: gmailWatchesBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), proxy: vault,
+          accounts: (await realtimeAccounts('mail')).map(account => ({ id: account.id, local: account.refresh_token !== undefined })) },
+      } : {}),
       gmail: { book: gmailPushBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
@@ -5264,6 +5313,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // subscribed, emitting writes nothing, calls nothing and arms no alarm.
     const observers: readonly ObservedSubscriber[] = daytimeOn
       ? [(event) => { daytime.observed(event)?.catch(() => log({ trace: MEMORY_DAYTIME_ID, hop: 'memory_daytime', ms: 0, ok: false, code: 'arm_failed' })); }] : [];
+    // Every account the sweep reads, each through its own client. One whose grant is failing waits for its probe; its cursors
+    // stay where they were.
+    const deltaAccounts = async (): Promise<readonly DeltaAccount[]> => {
+      const [calendar, mail, set] = [await realtimeAccounts('calendar'), await realtimeAccounts('mail'), calendarSet(storage.kv)];
+      const read: DeltaAccount[] = [];
+      for (const account of await accounts()) {
+        const [calendars, mails] = [calendar.some(known => known.id === account.id), mail.some(known => known.id === account.id)];
+        if (!calendars && !mails) continue;
+        const client = await google.client(calendars ? 'calendar' : 'mail', undefined, undefined, account.email);
+        if (client) read.push({ id: account.id, email: account.email, google: client, calendars: calendars ? set.calendars(account.id) : [], mail: mails });
+      }
+      return read;
+    };
     const updateCheck = async (trace: string) => {
       const client = await google.client();
       if (client === null) return;
@@ -5279,7 +5341,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
-          ...(realtime ? { delta: { calendars: calendarSet(storage.kv).calendars(), account: client.account?.connection_id ?? client.account?.email ?? 'google' } } : {}),
+          ...(realtime ? { delta: { accounts: await deltaAccounts() } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(
