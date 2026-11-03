@@ -149,6 +149,8 @@ export type DeferredReplay = Readonly<{
   enqueue(approvalId: string, call: Readonly<{ tool: string; args: Record<string, unknown>; args_digest: string }>): void;
   // Wakes the jobs lane once the commit has landed.
   wake(): Promise<void>;
+  // The owner said no to a card whose call would have run here: a task waiting on it resumes without the step.
+  declined?(approvalId: string): Promise<void>;
 }>;
 // a approve, s skip, e edit, u undo, d defer ("Not now": the row stays open and keeps its cards).
 export type DeskAction = 'a' | 's' | 'e' | 'u' | 'd';
@@ -241,7 +243,8 @@ export type ApprovalDesk = Readonly<{
   proposeSendMessage(payload: MessageSendProposal, options?: ProposeOptions): Promise<string>;
   proposeAgentMailSend(payload: AgentMailSendProposal, options?: ProposeOptions): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
-  proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
+  // runRef: the run the card belongs to when it is not the turn running now (a task worker's step: task:<job id>).
+  proposeTaintedAction(payload: TaintedActionProposal, options?: Readonly<{ runRef?: string }>): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
@@ -944,6 +947,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       } else if (action === 's') {
         setStatus(id, 'skipped');
         if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
+        if (entry.kind === 'tainted_action') await deps.replayLater?.declined?.(id);
         out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
       } else if (action === 'd') {
         sql.exec("UPDATE ledger SET deferred_at = ? WHERE id = ? AND status IN ('open', 'review_only') AND deferred_at IS NULL", deps.now(), id);
@@ -1650,10 +1654,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await present(id);
       return id;
     },
-    async proposeTaintedAction(payload) {
+    async proposeTaintedAction(payload, options) {
       // The row's digest is recomputed from the stored arguments at approval, so a changed payload never runs.
       if (await sha256Hex(stableJson(payload.args)) !== payload.args_digest) throw new Error('tainted action digest mismatch');
-      const originRunRef = deps.currentRunRef?.();
+      const originRunRef = options?.runRef ?? deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'tainted_action', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeTaintedAction(payload), JSON.stringify(payload), deps.now(), payload.args_digest);
       bindOrigin(id, originRunRef);

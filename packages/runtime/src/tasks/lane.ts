@@ -50,7 +50,16 @@ export type JobsLaneDeps = Readonly<{
   }>;
   // Each machine job's apply, which names its own tools and delivery; a job with none settles silently.
   machine?: MachineAppliers;
+  // WALDO_TASK_NOTES: a machine job that stopped tells the owner (machine.ts), and a task parked for a crash or an outage
+  // runs once more before the owner hears it stopped.
+  followUp?: boolean;
+  // The cards still waiting on the owner, by id: a job asking on a card that left this list undecided (withdrawn, expired)
+  // resumes as declined.
+  waitingCards?(): readonly string[];
 }>;
+
+// A task parked for a crash or a provider outage runs once more after this long.
+export const PARK_RETRY_MS = 10 * 60_000;
 
 // What a replay job's end means for its card. A job parked with its call in flight may have acted; one parked before the
 // call began did nothing.
@@ -115,8 +124,10 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     settled = [];
   };
 
+  const machineNote = deps.followUp ? (key: string, text: string, settle: () => void) => deps.quiet() ? Promise.resolve(settle()) : deps.deliver(key, `machine:${key}`, text, settle) : undefined;
   const apply = async (row: JobRow) => {
-    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop });
+    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop, ...(machineNote ? { note: machineNote } : {}) });
+    if (deps.followUp && row.kind === 'task' && book.retryParked(row.id, deps.now() + PARK_RETRY_MS)) { hop(row, 'task_park_retry', { ok: false, code: row.park_reason ?? 'parked' }); return; }
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
@@ -164,8 +175,13 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const applyReplay = async (row: JobRow) => {
     const { approval_id: id } = replayBrief(row);
     const card = replayCard(row);
+    // A task waiting on this card resumes with how its step ended, in the same commit.
     await deps.deliver(replayKey(id), `approval:${id}`, deps.approvals.replayReceipt(id, card.status, card.message), () => {
-      if (book.settle(row.id)) { deps.approvals.settleReplay(id, card.status); settled.push(row); }
+      if (book.settle(row.id)) {
+        deps.approvals.settleReplay(id, card.status);
+        settled.push(row);
+        book.resume(id, 'approved', { status: card.status === 'skipped' ? 'rejected' : card.status, message: card.message });
+      }
     });
     logSettled();
   };
@@ -241,9 +257,26 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   };
   for (const row of topics.length ? book.running() : []) forgotten(row);
 
+  // A job asking on a card that is no longer waiting and was not approved (withdrawn, expired) resumes as declined.
+  if (deps.waitingCards) {
+    const waiting = new Set(deps.waitingCards()), running = new Set(deps.approvals.replays());
+    for (const row of book.awaiting()) {
+      const asked = jobCheckpoint(row).asked;
+      if (asked && !waiting.has(asked.approval_id) && !running.has(asked.approval_id) && book.resume(asked.approval_id, 'declined')) hop(row, 'task_ask_closed', { ok: false });
+    }
+  }
+
   let leftOver = false, slotsFull = false, machineFull = false, replayWaits = false;
   for (const row of book.due()) {
     if (forgotten(row)) continue;
+    // Past its deadline while it waited on the owner: it parks, its card is withdrawn, and the owner hears it ran out of time.
+    if (row.status === 'awaiting_owner') {
+      if (!book.park(row.id, 'deadline')) continue;
+      deps.host.cancelled(row.id);
+      hop(row, 'task_parked', { ok: false, code: 'deadline' });
+      if (deps.room()) await apply(book.get(row.id)!); else leftOver = true;
+      continue;
+    }
     // An approved action's replay takes no model turn, no task slot and no machine slot, and is never applied as a task.
     if (row.kind === 'approval_replay') {
       if (row.status === 'reported') { await applyReplay(row); continue; }

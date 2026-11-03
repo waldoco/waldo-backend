@@ -94,6 +94,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_QUIET_MS?: string;
   // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
   WHATSAPP_REPLY_MERGE?: string;
+  // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
+  WALDO_TASK_ASK?: string;
+  // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
+  WALDO_TASK_NOTES?: string;
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;

@@ -645,6 +645,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
+      // With WALDO_TASK_ASK=1, a worker's step held for the owner raises its card now, on the job's surface. Only a step whose
+      // approval runs as a replay job here (a browser step) is asked: the job resumes once that replay has ended.
+      askOwner: async (row, call) => {
+        if (self.env.WALDO_TASK_ASK !== '1' || !BROWSER_TOOLS.has(call.name as ToolName)) return null;
+        const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+        return self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest: await sha256Hex(stableJson(args)),
+          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: `task:${row.id}` });
+      },
     });
   })();
 
@@ -3248,6 +3256,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
         startReplay: ticket => { this.ctx.waitUntil(this.tasks.replay(ticket).catch(() => { console.error(JSON.stringify({ hop: 'approval_replay', ok: false, code: 'replay_threw' })); })); },
         approvals: runtime.desk,
+        followUp: this.env.WALDO_TASK_NOTES === '1',
+        ...(this.env.WALDO_TASK_ASK === '1' ? { waitingCards: () => runtime.desk.waiting().map(card => card.approval_id) } : {}),
       });
       next = ran;
     } finally {
@@ -4144,6 +4154,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             brief: { approval_id: approvalId, ...call, approved_at: now }, dueAt: now, deadlineAt: now + REPLAY_DEADLINE_MS, taint: 'external' });
         },
         wake: () => armTaskJobsWake(storage, Date.now()),
+        declined: async approvalId => { if (this.jobs().resume(approvalId, 'declined')) await armTaskJobsWake(storage, Date.now()); },
       },
       replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
