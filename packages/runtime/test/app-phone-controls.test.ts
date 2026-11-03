@@ -160,14 +160,14 @@ it('says a lost answer from the ledger is unconfirmed, since the number may have
   });
 });
 
-it('refuses to change the number without a recent email code, before the ledger is asked', async () => {
+it('changes the number without a recent email code', async () => {
   const w = world();
   await app('1', async ({ read, act }) => {
     const { revision } = appControlProjectionV1Schema.parse((await read()).body);
-    const refused = await act({ view: 'phone', action: 'phone.set', value: NEW, revision, request_id: 'phone-request-10' });
-    expect(refused.status).toBe(403);
-    expect(refused.body).toMatchObject({ error: 'step_up_required' });
-    expect(w.sets).toEqual([]);
+    const set = await act({ view: 'phone', action: 'phone.set', value: NEW, revision, request_id: 'phone-request-10' });
+    expect(set.status).toBe(200);
+    expect(appControlResultV1Schema.parse(set.body).receipt).toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
+    expect(w.sets).toEqual([{ do_name: 'owner-app-phone', phone: NEW, countries: ['+91'] }]);
   }, new Date(Date.now() - 3 * 60 * 60_000).toISOString());
 });
 
@@ -365,13 +365,14 @@ describe('iMessage set-up where Waldo\'s iMessage runs on Photon', () => {
       expect(appControlResultV1Schema.parse(body).receipt).toEqual(APP_IMESSAGE_ENROLL_RECEIPTS_V1.unknown);
     }, undefined, imessage(unenrolled, null, async () => { throw new Error('photon unreachable'); }));
   });
-  it('needs a recent email code, since it sends the number to Photon', async () => {
+  it('needs no recent email code to send the number to Photon', async () => {
     world();
     enrolls = [];
     await app('0', async ({ read, act }) => {
       const projection = appControlProjectionV1Schema.parse((await read()).body);
-      expect(await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-41' })).toMatchObject({ status: 403, body: { error: 'step_up_required' } });
-      expect(enrolls).toEqual([]);
+      const result = appControlResultV1Schema.parse((await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-41' })).body);
+      expect(result.receipt).toEqual(APP_IMESSAGE_ENROLL_RECEIPTS_V1.enrolled);
+      expect(enrolls).toEqual([PHONE]);
     }, new Date(Date.now() - 3 * 60 * 60_000).toISOString(), imessage(unenrolled, null, photon()));
   });
 });
