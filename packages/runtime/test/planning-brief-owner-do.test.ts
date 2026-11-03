@@ -11,7 +11,8 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -148,7 +149,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     const QUESTION = 'The Brief\nYour day is open until Startup time at 3. What do you want done this morning?';
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: QUESTION }];
     model.owner = [{ calls: [{ name: 'propose_calendar_change', arguments: BLOCK }] }, { text: 'It is on a card for your yes.' }];
-    await owned('planning-brief-ask', { PLANNING_BRIEF: '1' }, async ({ brief, say, history, approvals, decide, hops }) => {
+    await owned('planning-brief-ask', { PLANNING_BRIEF: '1' }, async ({ state, brief, say, history, approvals, decide, hops }) => {
       await brief();
       // The Brief planned with the planning instruction and could raise cards and offer answers.
       expect(model.briefAsked[0]).toContain(PLANNING_BRIEF_INSTRUCTION);
@@ -174,6 +175,11 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
       expect(calendar.created).toMatchObject([{ title: 'Deck', block: 'deep_work' }]);
       // The answers stay on the Brief's row; the owner's later turn did not move them.
       expect(briefRow(await history()).parts.map(part => part.type)).toEqual(['text', 'quick_replies']);
+      // A forget reaches the answers on the row, and counts them until they are gone.
+      expect(await redactConversationEntries(state.storage, ['Gym first'], FORGOTTEN)).toMatchObject({ remaining: 0 });
+      const forgotten = briefRow(await history()).parts.find(part => part.type === 'quick_replies');
+      expect(JSON.stringify(forgotten)).not.toContain('Gym first');
+      expect(forgotten).toMatchObject({ choices: [{ label: 'Finish the deck' }, { label: FORGOTTEN }, { label: 'Something else' }] });
     });
   });
 
