@@ -56,7 +56,7 @@ export type ReplayOutcome = TaintedActionOutcome;
 // The step a job waits on the owner for: the card raised for it and the worker's call exactly as the card froze it, and once
 // the owner has decided, the decision the next attempt resumes with.
 // An approved step runs once as the card's own replay job; its outcome is what the job resumes with.
-export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id: string; name: string; arguments: string }>; decision?: 'approved' | 'declined'; outcome?: ReplayOutcome }>;
+export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id: string; name: string; arguments: string }>; decision?: 'approved' | 'declined' }>;
 export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep }>;
 
 export type JobRow = Readonly<{
@@ -147,7 +147,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
   // A table an earlier build created does not admit approval replays or jobs awaiting the owner; it is rebuilt with every column
   // it had, and park_retries at its default, in this synchronous block, which the storage commits as one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
-  if (made !== undefined && !made.includes("'awaiting_owner'")) {
+  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'"))) {
     sql.exec('DROP INDEX IF EXISTS task_jobs_open');
     sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_ask');
     for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
@@ -344,16 +344,16 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       "SELECT * FROM task_jobs WHERE status = 'awaiting_owner' AND json_extract(checkpoint_json, '$.asked.approval_id') = ?", approvalId,
     ).toArray()[0] ?? null,
     awaiting: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'awaiting_owner' ORDER BY created_at").toArray(),
-    // The card the job waits on was decided and, if approved, its replay ran: the job queues for its next attempt, due now,
-    // which resumes from the checkpoint with the decision and the replay's outcome.
-    resume(approvalId: string, decision: 'approved' | 'declined', outcome?: ReplayOutcome): boolean {
+    // The card the job waits on was decided: the job queues for its next attempt, due now, which runs an approved step under
+    // its own scope and resumes from the checkpoint.
+    resume(approvalId: string, decision: 'approved' | 'declined'): boolean {
       const row = this.asking(approvalId);
       if (!row) return false;
       const checkpoint = jobCheckpoint(row);
       const now = deps.now();
       return sql.exec(
         "UPDATE task_jobs SET status = 'queued', due_at = ?, checkpoint_json = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_owner'",
-        now, JSON.stringify({ ...checkpoint, asked: { ...checkpoint.asked!, decision, ...(outcome ? { outcome } : {}) } }), now, row.id,
+        now, JSON.stringify({ ...checkpoint, asked: { ...checkpoint.asked!, decision } }), now, row.id,
       ).rowsWritten > 0;
     },
     // A task parked for a crash or a provider outage runs once more after `dueAt` before the owner hears it stopped: its last

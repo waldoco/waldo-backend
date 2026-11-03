@@ -501,6 +501,21 @@ export const withdrawRunCards = (sql: SqlStorage, runRef: string, now: number): 
   return ids.length;
 };
 
+// A card a background task raised for one of its own steps (a tainted action bound to task:<id>). An approval of it runs in
+// the task's resumed attempt, under the task's own scope, never as a replay job. Answers the task's id and the card's status.
+export const taskAskCard = (sql: SqlStorage, id: string): Readonly<{ jobId: string; status: string }> | null => {
+  if (sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'origin_run_ref'").toArray().length === 0) return null;
+  const card = sql.exec<{ status: string; ref: string | null }>("SELECT status, origin_run_ref AS ref FROM ledger WHERE id = ? AND kind = 'tainted_action'", id).toArray()[0];
+  return card?.ref?.startsWith('task:') ? { jobId: card.ref.slice('task:'.length), status: card.status } : null;
+};
+
+// A task that stopped after its owner approved its asked step: the card leaves running, as unknown when the step was in
+// flight, else as stopped before it ran.
+export const endRunCards = (sql: SqlStorage, runRef: string, status: 'skipped' | 'uncertain', now: number): void => {
+  if (sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'origin_run_ref'").toArray().length === 0) return;
+  sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE origin_run_ref = ? AND kind = 'tainted_action' AND status = 'running'", status, now, runRef);
+};
+
 // The surface was bound to another number, or unbound: a card that waited for the owner's next message there was made for the
 // number that is gone, so it no longer waits. Synchronous, for the transaction that changes the binding.
 export const endCardWaits = (sql: SqlStorage, surface: string): void => {

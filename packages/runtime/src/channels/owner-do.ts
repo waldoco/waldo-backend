@@ -209,7 +209,7 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
@@ -260,6 +260,7 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
+import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
@@ -620,6 +621,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private jobs(): JobBook {
     return jobBook(this.ctx.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID() });
   }
+  // The cards a task raised for its own steps, between the desk and the book.
+  private readonly asks = taskAsks(this.ctx.storage.sql, () => this.jobs());
   // The brain's side of each worker call. One host per object, so a cancel reaches the scope of an attempt in flight.
   private readonly tasks: TaskHost = (() => {
     const self = this;
@@ -638,20 +641,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log: entry => self.taskLog(entry),
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
-      withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      withdrawCards: runRef => { self.asks.end(runRef, Date.now()); },
+      settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
-      // With WALDO_TASK_ASK=1, a worker's step held for the owner raises its card now, on the job's surface. Only a step whose
-      // approval runs as a replay job here (a browser step) is asked: the job resumes once that replay has ended.
+      // With WALDO_TASK_ASK=1, a worker's browser step held for the owner raises its card now, on the job's surface; the job
+      // resumes once the owner decides, and an approved step runs in its resumed attempt. The card is raised on the serial chain, as every card is: its desk write and its sends never interleave with a turn's.
       askOwner: async (row, call) => {
         if (self.env.WALDO_TASK_ASK !== '1' || !BROWSER_TOOLS.has(call.name as ToolName)) return null;
         const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
-        return self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest: await sha256Hex(stableJson(args)),
-          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: `task:${row.id}` });
+        const args_digest = await sha256Hex(stableJson(args));
+        return self.serial(() => self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest,
+          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: `task:${row.id}` }));
       },
     });
   })();
@@ -3255,9 +3260,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         machine: runtime.machine,
         // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
         startReplay: ticket => { this.ctx.waitUntil(this.tasks.replay(ticket).catch(() => { console.error(JSON.stringify({ hop: 'approval_replay', ok: false, code: 'replay_threw' })); })); },
-        approvals: runtime.desk,
+        // A task's own approved card has no replay job: the task settles it when its step ends.
+        approvals: { replays: () => this.asks.replays(runtime.desk),
+          replayReceipt: (id, status, message) => runtime.desk.replayReceipt(id, status, message), settleReplay: (id, status) => runtime.desk.settleReplay(id, status) },
         followUp: this.env.WALDO_TASK_NOTES === '1',
-        ...(this.env.WALDO_TASK_ASK === '1' ? { waitingCards: () => runtime.desk.waiting().map(card => card.approval_id) } : {}),
+        ...(this.env.WALDO_TASK_ASK === '1' ? { askedCard: (id: string) => this.asks.card(runtime.desk, id) } : {}),
       });
       next = ran;
     } finally {
@@ -4149,6 +4156,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       replayLater: {
         takes: tool => BROWSER_TOOLS.has(tool as ToolName),
         enqueue: (approvalId, call) => {
+          // A task's own card resumes the task, which runs the step itself; one approved before the task began to wait stays
+          // running until the jobs lane sees the task waiting.
+          if (this.asks.approved(approvalId)) return;
           const now = Date.now();
           this.jobs().create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: channel,
             brief: { approval_id: approvalId, ...call, approved_at: now }, dueAt: now, deadlineAt: now + REPLAY_DEADLINE_MS, taint: 'external' });

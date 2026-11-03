@@ -1,4 +1,4 @@
-import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type TaskResult, type TurnOutcome } from '@waldo/contracts';
+import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type ToolName, type TaskResult, type TurnOutcome } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
@@ -6,11 +6,12 @@ import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type Loo
 import { carriesTopic, hidesTopic, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
-import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
+import { argumentDigest, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { inMemoryToolOutputStore, type ToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
+import type { ReplayCardStatus } from '../channels/approvals';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, retryBrief, taskBrief, type AskedStep, type JobBook, type JobRow, type ReplayBrief, type ReplayOutcome, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, FINISH_TASK, jobTools, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
@@ -40,12 +41,15 @@ export type TaskHostDeps = Readonly<{
   // Runs an approved card's frozen call once, on the surface whose desk froze it, under the given scope. The host checks
   // the card is still the one approved; the outcome claims only what the replay established.
   replayApproval(surface: string, brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
-  // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
+  // Ends the approval cards a run raised, for a job that was cancelled, forgotten or parked: one still waiting is withdrawn,
+  // and one approved whose step the job will not now answer leaves running.
   withdrawCards?(runRef: string): void;
   // Raises the owner's card for a worker's step that needs their approval, on the job's surface, with the job's run ref
-  // (task:<id>), and answers its id; null when this deploy does not ask mid-task (WALDO_TASK_ASK) or an approval of that step
-  // would not run as a replay job, and the worker then hands the step back in its result as before.
+  // (task:<id>), and answers its id; null when this deploy does not ask mid-task (WALDO_TASK_ASK), and the worker then hands
+  // the step back in its result as before.
   askOwner?(row: JobRow, call: LLMToolCall): Promise<string | null>;
+  // Moves the card a resumed attempt answered off running, once, to how its step ended.
+  settleAsk?(row: JobRow, approvalId: string, status: ReplayCardStatus): void;
   // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
   // checkpoint that carries one cancels its job rather than write it back.
   heldTopics?(): readonly string[];
@@ -264,6 +268,8 @@ export const taskHost = (deps: TaskHostDeps) => {
           }
           fence(row.id);
           hop(row, 'task_awaiting_owner', { detail: call.name });
+          // An approval that landed while the card was being raised is picked up by the lane's next pass.
+          await deps.wake(deps.now());
           return 'fenced';
         }
         result = { ...result, ...OWNER_STEP, retryable: false };
@@ -282,24 +288,69 @@ export const taskHost = (deps: TaskHostDeps) => {
   // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
   const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); };
 
-  // A resumed attempt of a job the owner answered. The worker resumes with the step it asked about as one already taken, and
-  // as its result the replay's outcome (an approved step ran once, as its card's own replay job) or the owner's no, so it never
-  // asks for or runs that step again.
-  const answer = (ticket: TaskTicket, row: JobRow, asked: AskedStep): 'ok' | 'fenced' => {
-    const outcome = asked.outcome;
-    const output = JSON.stringify(asked.decision === 'declined' || !outcome ? { ok: false, ...DECLINED_STEP }
-      : outcome.status === 'done' ? { ok: true, data: { approved_by_owner: true, result: outcome.message } }
-      : { ok: false, error: `The owner approved this step, but ${outcome.status === 'uncertain' ? 'its outcome is unknown' : 'it did not complete'}: ${outcome.message}`, fix: 'It was tried once already: do not run it again. Finish with what you have and say what happened.' });
-    const external = asked.decision === 'approved' && outcome?.status === 'done';
-    const turns: LLMToolTurn[] = [...jobCheckpoint(row).turns, { call: asked.call, output, prior_items: [], ...(external ? { source_taint: 'external' as const } : {}) }];
-    if (deps.book.checkpoint(ticket, row.checkpoint_seq + 1, { turns }, { rounds: 0, costUsd: 0 }) !== 'ok') { fence(row.id); return 'fenced'; }
+  // A resumed attempt of a job the owner answered, before the worker sees anything. An approved step runs once here, under
+  // this attempt's own scope (the owner's browser acts only for a live run), exactly as the card froze it: its intent is on
+  // the job first, and the dispatcher admits it only as that approved call. A declined step does not run. The worker resumes
+  // with the step as one already taken and its result, so it never asks for or runs that step again.
+  const answer = async (ticket: TaskTicket, row: JobRow, asked: AskedStep): Promise<'ok' | 'fenced'> => {
+    let turn: LLMToolTurn;
+    if (asked.decision !== 'approved') turn = { call: asked.call, output: JSON.stringify({ ok: false, ...DECLINED_STEP }), prior_items: [] };
+    else {
+      const admission = deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
+      if (admission === 'dormant') { deps.book.suspend(row.id); fence(row.id); hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' }); return 'fenced'; }
+      if (admission === 'retry') { const dueAt = deps.now() + deferDelay(row.deferrals); deps.book.defer(ticket, dueAt, { rounds: 0, costUsd: 0 }); fence(row.id); await deps.wake(dueAt); return 'fenced'; }
+      const { scope, outputs } = attemptFor(ticket, row);
+      // A call whose arguments cannot be digested matches no approval: the dispatcher refuses it.
+      const digest = await argumentDigest(JSON.parse(asked.call.arguments || '{}')) ?? '';
+      const canaries = Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
+      const ctx: ToolDispatcherContext = {
+        ...deps.context(row.surface), trigger: 'user_message', canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: 'external', hasApproval: () => false,
+        approvedTaintedAction: { tool: asked.call.name as ToolName, args_digest: digest },
+        runScope: scope, turnId: traceOf(ticket), toolCallId: asked.call.call_id, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: deps.now() }),
+      };
+      const handlers = await profileHandlers(row, outputs);
+      const key = attemptKey(ticket);
+      busy.set(key, (busy.get(key) ?? 0) + 1);
+      let result: LoopToolResult;
+      try {
+        const run = async () => {
+          scope.admit();
+          if (!deps.book.beginEffect(ticket, { tool: asked.call.name, call_id: asked.call.call_id })) throw new ClosedRunError();
+          return dispatchLoopTool(asked.call, { handlers, ctx, offload: outputs });
+        };
+        result = BROWSER_TOOLS.has(asked.call.name as never) ? await deps.serialBrowser(scope, run) : await run();
+      } catch (error) {
+        // Fenced before its intent was written: nothing ran, and whatever fenced it (a cancel, a lapse) settles the job.
+        if (error instanceof ClosedRunError && deps.book.get(row.id)?.inflight_json == null) { fence(row.id); return 'fenced'; }
+        result = { ok: false, error_code: 'handler_failed', error: 'The step stopped partway.', retryable: false, code: 'transient' };
+      } finally {
+        const left = (busy.get(key) ?? 1) - 1;
+        if (left > 0) busy.set(key, left); else busy.delete(key);
+      }
+      // A handler that threw may have acted: the job parks with the effect in doubt, as a worker's own step would.
+      if (result.error_code === 'handler_failed') {
+        deps.book.park(row.id, 'uncertain_effect');
+        fence(row.id);
+        deps.settleAsk?.(row, asked.approval_id, 'uncertain');
+        hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: asked.call.name });
+        return 'fenced';
+      }
+      deps.settleAsk?.(row, asked.approval_id, result.ok ? 'done' : result.code === 'rejected' || result.error_code === 'taint_needs_approval' ? 'rejected' : 'failed');
+      turn = { call: asked.call, output: JSON.stringify(result), prior_items: [], ...(result.source_taint === 'external' ? { source_taint: 'external' as const } : {}) };
+    }
+    if (deps.book.checkpoint(ticket, row.checkpoint_seq + 1, { turns: [...jobCheckpoint(row).turns, turn] }, { rounds: 0, costUsd: 0 }) !== 'ok') { fence(row.id); return 'fenced'; }
+    if (turn.source_taint === 'external') deps.book.touch(ticket, 'external');
     hop(row, 'task_resumed', { code: asked.decision ?? 'declined', detail: asked.call.name });
     return 'ok';
   };
+  // A task that parked: a card it asked on that the owner approved and its step did not answer leaves running.
+  const endAsk = (row: JobRow): void => { deps.withdrawCards?.(`task:${row.id}`); };
+
 
   return {
     fence,
     cancelled,
+    endAsk,
     // An owner forget empties every attempt's stored outputs, as it empties an owner turn's: they are re-read if needed.
     forgetOutputs: (): void => { for (const held of scopes.values()) held.outputs.clear(); },
     // Jobs whose live attempt has a call running here.
@@ -341,7 +392,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       }
       if (stopLapsed(row)) return 'fenced';
       const asked = jobCheckpoint(row).asked;
-      if (asked?.decision !== undefined && answer(ticket, row, asked) === 'fenced') return 'fenced';
+      if (asked?.decision !== undefined && await answer(ticket, row, asked) === 'fenced') return 'fenced';
       const resumed = asked?.decision !== undefined ? deps.book.get(row.id)! : row;
       const handlers = await profileHandlers(resumed, attemptFor(ticket, resumed).outputs);
       const spend = ownerSpend();

@@ -53,9 +53,8 @@ export type JobsLaneDeps = Readonly<{
   // WALDO_TASK_NOTES: a machine job that stopped tells the owner (machine.ts), and a task parked for a crash or an outage
   // runs once more before the owner hears it stopped.
   followUp?: boolean;
-  // The cards still waiting on the owner, by id: a job asking on a card that left this list undecided (withdrawn, expired)
-  // resumes as declined.
-  waitingCards?(): readonly string[];
+  // WALDO_TASK_ASK: how a card a task asked on stands, by id.
+  askedCard?(approvalId: string): 'waiting' | 'approved' | 'declined';
 }>;
 
 // A task parked for a crash or a provider outage runs once more after this long.
@@ -128,6 +127,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const apply = async (row: JobRow) => {
     if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop, ...(machineNote ? { note: machineNote } : {}) });
     if (deps.followUp && row.kind === 'task' && book.retryParked(row.id, deps.now() + PARK_RETRY_MS)) { hop(row, 'task_park_retry', { ok: false, code: row.park_reason ?? 'parked' }); return; }
+    if (row.kind === 'task' && row.park_reason) deps.host.endAsk(row);
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
@@ -175,12 +175,10 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const applyReplay = async (row: JobRow) => {
     const { approval_id: id } = replayBrief(row);
     const card = replayCard(row);
-    // A task waiting on this card resumes with how its step ended, in the same commit.
     await deps.deliver(replayKey(id), `approval:${id}`, deps.approvals.replayReceipt(id, card.status, card.message), () => {
       if (book.settle(row.id)) {
         deps.approvals.settleReplay(id, card.status);
         settled.push(row);
-        book.resume(id, 'approved', { status: card.status === 'skipped' ? 'rejected' : card.status, message: card.message });
       }
     });
     logSettled();
@@ -257,12 +255,14 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   };
   for (const row of topics.length ? book.running() : []) forgotten(row);
 
-  // A job asking on a card that is no longer waiting and was not approved (withdrawn, expired) resumes as declined.
-  if (deps.waitingCards) {
-    const waiting = new Set(deps.waitingCards()), running = new Set(deps.approvals.replays());
+  // A job asking on a card that is no longer waiting resumes with how the card ended: approved (an approval that landed
+  // before the job began to wait), or declined (withdrawn, expired, said no to).
+  if (deps.askedCard) {
     for (const row of book.awaiting()) {
       const asked = jobCheckpoint(row).asked;
-      if (asked && !waiting.has(asked.approval_id) && !running.has(asked.approval_id) && book.resume(asked.approval_id, 'declined')) hop(row, 'task_ask_closed', { ok: false });
+      const card = asked ? deps.askedCard(asked.approval_id) : 'waiting';
+      if (card === 'waiting' || !book.resume(asked!.approval_id, card)) continue;
+      hop(row, 'task_ask_closed', { ok: card === 'approved', code: card });
     }
   }
 
