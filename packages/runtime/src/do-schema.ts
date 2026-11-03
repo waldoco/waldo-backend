@@ -455,6 +455,17 @@ export const CALENDAR_LAST_SEEN_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS calendar_last_seen_age;', 'DROP TABLE IF EXISTS calendar_last_seen;'],
 };
 
+// A fire asks for its schedule's crashed runs (rows still 'running'), which walked every run the schedule ever had. Running
+// rows are few and leave the index as they settle.
+export const SCHEDULE_RUNS_RUNNING_INDEX = "CREATE INDEX IF NOT EXISTS schedule_runs_running ON schedule_runs (schedule_id) WHERE outcome = 'running';";
+
+export const SCHEDULE_RUNS_RUNNING_MIGRATION: DoMigration = {
+  version: 15,
+  name: 'schedule-runs-running-index',
+  up: [SCHEDULE_RUNS_RUNNING_INDEX],
+  down: ['DROP INDEX IF EXISTS schedule_runs_running;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -466,6 +477,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   TASK_JOBS_SCHEMA_MIGRATION,
   RETIRE_MEMORY_HALLS_MIGRATION,
   CALENDAR_LAST_SEEN_MIGRATION,
+  SCHEDULE_RUNS_RUNNING_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

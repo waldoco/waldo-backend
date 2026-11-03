@@ -58,6 +58,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets a proposing tool take the steps behind its card ("Why this changed"), kept beside the card and the day card that
   // raised it and shown to an app reading approvals=8 or controls=14. Off unless "1".
   WHY_TRAIL?: string;
+  AUTONOMY_OWN_CALENDAR?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
