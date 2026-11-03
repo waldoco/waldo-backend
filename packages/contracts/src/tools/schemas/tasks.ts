@@ -9,6 +9,8 @@ export type TaskProfile = z.infer<typeof taskProfileSchema>;
 
 export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
+// One owner yes lets an errand send at most this many form submissions to its one site.
+export const ERRAND_SUBMITS_MAX = 3;
 export const startTaskArgsSchema = z.strictObject({
   profile: taskProfileSchema.describe('reader: mail, calendar, Drive, web. errand: also a browser; submits need approval. code: unavailable.'),
   // A label the owner and later turns read: one short line, so it cannot run on or start a line of its own.
@@ -17,6 +19,8 @@ export const startTaskArgsSchema = z.strictObject({
   context: z.string().describe('All it needs from this chat: names, dates, links, decisions, what to avoid.'),
   done_when: z.string().min(1),
   effort: z.enum(['standard', 'deep']).optional(),
+  site_grant: z.strictObject({ origin: z.string().max(253).regex(/^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+$/), submits: z.int().min(1).max(ERRAND_SUBMITS_MAX) }).optional()
+    .describe('errand: one site it may submit forms on, after the owner says yes'),
 });
 export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;
 

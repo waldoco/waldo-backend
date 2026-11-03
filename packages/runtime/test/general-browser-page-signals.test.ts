@@ -14,7 +14,7 @@ function harness(document: { status: number; headers?: Record<string, string>; i
     url: () => url, title: async () => 'Fixture', setDefaultTimeout() {},
     goto: async (target: string) => {
       let settled = '';
-      await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => page }) }),
+      await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => page }) }),
         fetch: async () => ({ status: () => document.status, headers: () => document.headers ?? {} }), fulfill: async () => { settled = 'fulfill'; }, abort: async () => { settled = 'abort'; } });
       if (settled === 'abort') throw Error('net::ERR_BLOCKED_BY_CLIENT');
       url = target; return { status: () => document.status };
@@ -35,7 +35,7 @@ function harness(document: { status: number; headers?: Record<string, string>; i
   // A main-document request from the page, answered with this status and these headers.
   const request = async (target: string, status: number, headers: Record<string, string> = {}) => {
     let settled = '';
-    await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => page }) }),
+    await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => page }) }),
       fetch: async () => ({ status: () => status, headers: () => headers }), fulfill: async () => { settled = 'fulfill'; }, abort: async () => { settled = 'abort'; } });
     return settled;
   };

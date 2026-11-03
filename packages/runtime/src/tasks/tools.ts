@@ -4,7 +4,10 @@ import {
 } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
-import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { argumentDigest, type ToolDispatcherContext } from '../tools/dispatcher';
+import { BROWSER_ERRAND_GRANT_MS, grantBrowserErrand, siteGrantPreview } from '../channels/browser-errand-grant';
+import { ownerEffectOperationRef } from '../channels/owner-effect-ledger';
+import type { TaintedActionProposal } from '../channels/approvals';
 import { isMachine, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
 import { TASK_PROFILE_SPECS } from './profiles';
 import { quoted } from '../prompt/turn-prompt';
@@ -29,7 +32,10 @@ export type TaskToolDeps = Readonly<{
   // Stops a cancelled job's worker and drops its browser session.
   fence(jobId: string): void;
   log(entry: TurnLogEntry): void;
+  // A site grant: the owner's card for the exact start_task call, and the storage its job and grant are written to together.
+  errandGrant?: Readonly<{ storage: DurableObjectStorage; propose(proposal: TaintedActionProposal): Promise<string> }>;
 }>;
+
 
 export const taskToolHandlers = (deps: TaskToolDeps) => [
   {
@@ -42,6 +48,16 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
     async handle(args: StartTaskArgs, ctx: ToolDispatcherContext) {
       const unavailable = TASK_PROFILE_SPECS[args.profile].unavailable;
       if (unavailable) return refusal(unavailable, 'invalid_args');
+      const grant = args.site_grant;
+      if (grant && args.profile !== 'errand') return refusal('Only an errand task can submit forms on a site. Use profile errand, or drop site_grant.', 'invalid_args');
+      if (grant && !deps.errandGrant) return refusal('This Waldo cannot let a task submit forms on a site. Tell the owner what to submit and where.');
+      // Only the replay of the owner's approved card for this exact call starts it; the dispatcher has matched its digest.
+      if (grant && ctx.approvedTaintedAction?.tool !== 'start_task') {
+        const digest = await argumentDigest(args);
+        if (digest === null) return refusal('The task could not be frozen for the owner\'s card.', 'invalid_args');
+        const proposal_id = await deps.errandGrant!.propose({ operation_ref: await ownerEffectOperationRef(ctx), tool: 'start_task', args, args_digest: digest, reasoning: args.goal, source: 'external', preview: [siteGrantPreview(grant)] });
+        return { ok: true as const, data: { status: 'waiting_for_owner', proposal_id, executed: false, note: 'The owner has a card for this errand. Nothing starts until they say yes.' }, source_taint: null };
+      }
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
       const conversationRef = deps.conversationRef?.(ctx) ?? null;
@@ -60,12 +76,17 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         if (counts.fromTurn >= TASK_MAX_PER_TURN) return refusal(`This turn already started ${TASK_MAX_PER_TURN} background tasks, the most one turn starts. Put the rest of the work in one of those briefs next time, or start it in a later turn.`, 'rate_limited');
         if (counts.open >= TASK_MAX_OPEN) return refusal(`${TASK_MAX_OPEN} background tasks are already open, the most at once. Wait for one to report, or cancel one the owner no longer needs with cancel_task, then start this one.`);
       }
-      const { job, created } = deps.book.create({
-        kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId, surface: deps.surface,
-        brief, dueAt: now, deadlineAt: now + TASK_DEADLINE_MS,
-        // A brief written in a turn that read someone else's words may carry them, so the report is applied as tainted.
-        taint: tainted ? 'external' : null,
-      });
+      const make = () => {
+        const made = deps.book.create({
+          kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId!, surface: deps.surface,
+          brief, dueAt: now, deadlineAt: now + (grant ? BROWSER_ERRAND_GRANT_MS : TASK_DEADLINE_MS),
+          // A brief written in a turn that read someone else's words may carry them, so the report is applied as tainted.
+          taint: tainted ? 'external' : null,
+        });
+        if (grant && made.created) grantBrowserErrand(deps.errandGrant!.storage, { approvalId: ctx.turnId!.slice('approval:'.length), runId: `task:${made.job.id}`, origin: grant.origin, expiresAt: now + BROWSER_ERRAND_GRANT_MS, maxSubmits: grant.submits }, now);
+        return made;
+      };
+      const { job, created } = grant ? deps.errandGrant!.storage.transactionSync(make) : make();
       if (created) {
         deps.log({ trace: `task:${job.id}`, hop: 'task_created', ms: 0, ok: true, job_id: job.id, job_profile: args.profile });
         await deps.wake(now);

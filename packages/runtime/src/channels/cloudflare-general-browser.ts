@@ -18,7 +18,7 @@ export class GeneralBrowserError extends Error {
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'turn_deadline' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain' | 'native_submit_requires_card', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string, body?: Uint8Array): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 const PROVIDER_REQUEST_MS = 10000;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
@@ -97,10 +97,10 @@ export function cloudflareGeneralBrowser(options: Options) {
     return { ms: Math.min(10000, remaining), turn: deadline <= session.expiresAt && remaining <= 10000 };
   };
   const actionTimeout = (session: BrowserSession) => actionBound(session).ms;
-  const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
+  const allowed = async (session: BrowserSession, url: string, method = 'GET', body?: Uint8Array) => {
     await admit(session);
     const target = new URL(url);
-    if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password || !await options.authorizeRequest(url, method)) throw new GeneralBrowserError('rejected');
+    if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password || !await options.authorizeRequest(url, method, body)) throw new GeneralBrowserError('rejected');
     await admit(session);
   };
   const tabRef = (session: BrowserSession, target: string) => generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target])).then(value => `tab:${value.slice(0, 24)}`);
@@ -203,7 +203,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         try {
           const capture=attachmentCapture,request=route.request();
           if(capture&&request.url()===capture.url&&request.isNavigationRequest()&&!request.frame().parentFrame()&&request.frame().page()===capture.page){
-            await guardGeneralBrowserRoute(route,{authorize:(url,method)=>allowed(session,url,method),timeout:()=>actionTimeout(session),admit:()=>admit(session),redirect:()=>{throw new GeneralBrowserError('rejected');},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},attachment:async response=>{await capture.consume(response);capture.complete=true;}});
+            await guardGeneralBrowserRoute(route,{authorize:(url,method,body)=>allowed(session,url,method,body),timeout:()=>actionTimeout(session),admit:()=>admit(session),redirect:()=>{throw new GeneralBrowserError('rejected');},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},attachment:async response=>{await capture.consume(response);capture.complete=true;}});
             return;
           }
           if(takeover){
@@ -222,7 +222,7 @@ export function cloudflareGeneralBrowser(options: Options) {
             }else if(request.isNavigationRequest()&&!request.frame().parentFrame())humanRedirects.delete(page);
             return;
           }
-          await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
+          await guardGeneralBrowserRoute(route, { authorize: (url, method, body) => allowed(session, url, method, body), timeout: () => actionTimeout(session), admit: () => admit(session),
             redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); },
             challenge: page => { challengedDocuments.add(page); }, document: page => { challengedDocuments.delete(page); } });
           await admit(session);

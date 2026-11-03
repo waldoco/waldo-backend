@@ -1,4 +1,5 @@
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
+import { siteGrantPreview } from '../../channels/browser-errand-grant';
 import {
   TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, toolNameSchema, triggerTypeSchema,
   type CloseLoopArgs, type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
@@ -99,6 +100,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       const waiting = desk.waitingTaintedActions?.('close_loop').find((card) => card.args.id === id);
       if (waiting) return { ok: false, error: `A card asking the owner to close loop ${id} (card ${waiting.approval_id}) is already waiting, so no second card was raised. Tell the owner that card is waiting for them; the loop stays open until they approve it.`, code: 'rejected' };
     }
+    if (tool.data === 'start_task' && frozen.site_grant !== undefined) preview = [siteGrantPreview(frozen.site_grant as Readonly<{ origin: string; submits: number }>)];
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {
       const check = ctx.hasApproval;

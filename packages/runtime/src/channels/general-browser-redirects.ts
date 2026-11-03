@@ -6,7 +6,9 @@ export class GeneralRedirectError extends Error {
   readonly code = 'rejected';
   constructor() { super('browser_redirect_rejected'); }
 }
-type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;challenge?(page: Page): void;document?(page: Page): void;attachment?(response:APIResponse):Promise<void> }>;
+// authorize sees a write request's own body on its first hop, so a host can admit exactly one approved submit; redirect
+// hops carry none (a redirected write continues only as a GET).
+type Routing = Readonly<{ authorize(url: string, method: string, body?: Uint8Array): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;challenge?(page: Page): void;document?(page: Page): void;attachment?(response:APIResponse):Promise<void> }>;
 
 // Neither continue nor fulfill(302) re-intercepts the complete Chromium chain.
 // Fetch each response without redirects; main documents re-enter page.goto so
@@ -16,10 +18,10 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
   let url = request.url(), method = request.method();
   if(options.attachment&&(method!=='GET'||!request.isNavigationRequest()||request.frame().parentFrame()))throw new GeneralRedirectError();
   let headers: Record<string, string> | undefined;
-  const visited = new Set<string>();
+  const visited = new Set<string>(), body = request.postDataBuffer() ?? undefined;
   for (;;) {
     if (visited.has(url) || visited.size > GENERAL_BROWSER_REDIRECT_LIMIT) throw new GeneralRedirectError();
-    visited.add(url); await options.authorize(url, method);
+    visited.add(url); await options.authorize(url, method, visited.size === 1 ? body : undefined);
     const response = await route.fetch({ maxRedirects: 0, timeout: options.timeout(), ...(visited.size > 1 ? { url, method, headers, ...(method !== request.method() ? { postData: '' } : {}) } : {}) });
     await options.admit();
     const status = response.status();

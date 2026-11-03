@@ -42,6 +42,8 @@ export type TaskHostDeps = Readonly<{
   replayApproval(surface: string, brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
+  // Ends the site grant a run holds, once its job has settled or been cancelled.
+  endGrant?(runRef: string): void;
   // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
   // checkpoint that carries one cancels its job rather than write it back.
   heldTopics?(): readonly string[];
@@ -177,6 +179,7 @@ export const taskHost = (deps: TaskHostDeps) => {
     if (!deps.lapsed?.(row)) return false;
     deps.book.cancel(row.id, 'owner');
     fence(row.id);
+    deps.endGrant?.(`task:${row.id}`);
     hop(row, 'task_cancelled', { ok: false, code: 'lapsed' });
     return true;
   };
@@ -256,7 +259,7 @@ export const taskHost = (deps: TaskHostDeps) => {
 
   // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
   // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
-  const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); };
+  const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); deps.endGrant?.(`task:${jobId}`); };
 
   return {
     fence,
@@ -414,6 +417,8 @@ export const taskHost = (deps: TaskHostDeps) => {
       if (written === 'fenced' || written === 'duplicate') { if (written === 'fenced') fence(ticket.jobId); return written; }
       replay(outcomes);
       fence(ticket.jobId);
+      // A deferred job runs again later under the same run, so only a settled one gives up its grant.
+      if (written !== 'deferred') deps.endGrant?.(`task:${ticket.jobId}`);
       const after = deps.book.get(ticket.jobId)!;
       hop(after, written === 'deferred' ? 'task_deferred' : written === 'parked' ? 'task_parked' : 'task_reported', {
         ok: written !== 'parked', ms: deps.now() - after.created_at,

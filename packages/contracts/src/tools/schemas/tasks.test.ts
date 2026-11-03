@@ -27,6 +27,15 @@ describe('start_task arguments', () => {
     ];
     for (const value of rejected) expect(startTaskArgsSchema.safeParse(value).success, JSON.stringify(value)).toBe(false);
   });
+
+  it('a site grant names one https origin and one to three submits, and nothing else', () => {
+    const grant = (site_grant: unknown) => startTaskArgsSchema.safeParse({ ...brief, profile: 'errand', site_grant }).success;
+    for (const ok of [{ origin: 'https://checkin.airline.example', submits: 1 }, { origin: 'https://www.example.co.jp', submits: 3 }]) expect(grant(ok), JSON.stringify(ok)).toBe(true);
+    for (const bad of [{ origin: 'http://checkin.airline.example', submits: 1 }, { origin: 'https://checkin.airline.example/path', submits: 1 }, { origin: 'https://checkin.airline.example:8443', submits: 1 },
+      { origin: 'https://user@airline.example', submits: 1 }, { origin: 'https://Airline.example', submits: 1 }, { origin: 'https://localhost', submits: 1 },
+      { origin: 'https://checkin.airline.example', submits: 0 }, { origin: 'https://checkin.airline.example', submits: 4 }, { origin: 'https://checkin.airline.example', submits: 1.5 },
+      { origin: 'https://checkin.airline.example' }, { origin: 'https://checkin.airline.example', submits: 1, password: 'x' }]) expect(grant(bad), JSON.stringify(bad)).toBe(false);
+  });
 });
 
 describe('cancel_task arguments', () => {

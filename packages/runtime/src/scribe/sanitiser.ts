@@ -1209,7 +1209,9 @@ function ownerReadable(destination: SanitiseDestination, taint: SourceTaint, kin
   return taint === null && OWNER_READABLE_DESTINATIONS.has(destination);
 }
 
-const WORKSPACE_ID_KEYS: ReadonlySet<string> = new Set(['file_id', 'blob_id', 'operation_id', 'source_file_id']);
+// Exact-uuid identifiers the model must echo back verbatim: workspace references and browser session handles. A random
+// uuid can look like a card number (its first three groups all digits), and a redacted handle cannot be continued.
+const STRUCTURED_ID_KEYS: ReadonlySet<string> = new Set(['file_id', 'blob_id', 'operation_id', 'source_file_id', 'session_handle', 'browser_action_session_handle']);
 const WORKSPACE_URL_KEYS: ReadonlySet<string> = new Set(['url', 'download_url']);
 
 // Exactly what workspace-delivery.ts emits: https origin, the file path, id (uuid) then a numeric revision.
@@ -1244,7 +1246,7 @@ function redactPiiText(
   // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
   // Everything else (free text, other keys, other URL shapes) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
-    if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
+    if (STRUCTURED_ID_KEYS.has(key) && validId(text)) return text;
     if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);

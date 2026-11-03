@@ -11,7 +11,7 @@ function harness(authorize: (url: string) => boolean = () => true) {
   let index = 0;
   const load = async (target: string) => {
     let settled = '';
-    await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => page }) }),
+    await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => page }) }),
       fetch: async () => ({ status: () => 200, headers: () => ({}) }), fulfill: async () => { settled = 'fulfill'; }, abort: async () => { settled = 'abort'; } });
     if (settled === 'abort') throw Error('net::ERR_BLOCKED_BY_CLIENT');
   };

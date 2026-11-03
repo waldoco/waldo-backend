@@ -16,9 +16,19 @@ it('attachment capture never admits POST export or fetches a denied redirect des
  const g=route();await expect(guardGeneralBrowserRoute(g.route as never,{authorize:async url=>{if(url.includes('assets'))throw Error('denied destination');},timeout:()=>1000,admit:async()=>{},redirect:()=>{},denied:()=>{},attachment:async()=>{captured=true;}})).rejects.toThrow();expect(g.calls.filter(call=>call[0]==='fetch')).toHaveLength(1);expect(captured).toBe(false);
 });
 
-function route(method = 'GET', navigation = true) {
+it('hands a write request its own body to authorize, so only an exactly approved submit can leave, and a GET none', async () => {
+  const body = new TextEncoder().encode('booking=FICTIONAL1&surname=Example');
+  const f = route('POST', true, body); f.responses[0] = { status: () => 200, headers: () => ({}) };
+  const authorized: any[] = [];
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async (url, method, sent) => { authorized.push([url, method, sent]); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
+  expect(authorized).toEqual([['https://docs.example/start', 'POST', body]]);
+  const g = route(); g.responses[0] = { status: () => 200, headers: () => ({}) };const read: any[] = [];
+  await guardGeneralBrowserRoute(g.route as never, { authorize: async (url, method, sent) => { read.push([url, method, sent]); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
+  expect(read).toEqual([['https://docs.example/start', 'GET', undefined]]);
+});
+function route(method = 'GET', navigation = true, body?: Uint8Array) {
   const calls: any[] = [], page = {};
-  const request = { url: () => 'https://docs.example/start', method: () => method, isNavigationRequest: () => navigation,
+  const request = { url: () => 'https://docs.example/start', method: () => method, isNavigationRequest: () => navigation, postDataBuffer: () => body ?? null,
     frame: () => ({ parentFrame: () => null, page: () => page }), allHeaders: async () => ({ authorization: 'private-origin-auth', cookie: 'private-origin-cookie', accept: 'text/html' }) };
   const responses = [{ status: () => 302, headers: () => ({ location: 'https://assets.example/final' }) }, { status: () => 200, headers: () => ({}) }];
   return { calls, page, route: { request: () => request, fetch: async (options: any) => { calls.push(['fetch', options]); return responses.shift(); }, fulfill: async (options: any) => { calls.push(['fulfill', options]); }, abort: async () => { calls.push(['abort']); } }, responses };
