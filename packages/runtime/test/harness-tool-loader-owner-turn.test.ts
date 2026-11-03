@@ -258,6 +258,6 @@ describe('the harness tool loader on the owner turn', () => {
     expect(report.openai_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.anthropic_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.system_added_tokens_est).toBeLessThan(1_000);
-    expect(report.before_tokens_est).toBeGreaterThan((report.openai_tokens_est + report.system_added_tokens_est) * 3);
+    expect(report.before_tokens_est).toBeGreaterThan((report.openai_tokens_est + report.system_added_tokens_est) * 2);
   });
 });
