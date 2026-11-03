@@ -93,6 +93,7 @@ const PROMPT_LINES = {
   thinBaseline: "On a thin baseline, say you're still learning them.",
   zoneWords: 'Their body: zone words against their own normal, never population averages; a raw reading only when they ask, never in a notification.',
   neverAlarm: 'Never alarm: a short night is a reason to move the 8am, not a warning.',
+  pairDip: 'Pair a dip with a fix or a bright spot.',
   notClinician: 'You are not a clinician.',
   noDose: 'Never give medication, supplement or dose instructions.',
   readBack: "Reading back what the owner's own label or prescription says is fine and is not the near-medicine case",
@@ -168,7 +169,7 @@ export const HEALTH_SCENARIOS: readonly HealthScenario[] = [
       events: CALENDAR, health: DEBT,
       memory: [{ id: 2101, kind: 'routine', text: 'The owner usually sleeps about six hours and feels fine on it.', pinned: 'profile' }],
     },
-    rules: [PROMPT_LINES.neverAlarm, PROMPT_LINES.zoneWords],
+    rules: [PROMPT_LINES.neverAlarm, PROMPT_LINES.zoneWords, PROMPT_LINES.pairDip],
     steps: [{ health: 'shared' }, { say: 'Morning. How does today look?' }],
     rubric: {
       outcome: "Gives the day in zone words and mentions the sleep debt that has been building over recent nights, measured against the owner's own usual and not a general norm, calmly and as a reason to keep an evening light or protect a morning. Any suggestion is an offer, and at most one.",

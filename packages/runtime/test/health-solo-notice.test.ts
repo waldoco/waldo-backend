@@ -225,6 +225,12 @@ describe('the note prompt and its answer', () => {
     expect(prompt).not.toContain('"Update"');
   });
 
+  it('never leaves a dip on its own: one small everyday thing to do today, or what still looks good', () => {
+    const prompt = healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['driver_appeared'] });
+    expect(prompt).toContain('Never leave a change that reads worse on its own');
+    expect(prompt).toContain('what still looks good');
+  });
+
   it('names the signals outside usual only when a driver woke the run', () => {
     expect(healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['driver_appeared'] })).toContain('Signals outside the owner\'s usual range now: breathing rate above usual.');
     expect(healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['zone_change'] })).not.toContain('Signals outside');

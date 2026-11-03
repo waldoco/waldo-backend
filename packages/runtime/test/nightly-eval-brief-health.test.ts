@@ -36,9 +36,10 @@ const SAID = [
 ].join('\n');
 
 describe('the Brief and health-only-day set in the catalogue', () => {
-  it('runs six cases nightly, each held by a receipt and quoting prompt lines the prompts still say', () => {
+  it('runs seven cases nightly, each held by a receipt and quoting prompt lines the prompts still say', () => {
     expect(BRIEF_HEALTH_SCENARIOS.map((entry) => entry.id)).toEqual([
       'h20-brief-with-shared-health', 'h21-brief-without-health', 'h22-brief-after-sharing-withdrawn', 'h23-brief-heavy-day-low-form', 'h24-health-only-day-sharp-drop', 'h25-health-only-day-small-move',
+      'h26-health-only-day-dip-on-a-good-day',
     ]);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     for (const entry of BRIEF_HEALTH_SCENARIOS) {

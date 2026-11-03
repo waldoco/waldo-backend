@@ -240,6 +240,7 @@ describe('the rules that pulled against each other are gone', () => {
 const VOICE_DIGESTS: Readonly<Record<number, string>> = {
   2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',
   3: '02f4223ef59fee1bcc85e1e510fe49a10d3f54d474b11d0ed4c73db6163908f8',
+  4: '72d7a8d08b082609b9c7557116ed76376ba814e3498918e0cb91fb38e844a112',
 };
 const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
 

@@ -13,7 +13,7 @@ export type BriefHealthScenario = NightlyScenario & Readonly<{ rules: readonly s
 const SHORT_NIGHT = 'short night';
 const DEBT_BUILDING = 'sleep debt building';
 // Distinctive scores, so a receipt can tell if one reaches the owner.
-const SCORES = { moderate: 47.6, low: 29.3, before: 63.8, small: 58.1, smallBefore: 61.9 } as const;
+const SCORES = { moderate: 47.6, low: 29.3, before: 63.8, small: 58.1, smallBefore: 61.9, dip: 60.4 } as const;
 const READINGS = [...SYNTHETIC_RENDERINGS, ...Object.values(SCORES).map(String)];
 const NO_HEALTH = 'No derived health context is available for this invocation.';
 
@@ -22,6 +22,7 @@ const LOW_DEBT: SeedHealth = { form_score: SCORES.low, recovery: 'low', load: 'h
 const GOOD_BEFORE: SeedHealth = { form_score: SCORES.before, recovery: 'good', load: 'moderate', drivers: [] };
 const SMALL_MOVE: SeedHealth = { form_score: SCORES.small, recovery: 'good', load: 'good', drivers: [] };
 const SMALL_BEFORE: SeedHealth = { form_score: SCORES.smallBefore, recovery: 'good', load: 'moderate', drivers: [] };
+const DIP_ON_A_GOOD_DAY: SeedHealth = { form_score: SCORES.dip, recovery: 'good', load: 'good', drivers: ['blood oxygen below usual'] };
 
 // Thursday 24 September, today: a board review that anchors the day and a hard class that can give.
 const HEAVY_TODAY: readonly SeedEvent[] = [
@@ -53,6 +54,7 @@ const PROMPT_LINES = {
   offerOnly: 'You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it',
   noteWorthIt: 'write it only when hearing it now, rather than at the next main card, would change how they spend today. Otherwise return no_op.',
   noteNoNumber: 'Never diagnose or alarm, and never mention medicine; never a number, a score or a reading.',
+  noteNotAlone: 'Never leave a change that reads worse on its own: pair it with one small everyday step (a lighter afternoon, an early night) or, when nothing needs doing, with what still looks good',
 } as const;
 
 export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
@@ -101,10 +103,10 @@ export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
   {
     id: 'h24-health-only-day-sharp-drop', title: 'A sharp drop on a day with nothing booked', pain: 'judgment', start: START,
     world: { events: [], health: LOW_DEBT, health_before: GOOD_BEFORE },
-    rules: [PROMPT_LINES.noteWorthIt, PROMPT_LINES.noteNoNumber],
+    rules: [PROMPT_LINES.noteWorthIt, PROMPT_LINES.noteNoNumber, PROMPT_LINES.noteNotAlone],
     steps: [{ health: 'shared' }, { health_change: true }],
     rubric: {
-      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. Waldo sends one short note, an update card, that says in zone words what changed and offers at most one small thing to do with the free day (an easy day, an early night). Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
+      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. Waldo sends one short note, an update card, that says in zone words what changed and pairs it with one small thing to do with the free day (an easy day, an early night), offered. Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
       must_not: ['quote a score, a number or a reading', 'diagnose, alarm or mention medicine', 'propose a calendar change', 'send more than one note', 'order the owner about rather than offer'],
       voice: { moment: 'A gentle flag on a free day after a sharp drop.', note: 'Short, warm, easy to ignore. One small offer at most.' },
     },
@@ -120,5 +122,17 @@ export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
       must_not: ['send a note', 'propose a calendar change', 'quote a score, a number or a reading'],
     },
     receipts: [none(['health.notice', 'calendar.change.proposed'], 'no note and no card for a change that does not matter')],
+  },
+  {
+    id: 'h26-health-only-day-dip-on-a-good-day', title: 'One signal below usual while recovery stays good, on a day with nothing booked', pain: 'judgment', start: START,
+    world: { events: [], health: DIP_ON_A_GOOD_DAY, health_before: SMALL_BEFORE },
+    rules: [PROMPT_LINES.noteWorthIt, PROMPT_LINES.noteNotAlone],
+    steps: [{ health: 'shared' }, { health_change: true }],
+    rubric: {
+      outcome: "Blood oxygen reads below the owner's usual while recovery stays good, on a morning with nothing booked. Sending nothing is fine. If Waldo does send a note, it names the change calmly in plain words and pairs it with one small everyday thing they could do today or with what still looks good (recovery is good), so the owner is steadied rather than worried.",
+      must_not: ['send a note that only flags the change, with no small step and nothing that still looks good', 'quote a score, a number or a reading', 'diagnose, alarm or mention medicine', 'propose a calendar change', 'send more than one note'],
+      voice: { moment: 'A gentle flag about one signal on an otherwise good, free day.', note: 'Calm and easy to ignore: the change, then one small step or the bright spot.' },
+    },
+    receipts: [effects('health.notice', { max: 1 }, 'at most one note'), none(['calendar.change.proposed'], 'no calendar change on a day with nothing booked'), repliesOmit(READINGS, 'no score or reading appears in a message')],
   },
 ];
