@@ -258,19 +258,23 @@ const fromName = (first: string | null) => first ? `Waldo, ${first}'s assistant`
 export const WALDO_SITE = 'https://heywaldo.in';
 const assistantLine = (first: string | null) => first ? `${first}'s personal assistant` : null;
 const signatureText = (first: string | null) => ['Waldo', assistantLine(first), WALDO_SITE].filter(line => line !== null).join('\n');
-const signatureHtml = (first: string | null, contentId: string) => {
-  const role = assistantLine(first);
-  return `<p style="margin:0 0 8px 0"><a href="${WALDO_SITE}" style="${LINK_STYLE};font-weight:bold">Waldo</a>${role ? `<br><span style="color:${MUTED}">${escape(role)}</span>` : ''}</p>`
+// The signature sits on the lines right under the model's closing word, as a signed letter does: it joins the last
+// paragraph, and opens its own only after a list, a table or an action button.
+const signedHtml = (blocks: readonly Block[], tail: string, first: string | null, contentId: string) => {
+  const role = assistantLine(first), last = blocks.at(-1);
+  const closing = !tail && last?.kind === 'paragraph' ? last : null;
+  const lines = `<a href="${WALDO_SITE}" style="${LINK_STYLE};font-weight:bold">Waldo</a>${role ? `<br><span style="color:${MUTED}">${escape(role)}</span>` : ''}`;
+  return `${(closing ? blocks.slice(0, -1) : blocks).map(htmlBlock).join('\n')}\n${tail}`
+    + `<p style="margin:0 0 8px 0">${closing ? `${closing.lines.map(htmlInline).join('<br>')}<br>` : ''}${lines}</p>`
     + `<img src="cid:${contentId}" width="${WALDO_MARK_WIDTH}" height="${WALDO_MARK_HEIGHT}" alt="Waldo" style="display:block;border:0;outline:none">`;
 };
-// The model's words, then the signature: the plain text a client shows, and what an approval card shows.
-const signedText = (bodyText: string, first: string | null) => `${bodyText}\n\n${signatureText(first)}`;
+// The model's words, then the signature on the next line: the plain text a client shows, and what an approval card shows.
+const signedText = (bodyText: string, first: string | null) => `${bodyText}\n${signatureText(first)}`;
 
 const htmlDocument = (subject: string, blocks: readonly Block[], callout: readonly Inline[] | null, action: Readonly<{ caption: string; href: string }> | null, first: string | null, contentId: string) => {
   const calloutHtml = callout ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0"><tr><td style="background-color:${ACCENT_SUBTLE};border-radius:12px;padding:14px 16px">${htmlInline(callout)}</td></tr></table>` : '';
   const actionHtml = action ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 8px 0"><tr><td style="background-color:${INK};border-radius:12px"><a href="${escape(action.href)}" style="display:inline-block;padding:12px 20px;color:${ON_INK};font-weight:bold;text-decoration:none">${escape(action.caption)}</a></td></tr></table>`
     + `<p style="margin:0 0 16px 0;font-size:13px;color:${MUTED};word-break:break-all">${escape(action.href)}</p>` : '';
-  const signature = signatureHtml(first, contentId);
   return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">'
     + `<title>${escape(subject)}</title></head>\n<body style="margin:0;padding:0;background-color:${CANVAS}">\n`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${CANVAS}"><tr><td align="center" style="padding:24px 12px">\n`
@@ -280,7 +284,7 @@ const htmlDocument = (subject: string, blocks: readonly Block[], callout: readon
     + `<table role="presentation" width="100%" align="center" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px">\n`
     + `<tr><td style="padding:0 4px 14px 4px;font-family:${FONT};font-size:18px;font-weight:bold;color:${INK}">Waldo</td></tr>\n`
     + `<tr><td style="background-color:${CARD};border:1px solid ${BORDER};border-radius:16px;padding:28px;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n`
-    + `${calloutHtml}${blocks.map(htmlBlock).join('\n')}\n${actionHtml}${signature}\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</td></tr></table>\n</body></html>`;
+    + `${calloutHtml}${signedHtml(blocks, actionHtml, first, contentId)}\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</td></tr></table>\n</body></html>`;
 };
 
 // The body both renders send: the plain text, and the HTML with Waldo's mark inline by its Content-ID.
@@ -409,7 +413,7 @@ export function renderOwnerMail(draft: OwnerMailDraft, first: string | null, rec
   // The mark's Content-ID needs only to be unique within the message; Waldo's own domain names it in either mailbox.
   const contentId = 'waldo-mark@heywaldo.in';
   const html = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>\n'
-    + `<body style="margin:0;padding:0;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n${blocks.map(htmlBlock).join('\n')}\n${signatureHtml(signerOf(first), contentId)}\n</body></html>`;
+    + `<body style="margin:0;padding:0;font-family:${FONT};font-size:15px;line-height:1.55;color:${INK}">\n${signedHtml(blocks, '', signerOf(first), contentId)}\n</body></html>`;
   // No HTML bound here: AGENT_MAIL_HTML_MAX keeps Waldo's own mail clear of Gmail's clipping, but an owner's long table is
   // still delivered whole when clipped, so it is not refused for it.
   const text = ownerMailText(draft.body_markdown, first);

@@ -303,6 +303,10 @@ const sameInstant = (a: string, b: string) => a === b || Date.parse(a) === Date.
 // the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
 // button, because approving would send content the owner never saw.
 const REVIEW_BUDGET = 3800;
+// Room an email card keeps for its closing lines: "Nothing has been sent." and the console review link.
+const EMAIL_TAIL_ROOM = 300;
+// Whether a card shows the whole review: present() and placement() both decide it here, so they never disagree.
+const reviewFits = (entry: LedgerRow) => reviewText(entry).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
 const reviewEmail = (p: EmailSendProposal) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
     ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
@@ -705,6 +709,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const entry = row(id)!;
     const deferrable = raise !== undefined || entry.deferred_at == null;
     const card = reviewText(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
+    // An email's card also links its console review; the lookup runs while the app card is built, not ahead of the card.
+    const reviewing = entry.kind === 'email_send' ? deps.reviewUrl?.().catch(() => null) ?? null : null;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     const shown: { surface: string; message_ref: string; approvable: boolean }[] = [];
     let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, waits = false;
@@ -724,11 +730,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
     }
     if (surface !== 'app') {
-      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
-      const review = entry.kind === 'email_send' ? await deps.reviewUrl?.().catch(() => null) : null;
+      const review = await reviewing;
       // An app handoff that cannot approve already ends with "Nothing was done."
       const unsent = entry.kind !== 'email_send' ? '' : [...(handsToApp && inApp?.approvable !== true ? [] : ['Nothing has been sent.']), ...(review ? [`You can also review it at ${review}.`] : [])].join(' ');
+      const fits = reviewFits(entry), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
@@ -1772,7 +1778,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
       const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
       // A card handed to the app shows the review whenever it fits, as present() decides.
-      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewText(entry!).length <= REVIEW_BUDGET);
+      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!));
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}) };
     },
     async approvals(now, filter = {}) {
