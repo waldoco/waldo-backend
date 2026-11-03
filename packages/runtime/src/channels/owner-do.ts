@@ -2368,11 +2368,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!channel || (state !== 'sync' && state !== 'exists' && state !== 'not_exists') || !Number.isSafeInteger(number)) return new Response('ok');
     // A channel per read calendar on each account (GOOGLE_REALTIME_TRIAGE) marks that calendar to be read, else the older
     // primary-only channel; until upkeep hands that one over, it marks the primary calendar of the account it was started on.
-    const kv = this.ctx.storage.kv, legacy = calendarPushBook(kv), legacyConnection = legacy.connection();
-    const admitted = calendarChannelsBook(kv).admit(channel, state, number);
+    const kv = this.ctx.storage.kv, legacy = calendarPushBook(kv), legacyConnection = legacy.connection(), realtime = realtimeTriage(this.env);
+    // With the switch back off the per-account channels wake nothing and lapse on their own; the poll and the older channel serve.
+    const admitted = realtime ? calendarChannelsBook(kv).admit(channel, state, number) : null;
     if (!admitted && legacy.admit(channel, state, number) !== 'wake') return new Response('ok');
     ensureSchema(this.ctx.storage);
-    const heir = admitted ? null : realtimeTriage(this.env)
+    const heir = admitted ? null : realtime
       ? ((await this.ctx.storage.get<GoogleAccount[]>('google:accounts')) ?? []).find(account => legacyConnection === null ? account.refresh_token : account.id === legacyConnection) : undefined;
     const source = admitted ? calendarSource(admitted.account, admitted.calendarId) : heir ? calendarSource(heir.id, 'primary') : null;
     if (source) updateBook(this.ctx.storage.sql).pend(source, Date.now());
@@ -3952,7 +3953,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account: GoogleAccount = 'id' in grant
           ? { id: grant.id, email, scopes: grant.scopes }
           : { id: `local:${email}`, email, scopes: grant.scopes ?? null, refresh_token: grant.refresh_token };
-        const kept = [...(await accounts()).filter((known) => known.email !== email), account];
+        const known = await accounts();
+        const kept = [...known.filter((other) => other.email !== email), account];
         // A profile lives only as long as its account. A connect that carries one replaces the old (an empty one clears
         // it); a grant that carries none, from an edge that predates it or a migrated token, leaves it as it is.
         const ids = new Set(kept.map((known) => known.id));
@@ -3963,6 +3965,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Upkeep runs at once and watches with the route this grant gives, rather than waiting out a stored skip or failure.
         gmailPushBook(identity).reset();
         calendarPushBook(identity).clearFailure();
+        calendarChannelsBook(identity).clearFailures(account.id);
+        gmailWatchesBook(identity).clearFailure(account.id);
+        // A reconnect that came back under a new connection leaves the old one's watches and cursors behind: they are forgotten,
+        // so its pushes wake nothing and the new connection starts each source from a baseline.
+        for (const replaced of known.filter((other) => other.email === email && other.id !== account.id)) {
+          calendarChannelsBook(identity).forgetAccount(replaced.id);
+          gmailWatchesBook(identity).forget(replaced.id);
+          updateBook(storage.sql).dropAccount(replaced.id);
+        }
         const grants = watchGrants(kept);
         await armWatchUpkeep(scheduler, grants, Date.now(), true);
         await endWatchUpkeep(scheduler, grants);
@@ -5341,7 +5352,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
-          ...(realtime ? { delta: { accounts: await deltaAccounts() } } : {}),
+          ...(realtime ? { delta: { accounts: await deltaAccounts(), followups: (await google.client('mail'))?.account?.email } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(

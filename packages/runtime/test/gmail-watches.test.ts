@@ -47,6 +47,16 @@ describe('a Gmail watch per mail account', () => {
     expect(w.book.misses()).toEqual([]);
   });
 
+  it('a reconnect clears the account\'s failed watch, so the next upkeep tries it, and leaves a live one', async () => {
+    const w = world();
+    w.refuse.add('conn-1');
+    await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }]);
+    w.refuse.clear();
+    w.book.clearFailure('conn-1');
+    w.book.clearFailure('conn-2');
+    expect(await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }])).toEqual({ started: 1, failed: 0, skipped: 0, fresh: 1 });
+  });
+
   it('an account no longer read is forgotten, so its pushes wake nothing', async () => {
     const w = world();
     await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }]);

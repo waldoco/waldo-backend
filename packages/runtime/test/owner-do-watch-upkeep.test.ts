@@ -3,8 +3,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import { calendarPushBook } from '../src/channels/calendar-push';
+import { calendarChannelsBook } from '../src/channels/calendar-watches';
 import { armBriefSweep, BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { gmailPushBook } from '../src/channels/gmail-push';
+import { gmailWatchesBook } from '../src/channels/gmail-watches';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { WATCH_UPKEEP_ID } from '../src/channels/watch-upkeep';
@@ -500,6 +502,25 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
     });
   });
 
+  it('a reconnect clears that account\'s failed watches at once; one under a new connection forgets the old one\'s cursors', async () => {
+    edge.calendars = [listed(EMAIL, true)];
+    await world('upkeep-realtime-reconnect', { off: ['event_briefs'], realtime: true }, async w => {
+      edge.failing = new Set(['calendar_watch', 'gmail_watch']);
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      const kv = w.state.storage.kv;
+      expect(calendarChannelsBook(kv).failures().map(miss => miss.account)).toEqual(['conn-1']);
+      expect(gmailWatchesBook(kv).misses().map(miss => miss.account)).toEqual(['conn-1']);
+      edge.failing = new Set();
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      expect(calendarChannelsBook(kv).failures()).toEqual([]);
+      expect(gmailWatchesBook(kv).misses()).toEqual([]);
+      w.state.storage.sql.exec("INSERT INTO watch_state (key, value) VALUES ('cursor:mail:conn-1', '5')");
+      await w.connect('conn-7', [...MAIL, CALENDAR]);
+      expect(w.state.storage.sql.exec("SELECT key FROM watch_state WHERE key LIKE '%conn-1%'").toArray()).toEqual([]);
+    });
+  });
+
   it('with the switch off, only the primary calendar is watched, as before', async () => {
     edge.calendars = [listed(EMAIL, true), listed('team@group.example.test')];
     await world('upkeep-realtime-off', { off: ['event_briefs'] }, async w => {
@@ -507,6 +528,11 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       await w.pass();
       expect(w.watches('calendar_watch')).toEqual(['conn-1']);
       expect(edge.ops.filter(body => body.op === 'events_watch')).toEqual([]);
+      // A channel left from when the switch was on wakes nothing and marks nothing to read.
+      calendarChannelsBook(w.state.storage.kv).record('conn-1', 'team@group.example.test', { channelId: 'left-on', resourceId: 'res-left', expiration: Date.now() + DAY }, 'conn-1');
+      expect((await w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': 'left-on', 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': '1' } }))).status).toBe(200);
+      expect(w.lines('calendar_push')).toEqual([]);
     });
   });
 });

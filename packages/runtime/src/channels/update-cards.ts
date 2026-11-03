@@ -260,7 +260,9 @@ export type DeltaCode = `${'mail' | 'calendar'}_${'baseline' | 'rebased' | 'capp
 // One connected Google account the delta reads: its client, the calendars it reads by Google id, and whether its mail is read.
 // Cursors, read times and waiting pushes are kept per source, so no two accounts share one.
 export type DeltaAccount = Readonly<{ id: string; email: string; google: DeltaGoogle; calendars: readonly string[]; mail: boolean }>;
-export type DeltaSource = Readonly<{ accounts: readonly DeltaAccount[] }>;
+// followups: the address a mail follow-up reads its thread through. Mail from another account is never a follow-up source,
+// since its thread would be read in the wrong mailbox.
+export type DeltaSource = Readonly<{ accounts: readonly DeltaAccount[]; followups?: string }>;
 type DeltaGoogle = Pick<GoogleClient, 'newMail' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
 export const mailSource = (account: string) => `mail:${account}`;
 export const calendarSource = (account: string, calendarId: string) => `cal:${account}:${calendarId}`;
@@ -320,7 +322,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];
   const mail = mailItems.map((item): Change => {
     const detail = withAccount(mailPromptProjection(item), found?.mailAccounts.get(item.id));
-    if (!sourceFollowups) return { source: 'mail', kind: 'new', detail, ref: `message:${item.id}` };
+    if (!sourceFollowups || (found && found.mailAccounts.get(item.id) !== delta?.followups)) return { source: 'mail', kind: 'new', detail, ref: `message:${item.id}` };
     const source_ref = `mail:${item.thread_id || item.id}`;
     observed.push({ source_ref, thread_id: item.thread_id, at: Date.parse(item.at), message_id: item.id });
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };
@@ -368,9 +370,11 @@ const readDelta = async (book: UpdateBook, delta: DeltaSource,
   };
   for (const account of delta.accounts) {
     const { google } = account;
-    // The same meeting sits on each invited account's calendar under one event id: it is read once, from the first account.
+    // The same meeting sits on each invited account's calendar under one event id: it is read once, from the first account,
+    // unless another account holds the invite still to answer.
     const keep = (event: CalendarChange | CalendarDeltaEvent) => {
-      if (events.has(event.id)) return;
+      const held = events.get(event.id);
+      if (held && !(('invite' in event && event.invite) && !('invite' in held && held.invite))) return;
       events.set(event.id, event);
       eventAccounts.set(event.id, account.email);
     };

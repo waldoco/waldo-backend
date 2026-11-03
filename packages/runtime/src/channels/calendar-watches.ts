@@ -39,6 +39,11 @@ export const calendarChannelsBook = (kv: Kv) => {
       write(rest);
       return Object.values(gone).filter(live);
     },
+    // A reconnect may fix what failed: the account's calendars are tried at the next upkeep. Live channels are left alone.
+    clearFailures: (account: string) => {
+      const entries = read();
+      if (entries[account]) write({ ...entries, [account]: Object.fromEntries(Object.entries(entries[account]).filter(([, entry]) => live(entry))) });
+    },
     // Each account with a calendar whose start failed, and the earliest such failure.
     failures: (): readonly Readonly<{ account: string; at: number }>[] => Object.entries(read()).flatMap(([account, entries]) => {
       const failed = Object.values(entries).filter((entry): entry is Readonly<{ failedAt: number }> => !live(entry)).map(entry => entry.failedAt);

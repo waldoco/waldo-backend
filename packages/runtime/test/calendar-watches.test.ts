@@ -140,6 +140,18 @@ describe('every connected account', () => {
     expect(w.book.admit('chan-4', 'exists', 1)).toEqual({ account: 'b2', calendarId: 'primary' });
   });
 
+  it('a reconnect clears an account\'s failed calendars, so the next upkeep tries them, and leaves its live channels', async () => {
+    const w = world({ a1: { list: LIST }, b2: { list: LIST_B } });
+    w.refuse.add('a1/team@group.example.test');
+    w.refuse.add('b2/club@group.example.test');
+    await w.run();
+    w.refuse.clear();
+    w.book.clearFailures('a1');
+    expect(w.book.failures()).toEqual([{ account: 'b2', at: w.now() }]);
+    expect(await w.run()).toMatchObject({ started: 1, failed: 0 });
+    expect(w.started.at(-1)).toMatchObject({ account: 'a1', calendarId: 'team@group.example.test' });
+  });
+
   it('forgetting an account hands back its live channels to stop', async () => {
     const w = world({ a1: { list: LIST }, b2: { list: LIST_B } });
     await w.run();

@@ -26,7 +26,7 @@ type Account = Readonly<{ id: string; calendars?: readonly string[]; mail?: bool
 type Harness = Readonly<{ updates: UpdateBook; fakes: Fakes; storage: DurableObjectStorage; settle(): void;
   // Another connected account with its own fakes; the first is 'a1'.
   account(id: string): Fakes;
-  check(calendars?: readonly string[] | readonly Account[]): ReturnType<typeof updateSweepCheck>;
+  check(calendars?: readonly string[] | readonly Account[], options?: Readonly<{ followups?: string }>): ReturnType<typeof updateSweepCheck>;
   // Moves the clock on by one poll, so every source is due again.
   later(ms?: number): number;
   jobs(): JobRow[]; rows(): Change[][]; cursor(key: string): string | null }>;
@@ -60,11 +60,12 @@ const withDelta = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       // The judged job settles, so the next tick reads again.
       settle: () => { sql.exec("UPDATE task_jobs SET status = 'applied', settled_at = 1"); },
       later: (ms = SOURCE_POLL_MS) => (clock += ms),
-      check: (sources = ['primary']) => {
+      check: (sources = ['primary'], options = {}) => {
         const accounts = (typeof sources[0] === 'string' || !sources.length ? [{ id: 'a1', calendars: sources as readonly string[] }] : sources as readonly Account[])
           .map(({ id, calendars = ['primary'], mail = true }) => ({ id, email: `${id}@example.test`, google: fakeClient(account(id)), calendars, mail }));
         return updateSweepCheck({
-          updates, jobs: book, google: fakeClient(account('a1')), now: clock, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: false, delta: { accounts },
+          updates, jobs: book, google: fakeClient(account('a1')), now: clock, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: options.followups !== undefined,
+          delta: { accounts, ...(options.followups === undefined ? {} : { followups: options.followups }) },
           gate: () => null, providerDown: () => false, transaction: work => state.storage.transactionSync(work),
           enqueued: () => undefined, held: () => [], dayChanged: async () => undefined,
         });
@@ -320,14 +321,35 @@ describe('every connected account', () => {
       b.calendar = async () => ({ state: 'delta', sync_token: 'w2', events: [guests] });
       await h.check(both);
       expect(h.rows()[0]!.filter(change => change.source === 'calendar').map(change => [change.ref, (JSON.parse(change.detail) as { account: string }).account]))
-        .toEqual([['event:shared', 'a1@example.test']]);
+        .toEqual([['event:shared', 'b2@example.test']]);
       h.settle();
-      // The guest copy arrives on its own push a minute later: the same meeting, not news.
+      // A copy arriving on its own push a minute later: the same meeting, not news.
       const at = h.later(60_000);
       h.updates.pend('cal:b2:primary', at);
       b.calendar = async () => ({ state: 'delta', sync_token: 'w3', events: [{ ...guests, etag: '"b-copy-2"' }] });
       expect((await h.check(both)).code).toBe('unchanged');
       expect(h.rows()).toHaveLength(1);
+    });
+  });
+
+  it('a pending invite on the second account is the copy read, named for that account', async () => {
+    await withDelta(async (h) => {
+      h.fakes.calendar = async () => ({ state: 'delta', sync_token: 's2', events: [event('offsite', { etag: '"a-copy"' })] });
+      h.account('b2').calendar = async () => ({ state: 'delta', sync_token: 'w2', events: [event('offsite', { etag: '"b-copy"', invite: true })] });
+      await h.check(both);
+      const calendar = h.rows()[0]!.filter(change => change.source === 'calendar');
+      expect(calendar.map(change => JSON.parse(change.detail) as { invite?: true; account: string })).toEqual([expect.objectContaining({ invite: true, account: 'b2@example.test' })]);
+    });
+  });
+
+  it('only mail from the account follow-ups read through can open a follow-up', async () => {
+    await withDelta(async (h) => {
+      seed(h, { 'mail:a1': '100', 'mail:b2': '900' });
+      h.fakes.mail = async () => ({ state: 'delta', history_id: '101', added: [mailItem('work')], labels: [], left_out: 0 });
+      h.account('b2').mail = async () => ({ state: 'delta', history_id: '901', added: [mailItem('home')], labels: [], left_out: 0 });
+      await h.check(both, { followups: 'a1@example.test' });
+      const mail = h.rows()[0]!.filter(change => change.source === 'mail');
+      expect(mail.map(change => [JSON.parse(change.detail).subject, change.source_ref ?? null])).toEqual([['Subject work', 'mail:t-work'], ['Subject home', null]]);
     });
   });
 

@@ -23,6 +23,8 @@ export const gmailWatchesBook = (kv: Kv) => {
     record: (account: string, watch: GmailWatch, now: number) => put(account, { historyId: watch.historyId, startedAt: now, expiration: watch.expiration }),
     fail: (account: string, now: number, reason: GmailWatchMiss = 'failed') => put(account, { failedAt: now, reason }),
     forget: (account: string) => put(account, null),
+    // A reconnect may fix what failed: the mailbox is tried at the next upkeep. A live watch is left alone.
+    clearFailure: (account: string) => { const stored = read()[account]; if (stored && 'failedAt' in stored) put(account, null); },
     misses: (): readonly Readonly<{ account: string; at: number; reason: GmailWatchMiss }>[] =>
       Object.entries(read()).flatMap(([account, stored]) => 'failedAt' in stored ? [{ account, at: stored.failedAt, reason: stored.reason }] : []),
     // The account a push is for. History ids only grow per mailbox: an equal or older one is a redelivery or out of order.
