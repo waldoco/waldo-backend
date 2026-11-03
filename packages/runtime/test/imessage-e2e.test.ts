@@ -228,6 +228,22 @@ const cardTurn = async (w: Awaited<ReturnType<typeof world>>, t0: number) => {
   return card as { commandId: string; text: string };
 };
 
+it('an owner that cannot take the message yet: the bridge retries after its interval, and host pulls in between do not pull the retry closer', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const full = vi.spyOn(OwnerDO.prototype, 'admitIMessageTurn').mockResolvedValue('capacity');
+  const alarmIn = async () => { const at = await runInDurableObject(w.bridgeStub(), async (_i, state) => state.storage.getAlarm()); return at === null ? null : at - Date.now(); };
+  expect((await w.host.send(w.host.message('Are you there?'))).status).toBe(200);
+  await runDurableObjectAlarm(w.bridgeStub()); // the platform may already have run the wake the event armed
+  await vi.waitFor(() => expect(full).toHaveBeenCalled());
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  for (let i = 0; i < 3; i++) expect((await w.host.pull()).status).toBe(200);
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  full.mockRestore();
+  await w.pump();
+  expect(proof.turns).toHaveLength(1);
+});
+
 it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead of the reply, numbered; a tapback leaves it, and "1" moves the event once', async () => {
   const w = await world();
   await w.pairAndActivate();

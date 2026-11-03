@@ -480,7 +480,7 @@ export const forgetWaitingCards = (sql: SqlStorage, texts: readonly string[], no
   const waiting = () => sql.exec<{ id: string; summary: string; payload_json: string }>(`SELECT id, summary, payload_json FROM ledger WHERE card_waits_on IS NOT NULL AND ${CARD_WAITING}`).toArray().filter(carries);
   let ended = 0;
   for (const { id } of waiting()) {
-    ended += sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ?, card_waits_on = NULL WHERE id = ? AND card_waits_on IS NOT NULL AND ${CARD_WAITING}`, now, id).rowsWritten;
+    ended += sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ?, card_waits_on = NULL WHERE id = ? AND card_waits_on IS NOT NULL AND ${CARD_WAITING}`, now, id).rowsWritten > 0 ? 1 : 0;
   }
   return { ended, remaining: waiting().length };
 };
@@ -566,6 +566,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   for (const column of ['deferred_at', 'raised_outside', 'withdrawn_outside']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} INTEGER`);
   }
+  // Rows are never pruned, so every read by status, kind or recency goes through an index rather than a scan and sort.
+  // An update's rowsWritten counts these index entries too, so a count of rows changed is taken as rowsWritten > 0 per id.
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_status ON ledger (status, created_at)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_decided ON ledger (status, decided_at)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_kind ON ledger (kind, status)');
+  sql.exec('CREATE INDEX IF NOT EXISTS ledger_by_settled ON ledger (COALESCE(decided_at, created_at))');
   const presentationsExisted = sql.exec('PRAGMA table_info(approval_presentations)').toArray().length > 0;
   sql.exec(`CREATE TABLE IF NOT EXISTS approval_presentations (
     approval_id TEXT NOT NULL, surface TEXT NOT NULL, message_ref TEXT NOT NULL, presented_at INTEGER NOT NULL, approvable INTEGER NOT NULL,
@@ -842,7 +848,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       let closes: boolean;
       try { closes = pastExpiry(entry, now) && !applyOnRecord(entry); }
       catch { deps.log({ trace: entry.id, hop: 'approval_expiry', ms: 0, ok: false, code: 'unreadable' }); continue; }
-      if (closes) closed += sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status).rowsWritten;
+      if (closes && sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status).rowsWritten > 0) closed += 1;
     }
     if (closed) deps.log({ trace: 'approvals', hop: 'approvals_sweep', ms: 0, ok: true, code: 'approvals_expired', detail: String(closed) });
   };

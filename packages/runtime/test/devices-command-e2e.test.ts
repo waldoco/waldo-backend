@@ -231,3 +231,57 @@ describe('use_mac session actions through the device bridge and a fake Kennel', 
     expect(await kennel.ownerInbox()).toEqual([]);
   });
 });
+
+describe('Mac follow-ups the device custody no longer resolves', () => {
+  const seed = (device: string, owner: string, count: number) => async (_i: unknown, state: DurableObjectState) => {
+    const commands = new DeviceCommandStore(state.storage);
+    for (let n = 0; n < count; n++) state.storage.sql.exec('INSERT INTO mac_deliveries(id,body) VALUES(?,?)', `result:req_${n}`, canonicalJson({ kind: 'result', request_id: `req_${n}`, device_id: device, owner_id: owner, payload: { status: 'expired' } }));
+    expect(commands.deliveryDue()).not.toBeNull();
+  };
+  const directory = (row: (device: string) => unknown) => {
+    const lookups: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname.split('/').at(-1)!, args = JSON.parse(String(init?.body)) as Record<string, string>;
+      if (path !== 'device_for_auth_v030') throw new Error(`Unexpected fictional RPC ${path}`);
+      lookups.push(args.p_device_id!);
+      return Response.json(row(args.p_device_id!));
+    });
+    return lookups;
+  };
+  const pass = (stub: DurableObjectStub) => runInDurableObject(stub as DurableObjectStub<DeviceBridgeDO>, async (instance, state) => {
+    await instance.alarm();
+    return { due: new DeviceCommandStore(state.storage).deliveryDue(), alarm: await state.storage.getAlarm() };
+  });
+
+  it('a deleted device: one lookup per pass, the rows are set aside and the bridge stops waking', async () => {
+    const device = `dev_gone_${crypto.randomUUID().slice(0, 8)}`, stub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName(device));
+    await runInDurableObject(stub, seed(device, 'owner_gone', 5));
+    const lookups = directory(() => []);
+    expect(await pass(stub)).toEqual({ due: null, alarm: null });
+    expect(lookups).toEqual([device]);
+    expect(await pass(stub)).toEqual({ due: null, alarm: null });
+    expect(lookups).toEqual([device]);
+    await runInDurableObject(stub, async (_i, state) => { expect(state.storage.sql.exec('SELECT admitted, count(*) AS n FROM mac_deliveries GROUP BY admitted').toArray()).toEqual([{ admitted: 2, n: 5 }]); });
+  });
+
+  it('a device now paired to another owner never hands that owner the old follow-up', async () => {
+    const device = `dev_moved_${crypto.randomUUID().slice(0, 8)}`, stub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName(device));
+    await runInDurableObject(stub, seed(device, 'owner_before', 1));
+    const lookups = directory(() => [{ owner_id: 'owner_after', do_name: 'owner_after', contract_version: '0.3.0', pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query' }]);
+    const admit = vi.fn(async () => true);
+    vi.spyOn(env.OWNER_DO!, 'get').mockImplementation(() => ({ admitMacDelivery: admit }) as never);
+    expect(await pass(stub)).toEqual({ due: null, alarm: null });
+    expect(lookups).toHaveLength(1);
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it('a directory outage keeps the rows for the next pass', async () => {
+    const device = `dev_outage_${crypto.randomUUID().slice(0, 8)}`, stub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName(device));
+    await runInDurableObject(stub, seed(device, 'owner_outage', 3));
+    vi.stubGlobal('fetch', async () => { throw new Error('directory unreachable'); });
+    const after = await pass(stub);
+    expect(after.due).not.toBeNull();
+    expect(after.alarm).not.toBeNull();
+    await runInDurableObject(stub, async (_i, state) => { expect(state.storage.sql.exec('SELECT count(*) AS n FROM mac_deliveries WHERE admitted=0').one().n).toBe(3); await state.storage.deleteAlarm(); });
+  });
+});
