@@ -32,10 +32,13 @@ table, no new store of record.
 
 | State | Where (DO SQLite) | Writer |
 |---|---|---|
-| Gmail cursor (`historyId`) | `watch_state` key `cursor:mail` (existing key/value table) | update sweep, in the record's transaction, compare-and-set |
-| Calendar `syncToken` per calendar | `watch_state` key `cursor:cal:<calendarId>` | same |
-| Delta dedupe (`msg:<id>`, `evt:<id>:<etag>`) | `google_delta_seen`, created by the update book like `observed_mail` (no DO migration), pruned after 14 days | same |
-| Calendar channel per calendar | `calendar_channels` KV book on the owner's object | watch upkeep (start, renew, stop); push admission (message number) |
+| Gmail cursor (`historyId`) per account | `watch_state` key `cursor:mail:<account>` (existing key/value table) | update sweep, in the record's transaction, compare-and-set |
+| Calendar `syncToken` per account and calendar | `watch_state` key `cursor:cal:<account>:<calendarId>` | same |
+| Last read and waiting push per source | `watch_state` keys `read:<source>` and `pending:<source>` | the sweep (read time; clears a push only if it is the one the read began with); push admission (marks a source) |
+| Delta dedupe (`msg:<id>`, `evt:<id>:<digest>`) | `google_delta_seen`, created by the update book like `observed_mail` (no DO migration), pruned after 14 days | same |
+| Calendar channel per account and calendar | `calendar_channels_v1` KV book on the owner's object, entries by account then calendar | watch upkeep (start, renew, stop); push admission (message number) |
+| Gmail watch per mail account | `gmail_watches_v1` KV book, entries by account (connection id) | watch upkeep; push admission (history id) |
+| Calendars read per account | `realtime_calendars_v1` KV, entries by account | watch upkeep (from each account's calendar list) |
 | Interrupt budget and cooldown | `watch_state` keys per owner-local day | the triage apply's delivery transaction |
 
 A cursor moves only if it still holds the value the read started from (`CursorMovedError` rolls the whole write back,
@@ -66,8 +69,12 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   [verified]) within the same page cap, and emits nothing from the baseline. The gap is then read **once** with the
   existing time-watermark read for that source, so nothing is lost and nothing is replayed. A calendar whose baseline
   exceeds the cap stays on the time-watermark read and is logged `sync_capped`.
-- **Dedupe:** by message id and by event id + etag, in `google_delta_seen`, so a re-baseline overlap, a gap read and a
-  redelivered push never produce the same change twice. Within one batch an event seen on two calendars is one change.
+- **Dedupe:** by message id, and by event id plus a digest of what the owner is shown of the event (status, times,
+  title, location, description, attendees, series), in `google_delta_seen`. So a re-baseline overlap, a gap read, a
+  redelivered push, and the same meeting on two accounts' calendars (each copy has its own etag and link) never produce
+  the same change twice, in one tick or a later one. A new etag that changes nothing the owner is shown is no longer
+  news. Within one tick, when one account's copy is an invite still to answer, that copy is the one read; across
+  ticks, an invite copy read after another copy of an unchanged meeting is deduped [known limit].
 - **Fallback:** a delta read that throws (an older proxy without the method, a provider error) leaves that cursor where
   it was and reads that source the older way this tick. Dedupe makes the later overlap exact. One calendar that cannot
   be read at all (gone, unsubscribed, no access) keeps its cursor and holds no other calendar back; only when every
@@ -77,15 +84,36 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
 - **Proxy:** the reads are two new `GoogleClient` methods (`mailDelta`, `calendarDelta`) in `GOOGLE_METHODS`, so a
   Vault-backed grant reaches them through `connector-proxy` (which also checks the calendar scope for `calendarDelta`).
 
-### 2.3 Every calendar the owner reads [proposed]
+### 2.3 Every connected account, every calendar the owner reads [proposed]
 
-- The set is the same one lane A's Weight read uses (`health/calendar-demand.ts`): `calendarList` items that are
-  `selected && !hidden`, with role `reader`, `writer` or `owner` (`freeBusyReader` cannot list events), capped at 20.
+- **Accounts (owner ruling, 3 November):** every connected account that holds the grant, up to `MAX_ACCOUNTS_PER_READ`
+  (5), in connect order. Each account is read through its own client, and every cursor, read time and waiting push is
+  kept per source (`mail:<account>`, `cal:<account>:<calendar>`). An account whose grant is failing waits for its probe;
+  one whose read fails keeps its cursors and its watermark (the shared one moves on with the others), and is due again
+  at the next tick. The tick fails only when every source due fails. Each change names the account it came from, for
+  the model only (never logs): the triage prompt asks the model to pass it as the card tool's `account`, which
+  `send_email`, `draft_email` and `propose_calendar_change` already route by. Only mail from the account a follow-up
+  reads through can open a source follow-up, since `source_ref` carries no account.
+- **When a source is read:** when a push marked it, or when its last read is 9 minutes old (so the 10-minute sweep reads
+  every source, and a push-woken sweep reads only what the push named).
+- The calendar set is the same one lane A's Weight read uses (`health/calendar-demand.ts`): `calendarList` items that are
+  `selected && !hidden`, with role `reader`, `writer` or `owner` (`freeBusyReader` cannot list events). At most 20
+  calendars are read across all accounts: each account's primary first, then the others in account order.
 - Each gets its own channel (`events/watch` on that calendar id), renewal a day before expiry, and its own 6-hour
   backoff after a failed start. A calendar Google will not watch (the push guide does not say which refuse [verified: not
   documented]) just keeps failing alone and is read on the 10-minute poll from its sync token; it never blocks the others.
-- On the first upkeep with the switch on, the older primary channel moves into the per-calendar book, and the older book
-  is left empty, so primary is never watched twice and a rollback starts a fresh primary channel at the next upkeep.
+- On the first upkeep with the switch on, the older primary channel moves into the per-calendar book under the account
+  it was started on, and the older book is left empty, so primary is never watched twice and a rollback starts a fresh
+  primary channel at the next upkeep.
+- **Routing.** A Calendar channel's token still names only the owner; its stored row names the account and calendar,
+  so a push marks just that source. A Gmail push is routed by its `emailAddress` through the connections table to
+  `(owner, connection)` as today; the owner's object marks that account's mailbox, and drops a connection no connected
+  account holds with code `unknown_account`. One Gmail watch per mail account; an account held the older way (a raw
+  token here) has no connection row, cannot be watched, and is read on the poll.
+- **Disconnect** stops that account's calendar channels while its grant can still stop them, forgets its Gmail watch
+  (Gmail lets it lapse) and drops only its cursors, read times and waiting pushes. A reconnect clears that account's
+  failed watches at once; one that comes back under a new connection forgets the old connection's books and cursors.
+- **Host fact:** the watch status line names each account not being watched (by address, in the owner's turn only).
 - The proxy gets a new op, `events_watch`, taking a calendar id. An older proxy answers `unknown operation`, which the
   upkeep records as a failed start, so no calendar is ever watched as `primary` by mistake.
 - A calendar the owner unselects or loses is stopped at the next upkeep, its cursor and channel row dropped.
@@ -137,8 +165,9 @@ and never stops a trial. No wording is pinned; the judge grades the words. In th
   or narrower is not added; existing mail and calendar grants). No body is fetched by the sweep.
 - **Model egress:** the same update turn, the same provider route and taint as today. More calendars means more event
   titles and attendees reach the turn, within the owner's grant (CLAUDE.md: full context within the owner's boundary).
-- **Stored:** cursors, channel ids, message and event ids with etags. No subjects, titles or bodies are added to storage
-  beyond today's `update_cards` record. Logs carry codes and counts only.
+- **Stored:** cursors, channel ids, connection ids, message ids and event ids with a content digest. No subjects, titles or bodies are added to storage
+  beyond today's `update_cards` record; each change in it now names the owner's own account address it came from, so the
+  turn can act from that account. Logs carry codes and counts only: never an address, a connection id or a calendar id.
 - **Health:** unchanged. The turn gets zone words; no reading is persisted or logged by this path.
 
 ## 4. Cost per owner per day [inference]
@@ -147,7 +176,7 @@ Assumptions: an active owner, 60 inbox mails and 15 calendar changes a day acros
 
 | Item | Volume | Cost |
 |---|---|---|
-| Google API calls | the 10-minute poll reads every read calendar and the mailbox each tick: (calendars + 1) × 144 ≈ 860 a day at 5 calendars, ≈ 3,000 at the 20-calendar cap, plus pushes, metadata reads for new mail (~60) and renewals | free within default quota; the Calendar API's per-user rate limit is the scaling item to watch at the cap |
+| Google API calls | the 10-minute poll reads each source once: (mailboxes + calendars) × 144. One account with 5 calendars ≈ 860 a day; at the caps (5 mailboxes + 20 calendars across accounts) ≈ 3,600, plus one read per push, metadata reads for new mail (~60 per mailbox) and renewals | free within default quota; each account has its own per-user rate limit, so spreading calendars over accounts does not concentrate load |
 | Triage turns | bounded by the 5-min debounce (≤ 288), realistically 20–40 batches | ~8k input + 300 output tokens each, mostly cached prefix |
 | Model spend | 30 turns × ~$0.01–0.03 (Sonnet-class, cache reads) | **~$0.30–0.90/day**; worst case (288 turns) ~$5 |
 | Reader job | today's sweep already runs one per batch | unchanged |
@@ -163,6 +192,8 @@ The debounce, not the push rate, bounds model cost: a burst of 50 pushes in 5 mi
 | `historyId` too old (404) / `syncToken` invalid (410) | Silent re-baseline + one bounded time-watermark gap read (§2.2). |
 | Baseline over the page cap | That calendar stays on the time-watermark read, logged `sync_capped`. |
 | A calendar refuses a watch | That calendar backs off 6 h and is polled; others unaffected. |
+| One account's grant fails | Its sources keep their cursors and watermark and are read again next tick; other accounts proceed; its watches back off and the host fact names it. |
+| A push for an account no longer connected | Dropped with `unknown_account` (Gmail) or ignored (a forgotten calendar channel). |
 | Old connector-proxy deployed | New methods/op rejected → time-watermark read and failed watch start; logged. |
 | Provider down mid-read | No transaction runs; cursors unmoved; the next tick reads the same window. |
 | Model returns invalid JSON | `brief`: the changes stay for the next card (`effects_invalid` logged). |
@@ -172,9 +203,9 @@ The debounce, not the push rate, bounds model cost: a burst of 50 pushes in 5 mi
 ## 6. Rollback
 
 Set `GOOGLE_REALTIME_TRIAGE=0`. The sweep returns to the time-watermark read and today's effects prompt; the new tables
-are left in place and ignored (no migration, all `CREATE TABLE IF NOT EXISTS`). Per-calendar channels lapse within 7 days
-and their pushes are ignored by the `primary` book; upkeep re-arms the `primary` channel. No contract field is removed
-and none is added.
+and KV books are left in place and ignored (no migration, all `CREATE TABLE IF NOT EXISTS`). With the switch off the
+per-account channels and Gmail watches wake nothing and mark nothing, and lapse within 7 days; upkeep re-arms the older
+`primary` channel and the first account's Gmail watch. No contract field is removed and none is added.
 
 ## 7. Decisions that depend on the owner's #1823 §9 answers
 
@@ -189,9 +220,8 @@ and none is added.
      are not news: today's window and last-seen rule, since Google's deltas carry no window;
   3. a batch of only owner actions on mail (read, archived, starred) starts no turn: the owner already acted;
   4. at most 20 calendars are read and watched: a cost and rate-limit bound.
-- **Accounts:** deltas, the calendar list and watches follow the account the update sweep already reads (the first
-  non-failing calendar-scoped grant). Cursors are tied to that account: when it changes, every source restarts from a
-  baseline. Reading every connected account is a follow-up.
+- **Accounts:** ruled 3 November: every connected account with the grant, up to 5 (§2.3). The gate accepted the four
+  filters above as scope and cost bounds, and the 20-calendar cap counts across accounts.
 
 ## 8. Deploy order (not done by this PR)
 
