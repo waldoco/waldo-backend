@@ -12,7 +12,7 @@ import {
 import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
 import { agentMailFirstName } from '../../channels/agent-mail/handles';
 import { renderOwnerMail } from '../../channels/agent-mail/render';
-import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
@@ -29,6 +29,7 @@ export type EffectDesk = Readonly<{
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   placement?(id: string): CardPlacement;
   replacement?(id: string): Replacement | null;
+  grantOutcome?(id: string): ReturnType<ApprovalDesk['grantOutcome']>;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -547,7 +548,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {
         try {
-          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx) });
+          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}) });
+          // A change the owner's standing grant covers ran without a card; the reply tells them what was done.
+          const granted = desk.grantOutcome?.(proposal_id) ?? null;
+          if (granted) return { proposal_id, status: granted.message, applied: granted.state === 'done' };
           return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
         } catch (error) {
           if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(replaces!, error) };

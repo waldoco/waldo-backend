@@ -179,6 +179,7 @@ import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { ownCalendarId, standingGrants } from './standing-grants';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
@@ -4098,8 +4099,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const approvalCallers: Partial<Record<ChannelKind, typeof routedCall>> = {
       imessage: iMessageApprovalCaller(storage, () => this.activeIMessage && this.activeScope ? { record: this.activeIMessage, scope: this.activeScope } : null),
     };
+    // Off unless AUTONOMY_OWN_CALENDAR is 1, and inert until a grant exists: nothing in this build creates one.
+    const grants = standingGrants(storage, { now: () => deps.now(), newId: () => `g${deps.newRunId().replaceAll('-', '').slice(0, 24)}`,
+      enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef, ownCalendar: account => ownCalendarId(storage, account) });
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
+      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       // A card closed in a turn that read outside text: the desk's own words reach the owner's main chat once, through the outbox.
       notice: (key, text) => finalOutbox.enqueue({ id: key, trace: key, payload: { chat_id: owner, text }, ownerSubject: String(owner),
