@@ -116,6 +116,26 @@ describe('schedule_runs history (C4)', () => {
     expect(runs.map((r) => [r.attempt, r.outcome])).toEqual([[1, 'running'], [2, 'ok']]);
     expect(runs.every((r) => r.schedule_id === longId)).toBe(true);
   });
+
+  // History rows can leave the table (moved to an archive) while a crashed attempt of the same occurrence stays: the next
+  // attempt numbers past the highest one kept, so it never takes the id of a row still there.
+  it('numbers a retry past the highest attempt kept, when an earlier attempt is no longer in the table', async () => {
+    const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: 's-gap', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      await expect(scheduler.dispatchDue({ brief: async () => { throw new Error('crash-injection: first'); } } as ScheduleExecutors)).rejects.toThrow('crash-injection');
+      await expect(scheduler.dispatchDue({ brief: async () => { throw new Error('crash-injection: second'); } } as ScheduleExecutors)).rejects.toThrow('crash-injection');
+      return readRuns();
+    });
+    expect(runs.map((r) => [r.attempt, r.outcome])).toEqual([[1, 'running'], [2, 'running']]);
+    const after = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(1_000));
+      await scheduler.schedule({ id: 's-gap', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      state.storage.sql.exec(`INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES ('s-gap:900:2', 's-gap', 'brief', 1_000, 2)`);
+      await scheduler.dispatchDue({ brief: async () => undefined } as ScheduleExecutors);
+      return state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY attempt').toArray();
+    });
+    expect(after.map((r) => [r.id, r.outcome])).toEqual([['s-gap:900:2', 'running'], ['s-gap:900:3', 'ok']]);
+  });
 });
 
 // The decision + delivery columns are generic run-history shape (heartbeat is their first
