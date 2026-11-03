@@ -56,10 +56,10 @@ to withdraw an approval card". The tool exists (`raise_approval` withdraw), but 
 - **Proactive turns run on grids.**
   - The update sweep runs every 10 minutes and the heartbeat every 30.
   - Gmail and Calendar push only pull the sweep forward (`channels/calendar-push.ts:52-55`).
-- **Proactive turns can propose, but mostly don't.**
-  - Day cards get the broad tool set, tainted, so `propose_action` would become an approval card (`owner-turn.ts:435`).
-  - The Brief prompt tells the model it cannot raise a card (`prompt/day-cards.ts` `BODY_RULE`), and `propose_action` is
-    deferred.
+- **The Brief cannot propose a calendar change.**
+  - A tainted job with no tool list is limited to reads plus `propose_action` (`owner-turn.ts:1045`).
+  - `propose_calendar_change` is unreachable from the Brief, and `propose_action` refuses a tool that raises its own card.
+  - The Brief prompt also tells the model it cannot raise a card (`prompt/day-cards.ts` `BODY_RULE`).
   - Reminders can only read (`channels/check-back.ts:11`).
 - **Mid-turn messages.**
   - Telegram steers the running turn.
@@ -80,7 +80,7 @@ to withdraw an approval card". The tool exists (`raise_approval` withdraw), but 
 
 ## 3. The gaps, ranked by what the owner feels
 
-1. **The Brief recaps instead of planning.** This is a prompt problem plus a deferred tool. Lane `planning-brief`
+1. **The Brief recaps instead of planning.** The prompt forbids proposing, and the job tool list leaves out calendar proposals. Lane `planning-brief`
    (concierge P1 and P2) is fixing it.
 2. **Waldo goes quiet while it works.** A long proactive or task-report turn blocks chat, and a second message waits behind
    it with no acknowledgement.
