@@ -90,6 +90,9 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim null: queued is not sent; the file leaves after the reply is written, so no done-claim can rest on this receipt.
   // core: offered only on an iMessage owner turn whose host verified tapbacks, where a tapback is a reply the model makes in
   // passing, so it is never behind a search. claim null: queued is not sent; it leaves with the reply.
+  // reminders: how a card follows up on its own question, offered only while a planning card is being written; the core
+  // budget is spent. claim null: offered is not shown; the answers go out with the card once it is delivered.
+  offer_replies: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('keeps the answers in memory for the card this turn writes; a re-run of the turn writes the card again with whatever it offers then') },
   react_to_message: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: { replay: 'provider_idempotent', basis: 'the commandId is fixed by the turn and the reaction, and the bridge mailbox and the host journal keep one command per commandId', evidence: { file: 'channels/imessage/final-outbox.ts', needle: 'wrx_' } } },
   attach_file: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
   // claim null: its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
@@ -242,7 +245,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.

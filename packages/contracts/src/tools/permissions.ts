@@ -124,6 +124,8 @@ export const toolNameSchema = z.enum([
   'connect_app',
   // send_agent_mail: propose an email Waldo sends as itself from the owner's Waldo address; the owner approves it on a card.
   'send_agent_mail',
+  // offer_replies: short answers the owner can tap for the one question a planning card asks; they go out with the card.
+  'offer_replies',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -267,6 +269,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'draft_email',
     'send_email',
     'send_agent_mail',
+    'offer_replies',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',

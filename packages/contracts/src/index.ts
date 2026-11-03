@@ -41,6 +41,7 @@ export * from './tools/schemas/connect-app';
 export * from './tools/schemas/progress-note';
 export * from './tools/schemas/reactions';
 export * from './tools/schemas/attach-file';
+export * from './tools/schemas/offer-replies';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
 export * from './tools/schemas/tasks';

@@ -1,6 +1,6 @@
-import { REPLY_TEXT_MAX_CHARS, replyApprovalPartV1Schema } from '@waldo/contracts';
+import { REPLY_TEXT_MAX_CHARS, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema } from '@waldo/contracts';
 import type { z } from 'zod';
-import { APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
+import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
 
 export type AppApprovalPart = z.infer<typeof replyApprovalPartV1Schema>;
 export const APP_REVIEW_MAX_CHARS = REPLY_TEXT_MAX_CHARS;
@@ -8,6 +8,13 @@ export const APP_REVIEW_MAX_CHARS = REPLY_TEXT_MAX_CHARS;
 // The app's form of an approval card, checked against the pinned contract. A card that does not
 // parse is never presented, so it can never open a row.
 export const appApprovalPart = (part: AppApprovalPart): AppApprovalPart => replyApprovalPartV1Schema.parse(part);
+export type AppQuickRepliesPart = z.infer<typeof replyQuickRepliesPartV1Schema>;
+// A row's answers to tap, as the app's part: ids by position, and the labels as the text a reader without chips could show.
+// Labels a forget rewrote past the contract's bounds give no part, and the row's text still carries the question.
+export const appQuickRepliesPart = (labels: readonly string[]): AppQuickRepliesPart | null => {
+  const part = replyQuickRepliesPartV1Schema.safeParse({ type: 'quick_replies', choices: labels.map((label, index) => ({ id: `r${index + 1}`, label })), fallback_text: labels.join(' / ') });
+  return part.success ? part.data : null;
+};
 export const appApprovalLink = (approvalId: string): string => `waldo://approvals/${approvalId}`;
 // What a chat turn on the app tells the model when a tool needs Google: the app connects from its own screen.
 export const APP_CONNECT_GUIDANCE = 'No connect button was sent: the app chat has none. Tell the owner to go back to Home, open the menu at the top left, tap Connections and connect Google there - never quote or retype any link yourself.';
@@ -25,8 +32,9 @@ export const WHATSAPP_CONNECT_GUIDANCE = 'No connect button was sent: WhatsApp c
 // link buttons, is an affordance the app cannot render from this path; it is never acknowledged as shown,
 // nor written as plain text. The delivery learns whether the send is worth delivering only now, so a copy of it
 // is never kept for later on another surface.
-// thread: the app thread the message belongs in, while that thread is open; main otherwise.
-export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string }>;
+// thread: the app thread the message belongs in, while that thread is open; main otherwise. replies: answers the owner can
+// tap under the message.
+export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[] }>;
 export type ScheduledAppDelivery = (text: string, send?: AppSend) => Promise<string>;
 // A surface whose turn replies leave through an outbox of their own (iMessage) acknowledges a plain send only during its
 // turn: outside one, a send with no delivery bound has nowhere to go, so it returns no message, which producers read as
@@ -37,8 +45,9 @@ export const appCaller = (scheduledDelivery: () => ScheduledAppDelivery | null =
   if ((markup?.inline_keyboard ?? []).some(row => row.length > 0)) return undefined;
   const deliver = scheduledDelivery();
   if (!deliver && !inTurn()) return undefined;
-  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown };
+  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown; [APP_REPLIES]?: unknown };
   const thread = typeof marks[APP_THREAD] === 'string' ? marks[APP_THREAD] : undefined;
-  const row = deliver ? await deliver(text ?? '', { nowOnly: marks[SEND_NOW_ONLY] === true, ...(thread ? { thread } : {}) }) : undefined;
+  const replies = Array.isArray(marks[APP_REPLIES]) && marks[APP_REPLIES].length ? marks[APP_REPLIES] as readonly string[] : undefined;
+  const row = deliver ? await deliver(text ?? '', { nowOnly: marks[SEND_NOW_ONLY] === true, ...(thread ? { thread } : {}), ...(replies ? { replies } : {}) }) : undefined;
   return { message_id: 1, chat: { id: chatId ?? 0 }, ...(row === undefined ? {} : { app_row_id: row }) };
 };

@@ -130,6 +130,7 @@ describe('toolName', () => {
       'react_to_message',
       'connect_app',
       'send_agent_mail',
+      'offer_replies',
     ]);
   });
 
@@ -292,6 +293,7 @@ describe('TOOL_PERMISSIONS', () => {
         'draft_email',
         'send_email',
         'send_agent_mail',
+        'offer_replies',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
