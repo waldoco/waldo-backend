@@ -558,7 +558,7 @@ export const createOwnerResponder = (
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
       type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
@@ -742,6 +742,10 @@ export const createOwnerResponder = (
     || (activeOwnerTurn?.parts.some((part) => part.authorship === 'quoted' || part.authorship === 'forwarded') ?? false);
   // Set once as the turn starts, from what started it; what its tools read afterwards never changes it.
   const runOrigin = (): RunOrigin => readOthersWords() ? 'external' : activeOwnerTurn ? 'owner' : 'waldo';
+  // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
+  // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
+  const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';
