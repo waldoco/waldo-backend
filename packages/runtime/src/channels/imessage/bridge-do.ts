@@ -130,6 +130,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   // Until then a reply is waiting for the slot, so no progress note takes it. Memory only: an evicted bridge forgets it,
   // and the waiting reply still takes the slot back from a note the host has not pulled.
   private replyWaitingUntil = 0;
+  // After a failed drain the work still pending waits this long, whatever host request re-arms in between. Memory only: an
+  // evicted bridge retries once early.
+  private retryNotBefore = 0;
   constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, env); }
 
   private composition() { return iMessageComposition(this.env); }
@@ -382,7 +385,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 
   private async rearm(store: BridgeStore, at?: number) {
-    const due = [at ?? null, store.sweepDeadlines(), store.nextPendingEvent() ? Date.now() + 250 : null, store.unreportedResults().length ? Date.now() + 250 : null]
+    const soon = Math.max(Date.now() + 250, this.retryNotBefore);
+    const due = [at ?? null, store.sweepDeadlines(), store.nextPendingEvent() ? soon : null, store.unreportedResults().length ? soon : null]
       .filter((v): v is number => v !== null);
     if (!due.length) return;
     const existing = await this.ctx.storage.getAlarm();
@@ -402,7 +406,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       retry = !(await this.drainEvents(store, c.environment)) || retry;
     } finally {
       this.draining = false;
-      await this.rearm(store, retry ? Date.now() + RETRY_MS : undefined);
+      this.retryNotBefore = retry ? Date.now() + RETRY_MS : 0;
+      await this.rearm(store);
     }
   }
 

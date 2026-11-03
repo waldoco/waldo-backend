@@ -2,7 +2,7 @@ import PostalMime from 'postal-mime';
 import { describe, expect, it } from 'vitest';
 import { WALDO_MARK_PNG_BASE64 } from '../src/channels/agent-mail/mark';
 import {
-  AGENT_MAIL_BODY_MAX, AGENT_MAIL_HTML_MAX, AGENT_MAIL_MAX_RECIPIENTS, AGENT_MAIL_MIME_MAX, renderAgentMail,
+  AGENT_MAIL_BODY_MAX, AGENT_MAIL_HTML_MAX, AGENT_MAIL_MAX_RECIPIENTS, AGENT_MAIL_MIME_MAX, WALDO_SITE, renderAgentMail,
   type AgentMailDraft, type AgentMailRecipients, type AgentMailSender, type AgentMailWire,
 } from '../src/channels/agent-mail/render';
 
@@ -79,7 +79,8 @@ describe('renderAgentMail', () => {
     expect(preview.html).toMatch(/<th [^>]*>Slot<\/th><th [^>]*>Room<\/th><\/tr><tr><td [^>]*>Fri 15:00<\/td><td [^>]*>Juniper<\/td>/);
     expect(preview.html).toContain('<a href="https://docs.example.test/review?id=42&#38;v=2" style="color:#1A1A1A;text-decoration:underline;text-decoration-color:#FB943F">the shared doc</a> <span style="color:#6B6B68">(https://docs.example.test/review?id=42&#38;v=2)</span>');
     expect(preview.html).toContain('>Accept the new time</a>');
-    expect(preview.html).toMatch(/<img src="cid:waldo-mark@mail\.test\.invalid" [^>]*><\/td><td [^>]*><strong style="color:#1A1A1A">Waldo<\/strong>, Priya's assistant<br>priya@mail\.test\.invalid<\/td>/);
+    // The signature: Waldo linked to its site, whose personal assistant it is, then the mark.
+    expect(preview.html).toMatch(/<a href="https:\/\/heywaldo\.in" [^>]*>Waldo<\/a><br><span [^>]*>Priya&#39;s personal assistant<\/span><\/p><img src="cid:waldo-mark@mail\.test\.invalid" /);
     expect(preview.html.indexOf('cid:')).toBeGreaterThan(preview.html.indexOf('Accept the new time'));
 
     expect(preview.text).toBe([
@@ -90,8 +91,7 @@ describe('renderAgentMail', () => {
       'Slot      | Room\n----------|--------\nFri 15:00 | Juniper\nFri 16:00 | Cedar',
       'The notes are at the shared doc (https://docs.example.test/review?id=42&v=2), and the old invite is https://cal.example.test/e/9.',
       'Thanks,',
-      'Accept the new time: https://cal.example.test/accept/9',
-      "-- \nWaldo, Priya's assistant\npriya@mail.test.invalid",
+      `Accept the new time: https://cal.example.test/accept/9\nWaldo\nPriya's personal assistant\n${WALDO_SITE}`,
     ].join('\n\n') + '\n');
   });
 
@@ -99,7 +99,8 @@ describe('renderAgentMail', () => {
     const { preview } = ok(render());
     const words = (value: string) => value.replace(/<[^>]*>/g, ' ').replace(/&#38;/g, '&').replace(/&#39;/g, "'").match(/[\p{L}\p{N}’']+/gu) ?? [];
     const htmlBody = preview.html.slice(preview.html.indexOf('<body'));
-    expect(new Set(words(preview.text))).toEqual(new Set(words(htmlBody)));
+    // The site is the signature link's target in the HTML and its own line in the text.
+    expect(new Set(words(preview.text.replace(WALDO_SITE, '')))).toEqual(new Set(words(htmlBody)));
     expect(preview.text).not.toMatch(/\*\*|<[a-z]|&#/);
   });
 
@@ -133,7 +134,8 @@ describe('renderAgentMail', () => {
   it('signs as Waldo alone when the owner has no first name', async () => {
     const result = ok(render({}, { ownerFirstName: null }));
     expect(result.preview.from.name).toBe('Waldo');
-    expect(result.preview.text.endsWith('-- \nWaldo\npriya@mail.test.invalid\n')).toBe(true);
+    expect(result.preview.text.endsWith(`/accept/9\nWaldo\n${WALDO_SITE}\n`)).toBe(true);
+    expect(result.preview.html).not.toContain('personal assistant');
     await expectRoundTrip(result);
     expect(ok(render({}, { ownerFirstName: ' \r\n ' })).preview.from.name).toBe('Waldo');
   });
@@ -216,7 +218,7 @@ describe('renderAgentMail', () => {
         '[q](https://x.example.test/a"onmouseover="alert(1))',
       ].join('\n\n') }));
       expect([...preview.html.matchAll(/href="([^"]*)"/g)].map(match => match[1])).toEqual([
-        'https://evil.example.test/login', 'https://xn--pple-43d.example.test/pay', 'https://x.example.test/a%22onmouseover=%22alert', 'https://cal.example.test/accept/9',
+        'https://evil.example.test/login', 'https://xn--pple-43d.example.test/pay', 'https://x.example.test/a%22onmouseover=%22alert', 'https://cal.example.test/accept/9', WALDO_SITE,
       ]);
       expect(preview.html).toContain('[click](javascript:alert(1))');
       expect(preview.text).toContain('https://good.example.test (https://evil.example.test/login)');

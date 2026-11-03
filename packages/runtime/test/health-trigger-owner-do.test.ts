@@ -6,6 +6,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
 import { schedulePreferences } from '../src/channels/schedule-preferences';
+import { standingGrants } from '../src/channels/standing-grants';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
@@ -43,6 +44,7 @@ vi.mock('../src/connectors/google', async load => {
     calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
     event: async () => fixture.event, changedEvents: async () => [], newMail: async () => [],
     updateEvent: async () => { fixture.writes += 1; throw new Error('the trigger must not write to Google'); },
+    createEvent: async () => { fixture.writes += 1; throw new Error('the trigger must not write to Google'); },
   }) };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
@@ -130,6 +132,22 @@ describe('the health trigger on the owner object', () => {
       expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
       for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
     });
+  });
+
+  it('cards a block it proposes even with own-block grants on and one that covers it: a health-trigger run never uses a grant', async () => {
+    fixture.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T16:00', end: '2026-10-21T17:00', title: 'Quiet hour', block: 'rest', notify_guests: null, reason: 'A pause after the review.' });
+    await withOwner(async ({ state, pass, notify }) => {
+      standingGrants(state.storage, { now: () => NOW, newId: () => 'g1', enabled: () => true, ownerRef: () => OWNER_ID }).grant({
+        scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '08:00', to: '20:00' }, weekdays: [0, 1, 2, 3, 4, 5, 6], min_lead_minutes: 30 },
+        limits: { max_per_day: 3, timezone: 'Asia/Kolkata' }, valid_from: NOW - 60_000, expires_at: NOW + 86_400_000 }, 'app');
+      await notify();
+      await pass();
+      const [run] = runs(state);
+      expect(run).toMatchObject({ outcome: 'proposed' });
+      expect(fixture.writes).toBe(0);
+      expect(state.storage.sql.exec('SELECT status, grant_json FROM ledger WHERE id = ?', run!.approval_id).one()).toMatchObject({ grant_json: null });
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', run!.approval_id).one().status).not.toBe('done');
+    }, { ...CONFIG, AUTONOMY_OWN_CALENDAR: '1' });
   });
 
   it('asks nothing of the model when health sharing is off: no readable row, no evaluation, the mark cleared', async () => {

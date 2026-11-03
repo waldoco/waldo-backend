@@ -8,7 +8,9 @@ import {
   appApprovalStateV1Schema,
   appApprovalAtRevision,
   appApprovalV1Schema,
+  APP_APPROVALS_AGENT_MAIL_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
+  APP_APPROVALS_WITHDRAWAL_REVISION,
   type AppApprovalV1,
 } from './approvals';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
@@ -276,7 +278,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(4);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(6);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -333,5 +335,70 @@ describe('the health origin of an approval, approvals revision 4', () => {
   it('serves the marker in a list only as the schema allows', () => {
     expect(appApprovalListV1Schema.safeParse({ approvals: [marked, email] }).success).toBe(true);
     expect(appApprovalListV1Schema.safeParse({ approvals: [{ ...marked, health: { reason: '' } }] }).success).toBe(false);
+  });
+});
+
+describe('a send as Waldo, approvals revision 5', () => {
+  const sender = { name: "Waldo, Sam's assistant", address: 'sam@mail.example.com' };
+  const asWaldo = {
+    ...email, approval_id: 'p0007', kind: 'agent_mail_send', review: `From: ${sender.name} <${sender.address}>\nTo: lee@example.com\nSubject: Friday\n\nSee you at 4.`,
+    exact: { recipients: { to: ['lee@example.com'], cc: [], bcc: [] }, sender, message: { subject: 'Friday', body: 'See you at 4.' } },
+  } as const;
+
+  it('accepts a send that names its sender, its recipients and its draft', () => {
+    expect(APP_APPROVALS_AGENT_MAIL_REVISION).toBe(5);
+    expect(appApprovalV1Schema.safeParse(asWaldo).success).toBe(true);
+    const { message: _draft, ...withoutDraft } = asWaldo.exact;
+    expect(appApprovalV1Schema.safeParse({ ...asWaldo, exact: withoutDraft }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [asWaldo, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no sender', { ...asWaldo, exact: { recipients: asWaldo.exact.recipients } }],
+    ['no recipients', { ...asWaldo, exact: { sender } }],
+    ['a sender on a Gmail send', { ...email, exact: { ...email.exact, sender } }],
+    ['a sender on a message', { ...message, exact: { ...message.exact, sender } }],
+    ['a sender name that breaks its line', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: 'Waldo\r\nBcc: x@example.com' } } }],
+    ['an empty sender name', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: '' } } }],
+    ['a sender that is not an address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, address: 'waldo' } } }],
+    ['a sender with more than its name and address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, reply_to: 'x@example.com' } } }],
+    ['a draft without its subject', { ...asWaldo, exact: { ...asWaldo.exact, message: { subject: null, body: 'See you at 4.' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+});
+
+describe('a card Waldo withdrew, approvals revision 6', () => {
+  const replaced = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'Replaced by a newer draft.', replaced_by: 'p0009' } } as const;
+  const withdrawn = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'You said you will call Sam instead.' } } as const;
+
+  it('accepts a closed card that says why, with the card that replaced it when one did', () => {
+    expect(APP_APPROVALS_WITHDRAWAL_REVISION).toBe(6);
+    expect(appApprovalV1Schema.safeParse(replaced).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withdrawn).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [replaced, withdrawn, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['a withdrawal on a card still waiting', { ...email, withdrawal: withdrawn.withdrawal }],
+    ['a withdrawal on a done card', { ...email, state: 'done', actions: [], withdrawal: withdrawn.withdrawal }],
+    ['decisions on a withdrawn card', { ...withdrawn, actions: ['approve'] }],
+    ['an empty reason', { ...withdrawn, withdrawal: { reason: '' } }],
+    ['a reason past one short line', { ...withdrawn, withdrawal: { reason: 'x'.repeat(201) } }],
+    ['a reason that breaks its line', { ...withdrawn, withdrawal: { reason: 'Stale.\nApproved.' } }],
+    ['a replacement that is no approval id', { ...withdrawn, withdrawal: { reason: 'Replaced.', replaced_by: 'a newer one' } }],
+    ['more than the reason and the replacement', { ...withdrawn, withdrawal: { reason: 'Replaced.', by: 'waldo' } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+
+  it('a build reading revision 5 or below still gets the card, closed as superseded, without the withdrawal', () => {
+    const parsed = appApprovalV1Schema.parse(replaced) as AppApprovalV1;
+    for (const revision of [1, 4, 5]) {
+      const shown = appApprovalAtRevision(parsed, revision);
+      expect([revision, shown.state, shown.actions, shown.withdrawal]).toEqual([revision, 'superseded', [], undefined]);
+      expect(appApprovalV1Schema.safeParse(shown).success).toBe(true);
+    }
+    expect(appApprovalAtRevision(parsed, 6)).toBe(parsed);
   });
 });

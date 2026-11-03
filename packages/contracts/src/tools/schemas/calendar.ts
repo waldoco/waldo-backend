@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../../core/error';
+import { replacesApprovalSchema } from './approvals';
 
 // A proposed change to the owner's own calendar (owner queue slice 3). Proposal only: the
 // write happens after the owner approves it.
@@ -19,6 +20,7 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
   add_meet_link: z.boolean().optional().describe('Create only: add a Google Meet link.'),
   send_updates: z.enum(['all', 'none']).optional().describe('Whether Google emails the guests about this change. Required with attendees.'),
   block: z.enum(['rest', 'deep_work']).optional().describe('Create only, for a block of protected time: rest (a break, recovery or a lighter stretch) or deep_work (focused work). Leave it out for any other event.'),
+  replaces: replacesApprovalSchema,
 }).refine((args) => args.action === 'create' ? Boolean(args.title && args.start && args.end) : Boolean(args.event_id), {
   error: 'create needs title, start and end; move and cancel need event_id',
 }).refine((args) => args.action === 'move' || args.rename_to === undefined, { error: 'rename_to is for move only' }).refine((args) => args.action !== 'move' || Boolean(args.start && args.end), { error: 'move needs start and end' })

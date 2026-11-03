@@ -106,7 +106,7 @@ describe('an approval card the surface cannot send now', () => {
       expect(f.delivered).toEqual(['knock', expect.stringContaining('Add "Focus"')]);
       expect(f.shown(id)).toEqual([{ surface: 'whatsapp', message_ref: 'wamid.card-1', approvable: 1, presented_at: NOW + 2 * HOUR }]);
       expect(f.status(id)).toBe('open');
-      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false });
+      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false, hereInFull: true });
       // Nothing waits any more, so the owner's next message sends nothing.
       await f.desk.ownerWrote();
       expect(f.attempts).toHaveLength(1);
@@ -212,7 +212,7 @@ describe('an approval card the surface cannot send now', () => {
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
       expect(f.shown(id).map(row => row.surface)).toEqual(['app', 'whatsapp']);
-      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, hereInFull: true });
     });
   });
 
@@ -227,7 +227,7 @@ describe('an approval card the surface cannot send now', () => {
       expect(await f.desk.reraise(id)).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp', 'app'] });
       await f.desk.ownerWrote();
       expect(f.attempts).toEqual([expect.stringContaining('Raised later')]);
-      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+      expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, hereInFull: true });
     });
   });
 

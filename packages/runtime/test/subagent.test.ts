@@ -454,8 +454,10 @@ describe('runChildLoop delegated effect receipts', () => {
         const receipt = onReceipt.mock.calls[0]![0] as LoopEventLike;
         expect(receipt).toEqual({
           seq: 0, call: { name: 'workspace_write', args: parsedArgs },
-          ok, delegated: true, ...(code ? { code } : {}),
+          ok, delegated: true, ...(code ? { code, reason: 'invalid_args' } : {}),
         });
+        // Refused by the argument check, the call did nothing, so the owner's receipt line leaves it off.
+        if (!ok) expect(receiptLine([receipt])).toBeNull();
         const [typed] = receiptsFromLoopEvents([receipt]);
         expect(typed).toEqual({ seq: 0, tool: 'workspace_write', effect: 'workspace_file_written', ok, state: ok ? 'accepted' : 'failed', delegated: true, ...(ref === undefined ? {} : { ref }) });
         expect(evaluateTurnClaims([{ seq: 1, effect: 'workspace_file_written' }], [receipt])).toEqual(ok ? [] : [{ claim_seq: 1, effect: 'workspace_file_written', reason: 'receipt_failed' }]);

@@ -47,7 +47,9 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it off'),
+  AUTONOMY_OWN_CALENDAR: gap('no trial holds a standing grant, and this build creates none; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
+  HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it off'),
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it off'),
@@ -95,6 +97,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   AGENT_MAIL_INBOUND: inert('inbound agent mail ingress'),
   AGENT_MAIL_DOMAIN: inert('inbound agent mail ingress'),
   AGENT_MAIL_ZONE_ID: inert('agent mail routing rules'),
+  AGENT_MAIL_SEND: inert('agent mail sending'),
 };
 
 export const unclassifiedVars = (vars: StagingVars): readonly string[] => Object.keys(vars).filter((name) => !(name in STAGING_VAR_CLASSES)).sort();

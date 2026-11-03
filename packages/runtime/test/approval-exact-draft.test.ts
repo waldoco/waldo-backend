@@ -8,10 +8,13 @@ import { appApprovalLink } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
+import { ownerMailText } from '../src/channels/agent-mail/render';
 import { emailProposal, sentMime } from './fixtures/email-send';
 
 const CSRF = 'c'.repeat(64);
-const BODY = 'Hi Sam,\n\nThe deck is ready — see slide 3 (and the 2× chart).\r\nThanks,\nRo';
+const BODY = 'Hi Sam,\n\nThe deck is ready — see slide 3 (and the 2× chart).\r\nThanks,';
+// What the recipient reads for a draft send_email signed: the draft's words, then Waldo's signature for Ro.
+const signed = (body: string) => ownerMailText(body, 'Ro');
 
 // A Telegram desk whose cards also show in the app, with a Gmail and a messaging fake that record what goes out.
 const harness = (state: DurableObjectState) => {
@@ -38,7 +41,7 @@ const harness = (state: DurableObjectState) => {
   };
   // The send_email tool itself drafts the email, so the bytes it freezes are the ones under test.
   const access: GoogleAccess = { client: async () => client };
-  const sendEmail = googleHandlers(access, desk, { timezone: 'UTC', now: () => new Date() }).find(tool => tool.name === 'send_email')!;
+  const sendEmail = googleHandlers(access, desk, { timezone: 'UTC', now: () => new Date() }, undefined, undefined, () => 'Ro Diaz').find(tool => tool.name === 'send_email')!;
   const draftEmail = async (args: Readonly<Record<string, unknown>>) => {
     const result = await sendEmail.handle({ to: ['sam@example.com'], cc: ['pat@example.org'], subject: 'Friday deck', body_markdown: BODY, ...args } as never) as { ok: boolean; data: { proposal_id: string } };
     expect(result.ok).toBe(true);
@@ -57,7 +60,7 @@ it('a send approval carries its frozen subject and body only to a build that dec
     expect(earlier).not.toContain('"message"');
     for (const header of [undefined, 'approvals=1']) expect([header, await list(header)]).toEqual([header, earlier]);
     const before = appApprovalListV1Schema.parse(JSON.parse(earlier)).approvals, now = await approvals();
-    expect(now.find(item => item.approval_id === email)!.exact.message).toEqual({ subject: 'Friday deck', body: BODY });
+    expect(now.find(item => item.approval_id === email)!.exact.message).toEqual({ subject: 'Friday deck', body: signed(BODY) });
     expect(now.find(item => item.approval_id === message)!.exact.message).toEqual({ subject: null, body: 'Running ten minutes late.' });
     // Revision 3 adds the draft and nothing else.
     const withoutDraft = ({ exact: { message: _message, ...exact }, ...item }: AppApprovalV1) => ({ ...item, exact });
@@ -98,7 +101,7 @@ it('a draft whose stored words changed after its card was shown is refused befor
     const inApp = await draftEmail({ subject: 'Friday deck, take two' });
     await swap(inApp);
     const current = (await approvals()).find(item => item.approval_id === inApp)!;
-    expect(current.exact.message!.body).toBe('Wire the deposit to the new account today.');
+    expect(current.exact.message!.body).toBe(signed('Wire the deposit to the new account today.'));
     const refused = await decide({ approval_id: inApp, action: 'approve', expected_digest: current.payload_digest, request_id: 'exact-tamper-0001' });
     expect([refused.status, JSON.parse(refused.text).receipt.state]).toEqual([409, 'rejected']);
     expect(row(inApp).status).toBe('failed');
@@ -167,7 +170,7 @@ it('Change it leaves the reviewed draft as it was; the new draft is a new approv
     const late = await decide({ approval_id: first, action: 'approve', expected_digest: reviewed!.payload_digest, request_id: 'exact-edit-0002' });
     expect([late.status, JSON.parse(late.text).error]).toEqual([409, 'no_longer_eligible']);
 
-    const second = await draftEmail({ body_markdown: 'Hi Sam,\n\nThe deck is ready. Slide 3 changed.\n\nRo' });
+    const second = await draftEmail({ body_markdown: 'Hi Sam,\n\nThe deck is ready. Slide 3 changed.\n\nThanks,' });
     const fresh = (await approvals()).find(item => item.approval_id === second)!;
     expect(second).not.toBe(first);
     expect(fresh.payload_digest).not.toBe(reviewed!.payload_digest);
@@ -176,7 +179,7 @@ it('Change it leaves the reviewed draft as it was; the new draft is a new approv
     expect(sent).toEqual([]);
     const approved = await decide({ approval_id: second, action: 'approve', expected_digest: fresh.payload_digest, request_id: 'exact-edit-0004' });
     expect(JSON.parse(approved.text)).toMatchObject({ approval_state: 'done' });
-    expect(sentMime(sent[0]!).body).toBe('Hi Sam,\n\nThe deck is ready. Slide 3 changed.\n\nRo');
+    expect(sentMime(sent[0]!).body).toBe(signed('Hi Sam,\n\nThe deck is ready. Slide 3 changed.\n\nThanks,'));
     expect(row(first).payload_json).toBe(stored);
   });
 });
