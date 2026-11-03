@@ -135,8 +135,8 @@ describe('the harness tool loader on the owner turn', () => {
       if (!isReply(request)) return undefined;
       const round = request.tool_turns?.length ?? 0;
       if (round === 0) return { text: '', tool_calls: [{ call_id: 'f1', name: FIND_TOOLS, arguments: JSON.stringify({ groups: ['health', 'reminders'] }) }] };
-      if (round === 1) return { text: '', tool_calls: [{ call_id: 'u1', name: USE_TOOL, arguments: JSON.stringify({ name: 'list_reminders', arguments: {} }) }] };
-      return { text: 'You have no reminders.' };
+      if (round === 1) return { text: '', tool_calls: [{ call_id: 'u1', name: USE_TOOL, arguments: JSON.stringify({ name: 'list_health_logs', arguments: {} }) }] };
+      return { text: 'Nothing logged yet.' };
     };
     const rounds = (await ownerTurns('harness-rounds', { WALDO_TOOL_LOADER: 'harness' }, [ASKED]))[0];
     expect(rounds!.length).toBe(3);
@@ -146,12 +146,28 @@ describe('the harness tool loader on the owner turn', () => {
     // The loaded definitions crossed the scribe unchanged, health tools among them, and only as tool-result text.
     const loaded = JSON.parse(rounds![1]!.tool_turns![0]!.output.split('\n[')[0]!) as { ok: boolean; data: { tools: { name: string; description: string }[] } };
     expect(loaded.ok).toBe(true);
-    expect(loaded.data.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['log_meal', 'list_health_logs', 'list_reminders']));
+    expect(loaded.data.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['log_meal', 'list_health_logs', 'start_task']));
     expect(rounds![1]!.tools!.map((tool) => tool.name)).not.toContain('log_meal');
-    // The call ran as list_reminders; the history the provider sees keeps the use_tool call it made.
+    // The call ran as list_health_logs; the history the provider sees keeps the use_tool call it made.
     const used = rounds![2]!.tool_turns![1]!;
     expect(used.call.name).toBe(USE_TOOL);
     expect(JSON.parse(used.output.split('\n[')[0]!)).toMatchObject({ ok: true });
+  });
+
+  // Work Waldo does unprompted, such as closing its own stale card, sits in the core list: one round, no catalogue search.
+  it('withdraws a stale card in the first round, with no find_tools', async () => {
+    const WITHDRAW = 'withdraw your stale card';
+    model.respond = (request) => {
+      if (!request.tools?.length || !request.messages.at(-1)!.content.startsWith(WITHDRAW)) return undefined;
+      if (request.tool_turns?.length) return { text: 'Withdrawn.' };
+      return { text: '', tool_calls: [{ call_id: 'w1', name: 'raise_approval', arguments: JSON.stringify({ operation: 'withdraw', approval_id: 'p-stale-1', reason: 'superseded by the revised draft' }) }] };
+    };
+    const rounds = (await ownerTurns('harness-withdraw', { WALDO_TOOL_LOADER: 'harness' }, [WITHDRAW]))[0]!;
+    expect(rounds).toHaveLength(2);
+    expect(rounds[0]!.tools!.map((tool) => tool.name)).toContain('raise_approval');
+    expect(rounds[1]!.tool_turns!.map((turn) => turn.call.name)).toEqual(['raise_approval']);
+    expect(JSON.parse(rounds[1]!.tool_turns![0]!.output.split('\n[')[0]!)).toMatchObject({ ok: true });
+    expect(rounds.flatMap((request) => request.tool_turns ?? []).some((turn) => turn.call.name === FIND_TOOLS)).toBe(false);
   });
 
   // Hostile: the round's hosted web search brought outside text into the turn, and the same response asks to change the

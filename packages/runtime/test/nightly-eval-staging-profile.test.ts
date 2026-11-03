@@ -144,21 +144,28 @@ const availability = { name: 'query_availability', arguments: { date_range: { fr
 const offered = (gateway: ReturnType<typeof scriptedGateway>) => gateway.requests().filter((request) => request.request.response_format === undefined).flatMap((request) => (request.request.tools ?? []).map((tool) => tool.name));
 
 describe('the harness loader in a trial', () => {
-  const rules: readonly ScriptRule[] = [{ match: /free tomorrow/, rounds: [
+  const rules: readonly ScriptRule[] = [{ match: /open tasks/, rounds: [
     { toolCalls: [{ name: 'find_tools', arguments: { groups: ['calendar'] } }] },
-    { toolCalls: [{ name: 'use_tool', arguments: { name: 'query_availability', arguments: availability.arguments } }] },
-    { text: 'One meeting.' },
+    { toolCalls: [{ name: 'use_tool', arguments: { name: 'get_tasks', arguments: {} } }] },
+    { text: 'Nothing open.' },
   ] }];
 
   it('reaches a deferred tool through find_tools and use_tool, and counts the rounds', async () => {
     const gateway = scriptedGateway({ rules });
-    const run = await runTrial(scenario([{ say: 'What is free tomorrow?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
+    const run = await runTrial(scenario([{ say: 'Any open tasks?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
     expect(run.status).toBe('ran');
-    expect(run.tools).toEqual([{ name: 'query_availability', ok: true }]);
+    expect(run.tools).toEqual([{ name: 'get_tasks', ok: true }]);
     expect(offered(gateway)).toEqual(expect.arrayContaining(['find_tools', 'use_tool']));
-    expect(offered(gateway)).not.toContain('query_availability');
+    expect(offered(gateway)).not.toContain('get_tasks');
     expect(run.metrics).toMatchObject({ rounds: 3, find_tools: 1, use_tool: 1, groups_loaded: 1 });
     expect(run.metrics.peak_result_chars).toBeGreaterThan(0);
+  });
+
+  it('offers free time in the first round under the loader: one call, no find_tools', async () => {
+    const gateway = scriptedGateway({ rules: [{ match: /free tomorrow/, rounds: [{ toolCalls: [availability] }, { text: 'One meeting.' }] }] });
+    const run = await runTrial(scenario([{ say: 'What is free tomorrow?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
+    expect(run.tools).toEqual([{ name: 'query_availability', ok: true }]);
+    expect(run.metrics).toMatchObject({ rounds: 2, find_tools: 0, use_tool: 0, groups_loaded: 0 });
   });
 
   it('offers the deferred tool directly when no loader is set', async () => {
