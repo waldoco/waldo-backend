@@ -26,11 +26,11 @@ import { CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, reminderCheckBackText } from 
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
-import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
+import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
-import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
+import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
@@ -211,9 +211,6 @@ export const createOwnerResponder = (
     const results = await toolLedger?.ownerTurnResults(heldTopics(), thread) ?? [];
     return barrier().texts(results, result => result, (_result, text) => text);
   };
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => {
-    return health(traceId);
-  } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
   const access = ownerModelAccess(modelAccess);
@@ -233,7 +230,7 @@ export const createOwnerResponder = (
       log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached' });
       return spendHold(clock.now());
     },
-    sanitise: adapters.safety.sanitise,
+    sanitise,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
@@ -417,7 +414,9 @@ export const createOwnerResponder = (
     if (added === null) return null;
     return added;
   };
-  const composer = context?.composer ?? adapters.contextComposer!;
+  // A turn without a composed owner context (tests, probes) composes from the local fixture.
+  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => health(traceId) }),
+    onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
   const compaction = conversationStore?.compaction ?? COMPACTION;
@@ -603,8 +602,7 @@ export const createOwnerResponder = (
             const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
             // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
             const admitsExternal = async (payload: string): Promise<boolean> => {
-              const sanitise = adapters.safety.sanitise;
-              if (!sanitise || !payload || utf8Bytes(payload) > EXTERNAL_DATA_MAX_BYTES) return false;
+              if (!payload || utf8Bytes(payload) > EXTERNAL_DATA_MAX_BYTES) return false;
               try {
                 const fragment = sanitiseResultSchema.parse(await sanitise({ payload, destination: 'system_prompt', source_taint: 'external', canary_tokens: CANARIES }));
                 return fragment.ok && fragment.source_taint === 'external' && fragment.payload === payload;
@@ -744,9 +742,8 @@ export const createOwnerResponder = (
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';
     // Guard quote bytes independently as external before joining owner-authored text.
     // A missing/broken guard removes the quote; it never promotes its bytes to owner authority.
-    if (!adapters.safety.sanitise) return unavailable;
     try {
-      const guarded = sanitiseResultSchema.parse(await adapters.safety.sanitise({
+      const guarded = sanitiseResultSchema.parse(sanitise({
         payload: {
           surface: reply.surface, message_id: reply.messageId,
           observed_conversation_ref: reply.conversationRef,
