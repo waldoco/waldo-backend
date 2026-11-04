@@ -65,8 +65,10 @@ const tainted = async () => {
   return { tool: 'create_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The email asked for it.', source: 'external' as const };
 };
 // One proposal for each kind the app's rule classifies. The record is typed by that rule's table, so a new kind does not
-// compile here until it has a proposal, and the test below then shows where it is approved.
-const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDesk) => Promise<string>>> = {
+// compile here until it has a proposal, and the test below then shows where it is approved. A day plan is in the app
+// contract before the desk can propose one; once the desk has proposeCalendarPlan, the record requires its proposal too.
+type Proposable = 'proposeCalendarPlan' extends keyof ApprovalDesk ? keyof typeof STEP_UP_APPROVALS : Exclude<keyof typeof STEP_UP_APPROVALS, 'calendar_plan'>;
+const PROPOSE: Readonly<Record<Proposable, (desk: ApprovalDesk) => Promise<string>>> = {
   email_send: async desk => desk.proposeSendEmail(await email()),
   message_send: desk => desk.proposeSendMessage(message()),
   agent_mail_send: async desk => desk.proposeAgentMailSend(await agentMailProposal()),
@@ -296,7 +298,7 @@ describe('a request whose stored payload can no longer be classified fails close
 
 describe('every approval kind is either one tap in chat or handed to the app, by the app\'s own rule', () => {
   for (const surface of ['whatsapp', 'imessage'] as const) {
-    for (const kind of Object.keys(STEP_UP_APPROVALS) as (keyof typeof STEP_UP_APPROVALS)[]) {
+    for (const kind of Object.keys(PROPOSE) as Proposable[]) {
       it(`${surface}: ${kind}`, async () => {
         await owner(`chat-kind-${surface}-${kind}`, async state => {
           const f = harness(state, surface);

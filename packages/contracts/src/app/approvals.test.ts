@@ -7,8 +7,10 @@ import {
   appApprovalRoutesV1,
   appApprovalStateV1Schema,
   appApprovalAtRevision,
+  appApprovalKindShownAt,
   appApprovalV1Schema,
   APP_APPROVALS_AGENT_MAIL_REVISION,
+  APP_APPROVALS_CALENDAR_PLAN_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
   APP_APPROVALS_WITHDRAWAL_REVISION,
   type AppApprovalV1,
@@ -278,7 +280,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(6);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(7);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -400,5 +402,58 @@ describe('a card Waldo withdrew, approvals revision 6', () => {
       expect(appApprovalV1Schema.safeParse(shown).success).toBe(true);
     }
     expect(appApprovalAtRevision(parsed, 6)).toBe(parsed);
+  });
+});
+
+describe('a day plan, approvals revision 7', () => {
+  const blocks = [
+    { title: 'Write the board memo', start: '2026-11-05T09:30:00+05:30', end: '2026-11-05T11:30:00+05:30', block: 'deep_work' },
+    { title: 'Lunch and a walk', start: '2026-11-05T13:00:00+05:30', end: '2026-11-05T14:00:00+05:30', block: 'rest' },
+    { title: 'Reply to Priya', start: '2026-11-05T14:00:00+05:30', end: '2026-11-05T14:30:00+05:30' },
+  ] as const;
+  const plan = {
+    ...email, approval_id: 'p0010', kind: 'calendar_plan', actions: ['approve', 'edit', 'skip', 'defer'],
+    review: 'Add 3 blocks to your calendar on Thu 5 Nov:\n09:30-11:30 Write the board memo\n13:00-14:00 Lunch and a walk\n14:00-14:30 Reply to Priya',
+    exact: { plan: { blocks, time_zone: 'Asia/Kolkata' } },
+  } as const;
+  const withBlocks = (next: readonly object[]) => ({ ...plan, exact: { plan: { ...plan.exact.plan, blocks: next } } });
+
+  it('accepts a plan of new blocks in order, back to back or apart, with the account when it is not the default', () => {
+    expect(APP_APPROVALS_CALENDAR_PLAN_REVISION).toBe(7);
+    expect(appApprovalV1Schema.safeParse(plan).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...plan, exact: { plan: { ...plan.exact.plan, account: 'me@example.com' } } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...plan, state: 'done', actions: ['undo'], undo_until: expiresAtMs }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [plan, calendar] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no plan', { ...plan, exact: { changes: calendar.exact.changes } }],
+    ['a plan beside a single change', { ...plan, exact: { ...plan.exact, changes: calendar.exact.changes } }],
+    ['a plan that invites guests', { ...plan, exact: { ...plan.exact, recipients: { to: ['sam@example.com'], cc: [], bcc: [] } } }],
+    ['blocks on a single calendar change', { ...calendar, exact: { ...calendar.exact, plan: plan.exact.plan } }],
+    ['one block, which is a single calendar change', withBlocks([blocks[0]])],
+    ['more than twelve blocks', withBlocks(Array.from({ length: 13 }, (_, hour) => ({ title: `Block ${hour}`, start: `2026-11-05T${String(hour + 6).padStart(2, '0')}:00:00Z`, end: `2026-11-05T${String(hour + 6).padStart(2, '0')}:30:00Z` })))],
+    ['a block that ends before it starts', withBlocks([blocks[0], { ...blocks[1], end: blocks[1].start }])],
+    ['blocks out of order', withBlocks([blocks[1], blocks[0]])],
+    ['blocks that overlap', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-05T11:00:00+05:30' }])],
+    ['a plan longer than a day', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-06T13:00:00+05:30', end: '2026-11-06T14:00:00+05:30' }])],
+    ['a time without its offset', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-05T13:00:00' }])],
+    ['an empty title', withBlocks([blocks[0], { ...blocks[1], title: '' }])],
+    ['a block kind other than rest or deep work', withBlocks([blocks[0], { ...blocks[1], block: 'workout' }])],
+    ['a block that names guests', withBlocks([blocks[0], { ...blocks[1], guests: ['sam@example.com'] }])],
+    ['a plan without its time zone', { ...plan, exact: { plan: { blocks } } }],
+    ['a plan on another calendar', { ...plan, exact: { plan: { ...plan.exact.plan, calendar: 'team@group.calendar.google.com' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+
+  it('is never shown to a build reading revision 6 or below, which cannot parse it, while other kinds stay as they were', () => {
+    for (const revision of [1, 5, 6]) expect([revision, appApprovalKindShownAt('calendar_plan', revision)]).toEqual([revision, false]);
+    expect(appApprovalKindShownAt('calendar_plan', 7)).toBe(true);
+    for (const revision of [1, 4]) expect(appApprovalKindShownAt('agent_mail_send', revision)).toBe(false);
+    expect(appApprovalKindShownAt('agent_mail_send', 5)).toBe(true);
+    for (const kind of ['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call', 'google_task_change', 'tainted_action'] as const) expect(appApprovalKindShownAt(kind, 1)).toBe(true);
+    const parsed = appApprovalV1Schema.parse(plan) as AppApprovalV1;
+    expect(appApprovalAtRevision(parsed, 7)).toBe(parsed);
   });
 });

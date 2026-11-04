@@ -49,11 +49,18 @@ The same idea serves very different days:
 
 ## Not built yet
 
-- **One tap to add the day's plan to the calendar.** Today each calendar change is its own approval card. Adding all blocks with one tap needs:
-  - a new approval kind holding several changes
-  - an app contract revision
-  - rendering in the Waldo app
-  - a multi-event apply with readback and undo.
+- **One tap to add the day's plan to the calendar.** The app contract is written; nothing produces or shows the card yet.
+  - Contract: approvals revision 7 adds the `calendar_plan` kind with `exact.plan` (`appApprovalPlanV1Schema` in `packages/contracts/src/app/approvals.ts`).
+    - It holds 2 to 12 new blocks on the owner's own primary calendar, with no guests. They run in order without overlapping and fit within one day.
+    - Done means every block was added. A partial add is removed again before the card reads not done; if that can't be confirmed, it reads outcome unknown. Undo removes every block.
+    - It is one tap in chat, like a single block on the owner's own calendar. A build reading revision 6 or below is never shown one.
+  - Still to build in this repo:
+    - the model's proposing tool and its desk proposal (`proposeCalendarPlan`)
+    - the review text and projection
+    - the multi-event apply with readback, rollback and undo
+    - card recovery
+    - gating the chat approval part for older app builds
+  - Still to build in the Waldo app: reading approvals revision 7 and rendering the blocks as one card.
 - **Moments beyond wake-up:**
   - workout ended
   - arrived or left a place
