@@ -54,7 +54,10 @@ Other properties:
 - Owner storage erase waits for the lane as it waits for `channelQueue`, so no browser write lands after `deleteAll`.
 - With the switch off, `serialBrowser` takes today's path, and `chainScope` equals `activeScope`.
 
-**Limit, stated:** an errand's browser actions still hold the owner's chain, one step at a time. Lifting that needs cards and effects filed under the calling run instead of a global current run. That is a change to the approval desk and the effect ledger, so it is a follow-up.
+**Limits, stated:**
+- An errand's browser actions still hold the owner's chain, one step at a time.
+- With the switch on, an errand's chain step can also wait, while it holds the chain, for an unrelated reader's page on the lane. An owner message that arrives then waits for both: worse than switch-off for that one case. Chain-then-lane is still the right order, because lane-then-chain would let an erase, which runs on the chain and waits for the lane, deadlock.
+- The real-browse test (a reader's `browse_page` holding the lane while an errand's step queues) shows both finish in order, with no deadlock. Lifting that needs cards and effects filed under the calling run instead of a global current run. That is a change to the approval desk and the effect ledger, so it is a follow-up.
 
 ### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [proposed]
 

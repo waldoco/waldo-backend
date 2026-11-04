@@ -271,20 +271,20 @@ it('while a task\'s browser step holds the browser lane, the owner\'s turn answe
 // reading task's step on the browser lane, rather than meeting that task's run on the browser and failing closed.
 it('an errand\'s browser step waits for a reading task\'s step on the browser lane, then runs', async () => {
   await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, state) => {
-    const abort = new AbortController();
-    const reader = { runId: 'task:reader-hold', attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() };
-    const lane = (owner as unknown as { browserSerial(scope: typeof reader, work: () => Promise<void>): Promise<void> }).browserSerial(reader, () => seen.state.hold);
-    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'errandjob001', newToken: () => crypto.randomUUID() });
-    const { job } = book.create({ kind: 'task', profile: 'errand', idempotencyKey: 'turn-e:call-e', origin: 'turn-e', surface: 'app',
-      brief: { title: 'Hotels near the venue', goal: 'Find three hotels.', context: '', done_when: 'Three hotels.', effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID() });
+    const create = (profile: 'reader' | 'errand', key: string) => book.create({ kind: 'task', profile, idempotencyKey: key, origin: key, surface: 'app',
+      brief: { title: 'Hotels near the venue', goal: 'Find three hotels.', context: '', done_when: 'Three hotels.', effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 }).job;
+    // A reader's real browse holds the browser lane, its page load held open.
+    const reader = worker(owner, book.startAttempt(create('reader', 'turn-r:call-r').id)!);
+    await vi.waitFor(() => expect(seen.state.trace).toContain('browse_open'), { timeout: 15_000, interval: 20 });
     let settled = false;
-    const attempt = worker(owner, book.startAttempt(job.id)!).finally(() => { settled = true; });
+    const errand = worker(owner, book.startAttempt(create('errand', 'turn-e:call-e').id)!).finally(() => { settled = true; });
     await new Promise(resolve => setTimeout(resolve, 400));
     expect(settled).toBe(false);
-    expect(seen.state.trace).not.toContain('browse_open');
+    expect(seen.state.trace.filter(step => step === 'browse_open')).toHaveLength(1);
     seen.state.release();
-    await lane;
-    expect(await attempt).toBe('reported');
-    expect(seen.state.trace.filter(step => step.startsWith('browse_'))).toEqual(['browse_open', 'browse_done']);
+    expect(await reader).toBe('reported');
+    expect(await errand).toBe('reported');
+    expect(seen.state.trace.filter(step => step.startsWith('browse_'))).toEqual(['browse_open', 'browse_done', 'browse_open', 'browse_done']);
   });
 }, 60_000);
