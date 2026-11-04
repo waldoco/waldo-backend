@@ -25,9 +25,14 @@ it('the switches are on only for "1"', () => {
 const ROUTER = ['get_context', 'web_search', 'search_communication', 'start_task', 'cancel_task'];
 const FULL = [...ROUTER, 'browse_page', 'browse_act', 'read_drive'];
 
-it('off, the prompt is the same bytes as before; on, the ladder climbs to a background task and says what to tell the owner', () => {
-  expect(messagingSystemPrompt(FULL, undefined, 'harness', undefined, false)).toBe(messagingSystemPrompt(FULL, undefined, 'harness'));
-  expect(messagingSystemPrompt(ROUTER)).toBe(messagingSystemPrompt(ROUTER, undefined, false, undefined, false));
+// The file snapshot was written by beta-mvp's prompt (b06146cc), before the background block existed, so switch-off is
+// held to those bytes, not to itself. A deliberate prompt change rewrites it with -u.
+it('off, the prompt is the bytes it was before the switch existed', async () => {
+  await expect(messagingSystemPrompt(FULL, undefined, 'harness', undefined, false)).toMatchFileSnapshot('__snapshots__/async-tools-off-harness.txt');
+  await expect(messagingSystemPrompt(ROUTER, undefined, false, undefined, false)).toMatchFileSnapshot('__snapshots__/async-tools-off-router.txt');
+});
+
+it('on, the ladder climbs to a background task and says what to tell the owner', () => {
   const router = messagingSystemPrompt(ROUTER, undefined, false, undefined, true);
   expect(router).toContain('mail, web_search, a background task, their Mac last.');
   expect(router).toContain('call start_task with a brief that holds everything its worker needs');

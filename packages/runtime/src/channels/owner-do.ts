@@ -1892,7 +1892,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.browserQueue.then(()=>this.ctx.storage.deleteAll()))},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
             chatLinks:()=>this.proactiveLinks(auth),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
@@ -2675,7 +2675,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const limited=this.consoleRateLimited(actionsRoute?'action':'read');
           if(limited)return limited;
           if(ownerControlsRoute||ownerActionsRoute){
-            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.browserQueue.then(()=>this.ctx.storage.deleteAll()))};
+            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()};
             let response:Response;
             if(ownerControlsRoute){const view=ownerControlsView(url.searchParams);if(!view)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});response=await ownerControlsRead(view,deps);}
             else {let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}response=await ownerControlsAction(form,deps);}
@@ -2843,7 +2843,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const done = admin && doName ? await this.purgeOwnerFiles() && await admin.deleteOwner(doName) : false;
         if (!done) return noticePage('invalid');
         const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': clearConsoleCookie(CONSOLE_COOKIE) } });
-        await this.channelSerial(() => this.ctx.storage.deleteAll());
+        await this.eraseOwnerStorage();
         return response;
       }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
@@ -3438,6 +3438,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     this.browserQueue = run.catch(() => undefined);
     return run;
+  }
+  // Owner storage erase. It waits on the channel queue, and takes its place on the browser lane, so no browser step lands
+  // after it: one queued later runs after the erase and finds no job book.
+  private eraseOwnerStorage(): Promise<void> {
+    return this.channelSerial(() => {
+      const run = this.browserQueue.then(() => this.ctx.storage.deleteAll());
+      this.browserQueue = run.catch(() => undefined);
+      return run;
+    });
   }
   private channelSerial<T>(work: () => Promise<T>): Promise<T> {
     const run = this.channelQueue.then(work);

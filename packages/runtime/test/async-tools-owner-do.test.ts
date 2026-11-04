@@ -18,7 +18,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // owner object, its serial chain, tool loop, task host, the worker loop (run here as a TaskWorkerDO runs it) and the jobs lane
 // are real.
 const seen = vi.hoisted(() => {
-  const state = { trace: [] as string[], ownerTools: [] as string[][], ownerSystem: [] as string[], models: [] as string[], applyAsked: '', release: () => {}, hold: Promise.resolve(), modelMs: 0, browseMs: 0 };
+  const state = { trace: [] as string[], ownerTools: [] as string[][], ownerSystem: [] as string[], models: [] as string[], applyAsked: '', release: () => {}, hold: Promise.resolve(), modelMs: 0, browseMs: 0, cancelId: '' };
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     if (state.modelMs && !request.response_format) await new Promise(resolve => setTimeout(resolve, state.modelMs));
     const done = (fields: object) => ({ ok: true as const, data: { model: request.model, text: '', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0, ...fields } });
@@ -41,6 +41,7 @@ const seen = vi.hoisted(() => {
       return tools.includes('delegate_task') ? call('delegate_task', { task: 'Read the hotels page at https://fixture.invalid/hotels and list the hotels.' })
         : call('start_task', { profile: 'reader', title: 'Read the hotels page', goal: 'Read the page.', context: '', done_when: 'What it says.' });
     }
+    if (said.includes('Cancel the hotel search')) return turns.length === 0 ? call('cancel_task', { job_id: state.cancelId }) : done({ text: 'Stopped the hotel search.' });
     if (said.includes('Find me three hotels') && turns.length === 0) return call('start_task', { profile: 'reader', title: 'Hotels near the venue', goal: 'Find three hotels near the venue with their nightly price.', context: 'The venue is fixture.invalid.', done_when: 'Three hotels with a price and a link each.' });
     if (said.includes('Find me three hotels')) { state.trace.push('reply:started'); return done({ text: 'I have started looking for hotels near the venue and will message you with three options.' }); }
     state.trace.push('reply:time');
@@ -286,5 +287,28 @@ it('an errand\'s browser step waits for a reading task\'s step on the browser la
     expect(await reader).toBe('reported');
     expect(await errand).toBe('reported');
     expect(seen.state.trace.filter(step => step.startsWith('browse_'))).toEqual(['browse_open', 'browse_done', 'browse_open', 'browse_done']);
+  });
+}, 60_000);
+
+// cancel_task while a reading task's page loads on the lane: the owner's turn runs and cancels it at once, the attempt is
+// fenced when the page returns, nothing is reported, and the lane is free for the next step.
+it('cancel_task in an owner turn while a reading task\'s page loads fences the task; nothing is reported and the lane frees', async () => {
+  await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, state, name) => {
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'ca0ce1ab0001', newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'turn-c:call-c', origin: 'turn-c', surface: 'app',
+      brief: { title: 'Hotels near the venue', goal: 'Find three hotels.', context: '', done_when: 'Three hotels.', effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const attempt = worker(owner, book.startAttempt(job.id)!);
+    await vi.waitFor(() => expect(seen.state.trace).toContain('browse_open'), { timeout: 15_000, interval: 20 });
+    seen.state.cancelId = job.id;
+    await send(owner, name, 'cancel-a-0001', 'Cancel the hotel search');
+    await completed(owner, name, 'cancel-a-0001');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+    seen.state.release();
+    expect(await attempt).toBe('fenced');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', result_json: null });
+    expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toHaveLength(1);
+    const abort = new AbortController();
+    const next = { runId: 'task:after-cancel', attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() };
+    await (owner as unknown as { browserSerial(scope: typeof next, work: () => Promise<string>): Promise<string> }).browserSerial(next, async () => 'ran');
   });
 }, 60_000);

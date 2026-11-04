@@ -4,7 +4,7 @@ Step 1 of the Super-agent design the owner adopted on 4 Nov (router plus workers
 
 - **Baseline:** `beta-mvp` at `8455b0b96`. `file:line` citations are at that SHA.
 - **Tags:** [verified] = read in source at the baseline or observed by a test in this PR. [inference] = concluded, not observed. [proposed] = a choice this note makes.
-- **Switches:** `WALDO_ASYNC_TOOLS` ("1" staging, "0" production) and `WALDO_LIGHT_CHAT` ("1" staging under the 4 Nov standing rule, "0" production). Both off leave today's behaviour unchanged, byte for byte in the prompt and tool menu.
+- **Switches:** `WALDO_ASYNC_TOOLS` ("1" staging, "0" production) and `WALDO_LIGHT_CHAT` ("0" in staging and production: it conflicts with the 27 Oct ruling that owner turns run on Terra, so the owner decides). Both off leave today's behaviour unchanged, byte for byte in the prompt and tool menu.
 
 ## What exists today
 
@@ -51,7 +51,7 @@ Two places assume one run per owner object:
 Other properties:
 - The browser still serves one run at a time. A step that keeps the chain also takes the browser lane inside it (`serial(() => browserSerial(...))`), so it waits for a reading task's step rather than meeting that task's run on the browser. That would fail closed and, for an approved replay, report an action the owner said yes to as "outcome unknown" without it having run. The lane never waits on `serial()`, so this cannot deadlock. [verified] by test.
 - An owner turn with the switch on holds no browser tool. If anything else reaches the browser runtime while a lane step runs, its custody check fails closed (`ClosedRunError`), as a mismatched run always does.
-- Owner storage erase waits for the lane as it waits for `channelQueue`, so no browser write lands after `deleteAll`.
+- Owner storage erase (app delete, console delete, console account controls) runs on the channel queue and takes its place on the browser lane, so no browser step lands after `deleteAll`: one queued later runs after the erase and finds no job book.
 - With the switch off, `serialBrowser` takes today's path, and `chainScope` equals `activeScope`.
 
 **Limits, stated:**
@@ -63,7 +63,7 @@ Other properties:
 
 - The owner's own reply runs on the provider's auxiliary model (Haiku 5.5 on Anthropic, Luna on OpenAI). The fallback stays the other provider's chat model, so an outage does not drop quality twice. Side jobs are unchanged.
 - Task workers run every task on the chat model (Sonnet 5.5 / Terra), not only `effort: 'deep'` ones. Today `standard` effort runs on auxiliary (`tasks/worker-loop.ts:230`). This is a real cost increase per task.
-- **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The 4 Nov adoption of the Super-agent design asks for a lighter router; the switch keeps both reachable and the gate decides staging. A light router may delegate less well: the eval reports delegation rate, not only latency.
+- **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The 4 Nov adoption of the Super-agent design asks for a lighter router; the switch keeps both reachable, and it stays "0" in staging until the owner decides. A light router may delegate less well: the eval reports delegation rate, not only latency.
 - Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`; the light reply keeps both.
 
 ### What the owner sees
@@ -73,6 +73,9 @@ Every reply still says what was started and what was done. The receipt line alre
 ### Not in this step
 
 - **In-turn pickup of a report.** A task that finishes while the owner's turn is still running is reported by the follow-up apply turn, not folded into the running turn. Router turns are now short, so this is rare, and pickup would race the jobs lane, the single retry owner. [proposed] Later step.
+- **Machine turns that browse.** A machine turn's own `browse_page`/`browse_act` runs on the chain, and while a reader's step holds the lane its custody check fails closed (the tool returns a refusal; nothing runs). [inference from source; not tested]
+- **Owner login inside a worker.** A worker cannot resume an owner browser login within its own job; the errand stops and the report asks the owner.
+- **Untested here:** an errand's browser card raised with the switch on and then withdrawn by `cancel_task`. Errand steps keep the chain with the job's run, which is the path `task-worker-owner-do.test.ts` covers with the switch off.
 - **Report and machine turns.** They run on the chain without the switch's menu. A task report's apply turn holds every owner tool except `start_task` and `cancel_task`, so it can still browse inline. It is short and runs after the work, but it holds the chain while it browses.
 - **Errand browser actions off the chain.** These need cards and effects filed under the calling run (see section 2).
 - **Speculative work, thread subscriptions, router batching.** Other Super-agent steps.
@@ -94,6 +97,8 @@ All in `test/async-tools-owner-do.test.ts` (owner object, real app chain, tool l
 - **Trace assertion** (owner object, real tool loop, scripted gateway): the owner's turn calls `start_task` and returns its reply, which names the task, while the worker's browse is held open; the worker then finishes and the apply turn delivers the report. The trace order is asserted.
 - **Concurrent message:** with a reader worker's `browse_page` held open, a second owner message gets its reply before the browse resolves. With the switch off (any worker), or on for an errand worker, the same message waits for the step: the baseline and the narrowed lane.
 - **One run on the browser:** an errand's step waits for a reading task's lane step, then runs.
+- **Cancel on the lane:** `cancel_task` in an owner turn while a reader's page loads cancels the job at once; the attempt is fenced when the page returns, nothing is reported, and the lane frees.
+- **Receipts:** a refused `start_task` (a title with a health value) names nothing in the line or the typed receipt; an accepted one names its title.
 - **Gateway:** with a browser registration selected and the lane held by a task's run, the owner's turn answers through the browser host's gateway.
 - **Menu:** switch on, the owner turn's menu has no `long` tool and no `delegate_task`, through the harness loader too; machine turns and workers keep theirs. Switch off, menu and prompt are byte-identical to the baseline.
 - **Models:** switch on, the reply runs on the auxiliary model with the chat model as its fallback, and a `standard` task runs on the chat model.
