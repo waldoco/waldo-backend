@@ -62,6 +62,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
+  // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
+  SCREEN_TIME?: string;
   // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
