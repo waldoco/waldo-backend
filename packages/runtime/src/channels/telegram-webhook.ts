@@ -105,6 +105,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_TASK_ASK?: string;
   // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
   WALDO_TASK_NOTES?: string;
+  // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
+  WALDO_OWNER_FIRST?: string;
+  // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
+  WALDO_SECOND_MESSAGE?: string;
+  // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
