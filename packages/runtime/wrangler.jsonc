@@ -110,6 +110,7 @@
     "AGENT_MAIL_DOMAIN": "",
     "AGENT_MAIL_SEND": "0",
     "PLANNING_BRIEF": "0",
+    "WHY_TRAIL": "0",
     "AGENT_MAIL_ZONE_ID": ""
   },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
@@ -273,6 +274,7 @@
         "AGENT_MAIL_DOMAIN": "mail.heywaldo.in",
         "AGENT_MAIL_SEND": "1",
         "PLANNING_BRIEF": "0",
+        "WHY_TRAIL": "0",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },

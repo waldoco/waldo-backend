@@ -18,6 +18,7 @@ import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { appApprovalStepUp } from './approval-step-up';
+import { appWhy, storedWhy, whyJson, type TrailStep } from '../tools/why-trail';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
 import { AGENT_MAIL_REFUSED, agentMailIntact, agentMailRefusal, agentMailSendCode, type AgentMailDeskDep, type AgentMailSendCode, type AgentMailSendProposal } from './agent-mail/send';
 
@@ -32,7 +33,7 @@ type Undo = ({ op: 'cancel'; id: string } | { op: 'restore'; id: string } | { op
 // Waldo withdrew a card, and the newer card that closed it when one did. chat_approval_json: the owner's message that
 // approved the card in words, where it did.
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null; card_waits_on?: string | null;
-  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null; grant_json?: string | null; chat_approval_json?: string | null };
+  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null; grant_json?: string | null; why_json?: string | null; chat_approval_json?: string | null };
 // running: approved, and its frozen call waits for or runs on the jobs lane. withdrawn: Waldo closed its own card while it
 // still waited on the owner; nothing ever moves a withdrawn card.
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'running' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone' | 'withdrawn';
@@ -237,7 +238,8 @@ export type Replacement = Readonly<{ approval_id: string; replaced: boolean; sta
 // Options a proposal takes beyond its payload: the earlier card it revises.
 // outside: the proposing turn had read outside text (an email, a page, a tool's answer), so the card's words may carry it.
 // origin: what started the run proposing it, which a standing grant needs before it can act without a card.
-export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin }>;
+// why: the steps behind the card ("Why this changed"), kept beside its row and never in its payload.
+export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[] }>;
 // The owner's own message that told Waldo to go ahead, as the host admitted it at the start of the turn. It never comes from
 // the model's arguments.
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
@@ -248,6 +250,8 @@ export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: Appro
   | { outcome: 'not_waiting'; state: AppApprovalStateV1 | 'not_found' }>;
 // Whether a tool call runs in a turn that has read outside text.
 export const turnReadOutside = (ctx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined): boolean => ctx?.toolArgSourceTaint === 'external';
+// The steps the host kept for the proposing call itself, never another call's.
+export const callWhy = (ctx: Readonly<{ whySteps?: readonly TrailStep[] }> | undefined): readonly TrailStep[] | undefined => ctx?.whySteps;
 // A card Waldo closes in a turn that read outside text gets these fixed words, never a reason the model wrote there.
 export const OUTSIDE_REASON = 'Closed while Waldo was working with an email or web page.';
 // What Waldo writes to the ledger as done without asking the owner. It can never be a kind the owner decides: readers such as
@@ -262,7 +266,7 @@ export type ApprovalDesk = Readonly<{
   proposeAgentMailSend(payload: AgentMailSendProposal, options?: ProposeOptions): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   // runRef: the run the card belongs to when it is not the turn running now (a task worker's step: task:<job id>).
-  proposeTaintedAction(payload: TaintedActionProposal, options?: Readonly<{ runRef?: string }>): Promise<string>;
+  proposeTaintedAction(payload: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'> & Readonly<{ runRef?: string }>): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
@@ -462,6 +466,11 @@ const senderOf = (entry: LedgerRow): Readonly<{ from?: string }> => {
   } catch { /* an unreadable payload names no sender; its card text still says what it can */ }
   return {};
 };
+// The steps behind the card, as the app shows them.
+const whyOf = (entry: LedgerRow): Pick<AppApprovalV1, 'why'> => {
+  const why = appWhy(storedWhy(entry.why_json));
+  return why ? { why } : {};
+};
 // A withdrawn card's reason as the owner reads it, and the newer card that replaced it when one did.
 const withdrawalOf = (entry: LedgerRow): Pick<AppApprovalV1, 'withdrawal'> => entry.status !== 'withdrawn' ? {}
   : { withdrawal: { reason: entry.withdrawn_reason || 'Withdrawn by Waldo.', ...(entry.replaced_by ? { replaced_by: entry.replaced_by } : {}) } };
@@ -538,6 +547,18 @@ export const withdrawRunCards = (sql: SqlStorage, runRef: string, now: number): 
     sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', now, id);
   }
   return ids.length;
+};
+
+// Whether a stored trail names a forgotten topic, in a line or a source.
+export const whyCarries = (json: string, topics: readonly string[]): boolean => topics.some(topic => carriesTopic(json, topic) || hidesTopic(json, topic));
+// Owner forget: the steps behind a card can name the forgotten text in a line or a source, so a trail that does loses them all,
+// whatever state its card is in. Answers how many trails still name it.
+export const forgetTrails = (sql: SqlStorage, texts: readonly string[]): number => {
+  const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
+  if (!topics.length || sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'why_json'").toArray().length === 0) return 0;
+  const carrying = () => sql.exec<{ id: string; why_json: string }>('SELECT id, why_json FROM ledger WHERE why_json IS NOT NULL').toArray().filter(row => whyCarries(row.why_json, topics));
+  for (const { id } of carrying()) sql.exec('UPDATE ledger SET why_json = NULL WHERE id = ?', id);
+  return carrying().length;
 };
 
 // The run ref of the card a background task raised for one of its own steps. Its own ref, apart from task:<id>, which any card
@@ -632,7 +653,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
-  for (const column of ['proposal_digest', 'origin_run_ref', 'card_waits_on', 'replaces', 'withdrawn_reason', 'replaced_by', 'grant_json', 'chat_approval_json']) {
+  for (const column of ['proposal_digest', 'origin_run_ref', 'card_waits_on', 'replaces', 'withdrawn_reason', 'replaced_by', 'grant_json', 'why_json', 'chat_approval_json']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} TEXT`);
   }
   for (const column of ['deferred_at', 'raised_outside', 'withdrawn_outside']) {
@@ -663,6 +684,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (origin === undefined) return;
     if (!origin || origin.length > 256 || /[\u0000-\u001f]/.test(origin)) throw new Error('invalid approval origin');
     sql.exec('UPDATE ledger SET origin_run_ref = ? WHERE id = ? AND origin_run_ref IS NULL', origin, id);
+  };
+  const bindWhy = (id: string, steps: readonly TrailStep[] | undefined) => {
+    const json = whyJson(steps);
+    if (json !== null) sql.exec('UPDATE ledger SET why_json = ? WHERE id = ?', json, id);
   };
   // A grant's use counts against its day's budget and is rechecked in the reserve; without the ledger nothing is granted.
   const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>, grant?: GrantUse) => {
@@ -916,7 +941,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
       ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: undoUntil(entry)! } : {}),
-      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry) };
+      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry), ...whyOf(entry) };
   };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'task_sources') return 'Task sources (expired)';
@@ -1736,6 +1761,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeGoogleTaskChange(proposal);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'google_task_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(proposal), deps.now(), digest);
       bindOrigin(id, originRunRef);
+      bindWhy(id, callWhy(ctx));
       bindOptions(id, { outside: turnReadOutside(ctx) });
       await present(id);
       return id;
@@ -1773,6 +1799,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       bindOrigin(id, originRunRef);
+      bindWhy(id, options.why);
       bindOptions(id, options);
       try {
         await present(id);
@@ -1789,6 +1816,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeMessage(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       bindOrigin(id, originRunRef);
+      bindWhy(id, options.why);
       bindOptions(id, { outside: options.outside === true });
       await present(id);
       return id;
@@ -1808,6 +1836,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'agent_mail_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeAgentMail(payload), JSON.stringify(payload), deps.now(), payload.parts_digest);
       bindOrigin(id, originRunRef);
+      bindWhy(id, options.why);
       bindOptions(id, options);
       try { await present(id); }
       catch { throw new EmailProposalError('card_unconfirmed'); }
@@ -1822,13 +1851,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await present(id);
       return id;
     },
-    async proposeTaintedAction(payload, options) {
+    async proposeTaintedAction(payload, options = {}) {
       // The row's digest is recomputed from the stored arguments at approval, so a changed payload never runs.
       if (await sha256Hex(stableJson(payload.args)) !== payload.args_digest) throw new Error('tainted action digest mismatch');
       const originRunRef = options?.runRef ?? deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'tainted_action', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeTaintedAction(payload), JSON.stringify(payload), deps.now(), payload.args_digest);
       bindOrigin(id, originRunRef);
+      bindWhy(id, options.why);
       await present(id);
       return id;
     },
@@ -1865,6 +1895,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
+        bindWhy(id, options.why);
         bindOptions(id, options);
         if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);

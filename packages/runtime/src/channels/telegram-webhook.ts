@@ -55,6 +55,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
   // the connector-proxy function must be deployed with restoreEvent first.
   CALENDAR_UNDO_CANCEL?: string;
+  // "1" lets a proposing tool take the steps behind its card ("Why this changed"), kept beside the card and the day card that
+  // raised it and shown to an app reading approvals=8 or controls=14. Off unless "1".
+  WHY_TRAIL?: string;
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;

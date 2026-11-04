@@ -5,12 +5,12 @@ import {
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import type { RunEffectScope } from '../../channels/run-effect-scope';
-import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
+import { callWhy, proposalStatus, type ProposeOptions, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
 import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 
 export type TaintedActionDesk = Readonly<{
-  proposeTaintedAction(proposal: TaintedActionProposal): Promise<string>;
+  proposeTaintedAction(proposal: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
   placement?(id: string): CardPlacement;
   waitingTaintedActions?(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
 }>;
@@ -110,7 +110,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     const proposal_id = await desk.proposeTaintedAction({
       operation_ref: await ownerEffectOperationRef(ctx), tool: tool.data, args: frozen, args_digest: digest, reasoning: args.reasoning, source: 'external',
       ...(preview ? { preview } : {}),
-    });
+    }, { why: callWhy(ctx) });
     return {
       ok: true,
       data: { proposal_id, tool: tool.data, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Not now buttons', 'Nothing ran.'), executed: false },

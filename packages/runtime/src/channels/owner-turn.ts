@@ -63,6 +63,7 @@ import type { SecondMessageRound } from './second-message';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
+import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
@@ -573,7 +574,9 @@ export const createOwnerResponder = (
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
       type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      // The turn's reads, kept only while a proposing tool can take steps behind its card.
+      const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
@@ -613,6 +616,7 @@ export const createOwnerResponder = (
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
           const frozen = turnSuffix;
           const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
+          recordSharedHealth(turnReads, admittedHealth, Date.now());
           const generation = forgettingState?.forgetGeneration() ?? 0;
           if (turnSanitise && turnSanitise.forgets !== `${forgetEpoch}:${generation}`) turnSanitise = { forgets: `${forgetEpoch}:${generation}`, memo: new TurnSanitiseMemo() };
           const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
