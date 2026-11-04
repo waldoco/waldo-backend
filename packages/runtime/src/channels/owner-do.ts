@@ -215,7 +215,7 @@ import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoti
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
 import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-time';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, ledgerSummary, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
@@ -266,6 +266,7 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
+import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
@@ -626,6 +627,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private jobs(): JobBook {
     return jobBook(this.ctx.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID(), archive: this.historyArchive() });
   }
+  // The cards a task raised for its own steps, between the desk and the book.
+  private readonly asks = taskAsks(this.ctx.storage.sql, () => this.jobs());
   // Retention moves past-cap history rows into history_archive, never deletes them, while HISTORY_ARCHIVE is "1".
   private archiveDeps(): ArchiveDeps {
     const storage = this.ctx.storage;
@@ -651,12 +654,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      endAsks: jobId => { self.asks.end(jobId, Date.now()); },
+      askCurrent: (row, approvalId, argsDigest) => self.setup(row.surface as ChannelKind).desk.replayCurrent(approvalId, argsDigest),
+      settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
+      // With WALDO_TASK_ASK=1, a worker's browser step held for the owner raises its card now, on the job's surface; the job
+      // resumes once the owner decides, and an approved step runs in its resumed attempt. The card is raised on the serial chain, as every card is: its desk write and its sends never interleave with a turn's.
+      askOwner: async (row, call) => {
+        if (self.env.WALDO_TASK_ASK !== '1' || !BROWSER_TOOLS.has(call.name as ToolName)) return null;
+        const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+        const args_digest = await sha256Hex(stableJson(args));
+        return self.serial(() => self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest,
+          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: taskAskRef(row.id) }));
+      },
     });
   })();
 
@@ -3311,7 +3326,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         machine: runtime.machine,
         // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
         startReplay: ticket => { this.ctx.waitUntil(this.tasks.replay(ticket).catch(() => { console.error(JSON.stringify({ hop: 'approval_replay', ok: false, code: 'replay_threw' })); })); },
-        approvals: runtime.desk,
+        // A task's own approved card has no replay job: the task settles it when its step ends.
+        approvals: { replays: () => this.asks.replays(runtime.desk),
+          replayReceipt: (id, status, message) => runtime.desk.replayReceipt(id, status, message), settleReplay: (id, status) => runtime.desk.settleReplay(id, status) },
+        followUp: this.env.WALDO_TASK_NOTES === '1',
+        // Read whatever the switch says, so a job already waiting when the switch is turned off still resumes.
+        askedCard: id => this.asks.card(runtime.desk, id),
       });
       next = ran;
     } finally {
@@ -4212,11 +4232,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       replayLater: {
         takes: tool => BROWSER_TOOLS.has(tool as ToolName),
         enqueue: (approvalId, call) => {
+          // A task's own card resumes the task, which runs the step itself; one approved before the task began to wait stays
+          // running until the jobs lane sees the task waiting.
+          if (this.asks.approved(approvalId)) return;
           const now = Date.now();
           this.jobs().create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: channel,
             brief: { approval_id: approvalId, ...call, approved_at: now }, dueAt: now, deadlineAt: now + REPLAY_DEADLINE_MS, taint: 'external' });
         },
         wake: () => armTaskJobsWake(storage, Date.now()),
+        declined: async approvalId => { if (this.jobs().resume(approvalId, 'declined')) await armTaskJobsWake(storage, Date.now()); },
       },
       replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
