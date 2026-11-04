@@ -81,8 +81,8 @@ describe('PLANNING_BRIEF in the Worker config', () => {
 });
 
 describe('SCREEN_TIME in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy with migration 20261103120000', () => {
+  it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');
-    expect(parsed.env.staging.vars.SCREEN_TIME).toBe('0');
+    expect(parsed.env.staging.vars.SCREEN_TIME).toBe('1');
   });
 });
