@@ -18,6 +18,7 @@ import { forgetBarrier, resultOrigin } from '../src/context-composer/forget-barr
 import { recallChain } from '../src/history/recall-chain';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { whyJson } from '../src/tools/why-trail';
 import { holdsIn } from '../src/memory/forget-guard';
 import { episodesFromSearchTool, recallForTurn, withinReach } from '../src/memory/turn-recall';
 import { jobBook } from '../src/tasks/jobs';
@@ -77,6 +78,13 @@ const seed = async (state: DurableObjectState, held: string[] = []) => {
   sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at) VALUES ('card1', 'email_send', 'done', 'Email the agent about Lisbon flights', ?, ?, ?)", JSON.stringify(mail), LAST_WEEK + 240_000, LAST_WEEK + 300_000);
   const calendar = { action: 'move', title: 'Offsite prep', event_id: 'evt-prep-9', start: '2026-10-30T10:00:00Z', end: '2026-10-30T11:00:00Z', reason: 'clash' };
   sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at) VALUES ('card2', 'calendar_change', 'done', 'Move offsite prep to Thursday', ?, ?, ?)", JSON.stringify(calendar), LAST_WEEK + 250_000, LAST_WEEK + 310_000);
+  // The why trail behind the calendar card, as whyJson stores it: the reads the turn made, by source.
+  const why = whyJson([
+    { at: LAST_WEEK + 200_000, verb: 'read', label: 'The agent asked to move prep before the flight', source: { kind: 'mail_thread', ref: 'thr-agent-7' } },
+    { at: LAST_WEEK + 210_000, verb: 'checked', label: 'Thursday morning is free', source: { kind: 'calendar_free_busy', ref: 'primary' } },
+    { at: LAST_WEEK + 220_000, verb: 'found', label: 'Form is steady this week', source: { kind: 'health_score', ref: 'form' } },
+  ]);
+  sql.exec("UPDATE ledger SET why_json = ? WHERE id = 'card2'", why);
 
   const topics = () => held;
   const chain = recallChain({ sql, claims: barrierMemory(memory, topics), held: () => holdsIn(topics()), approvalSummary: id => ledgerSummary(sql, id) });
@@ -174,7 +182,11 @@ describe('search_history with the recall chain', () => {
     expect(rels(result.run[0]!.links)).toEqual([`from ${result.wa}`]);
     expect(rels(result.job[0]!.links)).toEqual([`from ${result.wa}`]);
     expect(result.mail[0]!.links).toEqual([{ ref: 'mail:thr-lisbon-1', rel: 'acts_on', line: 'the mail thread this card sends in (read_thread)' }]);
-    expect(result.calendar[0]!.links).toEqual([{ ref: 'event:evt-prep-9', rel: 'acts_on', line: 'the calendar event this card changes, at 2026-10-30T10:00:00Z' }]);
+    // The card's own event, then the mail thread its why trail read; free/busy and health steps name no row to follow.
+    expect(result.calendar[0]!.links).toEqual([
+      { ref: 'event:evt-prep-9', rel: 'acts_on', line: 'the calendar event this card changes, at 2026-10-30T10:00:00Z' },
+      { ref: 'mail:thr-agent-7', rel: 'read', line: 'read: The agent asked to move prep before the flight' },
+    ]);
     expect(result.none).toEqual([]);
   });
 

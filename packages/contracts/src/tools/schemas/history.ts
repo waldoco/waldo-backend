@@ -40,7 +40,7 @@ export type SearchHistoryResult = Readonly<{ entries: readonly HistoryEntry[]; t
 //   c<id>                                           a memory note: read_memory with ids
 //   mail:<thread id>                                a mail thread: read_thread with thread_id
 //   event:<event id>                                a calendar event: query_calendar around the time its line gives
-export const RECALL_LINK_RELS = ['reply', 'reply_to', 'before', 'after', 'learned', 'started', 'from', 'card', 'acts_on'] as const;
+export const RECALL_LINK_RELS = ['reply', 'reply_to', 'before', 'after', 'learned', 'started', 'from', 'card', 'acts_on', 'read'] as const;
 export type RecallLinkRel = (typeof RECALL_LINK_RELS)[number];
 export type RecallLink = Readonly<{ ref: string; rel: RecallLinkRel; line: string }>;
 

@@ -3,11 +3,13 @@ import { surfaceOfTrace, traceSurfacePrefix } from '../channels/owner-turn-envel
 import type { Claim, ClaimStore } from '../memory/claims';
 import { outsideSafe } from '../memory/outside-view';
 import { redactNumericHealth } from '../scribe/sanitiser';
+import { storedWhy } from '../tools/why-trail';
 
 // The recall chain: a recalled row names the rows next to it, so the model follows a thread by ref instead of searching
 // again. Every link is a row that already exists, found by a column its writer fills: a reply is `<turn>-reply`; a memory
 // note names the owner message it was learned from (`owner, <turn>`); a delegated run's parent and a task's origin are the
-// turn that started it; a card's payload names the mail thread or calendar event it acts on. Nothing is stored for it.
+// turn that started it; a card's payload names the mail thread or calendar event it acts on, and its why trail the ones the
+// turn read before raising it. Nothing is stored for it.
 // Which link matters is the model's call; this only says what is next to what.
 // A line is built at read time from a row a forget purge rewrites, and is left out while its row carries a topic still being
 // forgotten. Health numbers never reach a line, and a health note is named by its kind alone.
@@ -115,15 +117,25 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
     if (typeof value === 'object' && value !== null) return value as Record<string, unknown>;
     try { return typeof value === 'string' ? JSON.parse(value) as Record<string, unknown> : {}; } catch { return {}; }
   };
-  const actsOn = (id: string): RecallLink[] => {
+  // A card's payload names what it acts on; its why trail, the mail threads and calendar events the turn read before raising
+  // it. A trail step's label is already free of readings, and a forget clears the trail of a card that carries the topic.
+  const cardLinks = (id: string): RecallLink[] => {
     if (!tableExists(sql, 'ledger')) return [];
-    const card = sql.exec<{ kind: string; payload_json: string }>('SELECT kind, payload_json FROM ledger WHERE id = ?', id).toArray()[0];
+    const card = sql.exec<{ kind: string; payload_json: string; why_json?: string | null }>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
     if (!card) return [];
     const payload = briefOf(card.payload_json);
     const text = (key: string) => typeof payload[key] === 'string' && payload[key] ? payload[key] as string : null;
-    if (card.kind === 'email_send' && text('thread_id')) return [{ ref: `mail:${text('thread_id')}`, rel: 'acts_on', line: 'the mail thread this card sends in (read_thread)' }];
-    if (card.kind === 'calendar_change' && text('event_id')) return [{ ref: `event:${text('event_id')}`, rel: 'acts_on', line: `the calendar event this card changes${text('start') ? `, at ${text('start')}` : ''}` }];
-    return [];
+    const acts: RecallLink[] = card.kind === 'email_send' && text('thread_id') ? [{ ref: `mail:${text('thread_id')}`, rel: 'acts_on', line: 'the mail thread this card sends in (read_thread)' }]
+      : card.kind === 'calendar_change' && text('event_id') ? [{ ref: `event:${text('event_id')}`, rel: 'acts_on', line: `the calendar event this card changes${text('start') ? `, at ${text('start')}` : ''}` }]
+        : [];
+    const seen = new Set(acts.map(link => link.ref));
+    const read = (storedWhy(card.why_json) ?? []).flatMap((step): RecallLink[] => {
+      const ref = step.source.kind === 'mail_thread' ? `mail:${step.source.ref}` : step.source.kind === 'calendar_event' ? `event:${step.source.ref}` : null;
+      if (ref === null || seen.has(ref) || holds(step.label)) return [];
+      seen.add(ref);
+      return [{ ref, rel: 'read', line: line(`${step.verb}: ${step.label}`) }];
+    });
+    return [...acts, ...read];
   };
 
   const ofHistory = (ref: string, limit: number, byRef: boolean): RecallLink[] => {
@@ -137,7 +149,7 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
       const card = typeof approval === 'string' ? deps.approvalSummary(approval) : null;
       return [...fromTurn(job.origin, byRef), ...(card !== null && !holds(card) ? [{ ref: `ledger:${approval as string}`, rel: 'card' as const, line: line(card) }] : [])].slice(0, limit);
     }
-    if (source === 'ledger') return actsOn(id).slice(0, limit);
+    if (source === 'ledger') return cardLinks(id).slice(0, limit);
     return [];
   };
 
