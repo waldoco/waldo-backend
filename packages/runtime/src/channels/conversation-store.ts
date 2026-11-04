@@ -154,7 +154,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   }
   return { sources, incomplete };
 };
-const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])];
+const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : []), ...(entry.quickReplies ?? [])];
 
 // The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
 // reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.

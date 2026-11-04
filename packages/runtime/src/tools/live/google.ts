@@ -14,6 +14,7 @@ import { agentMailFirstName } from '../../channels/agent-mail/handles';
 import { renderOwnerMail } from '../../channels/agent-mail/render';
 import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
+import type { CalendarEgressScreen } from '../../health/trigger';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
 import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
@@ -332,7 +333,7 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 };
 
 // ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null) => [
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null, calendarEgress?: CalendarEgressScreen) => [
   {
     name: 'query_calendar',
     description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
@@ -544,6 +545,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      const screened = await calendarEgress?.check(ctx?.turnId, args);
+      if (screened === 'refused') return { ok: false, code: 'rejected', error: "Nothing was proposed: a word about the owner's health is in the title, notes, place or a guest's address, and the calendar is read by others. Propose it again without it.", source_taint: null };
+      if (screened === 'unchecked') return { ok: false, code: 'rejected', error: "Nothing was proposed: the owner's health context could not be read to check this change before it reaches their calendar.", source_taint: null };
       // replaces is the desk's to act on, never part of the change the owner approves.
       const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {

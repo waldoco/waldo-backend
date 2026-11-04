@@ -436,7 +436,7 @@ it('rebuilds the turn context mid-turn when health sharing is withdrawn', async 
 // assembled in a different order, send the same system prompt.
 it('two turns admitting the same deferred tools in a different order send byte-identical system prompts', async () => {
   const quiet = async () => ({ ok: true as const, data: {}, source_taint: null });
-  const deferred = (['list_reminders', 'cancel_reminder', 'set_proactivity', 'set_schedule_preference', 'search_episodes', 'read_tool_output'] as const)
+  const deferred = (['list_responsibilities', 'close_responsibility', 'set_proactivity', 'set_schedule_preference', 'search_episodes', 'read_tool_output'] as const)
     .map((name) => ({ name, description: `${name}.`, schema: z.object({}), trigger_allowlist: allowlist(name), autonomy_gated: false, handle: quiet }));
   const systems: string[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {

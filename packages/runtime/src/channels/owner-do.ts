@@ -37,7 +37,7 @@ import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from 
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
 import { invokeHealth } from './app-health';
-import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
+import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -80,7 +80,7 @@ import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-m
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
-import { APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -108,7 +108,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS, reminderFloorText } from './check-back';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -126,6 +126,7 @@ import { iMessageScheduledRoute, observeIMessageReports } from './imessage/sched
 import { consoleLinkHandler } from '../tools/live/console-link';
 import { progressNoteHandler, type ProgressNoteDeliver } from '../tools/live/progress-note';
 import { attachFileHandler } from '../tools/live/attach-file';
+import { cardReplyBook, offerRepliesHandler } from '../tools/live/offer-replies';
 import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
@@ -154,7 +155,7 @@ import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandler
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
 import { mergedSteps, whyJson, withWhy, type TrailStep, type WhyHolder } from '../tools/why-trail';
 import { applyDayPlan, applyReplan, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
-import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
+import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
@@ -167,7 +168,7 @@ import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { searchHistoryHandler } from '../tools/live/search-history';
 import { archiveMode, historyArchive, historyArchiveForgetStore, sweepScheduleRuns, type ArchiveDeps, type HistoryArchive } from '../history/archive';
 import { memoryHandlers } from '../tools/live/memory';
-import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
+import { LIFE_AREAS, SURFACE_CAPABILITIES_V1, toolNameSchema } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
 import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
@@ -180,7 +181,7 @@ import { browserPublicReadConfiguration } from './browser-public-read-configurat
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler, webSearchOffered } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } from './health-log';
-import { healthContextBook } from './health-context';
+import { healthContextBook, healthZoneWords, toContextHealthMaterial, type HealthContextRow } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
@@ -216,7 +217,7 @@ import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoti
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
 import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-time';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
@@ -267,6 +268,7 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
+import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
@@ -629,6 +631,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private jobs(): JobBook {
     return jobBook(this.ctx.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID(), archive: this.historyArchive() });
   }
+  // The cards a task raised for its own steps, between the desk and the book.
+  private readonly asks = taskAsks(this.ctx.storage.sql, () => this.jobs());
   // Retention moves past-cap history rows into history_archive, never deletes them, while HISTORY_ARCHIVE is "1".
   private archiveDeps(): ArchiveDeps {
     const storage = this.ctx.storage;
@@ -654,12 +658,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      endAsks: jobId => { self.asks.end(jobId, Date.now()); },
+      askCurrent: (row, approvalId, argsDigest) => self.setup(row.surface as ChannelKind).desk.replayCurrent(approvalId, argsDigest),
+      settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
+      // With WALDO_TASK_ASK=1, a worker's browser step held for the owner raises its card now, on the job's surface; the job
+      // resumes once the owner decides, and an approved step runs in its resumed attempt. The card is raised on the serial chain, as every card is: its desk write and its sends never interleave with a turn's.
+      askOwner: async (row, call) => {
+        if (self.env.WALDO_TASK_ASK !== '1' || !BROWSER_TOOLS.has(call.name as ToolName)) return null;
+        const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+        const args_digest = await sha256Hex(stableJson(args));
+        return self.serial(() => self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest,
+          reasoning: 'A background task you started reached this step, which needs your yes before it runs. It waits for your answer.', source: 'external' }, { runRef: taskAskRef(row.id) }));
+      },
     });
   })();
 
@@ -1390,10 +1406,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private appDeliveryFor(authority: OwnerRuntimeAuthority): ScheduledAppDelivery {
     const kv = this.ctx.storage.kv, closed = new Error('thread_closed');
     const open = (thread: string) => threadRecord(kv, thread)?.state === 'active';
-    const write = (text: string, thread?: string) => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ entries }, ownerRef) => {
+    const write = (text: string, thread?: string, replies?: readonly string[]) => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ entries }, ownerRef) => {
       const id = `scheduled-${crypto.randomUUID()}`, chatId = thread ? threadChainRef(ownerRef, thread) : ownerChainRef('app', ownerRef);
       return { entry: { id, ownerId: ownerRef, chatId, parentId: chainLeaf(entries, chatId), threadAnchorId: null, surface: 'app',
-        modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() }, leafId: id };
+        modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now(), ...(replies?.length ? { quickReplies: [...replies] } : {}) }, leafId: id };
     }, work => this.ctx.storage.transactionSync(() => {
       if (thread && !open(thread)) throw closed;
       const written = work();
@@ -1402,7 +1418,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }), thread);
     return async (text, send) => {
       const thread = send?.thread !== undefined && open(send.thread) ? send.thread : undefined;
-      try { return await write(text, thread); } catch (error) { if (error === closed) return write(text); throw error; }
+      try { return await write(text, thread, send?.replies); } catch (error) { if (error === closed) return write(text, undefined, send?.replies); throw error; }
     };
   }
 
@@ -3316,7 +3332,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         machine: runtime.machine,
         // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
         startReplay: ticket => { this.ctx.waitUntil(this.tasks.replay(ticket).catch(() => { console.error(JSON.stringify({ hop: 'approval_replay', ok: false, code: 'replay_threw' })); })); },
-        approvals: runtime.desk,
+        // A task's own approved card has no replay job: the task settles it when its step ends.
+        approvals: { replays: () => this.asks.replays(runtime.desk),
+          replayReceipt: (id, status, message) => runtime.desk.replayReceipt(id, status, message), settleReplay: (id, status) => runtime.desk.settleReplay(id, status) },
+        followUp: this.env.WALDO_TASK_NOTES === '1',
+        // Read whatever the switch says, so a job already waiting when the switch is turned off still resumes.
+        askedCard: id => this.asks.card(runtime.desk, id),
       });
       next = ran;
     } finally {
@@ -4217,11 +4238,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       replayLater: {
         takes: tool => BROWSER_TOOLS.has(tool as ToolName),
         enqueue: (approvalId, call) => {
+          // A task's own card resumes the task, which runs the step itself; one approved before the task began to wait stays
+          // running until the jobs lane sees the task waiting.
+          if (this.asks.approved(approvalId)) return;
           const now = Date.now();
           this.jobs().create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: channel,
             brief: { approval_id: approvalId, ...call, approved_at: now }, dueAt: now, deadlineAt: now + REPLAY_DEADLINE_MS, taint: 'external' });
         },
         wake: () => armTaskJobsWake(storage, Date.now()),
+        declined: async approvalId => { if (this.jobs().resume(approvalId, 'declined')) await armTaskJobsWake(storage, Date.now()); },
       },
       replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
@@ -4380,6 +4405,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const attachmentRoute = attachmentRoutes[channel];
     const turnAttachments = turnAttachmentBook();
     const attachTools = attachmentRoute ? [attachFileHandler({ open: openWorkspace, book: turnAttachments })] : [];
+    // The planning Brief's answers to tap, offered only on a surface that draws them as chips on the row (today the app).
+    const planningBrief = this.env.PLANNING_BRIEF === '1';
+    const cardReplies = cardReplyBook();
+    const replyOfferTools = planningBrief && SURFACE_CAPABILITIES_V1[channel].quick_replies === 'chips' ? [offerRepliesHandler(cardReplies.port)] : [];
+    // ADR-0081: a planning Brief's calendar proposals carry no word from the owner's health view to Google.
+    const briefEgress = calendarEgressRuns(async () => {
+      const rpc = signedRpc(this.env), doName = identity.get<string>('do_name');
+      const row = rpc && doName ? await rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null;
+      const shown = row !== null && typeof row === 'object' ? toContextHealthMaterial(row as HealthContextRow, clock) : null;
+      return [...healthWordsOf(healthTriggerView(row, Date.now(), clock.timezone)), ...healthZoneWords(shown)];
+    });
     // One skill book for every surface of this owner: the reviewed catalog, its lifecycle
     // commands and the workspace receipts reach an app, iMessage or WhatsApp turn exactly as they reach a Telegram turn. The custody key is the
     // one the owner's rows were seeded under, so a founder who linked Telegram first keeps the same skills in the app.
@@ -4560,7 +4596,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects, () => ownerName(memory)), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), searchHistoryHandler(storage.sql, id => ledgerSummary(storage.sql, id)), ...memoryHandlers({
+      }, effects, () => ownerName(memory), briefEgress.screen), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, ...replyOfferTools, searchEpisodesHandler(episodes), searchHistoryHandler(storage.sql, id => ledgerSummary(storage.sql, id)), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
@@ -4618,8 +4654,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it
     // wants goes to the owner's card, as in an owner turn that read the same text.
-    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
-      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines(), 'external');
+    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11]) =>
+      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines(), 'external', undefined, undefined, directTools);
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;
@@ -5427,18 +5463,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
+      const planning = planningCard(card, planningBrief);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
         ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
-        waiting: waitingSection(waitingApprovals(desk.pending(now))),
+        waiting: waitingSection(waitingApprovals(desk.pending(now))), ...(planning ? { planning } : {}),
       });
       try {
         // With WHY_TRAIL=1, the steps behind every card this card's turn raises are the card's own "Why this changed".
         const explains = this.env.WHY_TRAIL === '1';
         this.whyHolder.collected = explains ? [] : undefined;
-        let text: string, raised: readonly TrailStep[];
-        try { text = (await ledgerJob(trace, said)).trim(); }
-        finally { raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined; }
+        // The planning Brief proposes its changes on the owner's cards, and where its row can carry them, offers answers to tap.
+        const asks = planning && replyOfferTools.length > 0;
+        if (asks) cardReplies.open(trace);
+        if (planning) briefEgress.open(trace);
+        let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
+        try {
+          const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
+          text = (await ledgerJob(trace, said, planning ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, planning ? proposes : undefined)).trim();
+        } finally {
+          raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
+          if (asks) replies = cardReplies.take(trace);
+          briefEgress.close(trace);
+        }
         const skipped = !text || isSkip(text);
         if (explains) plans.why(day, card.id, skipped ? null : whyJson(mergedSteps(raised)));
         if (!skipped && outboxed) {
@@ -5458,7 +5505,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         let appRow: string | undefined;
         if (!skipped) {
-          const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
+          const receipt = await sentOrThrow(replies.length ? routedCall('sendMessage', { chat_id: owner, text, [APP_REPLIES]: replies }) : api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
           if (typeof receipt.app_row_id === 'string') {
             appRow = receipt.app_row_id; plans.delivered(day, card.id, appRow, Date.now());
             if (otlp) rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now());
