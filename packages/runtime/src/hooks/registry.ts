@@ -52,6 +52,7 @@ import {
   queryAvailabilityArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
+  getScreenTimeArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
@@ -64,6 +65,7 @@ import {
   sendConsoleLinkArgsSchema,
   connectAppArgsSchema,
   sendProgressNoteArgsSchema,
+  ownerMessageHeardArgsSchema,
   reactToMessageArgsSchema,
   attachFileArgsSchema,
   queryCalendarArgsSchema,
@@ -74,6 +76,7 @@ import {
   sanitiseInputSchema,
   sanitiseResultSchema,
   searchEpisodesArgsSchema,
+  searchHistoryArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
   useMacArgsSchema,
@@ -83,6 +86,7 @@ import {
   cancelStandingOrderArgsSchema,
   closeLoopArgsSchema,
   raiseApprovalArgsSchema,
+  approveShownArgsSchema,
   closeResponsibilityArgsSchema,
   listResponsibilitiesArgsSchema,
   trackResponsibilityArgsSchema,
@@ -187,10 +191,12 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   use_mac: useMacArgsSchema,
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
+  get_screen_time: getScreenTimeArgsSchema,
   connect_service: connectServiceArgsSchema,
   send_console_link: sendConsoleLinkArgsSchema,
   connect_app: connectAppArgsSchema,
   send_progress_note: sendProgressNoteArgsSchema,
+  owner_message_heard: ownerMessageHeardArgsSchema,
   attach_file: attachFileArgsSchema,
   react_to_message: reactToMessageArgsSchema,
   query_calendar: queryCalendarArgsSchema,
@@ -220,6 +226,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   remember: rememberArgsSchema,
   forget_memory: forgetMemoryArgsSchema,
   search_episodes: searchEpisodesArgsSchema,
+  search_history: searchHistoryArgsSchema,
   propose_action: proposeActionArgsSchema,
   execute_action: executeActionArgsSchema,
   send_message: sendMessageArgsSchema,
@@ -266,6 +273,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   open_loop: openLoopArgsSchema,
   close_loop: closeLoopArgsSchema,
   raise_approval: raiseApprovalArgsSchema,
+  approve_shown: approveShownArgsSchema,
   track_responsibility: trackResponsibilityArgsSchema,
   update_todo: updateTodoArgsSchema,
   list_responsibilities: listResponsibilitiesArgsSchema,
@@ -473,7 +481,7 @@ export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner 
 // A tool that takes only what the owner says directly is refused in a turn that has read outside text: it is neither run
 // nor carded, so its arguments never reach the owner's ledger. The model is told to ask the owner instead.
 export const TAINT_REFUSED_REASON = 'external-tainted call to an owner-statement tool';
-export const TAINT_REFUSED_CAUSE = 'This is saved only from what the owner tells you directly, and this turn read an email, web page or other outside content, so nothing was saved and no card was made. Ask the owner to tell you it in a message of their own.';
+export const TAINT_REFUSED_CAUSE = 'This is taken only from what the owner tells you directly, and this turn read an email, web page or other outside content, so nothing was done and no card was made. Ask the owner to tell you it in a message of their own.';
 export const taintedCallRefused = (tool: ToolName, taint: SourceTaint): boolean => {
   const tainted = TOOL_RECORDS[tool].tainted;
   return isExternalSourceTaint(taint) && tainted !== undefined && 'refused' in tainted;

@@ -31,7 +31,7 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const sent = new Map<string, string>(), turns: string[] = [], started: TaskTicket[] = [], fenced: string[] = [], log: TurnLogEntry[] = [];
     const busy = new Set<string>();
-    const host = { fence: (id: string) => { fenced.push(id); }, cancelled: (id: string) => { fenced.push(id); }, busy: () => busy } as unknown as TaskHost;
+    const host = { fence: (id: string) => { fenced.push(id); }, cancelled: (id: string) => { fenced.push(id); }, endAsk: () => undefined, busy: () => busy } as unknown as TaskHost;
     const deps = (over: Partial<JobsLaneDeps> = {}): JobsLaneDeps => ({
       book, host, now: () => clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket); },

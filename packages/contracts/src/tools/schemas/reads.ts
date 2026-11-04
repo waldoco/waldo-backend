@@ -98,6 +98,43 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
 
+// The owner's screen time as their phone sent it: one summary per device and local day, at most 31 days ending no later than
+// today in the owner's zone. Stored summaries, not a live read of the phone: received_at says how fresh each one is.
+export const SCREEN_TIME_TOOL_MAX_DAYS = 31;
+export const getScreenTimeArgsSchema = z
+  .strictObject({ from: healthReadDaySchema, to: healthReadDaySchema })
+  .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
+  .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < SCREEN_TIME_TOOL_MAX_DAYS, { error: `at most ${SCREEN_TIME_TOOL_MAX_DAYS} days`, path: ['to'] });
+export type GetScreenTimeArgs = z.infer<typeof getScreenTimeArgsSchema>;
+const screenTimeMinutes = z.int().min(0).max(1440);
+const screenTimeClock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/);
+// device numbers the owner's phones 1, 2, ... in the order they first sent, so two phones are never added up.
+export const screenTimeToolDaySchema = z.strictObject({
+  day: healthReadDaySchema,
+  device: z.int().min(1).max(8),
+  coverage: z.enum(['complete', 'partial', 'none']),
+  received_at: z.iso.datetime(),
+  screen_on_minutes: screenTimeMinutes.optional(),
+  pickups: z.int().min(0).max(10_000).optional(),
+  unlocks: z.int().min(0).max(10_000).optional(),
+  late_night_minutes: screenTimeMinutes.optional(),
+  late_night_window: z.string().min(1).max(11),
+  first_use_at: screenTimeClock.optional(),
+  last_use_at: screenTimeClock.optional(),
+  categories: z.array(z.strictObject({ category: z.string().min(1).max(32), minutes: screenTimeMinutes })).max(10).optional(),
+});
+export const getScreenTimeResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    // Oldest first.
+    days: z.array(screenTimeToolDaySchema).max(SCREEN_TIME_TOOL_MAX_DAYS * 8),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_data', 'read_failed']) }),
+]);
+export type GetScreenTimeResult = z.infer<typeof getScreenTimeResultSchema>;
+
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   account: z.email().optional(),
@@ -116,14 +153,14 @@ export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
 
 // Provider receipt validation is also used after the proxy boundary, before claiming coverage. It names every field the
 // connector reports: one it leaves out rejects the whole page. An event Waldo created, moved or cancelled carries the
-// operation marker the approval desk reconciles by.
+// operation marker the approval desk reconciles by; one Waldo created carries waldo_made.
 export const calendarPageSchema = z.strictObject({
   events: z.array(z.strictObject({
     id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
     location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),operation_marker:z.string().min(1).max(1024).optional(),
     status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
     attendee_emails:z.array(z.string().min(1).max(320)).max(20).optional(),conference_url:z.string().max(2048).optional(),attachments:z.array(z.strictObject({title:z.string().min(1).max(255),file_id:z.string().max(1024).optional()})).max(20).optional(),
-    owner_status:z.enum(['organizer','accepted']).optional(),
+    owner_status:z.enum(['organizer','accepted']).optional(),waldo_made:z.literal(true).optional(),
   }).refine(event => {
     const time = event.all_day ? z.iso.date() : iso8601Schema;
     return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);

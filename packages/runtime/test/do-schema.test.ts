@@ -12,6 +12,9 @@ import {
   DO_SCHEMA_MIGRATIONS,
   RETIRE_MEMORY_HALLS_MIGRATION,
   CALENDAR_LAST_SEEN_MIGRATION,
+  SCHEDULE_RUNS_RUNNING_MIGRATION,
+  HISTORY_ARCHIVE_MIGRATION,
+  HISTORY_ARCHIVE_TABLE_SCHEMA,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   TASK_JOBS_SCHEMA_MIGRATION,
   applyDoMigration,
@@ -20,6 +23,7 @@ import {
   provisionDoSchema,
   type DoMigration,
 } from '../src/do-schema';
+import { ensureSchema } from '../src/tracer/schema';
 import type { TestStorageDO } from './support/worker-entry';
 
 let seq = 0;
@@ -203,7 +207,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
@@ -211,12 +215,47 @@ describe('HEY-10 DO SQLite schema root', () => {
       { version: 12, name: TASK_JOBS_SCHEMA_MIGRATION.name },
       { version: 13, name: 'retire-memory-halls' },
       { version: 14, name: 'calendar-last-seen' },
+      { version: 15, name: 'schedule-runs-running-index' },
+      { version: 16, name: 'history-archive' },
     ]);
     expect(result.tables).toContain('calendar_last_seen');
     expect(result.tables).toContain('task_jobs');
     for (const retired of ['owner_roots', 'presence_registrations', 'work_units', 'judgment_requests', 'common_message_custody', 'planning_execution_requests']) {
       expect(result.tables).not.toContain(retired);
     }
+  });
+
+  it("indexes only the running rows a fire asks about, from the chain and from the owner object's own schema, and its down drops it", async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const indexed = () => state.storage.sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'schedule_runs_running'").toArray().map(row => row.sql);
+      provisionDoSchema(state.storage);
+      const provisioned = indexed();
+      applyDoMigration(state.storage, SCHEDULE_RUNS_RUNNING_MIGRATION, 'down');
+      const down = indexed();
+      ensureSchema(state.storage);
+      return { provisioned, down, ensured: indexed() };
+    });
+    expect(result.provisioned).toEqual(["CREATE INDEX schedule_runs_running ON schedule_runs (schedule_id) WHERE outcome = 'running'"]);
+    expect(result.down).toEqual([]);
+    expect(result.ensured).toEqual(result.provisioned);
+  });
+
+  it('creates the history archive from the chain with the same DDL its writer runs, and its down drops it', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'history_archive%' ORDER BY name").toArray();
+      provisionDoSchema(state.storage);
+      const provisioned = objects();
+      applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
+      const down = objects();
+      for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) state.storage.sql.exec(statement);
+      return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
+    });
+    expect(result.provisioned.map(row => row.name)).toEqual(['history_archive', 'history_archive_by_ref', 'history_archive_by_source']);
+    expect(result.down).toEqual([]);
+    expect(result.written).toEqual(result.provisioned);
+    expect(result.version).toBe(15);
   });
 
   it('drops the memory hall tables a V1 database created, and its down restores them empty', async () => {
@@ -231,6 +270,8 @@ describe('HEY-10 DO SQLite schema root', () => {
       const atV1 = objects();
       provisionDoSchema(state.storage);
       const current = objects();
+      applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
+      applyDoMigration(state.storage, SCHEDULE_RUNS_RUNNING_MIGRATION, 'down');
       applyDoMigration(state.storage, CALENDAR_LAST_SEEN_MIGRATION, 'down');
       applyDoMigration(state.storage, RETIRE_MEMORY_HALLS_MIGRATION, 'down');
       return { atV1, current, restored: objects(), version: getSchemaVersion(state.storage.sql) };

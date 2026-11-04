@@ -10,7 +10,11 @@ import { agentMailFirstName } from '../src/channels/agent-mail/handles';
 import { WALDO_SITE, ownerMailText, renderOwnerMail } from '../src/channels/agent-mail/render';
 import { approvalDesk } from '../src/channels/approvals';
 import type { GoogleClient } from '../src/connectors/google';
+import { buildSessionState } from '@waldo/contracts';
+import { sanitise } from '../src/scribe/sanitiser';
+import { dispatchTool } from '../src/tools/dispatcher';
 import { googleHandlers } from '../src/tools/live/google';
+import { approvalHandlers } from '../src/tools/live/raise-approval';
 import { sentMime } from './fixtures/email-send';
 
 const DRAFT = { subject: 'Waldo update for Varun', body_markdown: 'Hi Varun and JJ,\n\nShivansh would like to share an update on **Waldo**.\n\nThanks,' };
@@ -35,8 +39,9 @@ describe('renderOwnerMail', () => {
     const cid = /<img src="cid:([^"]+)"/.exec(mail.html ?? '')?.[1];
     expect(mark!.contentId).toBe(`<${cid}>`);
     // The signature follows the model's words in both parts: Waldo linked to its site, then the assistant line.
-    expect(mail.html).toMatch(new RegExp(`Thanks,</p>\\n<p [^>]*><a href="${WALDO_SITE.replace(/\./g, '\\.')}"[^>]*>Waldo</a><br><span [^>]*>Shivansh&#39;s personal assistant</span></p><img src="cid:`));
-    expect(result.text).toBe(`Hi Varun and JJ,\n\nShivansh would like to share an update on Waldo.\n\nThanks,\n\nWaldo\nShivansh's personal assistant\n${WALDO_SITE}`);
+    // The signature reads on the lines right under the closing word, in the same paragraph, as in the owner's example.
+    expect(mail.html).toMatch(new RegExp(`<p [^>]*>Thanks,<br><a href="${WALDO_SITE.replace(/\./g, '\\.')}"[^>]*>Waldo</a><br><span [^>]*>Shivansh&#39;s personal assistant</span></p><img src="cid:`));
+    expect(result.text).toBe(`Hi Varun and JJ,\n\nShivansh would like to share an update on Waldo.\n\nThanks,\nWaldo\nShivansh's personal assistant\n${WALDO_SITE}`);
     expect(ownerMailText(DRAFT.body_markdown, 'Shivansh')).toBe(result.text);
   });
 
@@ -49,7 +54,7 @@ describe('renderOwnerMail', () => {
 
   it('with no first name, signs as Waldo with no assistant line', async () => {
     const result = ok(renderOwnerMail(DRAFT, null, TO, WIRE));
-    expect(result.text.endsWith(`Thanks,\n\nWaldo\n${WALDO_SITE}`)).toBe(true);
+    expect(result.text.endsWith(`Thanks,\nWaldo\n${WALDO_SITE}`)).toBe(true);
     const mail = await PostalMime.parse(result.mime);
     expect(mail.html).not.toContain('personal assistant');
     expect(mail.html).toContain('>Waldo</a></p><img src="cid:');
@@ -63,6 +68,12 @@ describe('renderOwnerMail', () => {
     const rows = Array.from({ length: 1600 }, (_, i) => `| ${i} | x |`).join('\n');
     const result = ok(renderOwnerMail({ ...DRAFT, body_markdown: `| a | b |\n| --- | --- |\n${rows}`.slice(0, 10_000) }, 'Shivansh', TO, WIRE));
     expect(result.text).toContain('\n800 | x\n');
+  });
+
+  it('after a list, the signature opens its own paragraph', async () => {
+    const result = ok(renderOwnerMail({ ...DRAFT, body_markdown: 'Agenda:\n\n- Pricing\n- Next steps' }, 'Shivansh', TO, WIRE));
+    expect(result.text.endsWith(`- Next steps\nWaldo\nShivansh's personal assistant\n${WALDO_SITE}`)).toBe(true);
+    expect((await PostalMime.parse(result.mime)).html).toMatch(/<\/ul>\n<p [^>]*><a href="https:\/\/heywaldo\.in"/);
   });
 
   it('is the same bytes for the same draft and signer, and different bytes for another signer', () => {
@@ -85,13 +96,16 @@ describe('send_email signs what it freezes, and the card shows it', () => {
       call: async (method: string, body: object) => { if (method === 'sendMessage') cards.push((body as { text: string }).text); return method === 'sendMessage' ? { message_id: cards.length, chat: { id: 42 } } : true; },
     });
     const tool = googleHandlers({ client: async () => client }, desk, { timezone: 'UTC', now: () => new Date() }, undefined, undefined, () => name).find(handler => handler.name === 'send_email')!;
+    // What the model got back from its call, for checks on what it can see.
+    const results: unknown[] = [];
     const propose = async (args: Readonly<Record<string, unknown>> = {}) => {
       const result = await tool.handle({ ...TO, ...DRAFT, ...args } as never, { authenticatedUserId: 'owner', turnId: `turn-${crypto.randomUUID()}`, toolCallId: 'call-1' } as never) as { ok: boolean; data: { proposal_id: string } };
       expect(result.ok).toBe(true);
+      results.push(result);
       return result.data.proposal_id;
     };
     const stored = (id: string) => JSON.parse(state.storage.sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', id).one().payload_json) as { raw: string; signature?: { first_name: string | null } };
-    return { desk, cards, sent, propose, stored };
+    return { desk, cards, sent, propose, stored, results };
   };
   const owner = (name: string, work: (state: DurableObjectState) => Promise<void>) =>
     runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -101,7 +115,7 @@ describe('send_email signs what it freezes, and the card shows it', () => {
       const f = harness(state, 'Shivansh Fulper');
       const id = await f.propose();
       expect(f.stored(id).signature).toEqual({ first_name: 'Shivansh' });
-      expect(f.cards[0]).toContain(`Thanks,\n\nWaldo\nShivansh's personal assistant\n${WALDO_SITE}`);
+      expect(f.cards[0]).toContain(`Thanks,\nWaldo\nShivansh's personal assistant\n${WALDO_SITE}`);
       expect((await f.desk.decide(id, 'a', 'trace')).toast).toBe('Sent');
       expect(f.cards[0]).toContain(sentMime(f.sent[0]!).body);
     });
@@ -114,6 +128,44 @@ describe('send_email signs what it freezes, and the card shows it', () => {
       expect(f.cards[0]).toContain('Subject: Weekly numbers\n');
       expect((await f.desk.decide(id, 'a', 'trace')).toast).toBe('Sent');
       expect(sentMime(f.sent[0]!).headers).toContain('Subject: Weekly numbers');
+    });
+  });
+
+  // The model never sees its draft signed: the tool's answer, the Modify reply and the approvals list carry no signature,
+  // so the draft it rewrites after Modify is its own words, and the new card signs once.
+  it('after Modify, nothing the model reads is signed, and the re-proposed draft signs once', async () => {
+    await owner('sig-modify', async state => {
+      const f = harness(state, 'Shivansh');
+      const first = await f.propose();
+      const asked = await f.desk.decide(first, 'e', 'trace');
+      const seen = JSON.stringify([f.results, asked, f.desk.waiting()]);
+      expect(seen).not.toContain('personal assistant');
+      expect(seen).not.toContain(WALDO_SITE);
+      const second = await f.propose({ body_markdown: `${DRAFT.body_markdown.replace('an update', 'a short update')}` });
+      expect(f.cards.at(-1)!.split("Shivansh's personal assistant")).toHaveLength(2);
+      expect(f.stored(second).signature).toEqual({ first_name: 'Shivansh' });
+    });
+  });
+
+  // What raise_approval list hands the model, through the real dispatcher and its hooks: the draft unsigned. The owner's
+  // card stays signed.
+  it('raise_approval list shows the model its draft unsigned, while the owner\'s card stays signed', async () => {
+    await owner('sig-raise-list', async state => {
+      const f = harness(state, 'Shivansh');
+      const id = await f.propose();
+      await f.desk.decide(id, 'e', 'trace');
+      const context = {
+        authenticatedUserId: 'owner', trigger: 'user_message' as const, turnId: 'turn-list',
+        session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }),
+        hasApproval: () => false, sourceTaint: null, toolArgSourceTaint: null, sanitise,
+      };
+      const listed = await dispatchTool({ id: 'call-list', name: 'raise_approval', args: { operation: 'list' } }, context as never, { handlers: approvalHandlers(f.desk) as never });
+      expect(listed.ok).toBe(true);
+      const read = JSON.stringify(listed);
+      expect(read).toContain('Shivansh would like to share an update on **Waldo**.');
+      expect(read).not.toContain('personal assistant');
+      expect(read).not.toContain(WALDO_SITE);
+      expect(f.cards[0]).toContain("Shivansh's personal assistant");
     });
   });
 
@@ -132,7 +184,7 @@ describe('send_email signs what it freezes, and the card shows it', () => {
       const f = harness(state, null);
       const id = await f.propose();
       expect(f.stored(id).signature).toEqual({ first_name: null });
-      expect(f.cards[0]).toContain(`Thanks,\n\nWaldo\n${WALDO_SITE}`);
+      expect(f.cards[0]).toContain(`Thanks,\nWaldo\n${WALDO_SITE}`);
       expect(f.cards[0]).not.toContain('personal assistant');
     });
   });

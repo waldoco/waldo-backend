@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { raiseApprovalArgsSchema } from './approvals';
+import { approveShownArgsSchema, raiseApprovalArgsSchema } from './approvals';
 import { proposeCalendarChangeArgsSchema } from './calendar';
 import { draftEmailArgsSchema, sendAgentMailArgsSchema, sendEmailArgsSchema } from './writes';
 import { toolNameSchema, TOOL_PERMISSIONS } from '../permissions';
@@ -63,5 +63,32 @@ describe('replaces on a proposing tool', () => {
 
   it('a Gmail draft replaces nothing: it raises no card', () => {
     expect(draftEmailArgsSchema.safeParse({ ...email, replaces: ID }).success).toBe(false);
+  });
+});
+
+describe('approve_shown args', () => {
+  it('accepts exactly one approval id', () => {
+    expect(approveShownArgsSchema.safeParse({ approval_id: ID }).success).toBe(true);
+    expect(approveShownArgsSchema.safeParse({ approval_id: 'p1' }).success).toBe(true);
+  });
+
+  // No default card: a call that names none, names a list, or names one loosely is refused before anything runs.
+  it.each([
+    [{}],
+    [{ approval_id: '' }],
+    [{ approval_id: 'latest' }],
+    [{ approval_id: 'r1' }],
+    [{ approval_id: `p${'a'.repeat(64)}` }],
+    [{ approval_id: ['p1', 'p2'] }],
+    [{ approval_ids: ['p1'] }],
+    [{ approval_id: 'p1', evidence: 'the owner said yes' }],
+    [{ approval_id: 'p1', message_ref: 'wamid.1' }],
+  ])('rejects %j', args => {
+    expect(approveShownArgsSchema.safeParse(args).success).toBe(false);
+  });
+
+  it('is an owner chat tool only', () => {
+    expect(toolNameSchema.options).toContain('approve_shown');
+    expect(Object.entries(TOOL_PERMISSIONS).filter(([, tools]) => (tools as readonly string[]).includes('approve_shown')).map(([trigger]) => trigger)).toEqual(['user_message']);
   });
 });

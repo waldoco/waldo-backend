@@ -382,7 +382,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
     surface         TEXT NOT NULL,
     brief_json      TEXT NOT NULL,
     brief_digest    TEXT NOT NULL,
-    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'reported', 'applied', 'cancelled', 'parked')),
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'awaiting_owner', 'reported', 'applied', 'cancelled', 'parked')),
     attempt         INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
     lease_token     TEXT,
     lease_until     INTEGER,
@@ -402,6 +402,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
     cost_usd        REAL NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
     notes_sent      INTEGER NOT NULL DEFAULT 0 CHECK (notes_sent >= 0),
     last_note_at    INTEGER,
+    park_retries    INTEGER NOT NULL DEFAULT 0 CHECK (park_retries >= 0),
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     settled_at      INTEGER,
@@ -455,6 +456,46 @@ export const CALENDAR_LAST_SEEN_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS calendar_last_seen_age;', 'DROP TABLE IF EXISTS calendar_last_seen;'],
 };
 
+// A fire asks for its schedule's crashed runs (rows still 'running'), which walked every run the schedule ever had. Running
+// rows are few and leave the index as they settle.
+export const SCHEDULE_RUNS_RUNNING_INDEX = "CREATE INDEX IF NOT EXISTS schedule_runs_running ON schedule_runs (schedule_id) WHERE outcome = 'running';";
+
+export const SCHEDULE_RUNS_RUNNING_MIGRATION: DoMigration = {
+  version: 15,
+  name: 'schedule-runs-running-index',
+  up: [SCHEDULE_RUNS_RUNNING_INDEX],
+  down: ['DROP INDEX IF EXISTS schedule_runs_running;'],
+};
+
+// The history archive: rows retention moves out of the hot background_runs, task_jobs and schedule_runs tables, never
+// deleted, so search_history and the forget paths still reach them. One row per moved row: the columns search reads, and
+// the whole hot row as JSON. The archive writer runs this DDL itself, in the same transaction as its first move.
+// A hot id is unique only among the rows still hot (a run id is 8 hex characters), so the archive keys its rows by rowid
+// and may hold one source id twice.
+export const HISTORY_ARCHIVE_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS history_archive (
+    seq         INTEGER PRIMARY KEY,
+    source      TEXT NOT NULL CHECK (source IN ('background_runs', 'task_jobs', 'schedule_runs')),
+    source_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    started_at  INTEGER NOT NULL,
+    ended_at    INTEGER,
+    summary     TEXT,
+    row_json    TEXT NOT NULL,
+    archived_at INTEGER NOT NULL
+  );`,
+  'CREATE INDEX IF NOT EXISTS history_archive_by_source ON history_archive (source, started_at);',
+  'CREATE INDEX IF NOT EXISTS history_archive_by_ref ON history_archive (source, source_id);',
+] as const;
+
+export const HISTORY_ARCHIVE_MIGRATION: DoMigration = {
+  version: 16,
+  name: 'history-archive',
+  up: HISTORY_ARCHIVE_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS history_archive_by_ref;', 'DROP INDEX IF EXISTS history_archive_by_source;', 'DROP TABLE IF EXISTS history_archive;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -466,6 +507,8 @@ export const DO_SCHEMA_MIGRATIONS = [
   TASK_JOBS_SCHEMA_MIGRATION,
   RETIRE_MEMORY_HALLS_MIGRATION,
   CALENDAR_LAST_SEEN_MIGRATION,
+  SCHEDULE_RUNS_RUNNING_MIGRATION,
+  HISTORY_ARCHIVE_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

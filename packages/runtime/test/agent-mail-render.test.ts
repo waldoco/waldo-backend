@@ -91,8 +91,7 @@ describe('renderAgentMail', () => {
       'Slot      | Room\n----------|--------\nFri 15:00 | Juniper\nFri 16:00 | Cedar',
       'The notes are at the shared doc (https://docs.example.test/review?id=42&v=2), and the old invite is https://cal.example.test/e/9.',
       'Thanks,',
-      'Accept the new time: https://cal.example.test/accept/9',
-      `Waldo\nPriya's personal assistant\n${WALDO_SITE}`,
+      `Accept the new time: https://cal.example.test/accept/9\nWaldo\nPriya's personal assistant\n${WALDO_SITE}`,
     ].join('\n\n') + '\n');
   });
 
@@ -135,7 +134,7 @@ describe('renderAgentMail', () => {
   it('signs as Waldo alone when the owner has no first name', async () => {
     const result = ok(render({}, { ownerFirstName: null }));
     expect(result.preview.from.name).toBe('Waldo');
-    expect(result.preview.text.endsWith(`/accept/9\n\nWaldo\n${WALDO_SITE}\n`)).toBe(true);
+    expect(result.preview.text.endsWith(`/accept/9\nWaldo\n${WALDO_SITE}\n`)).toBe(true);
     expect(result.preview.html).not.toContain('personal assistant');
     await expectRoundTrip(result);
     expect(ok(render({}, { ownerFirstName: ' \r\n ' })).preview.from.name).toBe('Waldo');

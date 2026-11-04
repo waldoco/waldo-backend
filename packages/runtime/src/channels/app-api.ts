@@ -9,6 +9,7 @@ import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-director
 import { signedRpc } from '../identity/owner-directory';
 import { dailyScoresFor } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
@@ -31,7 +32,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -231,19 +232,26 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
-  // A link code or a provider connection outlives this session, so it needs a sign-in from the last two hours. Throws when
-  // the directory cannot list the sessions.
+  // Whether this session signed in within the last two hours, for a link code or provider connection the step-up table gates.
+  // Throws when the directory cannot list the sessions. The table loads lazily: its routes reach Durable Object modules,
+  // which cannot load in plain Node.
   const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.signed_in_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
-    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, signedInRecently: signedIn });
+    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', coaching: env.HEALTH_COACHING === '1',
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
         notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
+  }
+  // Screen time spends its own per-owner budget. Off, the routes are not there.
+  if (url.pathname === APP_SCREEN_TIME_PATH || url.pathname.startsWith(`${APP_SCREEN_TIME_PATH}/`)) {
+    if (env.SCREEN_TIME !== '1') return fail(404);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-screen-time:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    return handleAppScreenTime({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
@@ -265,7 +273,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
       // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
       const { iMessageNumberView } = await import('./imessage/enrollment');
-      if (!await signedIn()) return ok({ error: 'step_up_required', code: 'step_up_required' }, 403);
+      const { stepUpGated, appLinkStepUpAction } = await import('./console-step-up');
+      if (stepUpGated(appLinkStepUpAction('imessage')) && !await signedIn()) return ok({ error: 'step_up_required', code: 'step_up_required' }, 403);
       const address = (await iMessageNumberView(env as never, who.doName)).number;
       if (!address) return fail(503);
       const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
@@ -335,15 +344,34 @@ export type AppMessage = AppMessageV1;
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
 // to a run also carries the approval cards presented for that run.
 const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
+const shownRow = (entry: ConversationEntry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant';
+const pageWindow = (cursor: string | null, limit: number) => ({
+  taken: cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0, // old consumers can finish an offset page
+  size: Math.min(Math.max(Math.trunc(limit) || 20, 1), 50),
+  before: cursor?.startsWith('before:') ? cursor.slice(7) : null,
+});
+// Whether the rows read so far, newest first, are enough for this page: every row newer than it (a reply's cards go on the
+// newest reply to its message), the page itself, and one older shown row, which says whether there is a next page.
+export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
+  const { taken, size, before } = pageWindow(cursor, limit);
+  return (newestFirst: readonly ConversationEntry[]): boolean => {
+    let found = before === null, older = 0;
+    for (const entry of newestFirst) {
+      if (!shownRow(entry)) continue;
+      if (!found) { found = entry.id === before; continue; }
+      if (++older > (before === null ? taken : 0) + size) return true;
+    }
+    return false;
+  };
+};
 // consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
   consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
-  const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
-  const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
-  const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
-  const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
-  const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
+  const shown = entries.filter(shownRow);
+  const { taken, size, before: beforeId } = pageWindow(cursor, limit);
+  const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
+  const end = beforeId !== null ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {

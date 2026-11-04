@@ -55,9 +55,18 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
   // the connector-proxy function must be deployed with restoreEvent first.
   CALENDAR_UNDO_CANCEL?: string;
+  AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
+  // unless "1".
+  APPROVE_IN_CHAT?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
+  // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
+  SCREEN_TIME?: string;
+  // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
+  // and logs per-source counts; anything else keeps the deletes.
+  HISTORY_ARCHIVE?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -94,6 +103,15 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_QUIET_MS?: string;
   // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
   WHATSAPP_REPLY_MERGE?: string;
+  // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
+  WALDO_TASK_ASK?: string;
+  // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
+  WALDO_TASK_NOTES?: string;
+  // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
+  WALDO_OWNER_FIRST?: string;
+  // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
+  WALDO_SECOND_MESSAGE?: string;
+  // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
