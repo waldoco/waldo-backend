@@ -79,3 +79,10 @@ describe('PLANNING_BRIEF in the Worker config', () => {
     expect(parsed.env.staging.vars.PLANNING_BRIEF).toBe('0');
   });
 });
+
+describe('SCREEN_TIME in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy with migration 20261103120000', () => {
+    expect(parsed.vars.SCREEN_TIME).toBe('0');
+    expect(parsed.env.staging.vars.SCREEN_TIME).toBe('0');
+  });
+});
