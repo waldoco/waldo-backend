@@ -3357,7 +3357,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try {
       return await runWatchdog({
         book, store: watchdogStore(this.ctx.storage.sql), now: Date.now, judge: watchdogJudge(access, { ownerRef: runtime.taskContext().authenticatedUserId, log: runtime.log }),
-        room: () => this.machineRoom(alarmEnd), busy: () => this.tasks.busy(), fence: id => this.tasks.fence(id), log: runtime.log, lateMs,
+        room: () => this.machineRoom(alarmEnd), fence: id => this.tasks.fence(id), log: runtime.log, lateMs,
       });
     } catch {
       console.error(JSON.stringify({ hop: 'watchdog', ok: false, code: 'watchdog_failed' }));

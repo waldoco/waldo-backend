@@ -10,7 +10,7 @@ import { FINISH_TASK } from './profiles';
 
 // The progress watchdog: a check on running background work, made by the brain in its alarm pass and apart from the worker
 // doing the work (WALDO_WATCHDOG). Liveness is recorded as facts and re-checked each pass until it clears: a lost lease, a
-// provider outage, a worker that stopped checkpointing, a late wake. The lane stays the one retry owner for those. Whether
+// provider outage, a worker that stopped checkpointing, a jobs lane that ran late. The lane stays the one retry owner for those. Whether
 // a worker is getting closer to its brief is the model's judgment: a cheap model reads the brief, the steps and the timings
 // and says progressing, looping or drifting, and whether to nudge or park. The watchdog acts only through the job book: a
 // nudge waits for the attempt's next claim, and a park is the book's own park, told to the owner by the lane's parked path.
@@ -24,9 +24,10 @@ export const JUDGE_MIN_ROUNDS = 4;
 export const JUDGE_EVERY_MS = 10 * 60_000;
 // Nudges one job gets; past them a verdict that asks for another changes nothing.
 export const NUDGES_MAX = 2;
-// A running attempt with no checkpoint for two worker slices is stalled; a wake this late was missed.
+// A running attempt with no checkpoint for two worker slices is stalled. A jobs lane that ran this long after its wake was
+// due was held up: a late alarm, or a long pass ahead of it.
 export const STALL_MS = 20 * 60_000;
-export const ALARM_LATE_MS = 5 * 60_000;
+export const LANE_LATE_MS = 5 * 60_000;
 const WATCHDOG_CALL_TIMEOUT_MS = 30_000;
 const FINDINGS_KEPT = 500;
 const HOUR_MS = 60 * 60_000;
@@ -44,10 +45,10 @@ export type WatchdogVerdict = z.infer<typeof watchdogVerdictSchema>;
 // The judge reads one job's rendered check and answers a verdict, or throws when no model answered.
 export type WatchdogJudge = (input: Readonly<{ jobId: string; text: string }>) => Promise<WatchdogVerdict>;
 
-export const TRANSIENT_CODES = ['lease_lapsed', 'provider_errors', 'stalled', 'alarm_late', 'judge_unavailable'] as const;
+export const TRANSIENT_CODES = ['lease_lapsed', 'provider_errors', 'stalled', 'lane_late', 'judge_unavailable'] as const;
 export type TransientCode = typeof TRANSIENT_CODES[number];
 export type FindingCode = Verdict | TransientCode;
-// held: a park the job was no longer in a state to take (it moved on while the judge answered, or a step was running).
+// held: a park the job was no longer in a state to take (a new attempt, or a step in flight).
 export type FindingAction = 'none' | 'nudge' | 'park' | 'held' | 'recheck';
 export const FINDING_CODES: readonly FindingCode[] = [...VERDICTS, ...TRANSIENT_CODES];
 export const FINDING_ACTIONS: readonly FindingAction[] = ['none', 'nudge', 'park', 'held', 'recheck'];
@@ -59,7 +60,8 @@ export const NUDGE_LINES: Readonly<Record<NudgeCode, string>> = {
   drifting: `[Waldo checked this task's progress: the recent steps have moved away from the goal above. Go back to it, or call ${FINISH_TASK} with what you have.]`,
 };
 
-const quotedList = (values: readonly string[]) => values.map(value => `'${value}'`).join(', ');
+// No CHECK lists on these tables: CREATE TABLE IF NOT EXISTS never updates one in an object that already has the table, so a
+// code added later would fail to insert there. The types bound the values.
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS watchdog_jobs (
     job_id     TEXT PRIMARY KEY,
@@ -71,15 +73,15 @@ const SCHEMA = [
     judged_seq INTEGER NOT NULL DEFAULT 0,
     judged_at  INTEGER,
     nudges     INTEGER NOT NULL DEFAULT 0,
-    nudge      TEXT CHECK (nudge IS NULL OR nudge IN ('looping', 'drifting')),
+    nudge      TEXT,
     nudged_seq INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS watchdog_findings (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id     TEXT,
     job_kind   TEXT NOT NULL,
-    code       TEXT NOT NULL CHECK (code IN (${quotedList(FINDING_CODES)})),
-    action     TEXT NOT NULL CHECK (action IN (${quotedList(FINDING_ACTIONS)})),
+    code       TEXT NOT NULL,
+    action     TEXT NOT NULL,
     seq        INTEGER,
     at         INTEGER NOT NULL,
     cleared_at INTEGER
@@ -93,7 +95,7 @@ type Sql = Pick<SqlStorage, 'exec'>;
 type Seen = Readonly<{ job_id: string; attempt: number; seq: number; seq_at: number; crashes: number; deferrals: number; judged_seq: number; judged_at: number | null; nudges: number; nudge: NudgeCode | null; nudged_seq: number | null }>;
 export type Finding = Readonly<{ id: number; job_id: string | null; job_kind: string; code: FindingCode; action: FindingAction; seq: number | null; at: number; cleared_at: number | null }>;
 
-// The job's kind as the console names it: task, a machine job's name, or the brain's own kinds; alarm for the owner's wake.
+// The job's kind as the console names it: task, a machine job's name, or the brain's own kinds; lane for the jobs lane itself.
 export const jobKind = (row: Pick<JobRow, 'kind' | 'origin'>): string => isMachine(row) ? row.origin.slice(row.origin.indexOf(':') + 1) : row.kind;
 
 export const watchdogStore = (sql: Sql) => {
@@ -163,11 +165,10 @@ export type WatchdogDeps = Readonly<{
   judge: WatchdogJudge;
   // Whether this alarm still has time for a model call.
   room(): boolean;
-  // Jobs whose live attempt has a call running in the brain (TaskHost.busy) and the fence that aborts an attempt's I/O.
-  busy(): ReadonlySet<string>;
+  // Aborts a parked attempt's I/O in the brain (TaskHost.fence).
   fence(id: string): void;
   log(entry: TurnLogEntry): void;
-  // How late this pass's jobs wake fired.
+  // How long after its wake was due this pass's jobs lane ran.
   lateMs: number;
 }>;
 
@@ -197,17 +198,18 @@ export const watchdogJudgeText = (row: JobRow, seen: Seen | null, earlier: reado
 export async function runWatchdog(deps: WatchdogDeps): Promise<number | null> {
   const { book, store } = deps;
   const now = deps.now();
+  // The whole finding rides in code, which every log sink keeps; detail is dropped where text is not captured.
   const hop = (jobId: string | null, kind: string, code: FindingCode, action: FindingAction, ok: boolean) =>
-    deps.log({ trace: jobId ? `task:${jobId}` : 'watchdog', hop: 'watchdog_finding', ms: 0, ok, code, detail: `${kind}:${action}`, ...(jobId ? { job_id: jobId } : {}) });
+    deps.log({ trace: jobId ? `task:${jobId}` : 'watchdog', hop: 'watchdog_finding', ms: 0, ok, code: `${kind}:${code}:${action}`, ...(jobId ? { job_id: jobId } : {}) });
   const raise = (row: JobRow | null, code: TransientCode, seq: number | null) => {
     if (store.isOpen(code, row?.id ?? null)) return;
-    store.record(row?.id ?? null, row ? jobKind(row) : 'alarm', code, 'recheck', seq, now);
-    hop(row?.id ?? null, row ? jobKind(row) : 'alarm', code, 'recheck', false);
+    store.record(row?.id ?? null, row ? jobKind(row) : 'lane', code, 'recheck', seq, now);
+    hop(row?.id ?? null, row ? jobKind(row) : 'lane', code, 'recheck', false);
   };
   store.checked(now);
 
-  if (deps.lateMs >= ALARM_LATE_MS) raise(null, 'alarm_late', null);
-  else store.clear(['alarm_late'], null, now);
+  if (deps.lateMs >= LANE_LATE_MS) raise(null, 'lane_late', null);
+  else store.clear(['lane_late'], null, now);
 
   const open = book.open();
   store.gone(new Set(open.map(row => row.id)), now);
@@ -254,10 +256,10 @@ export async function runWatchdog(deps: WatchdogDeps): Promise<number | null> {
       // A park is the second step: the worker heard a nudge and ran on after it. A park asked before that is a nudge.
       const heard = after.nudged_seq !== null && row.checkpoint_seq - after.nudged_seq >= JUDGE_MIN_ROUNDS;
       if (verdict.action === 'park' && heard) {
-        // The judged attempt, at the judged round, with no step running or in flight: anything else and the verdict is about
-        // a job that moved on, or a park could cut a step whose effect would then be in doubt.
-        const still = current?.status === 'running' && current.attempt === row.attempt && current.checkpoint_seq === row.checkpoint_seq
-          && current.inflight_json === null && !deps.busy().has(row.id);
+        // The judged attempt, with no step in flight. A worker that took another round while the judge answered is the same
+        // worker; a new attempt is not. A step that cannot be replayed records its intent before its handler runs, and a
+        // parked attempt can record none, so a park here never leaves an effect in doubt; a read it cuts is only aborted.
+        const still = current?.status === 'running' && current.attempt === row.attempt && current.inflight_json === null;
         if (still && book.park(row.id, 'no_progress')) { deps.fence(row.id); parked = true; action = 'park'; }
         else action = 'held';
       } else if (current?.status === 'running' && after.nudges < NUDGES_MAX && after.nudge === null) {

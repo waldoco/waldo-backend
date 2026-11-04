@@ -13,7 +13,7 @@ import type { TaskHost } from '../src/tasks/brain';
 import { PARK_WORDS } from '../src/prompt/fixed-lines';
 import { taskBriefText } from '../src/tasks/worker-loop';
 import {
-  ALARM_LATE_MS, JUDGE_EVERY_MS, JUDGE_MIN_ROUNDS, NUDGE_LINES, runWatchdog, watchdogStore, WATCHDOG_JUDGMENTS_PER_HOUR,
+  LANE_LATE_MS, JUDGE_EVERY_MS, JUDGE_MIN_ROUNDS, NUDGE_LINES, runWatchdog, watchdogStore, WATCHDOG_JUDGMENTS_PER_HOUR,
   type WatchdogJudge, type WatchdogStore, type WatchdogVerdict,
 } from '../src/tasks/watchdog';
 import { DASHBOARD_WATCHDOG_PATH, consoleWatchdog, watchdogView, watchdogViewSchema } from '../src/channels/dashboard-watchdog';
@@ -27,8 +27,8 @@ const task = (key: string, extra: Partial<CreateJob> = {}): CreateJob => ({ kind
 const turn = (n: number): LLMToolTurn => ({ call: { call_id: `c${n}`, name: 'search_communication', arguments: JSON.stringify({ query: 'quote' }) }, output: '{"ok":true,"data":{"hits":0}}' });
 
 type Harness = Readonly<{
-  book: JobBook; store: WatchdogStore; clock: { at: number }; log: TurnLogEntry[]; fenced: string[]; busy: Set<string>; asked: string[];
-  verdicts: (WatchdogVerdict | 'throws')[]; sql: SqlStorage; kv: SyncKvStorage;
+  book: JobBook; store: WatchdogStore; clock: { at: number }; log: TurnLogEntry[]; fenced: string[]; asked: string[];
+  verdicts: (WatchdogVerdict | 'throws')[]; sql: SqlStorage;
   watch(over?: Partial<Parameters<typeof runWatchdog>[0]>): Promise<number | null>;
   run(key: string): TaskTicket;
   rounds(ticket: TaskTicket, count: number, step?: number): void;
@@ -41,7 +41,6 @@ const withWatchdog = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const store = watchdogStore(state.storage.sql);
     const log: TurnLogEntry[] = [], fenced: string[] = [], asked: string[] = [];
-    const busy = new Set<string>();
     const verdicts: (WatchdogVerdict | 'throws')[] = [];
     const judge: WatchdogJudge = async ({ jobId, text }) => {
       asked.push(jobId);
@@ -51,7 +50,7 @@ const withWatchdog = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       return next;
     };
     const watch = (over: Partial<Parameters<typeof runWatchdog>[0]> = {}) => runWatchdog({
-      book, store, now: () => clock.at, judge, room: () => true, busy: () => busy, fence: id => { fenced.push(id); }, log: entry => { log.push(entry); }, lateMs: 0, ...over,
+      book, store, now: () => clock.at, judge, room: () => true, fence: id => { fenced.push(id); }, log: entry => { log.push(entry); }, lateMs: 0, ...over,
     });
     const run = (key: string) => { const { job } = book.create(task(key)); return book.startAttempt(job.id)!; };
     // A worker taking `count` rounds over the clock, each checkpointed, so its lease stays held.
@@ -63,7 +62,7 @@ const withWatchdog = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
         expect(book.checkpoint(ticket, row.checkpoint_seq + 1, { turns: [...done.turns, turn(row.checkpoint_seq + 1)] }, { rounds: 1, costUsd: 0.001 })).toBe('ok');
       }
     };
-    return work({ book, store, clock, log, fenced, busy, asked, verdicts, sql: state.storage.sql, kv: state.storage.kv, watch, run, rounds });
+    return work({ book, store, clock, log, fenced, asked, verdicts, sql: state.storage.sql, watch, run, rounds });
   });
 
 const findings = (store: WatchdogStore, jobId?: string) => store.findings().filter(row => jobId === undefined || row.job_id === jobId);
@@ -135,13 +134,13 @@ describe('the progress watchdog', () => {
       const ticket = run('stuck');
       rounds(ticket, 1);
       // The worker stopped calling in, and the wake that should have caught it came late.
-      clock.at += TASK_LEASE_MS + ALARM_LATE_MS;
+      clock.at += TASK_LEASE_MS + LANE_LATE_MS;
       expect(book.lapse()).toEqual([{ id: ticket.jobId, parked: false }]);
-      await watch({ lateMs: ALARM_LATE_MS + MIN });
-      expect(store.open().map(row => row.code).sort()).toEqual(['alarm_late', 'lease_lapsed']);
+      await watch({ lateMs: LANE_LATE_MS + MIN });
+      expect(store.open().map(row => row.code).sort()).toEqual(['lane_late', 'lease_lapsed']);
       // Re-checked on the next pass: still open while nothing changed.
-      await watch({ lateMs: ALARM_LATE_MS + MIN });
-      expect(store.open().map(row => row.code).sort()).toEqual(['alarm_late', 'lease_lapsed']);
+      await watch({ lateMs: LANE_LATE_MS + MIN });
+      expect(store.open().map(row => row.code).sort()).toEqual(['lane_late', 'lease_lapsed']);
       expect(findings(store).filter(row => row.code === 'lease_lapsed')).toHaveLength(1);
       // A new attempt makes progress and the wake is on time: both clear.
       const next = book.startAttempt(ticket.jobId)!;
@@ -167,31 +166,48 @@ describe('the progress watchdog', () => {
     });
   });
 
-  it('never parks on a verdict about an attempt that has moved on, or while a step is running or in flight', async () => {
-    await withWatchdog(async ({ book, store, fenced, busy, verdicts, watch, run, rounds }) => {
+  it('holds a park when the judged attempt was replaced or a step is in flight, and asks again on the next pass', async () => {
+    await withWatchdog(async ({ book, store, clock, fenced, asked, verdicts, watch, run, rounds }) => {
       const ticket = run('moved-on');
       rounds(ticket, JUDGE_EVERY_MS / MIN);
       verdicts.push({ verdict: 'looping', action: 'nudge' });
       await watch();
       store.nudgeFor(ticket.jobId, book.get(ticket.jobId)!.checkpoint_seq);
       rounds(ticket, JUDGE_EVERY_MS / MIN);
-      // The judge answers after the worker took another round.
-      verdicts.push({ verdict: 'looping', action: 'park' });
-      await watch({ judge: async () => { rounds(ticket, 1); return verdicts.shift() as WatchdogVerdict; } });
+      // While the judge answers, the worker's attempt is lost and a new one starts.
+      let next: TaskTicket | null = null;
+      await watch({ judge: async ({ jobId }) => {
+        asked.push(jobId);
+        clock.at += TASK_LEASE_MS + 1;
+        book.lapse();
+        next = book.startAttempt(ticket.jobId);
+        return { verdict: 'looping', action: 'park' };
+      } });
+      expect(next).not.toBeNull();
       expect(book.get(ticket.jobId)!.status).toBe('running');
       expect(findings(store, ticket.jobId).at(-1)!.action).toBe('held');
-      // A step running in the brain holds the park too.
-      busy.add(ticket.jobId);
+      // Asked again on the next pass without new rounds; this time a step that cannot be replayed is in flight.
+      expect(book.beginEffect(next!, { tool: 'browse_act', call_id: 'c-x' })).toBe(true);
       verdicts.push({ verdict: 'looping', action: 'park' });
       await watch();
+      expect(asked).toHaveLength(3);
       expect(book.get(ticket.jobId)!.status).toBe('running');
-      busy.clear();
-      // And an effect recorded in flight.
-      expect(book.beginEffect(ticket, { tool: 'browse_act', call_id: 'c-x' })).toBe(true);
-      verdicts.push({ verdict: 'looping', action: 'park' });
-      await watch();
-      expect(book.get(ticket.jobId)!.status).toBe('running');
+      expect(findings(store, ticket.jobId).at(-1)!.action).toBe('held');
       expect(fenced).toEqual([]);
+    });
+  });
+
+  it('parks a worker that took another round on the same attempt while the judge answered', async () => {
+    await withWatchdog(async ({ book, store, fenced, verdicts, watch, run, rounds }) => {
+      const ticket = run('same-attempt');
+      rounds(ticket, JUDGE_EVERY_MS / MIN);
+      verdicts.push({ verdict: 'looping', action: 'nudge' });
+      await watch();
+      store.nudgeFor(ticket.jobId, book.get(ticket.jobId)!.checkpoint_seq);
+      rounds(ticket, JUDGE_EVERY_MS / MIN);
+      await watch({ judge: async () => { rounds(ticket, 1); return { verdict: 'looping', action: 'park' }; } });
+      expect(book.get(ticket.jobId)!.park_reason).toBe('no_progress');
+      expect(fenced).toEqual([ticket.jobId]);
     });
   });
 
@@ -234,7 +250,7 @@ describe('the progress watchdog', () => {
       rounds(ticket, JUDGE_EVERY_MS / MIN);
       verdicts.push({ verdict: 'drifting', action: 'nudge' });
       await watch();
-      expect(log.some(entry => entry.hop === 'watchdog_finding' && entry.code === 'drifting' && entry.job_id === ticket.jobId)).toBe(true);
+      expect(log.some(entry => entry.hop === 'watchdog_finding' && entry.code === 'task:drifting:nudge' && entry.job_id === ticket.jobId)).toBe(true);
       for (const entry of log) {
         expect(entry).not.toHaveProperty('text');
         expect(JSON.stringify(entry).toLowerCase()).not.toContain('supplier');
@@ -312,14 +328,14 @@ describe('the nudge at the worker claim', () => {
 
 describe('the console watchdog read', () => {
   it('answers codes, counts and job ids, with the job status and park reason, and nothing else', async () => {
-    await withWatchdog(async ({ book, store, kv, sql, clock, verdicts, watch, run, rounds }) => {
+    await withWatchdog(async ({ sql, clock, verdicts, watch, run, rounds }) => {
       const ticket = run('viewed');
       rounds(ticket, JUDGE_EVERY_MS / MIN);
       verdicts.push({ verdict: 'drifting', action: 'nudge' });
-      await watch({ lateMs: ALARM_LATE_MS * 2 });
+      await watch({ lateMs: LANE_LATE_MS * 2 });
       const view = watchdogView(sql, clock.at, true);
       expect(watchdogViewSchema.parse(view)).toEqual(view);
-      expect(view.counts_24h).toEqual({ drifting: 1, alarm_late: 1 });
+      expect(view.counts_24h).toEqual({ drifting: 1, lane_late: 1 });
       expect(view.judgments_last_hour).toBe(1);
       expect(view.recent.find(row => row.code === 'drifting')).toMatchObject({ job_id: ticket.jobId, job_kind: 'task', action: 'nudge', job_status: 'running', park_reason: null });
       expect(JSON.stringify(view).toLowerCase()).not.toContain('supplier');
@@ -329,8 +345,6 @@ describe('the console watchdog read', () => {
       expect(limited.at).toBe(1);
       expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}?x=1`), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(400);
       expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`, { method: 'POST' }), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(405);
-      expect(kv).toBeDefined();
-      void store; void book;
     });
   });
 });
