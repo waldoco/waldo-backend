@@ -109,6 +109,18 @@ describe('toolResultSchema', () => {
     expect(resultSchema.safeParse({ ...baseErr }).success).toBe(true);
   });
 
+  it("accepts a failure carrying the tool's own recovery step", () => {
+    expect(resultSchema.safeParse({ ...baseErr, fix: 'Pass body_next_offset from the last read.' }).success).toBe(true);
+    expect(externalSchema.safeParse({ ...baseErr, source_taint: 'external', fix: 'Pass one of the connected accounts.' }).success).toBe(true);
+  });
+
+  it('rejects an empty, oversized or non-text recovery step', () => {
+    for (const fix of ['', 'x'.repeat(501), 42]) {
+      expect(resultSchema.safeParse({ ...baseErr, fix }).success).toBe(false);
+      expect(externalSchema.safeParse({ ...baseErr, source_taint: 'external', fix }).success).toBe(false);
+    }
+  });
+
   it('rejects an invalid taint value on the failure branch', () => {
     expect(resultSchema.safeParse({ ...baseErr, source_taint: 'bogus' }).success).toBe(false);
   });
