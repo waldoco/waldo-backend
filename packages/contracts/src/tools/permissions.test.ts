@@ -87,6 +87,7 @@ describe('toolName', () => {
       'open_loop',
       'close_loop',
       'raise_approval',
+      'approve_shown',
       'track_responsibility',
       'update_todo',
       'list_responsibilities',
@@ -131,6 +132,7 @@ describe('toolName', () => {
       'connect_app',
       'send_agent_mail',
       'offer_replies',
+      'search_history',
     ]);
   });
 
@@ -313,6 +315,7 @@ describe('TOOL_PERMISSIONS', () => {
         'open_loop',
         'close_loop',
         'raise_approval',
+        'approve_shown',
         'track_responsibility',
         'set_proactivity',
         'set_schedule_preference',
@@ -341,6 +344,7 @@ describe('TOOL_PERMISSIONS', () => {
       'cancel_task',
       'record_owner_finding',
       'list_owner_findings',
+      'search_history',
       ],
       dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
       pre_activity_spot: [
