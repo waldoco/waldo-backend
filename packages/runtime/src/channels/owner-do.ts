@@ -648,12 +648,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // WALDO_ASYNC_TOOLS on, the owner's own turns hold no browser tool, so a task that only reads pages takes the browser lane
       // instead and the owner's messages keep running while a page loads. A step that can act on a page (an errand's, an
       // approved replay's) can raise a card or record an effect, which this object files under the run on its chain, so it
-      // keeps the chain.
-      serialBrowser: (scope, work) => asyncToolsEnabled(self.env) && self.readsPagesOnly(scope) ? self.browserSerial(scope, work) : self.serial(async () => {
-        const previous = self.activeScope;
-        self.activeScope = scope;
-        try { return await work(); } finally { if (self.activeScope === scope) self.activeScope = previous; }
-      }),
+      // keeps the chain, and takes the browser lane inside it, so the browser still serves one run at a time.
+      serialBrowser: (scope, work) => {
+        const laned = asyncToolsEnabled(self.env);
+        if (laned && self.readsPagesOnly(scope)) return self.browserSerial(scope, work);
+        const onChain = async () => {
+          const previous = self.activeScope;
+          self.activeScope = scope;
+          try { return await work(); } finally { if (self.activeScope === scope) self.activeScope = previous; }
+        };
+        return self.serial(laned ? () => self.browserSerial(scope, onChain) : onChain);
+      },
       releaseBrowser: scope => { self.ctx.waitUntil(self.ownerBrowser.finish(scope).catch(() => undefined)); },
       log: entry => self.taskLog(entry),
       spend: () => self.setup(self.taskChannel()).monthSpend(),

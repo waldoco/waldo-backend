@@ -266,3 +266,25 @@ it('while a task\'s browser step holds the browser lane, the owner\'s turn answe
     await lane;
   });
 }, 60_000);
+
+// The browser serves one run at a time across both queues: an errand's step, which keeps the owner's chain, also waits for a
+// reading task's step on the browser lane, rather than meeting that task's run on the browser and failing closed.
+it('an errand\'s browser step waits for a reading task\'s step on the browser lane, then runs', async () => {
+  await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, state) => {
+    const abort = new AbortController();
+    const reader = { runId: 'task:reader-hold', attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() };
+    const lane = (owner as unknown as { browserSerial(scope: typeof reader, work: () => Promise<void>): Promise<void> }).browserSerial(reader, () => seen.state.hold);
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'errandjob001', newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'errand', idempotencyKey: 'turn-e:call-e', origin: 'turn-e', surface: 'app',
+      brief: { title: 'Hotels near the venue', goal: 'Find three hotels.', context: '', done_when: 'Three hotels.', effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    let settled = false;
+    const attempt = worker(owner, book.startAttempt(job.id)!).finally(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(settled).toBe(false);
+    expect(seen.state.trace).not.toContain('browse_open');
+    seen.state.release();
+    await lane;
+    expect(await attempt).toBe('reported');
+    expect(seen.state.trace.filter(step => step.startsWith('browse_'))).toEqual(['browse_open', 'browse_done']);
+  });
+}, 60_000);
