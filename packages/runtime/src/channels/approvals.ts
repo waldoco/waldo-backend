@@ -336,8 +336,8 @@ const reviewEmail = (p: EmailSendProposal, signed: boolean) =>
     ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
     `Subject: ${p.subject}`, '', signed ? emailWords(p) : p.body].join('\n');
 const reviewMessage = (p: MessageSendProposal) => p.content;
-const reviewAgentMail = (p: AgentMailSendProposal) =>
-  [`From: ${p.from.name} <${p.from.address}>`, `To: ${p.to.join(', ')}`, ...(p.cc.length ? [`Cc: ${p.cc.join(', ')}`] : []), `Subject: ${p.subject}`, '', p.body].join('\n');
+const reviewAgentMail = (p: AgentMailSendProposal, signed: boolean) =>
+  [`From: ${p.from.name} <${p.from.address}>`, `To: ${p.to.join(', ')}`, ...(p.cc.length ? [`Cc: ${p.cc.join(', ')}`] : []), `Subject: ${p.subject}`, '', signed ? p.body : p.body_markdown].join('\n');
 const describeAgentMail = (p: AgentMailSendProposal) => `Send email as Waldo from ${p.from.address} to ${p.to.join(', ')}: "${p.subject}"`;
 // The sends whose card is their exact draft: an email from the owner's Gmail, a message, and an email as Waldo. What goes
 // out is checked against the stored payload the card showed, and the console may send them from that review.
@@ -400,7 +400,7 @@ const reviewText = (entry: LedgerRow, signed = true): string => {
   const p = JSON.parse(entry.payload_json);
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p, signed)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
-  if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p)}`;
+  if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p, signed)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
   if (entry.kind === 'tainted_action') return `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
