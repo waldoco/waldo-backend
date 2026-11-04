@@ -15,6 +15,7 @@ import type { ReplayCardStatus } from '../channels/approvals';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, retryBrief, taskBrief, type AskedStep, type JobBook, type JobRow, type ReplayBrief, type ReplayOutcome, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, FINISH_TASK, jobTools, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import type { NudgeCode } from './watchdog';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
 // checks the attempt's ticket against the job book first, so a fenced attempt can neither read nor write. The jobs lane,
@@ -65,6 +66,8 @@ export type TaskHostDeps = Readonly<{
   // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
   // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
   providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
+  // The progress watchdog's waiting nudge for a job, taken once by the claim at the round it reached (WALDO_WATCHDOG).
+  nudge?(jobId: string, seq: number): NudgeCode | null;
 }>;
 
 // After a provider outage a task waits before its next attempt: 2, 5, 10, then every 20 minutes until its deadline.
@@ -406,6 +409,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const handlers = await profileHandlers(resumed, attemptFor(ticket, resumed).outputs);
       const spend = ownerSpend();
       const { conversation_ref: _replyChain, ...brief } = taskBrief(resumed);
+      const nudge = deps.nudge?.(row.id, resumed.checkpoint_seq) ?? null;
       return {
         jobId: row.id, profile: row.profile, brief, tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
@@ -413,6 +417,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         ownerRef: deps.context(row.surface).authenticatedUserId,
         ...(spend ? { spend } : {}),
         ...(deps.providerHealth ? { providerHealth: deps.providerHealth.snapshot() } : {}),
+        ...(nudge ? { nudge } : {}),
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted

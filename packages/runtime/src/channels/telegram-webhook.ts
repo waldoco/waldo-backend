@@ -58,6 +58,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
+  // "1": the progress watchdog checks running background jobs in the owner's alarm pass and its console read reports enabled.
+  WALDO_WATCHDOG?: string;
   AUTONOMY_OWN_CALENDAR?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
