@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { APP_WHY_STEPS_MAX_V1, appWhyLabelV1Schema, appWhySourceV1Schema, appWhyVerbV1Schema } from '../../app/why';
 
 // An approval card Waldo raised for this owner, as the desk names it.
 export const approvalRefSchema = z.string().regex(/^p[A-Za-z0-9-]{1,63}$/);
@@ -26,3 +27,18 @@ export type ApproveShownArgs = z.infer<typeof approveShownArgsSchema>;
 // that one in the same write; whether two cards are the same action is the model's call.
 export const replacesApprovalSchema = approvalRefSchema.optional()
   .describe('When this revises a card of yours still waiting on the owner: its approval_id (from raise_approval list). Showing this card closes that one.');
+
+// On a proposing tool, while the trail is on: the steps that led to this card, shown under "Why this changed". The host keeps
+// a step only when its source is something a read earlier in this turn returned, and takes the step's time from that read;
+// it is never part of the change the owner approves. Which steps matter and how to word them is the model's call.
+export const whyStepArgSchema = z.strictObject({
+  verb: appWhyVerbV1Schema.describe('read, checked, found, prepared or watching'),
+  label: appWhyLabelV1Schema.describe('One short line the owner reads, e.g. "Found the 3pm clash". For health, name the score, never a number.'),
+  source: z.strictObject({
+    kind: appWhySourceV1Schema,
+    ref: z.string().min(1).max(256).describe('What you read: the event id, the thread id or the memory node id from that read; for calendar_free_busy the calendar id; for health_score the score or signal name (recovery, form, load, sleep, hrv...).'),
+  }),
+});
+export const whyArgSchema = z.array(whyStepArgSchema).min(1).max(APP_WHY_STEPS_MAX_V1)
+  .describe('Optional. Up to 8 steps behind this card, each tied to something you read this turn. A step naming nothing you read is dropped.');
+export type WhyStepArg = z.infer<typeof whyStepArgSchema>;

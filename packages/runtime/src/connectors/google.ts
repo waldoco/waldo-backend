@@ -373,6 +373,8 @@ export type ContactMatch = Readonly<{ name: string | null; emails: readonly stri
 // the contract's address check, keeps an address once across people, and cuts to three addresses and the limit, so an
 // address the contract refuses never takes a place. A results field that is not a list is refused, never read as no match.
 // The connector's fixed refusal of a malformed People answer; the edge passes it through, so the Worker can refuse it.
+// A message id read that names no message in the thread: the same read fails the same way every time.
+export const UNKNOWN_THREAD_MESSAGE = 'unknown message in thread';
 export const PEOPLE_UNREADABLE = 'invalid People search response';
 const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[]): readonly ContactMatch[] =>
   sources.flatMap(({ source, results }) => {
@@ -856,7 +858,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         }
       };
       const chosen = read?.messageId === undefined ? json.messages.slice(offset, offset + limit) : json.messages.filter(message => message.id === read.messageId);
-      if (read?.messageId !== undefined && chosen.length === 0) throw new Error('unknown message in thread');
+      if (read?.messageId !== undefined && chosen.length === 0) throw new Error(UNKNOWN_THREAD_MESSAGE);
       const messages = await Promise.all(chosen.map(async message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];

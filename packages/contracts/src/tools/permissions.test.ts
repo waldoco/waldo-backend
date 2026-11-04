@@ -132,6 +132,7 @@ describe('toolName', () => {
       'react_to_message',
       'connect_app',
       'send_agent_mail',
+      'offer_replies',
       'search_history',
       'get_screen_time',
     ]);
@@ -302,6 +303,7 @@ describe('TOOL_PERMISSIONS', () => {
         'draft_email',
         'send_email',
         'send_agent_mail',
+        'offer_replies',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',

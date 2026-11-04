@@ -10,7 +10,7 @@ type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
 export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean }>;
 
-const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
+export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
 export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): number }>) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS loops (
@@ -80,10 +80,7 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       } else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
     },
     closed: (limit = 5) => sql.exec<Loop>("SELECT * FROM loops WHERE status != 'open' ORDER BY closed_at DESC LIMIT ?", limit).toArray(),
-    proactivity(): Proactivity {
-      const row = sql.exec<{ settings: string }>('SELECT settings FROM proactivity WHERE id = 1').toArray()[0];
-      return row ? { ...DEFAULT_PROACTIVITY, ...(JSON.parse(row.settings) as Partial<Proactivity>) } : DEFAULT_PROACTIVITY;
-    },
+    proactivity: () => storedProactivity(sql),
     setProactivity(settings: SetProactivityArgs): Proactivity {
       const quiet: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
       const followups = settings.followups ?? this.proactivity().followups;
@@ -95,6 +92,12 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
   };
 };
 export type LoopBook = ReturnType<typeof loopBook>;
+
+// The owner's proactivity settings as stored, read only: the defaults when none are.
+export const storedProactivity = (sql: Sql): Proactivity => {
+  const row = sql.exec<{ settings: string }>('SELECT settings FROM proactivity WHERE id = 1').toArray()[0];
+  return row ? { ...DEFAULT_PROACTIVITY, ...(JSON.parse(row.settings) as Partial<Proactivity>) } : DEFAULT_PROACTIVITY;
+};
 
 export const isQuiet = (settings: Proactivity, now: number, timezone: string): boolean => {
   if (!settings.quiet_start || !settings.quiet_end || settings.quiet_start === settings.quiet_end) return false;

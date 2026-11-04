@@ -109,6 +109,9 @@
     "AGENT_MAIL_INBOUND": "0",
     "AGENT_MAIL_DOMAIN": "",
     "AGENT_MAIL_SEND": "0",
+    "PLANNING_BRIEF": "0",
+    "NEXT_DUE_ALARM": "0",
+    "WHY_TRAIL": "0",
     "GOOGLE_REALTIME_TRIAGE": "0",
     "AGENT_MAIL_ZONE_ID": ""
   },
@@ -272,6 +275,9 @@
         "AGENT_MAIL_INBOUND": "1",
         "AGENT_MAIL_DOMAIN": "mail.heywaldo.in",
         "AGENT_MAIL_SEND": "1",
+        "PLANNING_BRIEF": "0",
+        "NEXT_DUE_ALARM": "1",
+        "WHY_TRAIL": "0",
         "GOOGLE_REALTIME_TRIAGE": "0",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
