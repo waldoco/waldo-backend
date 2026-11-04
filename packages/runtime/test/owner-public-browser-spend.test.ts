@@ -135,3 +135,18 @@ it('another owner\'s ledger, or one that does not validate under its own custody
  const split=structuredClone([...f.rows]);
  expect(()=>reserveMoved()).toThrow('retained cost conflict');expect([...f.rows]).toEqual(split);
 });
+
+it('an escalated vendor browser charges at its own rate, keeps it through reconstruction and settlement, and a tampered rate is refused',()=>{
+ const f=fixture(),reservedBrowserMs=20*60_000,rateMicrousdPerHour=120_000;
+ reserveOwnerPublicBrowser({storage:f.storage,ownerId,custodyDigest,intent:'escalated',reservedBrowserMs,rateMicrousdPerHour,now,assertCurrent(){}});
+ const bound=ownerPublicBrowserDurationMicrousd(reservedBrowserMs,rateMicrousdPerHour);
+ expect(bound).toBe(40_000);expect(bound).toBeGreaterThan(ownerPublicBrowserDurationMicrousd(reservedBrowserMs));
+ expect(f.rows.get(monthKey)).toBe(bound);expect(f.rows.get(KEY).reservations[0]).toMatchObject({chargedMicrousd:bound,rateMicrousdPerHour});
+ const rebuilt=fixture([...f.rows]);rebuilt.reserve('standard',60_000);rebuilt.settle('escalated',6*60_000);
+ expect(rebuilt.rows.get(KEY).reservations[0]).toMatchObject({chargedMicrousd:12_000,settled:true,rateMicrousdPerHour});
+ for(const rate of [90_000,0,1.5,-1]){
+  const tampered=fixture([...f.rows]);tampered.rows.set(KEY,{...tampered.rows.get(KEY),reservations:[{...tampered.rows.get(KEY).reservations[0],rateMicrousdPerHour:rate}]});
+  expect(()=>tampered.reserve('next',60_000)).toThrow(/retained cost conflict/);
+ }
+ expect(()=>reserveOwnerPublicBrowser({storage:fixture().storage,ownerId,custodyDigest,intent:'bad-rate',reservedBrowserMs,rateMicrousdPerHour:0,now,assertCurrent(){}})).toThrow();
+});

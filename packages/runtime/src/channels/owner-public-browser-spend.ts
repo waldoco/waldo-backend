@@ -11,7 +11,8 @@ const LEGACY_RESERVATION_MICROUSD=2_090_000;
 const LEGACY_DEFAULT_CEILING_MICROUSD=20_000_000;
 type Accounting={ownerId:string;custodyDigest:string;limitMicrousd?:number;reservedMicrousd:number;intents:readonly string[]};
 type Legacy=Accounting&{limitMicrousd:number};
-type Reservation={intent:string;month:string;reservedBrowserMs:number;chargedMicrousd:number;settled:boolean;durationMs?:number};
+// rateMicrousdPerHour is set for an escalated vendor browser; absent, the reservation was priced at Cloudflare's rate.
+type Reservation={intent:string;month:string;reservedBrowserMs:number;chargedMicrousd:number;settled:boolean;durationMs?:number;rateMicrousdPerHour?:number};
 type Retained=Omit<Accounting,'intents'>&{reservations:readonly Reservation[]};
 const validIntent=(id:unknown):id is string=>typeof id==='string'&&id.length>0&&id.length<=256;
 const validAmount=(amount:unknown):amount is number=>Number.isSafeInteger(amount)&&(amount as number)>=0;
@@ -20,9 +21,11 @@ const lowerCeiling=(a:number|undefined,b:number|undefined)=>a===undefined?b:b===
 // Normal reads estimate browser duration at $0.09/hour, rounded up to microUSD.
 // Account-level peak/rounding charges belong to the registered test envelope.
 // https://developers.cloudflare.com/browser-run/pricing/
-export function ownerPublicBrowserDurationMicrousd(durationMs:number):number{
- if(!Number.isSafeInteger(durationMs)||durationMs<0)throw Error('public browser duration invalid');
- return Number((BigInt(durationMs)*90_000n+3_600_000n-1n)/3_600_000n);
+const CLOUDFLARE_MICROUSD_PER_HOUR=90_000;
+const validRate=(rate:unknown):rate is number=>Number.isSafeInteger(rate)&&(rate as number)>0;
+export function ownerPublicBrowserDurationMicrousd(durationMs:number,rateMicrousdPerHour=CLOUDFLARE_MICROUSD_PER_HOUR):number{
+ if(!Number.isSafeInteger(durationMs)||durationMs<0||!validRate(rateMicrousdPerHour))throw Error('public browser duration invalid');
+ return Number((BigInt(durationMs)*BigInt(rateMicrousdPerHour)+3_600_000n-1n)/3_600_000n);
 }
 function retainedAccounting(storage:Pick<DurableObjectStorage,'kv'>,ownerId:string,custodyDigest:string){
  const legacy=storage.kv.get<Legacy>(LEGACY_KEY),current=storage.kv.get<Retained>(KEY);
@@ -38,9 +41,11 @@ function retainedAccounting(storage:Pick<DurableObjectStorage,'kv'>,ownerId:stri
   for(const item of current.reservations){
    if(!item||!validIntent(item.intent)||intents.has(item.intent)||typeof item.month!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.month)
     ||!validReservedDuration(item.reservedBrowserMs)||!validAmount(item.chargedMicrousd)||typeof item.settled!=='boolean'
-    ||item.chargedMicrousd>ownerPublicBrowserDurationMicrousd(item.reservedBrowserMs)
-    ||!item.settled&&(item.durationMs!==undefined||item.chargedMicrousd!==ownerPublicBrowserDurationMicrousd(item.reservedBrowserMs))
-    ||item.settled&&(!validAmount(item.durationMs)||item.durationMs>item.reservedBrowserMs||item.chargedMicrousd!==ownerPublicBrowserDurationMicrousd(item.durationMs)))throw Error('public browser retained cost conflict');
+    ||item.rateMicrousdPerHour!==undefined&&!validRate(item.rateMicrousdPerHour))throw Error('public browser retained cost conflict');
+   const charge=(durationMs:number)=>ownerPublicBrowserDurationMicrousd(durationMs,item.rateMicrousdPerHour);
+   if(item.chargedMicrousd>charge(item.reservedBrowserMs)
+    ||!item.settled&&(item.durationMs!==undefined||item.chargedMicrousd!==charge(item.reservedBrowserMs))
+    ||item.settled&&(!validAmount(item.durationMs)||item.durationMs>item.reservedBrowserMs||item.chargedMicrousd!==charge(item.durationMs)))throw Error('public browser retained cost conflict');
    intents.add(item.intent);sum+=item.chargedMicrousd;months.set(item.month,(months.get(item.month)??0)+item.chargedMicrousd);
   }
   for(const [month,total] of months){
@@ -75,10 +80,10 @@ function carryLedgerCustody(storage:Pick<DurableObjectStorage,'kv'>,ownerId:stri
 // No room under the owner's or this month's browser spend ceiling; no retry changes that.
 export class OwnerPublicBrowserCeilingExceeded extends Error {}
 export function reserveOwnerPublicBrowser(options:Readonly<{
- storage:DurableObjectStorage;ownerId:string;custodyDigest:string;intent:string;reservedBrowserMs:number;now:number;declaredLimitMicrousd?:number;assertCurrent():void;
+ storage:DurableObjectStorage;ownerId:string;custodyDigest:string;intent:string;reservedBrowserMs:number;now:number;declaredLimitMicrousd?:number;rateMicrousdPerHour?:number;assertCurrent():void;
 }>):PublicReadReservation{
- const {storage,ownerId,custodyDigest,intent,now,reservedBrowserMs}=options;
- const bound=ownerPublicBrowserDurationMicrousd(reservedBrowserMs);
+ const {storage,ownerId,custodyDigest,intent,now,reservedBrowserMs,rateMicrousdPerHour}=options;
+ const bound=ownerPublicBrowserDurationMicrousd(reservedBrowserMs,rateMicrousdPerHour);
  if(!validIntent(intent)||!Number.isSafeInteger(now)||!/^[a-f0-9]{64}$/.test(custodyDigest)||!validReservedDuration(reservedBrowserMs))throw Error('public browser reservation unavailable');
  const month=new Date(now).toISOString().slice(0,7),monthKey=`common-public-browser-month:${month}`;
  storage.transactionSync(()=>{
@@ -109,7 +114,7 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
   if(!Number.isSafeInteger(aggregate+bound)||ceiling!==undefined&&aggregate+bound>ceiling||spent+bound>COMMON_BROWSER_MONTH_CEILING_MICROUSD)throw new OwnerPublicBrowserCeilingExceeded('public browser owner cost ceiling exceeded');
   const current=storage.kv.get<Retained>(KEY);
   storage.kv.put(KEY,{ownerId,custodyDigest,...(ceiling===undefined?{}:{limitMicrousd:ceiling}),reservedMicrousd:(current?.reservedMicrousd??0)+bound,
-   reservations:[...(current?.reservations??[]),{intent,month,reservedBrowserMs,chargedMicrousd:bound,settled:false}]} satisfies Retained);
+   reservations:[...(current?.reservations??[]),{intent,month,reservedBrowserMs,chargedMicrousd:bound,settled:false,...(rateMicrousdPerHour===undefined?{}:{rateMicrousdPerHour})}]} satisfies Retained);
   storage.kv.put(monthKey,spent+bound);
  });
  return Object.freeze({settle:(durationMs:number)=>settleOwnerPublicBrowser({storage,ownerId,custodyDigest,intent,durationMs,expected:{month,reservedBrowserMs}})});
@@ -122,11 +127,11 @@ export function settleOwnerPublicBrowser(options:Readonly<{
  expected?:Readonly<Pick<Reservation,'month'|'reservedBrowserMs'>>;
 }>):void{
  const {storage,ownerId,custodyDigest,intent,durationMs,expected}=options;
- const chargedMicrousd=ownerPublicBrowserDurationMicrousd(durationMs);
  if(!validIntent(intent)||!/^[a-f0-9]{64}$/.test(custodyDigest))throw Error('public browser settlement conflict');
  storage.transactionSync(()=>{
   const {current}=retainedAccounting(storage,ownerId,custodyDigest),item=current?.reservations.find(row=>row.intent===intent);
   if(!current||!item||expected&&(item.month!==expected.month||item.reservedBrowserMs!==expected.reservedBrowserMs))throw Error('public browser settlement conflict');
+  const chargedMicrousd=ownerPublicBrowserDurationMicrousd(durationMs,item.rateMicrousdPerHour);
   // An over-bound duration stays unresolved, never capped into a false refund.
   if(durationMs>item.reservedBrowserMs)throw Error('public browser duration exceeds reservation');
   if(item.settled){if(item.durationMs!==durationMs)throw Error('public browser settlement conflict');return;}

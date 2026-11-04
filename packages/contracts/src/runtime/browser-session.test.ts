@@ -65,3 +65,8 @@ describe('BrowserSessionBoundary', () => {
 it('represents an isolated public Cloudflare session with its own provider identity', () => {
   expect(browserSessionSchema.safeParse(session({ provider: 'cloudflare_playwright' } as never)).success).toBe(true);
 });
+
+it('names each CDP vendor the escalated browser drives, and nothing else', () => {
+  for (const provider of ['browserbase_cdp', 'browser_use_cdp'] as const) expect(browserSessionSchema.safeParse(session({ provider } as never)).success).toBe(true);
+  for (const provider of ['browserbase', 'cdp', 'browser_use_v4']) expect(browserSessionSchema.safeParse(session({ provider } as never)).success).toBe(false);
+});

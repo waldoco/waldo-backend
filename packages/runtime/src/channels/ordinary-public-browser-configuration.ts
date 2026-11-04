@@ -14,6 +14,8 @@ type Retained={grant:CommonBrowserGrant;custody:Custody;startedAt?:number;intent
 export function ordinaryPublicBrowserConfiguration(options:Readonly<{
  storage:DurableObjectStorage;binding:BrowserWorker;loadSdk:CloudflareBrowserSdkLoader;
  owner?:Custody;deadline?:number;declaredLimitMicrousd?:number;now():number;
+ // The escalated browser: a CDP vendor behind `binding`, metered at its own hourly rate.
+ vendor?:Readonly<{provider:'browserbase_cdp'|'browser_use_cdp';rateMicrousdPerHour:number}>;
  assertCurrent():Promise<void>;assertOwner():Promise<Custody>;
 }>):CommonBrowserConfiguration & {ownerId:string;expiresAt:number;lifetimeMs:number}{
  const {storage}=options,now=options.now(),expiresAt=options.deadline===undefined?now:options.deadline+IDLE_MS;
@@ -33,7 +35,7 @@ export function ordinaryPublicBrowserConfiguration(options:Readonly<{
  };
  return {
   ownerId:options.owner?.ownerId??'',expiresAt,lifetimeMs:expiresAt-now,
-  retainInteractions:true,binding:options.binding,loadSdk:options.loadSdk,
+  retainInteractions:true,binding:options.binding,loadSdk:options.loadSdk,...(options.vendor?{provider:options.vendor.provider}:{}),
   ownsGrant:grant=>storage.kv.get<Retained>(prefix+grant.taskId)?.grant.ref===grant.ref,
   cleanupBinding:(grant,providerSessionId)=>{exact(grant,{providerSessionId});return options.binding;},
   allocationClosed:async(grant,session)=>{const row=exact(grant,session);settleOwnerPublicBrowser({storage,...row.custody,intent:row.intent!,durationMs:options.now()-row.startedAt!});},
@@ -42,7 +44,9 @@ export function ordinaryPublicBrowserConfiguration(options:Readonly<{
    if(!options.owner||JSON.stringify(owner)!==JSON.stringify(options.owner)||owner.ownerId!==ownerId||!task.ready||!task.sources.some(source=>source==='browser'||source==='web'))throw Error('ordinary browser source unavailable');
    const retained=storage.kv.get<Retained>(prefix+task.taskId);if(retained){await verify(retained.grant);return retained.grant;}
    if(!Number.isSafeInteger(expiresAt)||!Number.isSafeInteger(options.deadline)||options.deadline!<=options.now())throw Error('ordinary browser run expired');
-   const grant:CommonBrowserGrant={ref:`ordinary:${task.taskId}`,taskId:task.taskId,ownerId,expiresAt,allowedOrigins:['*'],maxScreenshotBytes:128*1024,lifetimeMs:expiresAt-options.now(),keepAliveMs:IDLE_MS};
+   const grant:CommonBrowserGrant={ref:`ordinary:${task.taskId}`,taskId:task.taskId,ownerId,expiresAt,allowedOrigins:['*'],maxScreenshotBytes:128*1024,lifetimeMs:expiresAt-options.now(),
+    // Cloudflare's keep_alive is an idle window; a vendor's session timeout is its whole life, so a vendor gets the lifetime.
+    ...(options.vendor?{}:{keepAliveMs:IDLE_MS})};
    // The run and live directory supply admission; this is custody, not a trial
    // declaration. Funding occurs atomically before the first provider request.
    storage.kv.put(prefix+task.taskId,{grant,custody:owner} satisfies Retained);return grant;
@@ -58,7 +62,7 @@ export function ordinaryPublicBrowserConfiguration(options:Readonly<{
    if(row.startedAt!==undefined||row.intent!==undefined)throw Error('ordinary browser allocation requires reconciliation');
    storage.transactionSync(()=>{
     const limit=options.declaredLimitMicrousd;
-    reserveOwnerPublicBrowser({storage,...row.custody,intent,reservedBrowserMs:grant.expiresAt-at+IDLE_MS+CLEANUP_MS,now:at,
+    reserveOwnerPublicBrowser({storage,...row.custody,intent,reservedBrowserMs:grant.expiresAt-at+IDLE_MS+CLEANUP_MS,now:at,rateMicrousdPerHour:options.vendor?.rateMicrousdPerHour,
      declaredLimitMicrousd:limit===undefined?undefined:Math.min(limit,COMMON_TEST_CEILING_MICROUSD),
      assertCurrent:()=>{if(options.now()>=grant.expiresAt||JSON.stringify(storage.kv.get(prefix+grant.taskId))!==JSON.stringify(row))throw Error('ordinary browser allocation changed');}});
     storage.kv.put(prefix+grant.taskId,{...row,startedAt:at,intent} satisfies Retained);
