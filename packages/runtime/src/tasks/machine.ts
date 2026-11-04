@@ -4,6 +4,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { md5Hex } from '../channels/md5';
 import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
+import { PARK_WORDS } from '../prompt/fixed-lines';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
 import { applyInterrupted, carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
@@ -93,10 +94,21 @@ export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler
 // A report that no model could apply is retried for an hour.
 export const APPLY_RETRY_MS = 60 * 60_000;
 
+// With WALDO_TASK_NOTES=1, a machine job that stopped (parked, or its worker failed or was blocked with nothing to show)
+// tells the owner once a day per job, outside quiet hours, so background work never drops out of sight. `note` queues the
+// line under its key with `settle` in the same commit; a key already queued only settles.
+export type MachineNote = (key: string, text: string, settle: () => void) => Promise<void>;
+const MACHINE_WORK: Readonly<Record<MachineJob, string>> = {
+  heartbeat: 'check-back on your open loops', update_sweep: 'scan of your mail and calendar for updates',
+  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile',
+};
+export const machineStoppedNote = (job: MachineJob, why: string): string => `My background ${MACHINE_WORK[job]} stopped before it finished, because ${why}. I'll try it again on its next run.`;
+const DAY_MS = 24 * 60 * 60_000;
+
 // The jobs lane's apply step for a machine job. The owner never asked for this work, so nothing here tells them about it
 // unless the job found something: a parked job, an empty result and an apply that never got a model all settle silently.
 export const applyMachineJob = async (row: JobRow, deps: Readonly<{
-  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void;
+  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void; note?: MachineNote;
 }>): Promise<void> => {
   try { await applyOnce(row, deps); } finally {
     const after = deps.book.get(row.id);
@@ -139,12 +151,22 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
     return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
   };
-  if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
+  // A job that stopped tells the owner when this deploy says so; otherwise it settles silently, as one that found nothing.
+  const stopped = async (name: string, fields: Partial<TurnLogEntry>, why: string) => {
+    if (!deps.note) return quietly(name, fields);
+    try { await deps.note(`machine:${job}:stopped:${Math.floor(deps.now() / DAY_MS)}`, machineStoppedNote(job, why), settle); }
+    catch (error) { if (error instanceof ClosedRunError) return; throw error; }
+    done(name, { ...fields, detail: 'noted' });
+  };
+  if (row.park_reason) return stopped('machine_parked', { ok: false, code: row.park_reason }, PARK_WORDS[row.park_reason]);
   // A pass lost inside the apply turn left its intent: the turn may have raised a card or opened a loop, so it is not run
   // again. The owner never asked for this work, so nothing names it; the trigger's next tick asks again.
   if (applyInterrupted(row)) return quietly('machine_apply_uncertain', { ok: false });
   const handler = deps.appliers[job];
   const result = jobResult(row)!;
+  if ((result.status === 'failed' || result.status === 'blocked') && !result.findings.length && !result.proposals.length) {
+    return stopped('machine_stopped', { ok: false, code: result.status }, result.status === 'blocked' ? 'something it needed was not available' : 'it ran into an error');
+  }
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
   // nothing about an item it was not shown, so a job with one goes to the brain's apply, which can see it.
   if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {

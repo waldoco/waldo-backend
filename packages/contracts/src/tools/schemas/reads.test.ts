@@ -12,6 +12,8 @@ import {
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
+  getScreenTimeArgsSchema,
+  getScreenTimeResultSchema,
   healthReadSignalSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
@@ -67,6 +69,23 @@ describe('getCrsArgs', () => {
 
   it('rejects a smuggled extra argument', () => {
     expect(getCrsArgsSchema.safeParse({ range_days: 1, verbose: true }).success).toBe(false);
+  });
+});
+
+describe('getScreenTimeArgsSchema', () => {
+  it('takes a span of local days, at most 31, in order', () => {
+    expect(getScreenTimeArgsSchema.safeParse({ from: '2026-10-03', to: '2026-11-02' }).success).toBe(true);
+    expect(getScreenTimeArgsSchema.safeParse({ from: '2026-10-02', to: '2026-11-02' }).success).toBe(false);
+    expect(getScreenTimeArgsSchema.safeParse({ from: '2026-11-02', to: '2026-11-01' }).success).toBe(false);
+    expect(getScreenTimeArgsSchema.safeParse({ from: '2026-11-01', to: '2026-11-02', device_id: 'x' }).success).toBe(false);
+  });
+
+  it('answers rows per device and day, or why there are none', () => {
+    const row = { day: '2026-11-02', device: 1, coverage: 'partial', received_at: '2026-11-03T02:00:00.000Z', screen_on_minutes: 120, late_night_window: '23:00-05:00' };
+    expect(getScreenTimeResultSchema.safeParse({ state: 'available', from: '2026-11-01', to: '2026-11-02', days: [row] }).success).toBe(true);
+    expect(getScreenTimeResultSchema.safeParse({ state: 'available', from: '2026-11-01', to: '2026-11-02', days: [{ ...row, device_id: 'x' }] }).success).toBe(false);
+    expect(getScreenTimeResultSchema.safeParse({ state: 'unavailable', reason: 'no_data' }).success).toBe(true);
+    expect(getScreenTimeResultSchema.safeParse({ state: 'unavailable', reason: 'phone_offline' }).success).toBe(false);
   });
 });
 
