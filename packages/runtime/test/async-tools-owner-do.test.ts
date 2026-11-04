@@ -157,13 +157,15 @@ it('with WALDO_ASYNC_TOOLS on, the owner turn starts long work as a task and ans
   });
 }, 60_000);
 
-it('with WALDO_ASYNC_TOOLS off, the owner turn keeps the long tools and a worker\'s browser step holds the next app message (the baseline)', async () => {
-  await withOwner({ WALDO_ASYNC_TOOLS: '0' }, async (owner, state, name) => {
+// Off, as before: the owner's turn holds the long tools and a worker's browser step takes the owner's chain. On, an errand's
+// step does too: an errand can act on a page, and a card or effect it raises is filed under the run on the chain.
+it.each([['0', 'reader'], ['1', 'errand']] as const)('with WALDO_ASYNC_TOOLS %s, a %s worker\'s browser step holds the next app message on the owner\'s chain', async (switched, profile) => {
+  await withOwner({ WALDO_ASYNC_TOOLS: switched }, async (owner, state, name) => {
     await send(owner, name, 'base-a-0001', 'What time is it?');
     await completed(owner, name, 'base-a-0001');
-    expect(seen.state.ownerTools[0]).toEqual(expect.arrayContaining(['start_task', 'delegate_task']));
+    if (switched === '0') expect(seen.state.ownerTools[0]).toEqual(expect.arrayContaining(['start_task', 'delegate_task']));
     const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'heldjob00001', newToken: () => crypto.randomUUID() });
-    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'turn-0:call-0', origin: 'turn-0', surface: 'app',
+    const { job } = book.create({ kind: 'task', profile, idempotencyKey: 'turn-0:call-0', origin: 'turn-0', surface: 'app',
       brief: { title: 'Hotels near the venue', goal: 'Find three hotels.', context: '', done_when: 'Three hotels.', effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
     const attempt = worker(owner, book.startAttempt(job.id)!);
     await vi.waitFor(() => expect(seen.state.trace).toContain('browse_open'), { timeout: 15_000, interval: 20 });

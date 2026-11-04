@@ -266,7 +266,7 @@ import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
-import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
+import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
@@ -645,9 +645,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       handlers: (surface, row) => row.origin === LOOKUP_ORIGIN ? self.setup(surface as ChannelKind).lookupToolHandlers() : self.setup(surface as ChannelKind).toolHandlers(),
       context: surface => self.setup(surface as ChannelKind).taskContext(),
       // The owner's browser serves one active run, so a job's browser step takes the serial lane with its own scope. With
-      // WALDO_ASYNC_TOOLS on, the owner's own turns hold no browser tool, so the step takes the browser lane instead and the
-      // owner's messages keep running while a page loads.
-      serialBrowser: (scope, work) => asyncToolsEnabled(self.env) ? self.browserSerial(scope, work) : self.serial(async () => {
+      // WALDO_ASYNC_TOOLS on, the owner's own turns hold no browser tool, so a task that only reads pages takes the browser lane
+      // instead and the owner's messages keep running while a page loads. A step that can act on a page (an errand's, an
+      // approved replay's) can raise a card or record an effect, which this object files under the run on its chain, so it
+      // keeps the chain.
+      serialBrowser: (scope, work) => asyncToolsEnabled(self.env) && self.readsPagesOnly(scope) ? self.browserSerial(scope, work) : self.serial(async () => {
         const previous = self.activeScope;
         self.activeScope = scope;
         try { return await work(); } finally { if (self.activeScope === scope) self.activeScope = previous; }
@@ -3391,6 +3393,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
+  }
+  private readsPagesOnly(scope: RunEffectScope): boolean {
+    const row = scope.runId.startsWith('task:') ? this.jobs().get(scope.runId.slice('task:'.length)) : undefined;
+    return row?.kind === 'task' && !jobTools(row).includes('browse_act');
   }
   // One browser step at a time, apart from the owner's chain: the browser serves the lane's scope while a step runs. Anything
   // else that reaches the browser then meets a scope that is not its own and is closed, as a mismatched scope always is.

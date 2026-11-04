@@ -40,14 +40,20 @@ This is a capability decision about tools, not routing by content: nothing inspe
 
 **Tool loader.** Staging runs `WALDO_TOOL_LOADER=harness`. Its catalogue is built from the turn's handlers, so a dropped tool is not findable or callable through `use_tool`. The `web` namespace description names `browse_act`; it stays, because machine turns and the switch-off path still hold it. [verified] source `tools/loader.ts:42-80`; a test in this PR pins it.
 
-### 2. Worker browser steps get their own lane [proposed]
+### 2. A reading task's browser steps get their own lane [built]
 
-With the switch on, `serialBrowser` runs on a browser-only queue, not `serial()`. The owner browser runtime reads the active scope through one field today (`activeScope`, shared with owner turns, approvals and custody checks). The lane sets a separate `browserScope`, and the runtime reads `browserScope ?? activeScope`.
+With the switch on, `serialBrowser` runs a task's browser step on a browser-only queue (`browserSerial`), not `serial()`, when the task's tools hold no browser action (reader and owner look-up workers: `browse_page` only). The owner browser runtime read the active run through one field (`activeScope`), shared with owner turns, approvals and custody checks. The lane sets a separate `browserScope`, and the runtime reads `browserScope ?? activeScope` for browser custody.
 
-- The browser still serves one scope at a time: every worker browse and every approved browser replay goes through the one lane.
-- An owner turn with the switch on holds no browser tool. If anything in an owner turn reaches the browser runtime while a worker browses, the scope check fails closed (`ClosedRunError`), exactly as a mismatched scope does today.
-- Owner storage erase already waits on `channelQueue`; it also waits on the browser lane, so no browser write lands after `deleteAll`.
-- Switch off: `serialBrowser` is today's code path.
+Two places assume one run per owner object:
+- **Model calls.** With a browser registration selected, every owner model call goes through the browser host's gateway (`owner-browser-runtime.ts` `gateway()`), which checks the call's run against the host's active run. During a lane step that would close the owner's turn. So the gateway checks the run on the owner's chain (`chainScope`), and browser custody checks the lane's. [verified] The test "while a task's browser step holds the browser lane…" fails without this and passes with it.
+- **Cards and effects.** The approval desk and the owner effect ledger file a new card or effect under `activeApp ?? activeScope` (`owner-do.ts` `currentRunRef`). An errand's `browse_act` can raise a browser-submit card. On the lane during an owner turn, that card would be filed under the owner's turn, and `cancel_task` would not withdraw it. So steps that can act on a page (errand workers, approved browser replays) keep the owner's chain, as today. [verified] by test.
+
+Other properties:
+- The browser still serves one run at a time: every lane step and every chain step that browses is serialised among its own kind, and an owner turn with the switch on holds no browser tool. If anything else reaches the browser runtime while a lane step runs, its custody check fails closed (`ClosedRunError`), as a mismatched run always does.
+- Owner storage erase waits for the lane as it waits for `channelQueue`, so no browser write lands after `deleteAll`.
+- With the switch off, `serialBrowser` takes today's path, and `chainScope` equals `activeScope`.
+
+**Limit, stated:** an errand's browser actions still hold the owner's chain, one step at a time. Lifting that needs cards and effects filed under the calling run instead of a global current run. That is a change to the approval desk and the effect ledger, so it is a follow-up.
 
 ### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [proposed]
 
@@ -63,6 +69,7 @@ Every reply still says what was started and what was done. The receipt line alre
 ### Not in this step
 
 - **In-turn pickup of a report.** A task that finishes while the owner's turn is still running is reported by the follow-up apply turn, not folded into the running turn. Router turns are now short, so this is rare, and pickup would race the jobs lane, the single retry owner. [proposed] Later step.
+- **Errand browser actions off the chain.** These need cards and effects filed under the calling run (see section 2).
 - **Speculative work, thread subscriptions, router batching.** Other Super-agent steps.
 - **Dependency.** "A new owner message is handled as soon as the current inference step ends" needs `WALDO_SECOND_MESSAGE=1` (and `WALDO_OWNER_FIRST=1` for machine work). Both are "0" in `wrangler.jsonc` today; the 4 Nov owner ruling turns them on in the bundled deploy. Without second message, a newer message waits for the whole (now short) turn.
 
@@ -80,7 +87,8 @@ Every reply still says what was started and what was done. The receipt line alre
 All in `test/async-tools-owner-do.test.ts` (owner object, real app chain, tool loop, task host, worker loop and jobs lane; scripted model and browser vendor) and `test/async-tools.test.ts`.
 
 - **Trace assertion** (owner object, real tool loop, scripted gateway): the owner's turn calls `start_task` and returns its reply, which names the task, while the worker's browse is held open; the worker then finishes and the apply turn delivers the report. The trace order is asserted.
-- **Concurrent message:** with a worker's `browse_page` held open, a second owner message gets its reply before the browse resolves.
+- **Concurrent message:** with a reader worker's `browse_page` held open, a second owner message gets its reply before the browse resolves. With the switch off (any worker), or on for an errand worker, the same message waits for the step: the baseline and the narrowed lane.
+- **Gateway:** with a browser registration selected and the lane held by a task's run, the owner's turn answers through the browser host's gateway.
 - **Menu:** switch on, the owner turn's menu has no `long` tool and no `delegate_task`, through the harness loader too; machine turns and workers keep theirs. Switch off, menu and prompt are byte-identical to the baseline.
 - **Models:** switch on, the reply runs on the auxiliary model with the chat model as its fallback, and a `standard` task runs on the chat model.
 
