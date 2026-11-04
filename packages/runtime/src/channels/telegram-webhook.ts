@@ -62,6 +62,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
+  // Off unless "1".
+  NEXT_DUE_ALARM?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
