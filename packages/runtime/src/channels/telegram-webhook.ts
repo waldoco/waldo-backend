@@ -59,9 +59,15 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // raised it and shown to an app reading approvals=8 or controls=14. Off unless "1".
   WHY_TRAIL?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
+  // unless "1".
+  APPROVE_IN_CHAT?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
+  // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
+  // and logs per-source counts; anything else keeps the deletes.
+  HISTORY_ARCHIVE?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

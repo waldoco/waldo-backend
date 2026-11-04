@@ -454,7 +454,7 @@ export const createOwnerResponder = (
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
-          const retainedRead = ['read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
+          const retainedRead = ['read_memory', 'search_episodes', 'search_history', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
@@ -561,7 +561,7 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       // The turn's reads, kept only while a proposing tool can take steps behind its card.
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
@@ -746,6 +746,10 @@ export const createOwnerResponder = (
     || (activeOwnerTurn?.parts.some((part) => part.authorship === 'quoted' || part.authorship === 'forwarded') ?? false);
   // Set once as the turn starts, from what started it; what its tools read afterwards never changes it.
   const runOrigin = (): RunOrigin => readOthersWords() ? 'external' : activeOwnerTurn ? 'owner' : 'waldo';
+  // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
+  // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
+  const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';

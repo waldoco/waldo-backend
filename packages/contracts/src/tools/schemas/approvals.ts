@@ -15,6 +15,14 @@ export const raiseApprovalArgsSchema = z.strictObject({
   .refine(args => (args.operation === 'withdraw') === (args.reason !== undefined), { error: 'withdraw needs a reason, and only withdraw takes one', path: ['reason'] });
 export type RaiseApprovalArgs = z.infer<typeof raiseApprovalArgsSchema>;
 
+// The owner told Waldo, in their own message, to go ahead with one card they were shown in full in this conversation. Which
+// card, and whether they said to go ahead, is the model's judgment; it names exactly one card and never a default. The desk
+// approves only a card shown here before that message, unchanged since, in a turn that has read no outside text.
+export const approveShownArgsSchema = z.strictObject({
+  approval_id: approvalRefSchema.describe('The one card the owner told you to go ahead with, from its proposal or raise_approval list.'),
+});
+export type ApproveShownArgs = z.infer<typeof approveShownArgsSchema>;
+
 // On a proposing tool: the earlier card of the owner's that this one is a revised version of. Raising the new card closes
 // that one in the same write; whether two cards are the same action is the model's call.
 export const replacesApprovalSchema = approvalRefSchema.optional()

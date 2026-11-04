@@ -72,6 +72,9 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   ownerInitiated?: boolean;
   // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
   runOrigin?: RunOrigin;
+  // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
+  // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments.
+  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number }>;
   // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
   // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
   taintOrigins?: readonly string[];

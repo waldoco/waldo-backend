@@ -1,4 +1,5 @@
 import { jobBook } from '../src/tasks/jobs';
+import { HISTORY_ARCHIVE_TABLE_SCHEMA } from '../src/do-schema';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -848,6 +849,11 @@ positiveStore('task_jobs', 'POSTASK769', (sql, text) => {
   const brief = { title: 'Read the backlog', goal: text, context: text, done_when: 'summarised', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
   book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'pos-769-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
 }, sql => JSON.stringify(sql.exec('SELECT status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()));
+positiveStore('history_archive', 'POSARCHIVE769', (sql, text) => {
+  for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) sql.exec(statement);
+  sql.exec('INSERT INTO history_archive (source, source_id, kind, status, started_at, ended_at, summary, row_json, archived_at) VALUES (?,?,?,?,?,?,?,?,?)',
+    'background_runs', 'pos-769-old', 'event', 'completed', 1, 2, text, JSON.stringify({ id: 'pos-769-old', summary: text }), 3);
+}, sql => JSON.stringify(sql.exec('SELECT summary, row_json FROM history_archive').toArray()));
 
 it('forget_memory cancels an open task whose brief carried the topic, so its worker cannot report it back', async () => {
   const name = 'memory-do-forget-open-task';
