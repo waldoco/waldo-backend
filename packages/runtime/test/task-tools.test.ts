@@ -98,6 +98,21 @@ describe('start_task', () => {
     });
   });
 
+  // The scan reads each field as the model wrote it. Run over the brief's JSON, a quote or a tab before the number became an
+  // escape the check did not see past, and the title then reached the stored brief and the reply's receipt line.
+  it.each([
+    ['a quoted reading in the title', { title: 'Why HRV "38 ms" dropped' }],
+    ['a tab before the reading in the title', { title: 'Why HRV\t38 ms dropped' }],
+    ['a tab before a percentage in the goal', { goal: 'Explain why recovery\t34% was low.' }],
+    ['a quoted heart rate in done_when', { done_when: 'Say why resting HR "52 bpm" rose.' }],
+  ])('refuses a brief with %s and stores nothing', async (_name, field) => {
+    await withTools(async ({ book, start, cancel }) => {
+      const refused = await dispatched([start, cancel], 'call-1', { ...args, ...field });
+      expect(refused).toMatchObject({ ok: false, error_code: 'invalid_args', error: expect.stringContaining('Describe them in words') });
+      expect(book.open()).toHaveLength(0);
+    });
+  });
+
   it('refuses the code profile with what to use instead; the reader profile then starts', async () => {
     await withTools(async ({ book, start, cancel }) => {
       const refused = await dispatched([start, cancel], 'call-1', { ...args, profile: 'code' });

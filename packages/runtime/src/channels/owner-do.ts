@@ -3439,13 +3439,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.browserQueue = run.catch(() => undefined);
     return run;
   }
-  // Owner storage erase. It waits on the channel queue, and takes its place on the browser lane, so no browser step lands
-  // after it: one queued later runs after the erase and finds no job book.
+  // Owner storage erase. It runs on the channel queue and holds its place on the browser lane from the moment it is asked
+  // for: it waits for the browser steps queued before it, and a step queued after it runs after the erase and finds no
+  // job book. Neither queue waits on serial(), so the chain cannot deadlock on it.
   private eraseOwnerStorage(): Promise<void> {
-    return this.channelSerial(() => {
-      const run = this.browserQueue.then(() => this.ctx.storage.deleteAll());
-      this.browserQueue = run.catch(() => undefined);
-      return run;
+    const before = this.browserQueue;
+    let erased!: () => void;
+    this.browserQueue = new Promise<void>(resolve => { erased = resolve; });
+    return this.channelSerial(async () => {
+      await before;
+      try { await this.ctx.storage.deleteAll(); } finally { erased(); }
     });
   }
   private channelSerial<T>(work: () => Promise<T>): Promise<T> {

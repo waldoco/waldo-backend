@@ -41,6 +41,7 @@ const seen = vi.hoisted(() => {
       return tools.includes('delegate_task') ? call('delegate_task', { task: 'Read the hotels page at https://fixture.invalid/hotels and list the hotels.' })
         : call('start_task', { profile: 'reader', title: 'Read the hotels page', goal: 'Read the page.', context: '', done_when: 'What it says.' });
     }
+    if (said.includes('Why did my HRV drop')) return turns.length === 0 ? call('start_task', { profile: 'reader', title: 'Why HRV "47 ms" dropped', goal: 'Find what changed this week.', context: '', done_when: 'Possible contributors.' }) : done({ text: 'I will look into what changed this week.' });
     if (said.includes('Cancel the hotel search')) return turns.length === 0 ? call('cancel_task', { job_id: state.cancelId }) : done({ text: 'Stopped the hotel search.' });
     if (said.includes('Find me three hotels') && turns.length === 0) return call('start_task', { profile: 'reader', title: 'Hotels near the venue', goal: 'Find three hotels near the venue with their nightly price.', context: 'The venue is fixture.invalid.', done_when: 'Three hotels with a price and a link each.' });
     if (said.includes('Find me three hotels')) { state.trace.push('reply:started'); return done({ text: 'I have started looking for hotels near the venue and will message you with three options.' }); }
@@ -309,6 +310,40 @@ it('cancel_task in an owner turn while a reading task\'s page loads fences the t
     expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toHaveLength(1);
     const abort = new AbortController();
     const next = { runId: 'task:after-cancel', attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() };
-    await (owner as unknown as { browserSerial(scope: typeof next, work: () => Promise<string>): Promise<string> }).browserSerial(next, async () => 'ran');
+    expect(await (owner as unknown as { browserSerial(scope: typeof next, work: () => Promise<string>): Promise<string> }).browserSerial(next, async () => 'ran')).toBe('ran');
+  });
+}, 60_000);
+
+// With both switches off, as the owner's turns run today: a task title the model wrote with a quoted reading is refused, so
+// it is neither stored with a job nor named in the reply's receipt line or the transcript.
+it('a start_task title quoting a health reading is refused: no job, and the reply and its receipt do not carry it', async () => {
+  await withOwner({ WALDO_ASYNC_TOOLS: '0', WALDO_LIGHT_CHAT: '0' }, async (owner, state, name) => {
+    await send(owner, name, 'hrv-a-0001', 'Why did my HRV drop this week?');
+    await completed(owner, name, 'hrv-a-0001');
+    expect(jobs(state.storage.sql)).toEqual([]);
+    const chat = await history(owner, name);
+    expect(chat).toContain('I will look into what changed this week.');
+    expect(chat).not.toContain('47');
+    expect(JSON.stringify([...state.storage.kv.list()])).not.toContain('47 ms');
+  });
+}, 60_000);
+
+// An erase waits for the lane step that holds the browser, and a step queued after it runs after the erase: it finds the
+// owner's storage gone, so nothing a task does lands on erased storage.
+it('an owner storage erase takes its place on the browser lane: a step queued after it sees the storage already erased', async () => {
+  await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, state) => {
+    type Lane = { browserSerial<T>(scope: object, work: () => Promise<T>): Promise<T>; eraseOwnerStorage(): Promise<void> };
+    const lane = owner as unknown as Lane;
+    const abort = new AbortController();
+    const scope = (runId: string) => ({ runId, attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() });
+    const held = lane.browserSerial(scope('task:held-step'), async () => { await seen.state.hold; return state.storage.kv.get('do_name'); });
+    const erased = lane.eraseOwnerStorage();
+    const after = lane.browserSerial(scope('task:queued-after'), async () => state.storage.kv.get('do_name'));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(state.storage.kv.get('do_name')).toBeDefined();
+    seen.state.release();
+    expect(await held).toBeDefined();
+    await erased;
+    expect(await after).toBeUndefined();
   });
 }, 60_000);
