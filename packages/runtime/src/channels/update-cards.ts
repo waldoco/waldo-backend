@@ -132,10 +132,13 @@ export const updateBook = (sql: Sql) => {
       }
     },
     // Keeps each key's version as shown, and answers which keys are news: never shown, or shown as another version.
+    // A version read again keeps its row fresh, so it does not age out while it is still being read.
     shown(keys: readonly DeltaKey[], at: number): ReadonlySet<string> {
-      const fresh = new Set(keys.filter(({ key, version }) => sql.exec(`INSERT INTO google_delta_shown (key, version, shown_at) VALUES (?, ?, ?)
-        ON CONFLICT (key) DO UPDATE SET version = excluded.version, shown_at = excluded.shown_at WHERE google_delta_shown.version != excluded.version RETURNING key`,
-      key, version, at).toArray().length > 0).map(({ key }) => key));
+      const fresh = new Set(keys.filter(({ key, version }) => {
+        const was = sql.exec<{ version: string }>('SELECT version FROM google_delta_shown WHERE key = ?', key).toArray()[0]?.version;
+        sql.exec('INSERT INTO google_delta_shown (key, version, shown_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET version = excluded.version, shown_at = excluded.shown_at', key, version, at);
+        return was !== version;
+      }).map(({ key }) => key));
       sql.exec('DELETE FROM google_delta_shown WHERE shown_at < ?', at - DELTA_SHOWN_KEPT_MS);
       return fresh;
     },
@@ -430,11 +433,14 @@ const readDelta = async (book: UpdateBook, delta: DeltaSource,
   // An outage, not one source: the tick fails as before and nothing moves. A tick with nothing due reads nothing.
   if (due > 0 && done === 0) throw firstFailure;
   const items = [...events.values()];
-  // Each account's copy of a meeting has its own etag, link and reply: the key is the event id, and its version what the owner
-  // is shown of it, so a change is said once whichever account reads it, and a change back to an earlier version is said again.
-  const eventKeys = await Promise.all(items.map(async (event) => ({ key: `evt:${event.id}`, version: (await sha256Hex(JSON.stringify([event.status, event.start, event.end,
-    event.all_day, event.title, event.location ?? null, event.description ?? null, event.attendees ?? null, event.attendee_names ?? null,
-    event.recurring_event_id ?? null, event.original_start ?? null, 'series' in event ? event.series ?? null : null]))).slice(0, 32) })));
+  // The key is the event id, and its version what the owner is shown of it in a form every account's copy shares, so a change is
+  // said once whichever account reads it, and a change back to an earlier version is said again. Left out: each copy's own
+  // etag, link and reply, the guest names (each copy leaves out its own account), and the times' offset (each calendar
+  // gives its own), which are compared as instants.
+  const instant = (time: string | undefined) => time ? Date.parse(time) : null;
+  const eventKeys = await Promise.all(items.map(async (event) => ({ key: `evt:${event.id}`, version: (await sha256Hex(JSON.stringify([event.status,
+    instant(event.start), instant(event.end), event.all_day, event.title, event.location ?? null, event.description ?? null, event.attendees ?? null,
+    event.recurring_event_id ?? null, instant(event.original_start), 'series' in event ? event.series ?? null : null]))).slice(0, 32) })));
   return { items, mail: [...mail.values()], after, cursors, reads, codes, eventKeys, eventAccounts, mailAccounts };
 };
 // Records what the read observed and moves the watermarks. With the day state it also keeps each event as last seen, and

@@ -400,6 +400,49 @@ describe('every connected account', () => {
     });
   });
 
+  it('a meeting\'s copies on two accounts are one version: names without self and times in each calendar\'s offset', async () => {
+    await withDelta(async (h) => {
+      const b = h.account('b2');
+      // The same meeting as each account's calendar returns it: the other account is the named guest, and b2's calendar
+      // gives the times in its own offset.
+      const onA = (start: string, end: string, etag: string) => event('sync', { start, end, etag, attendees: 2, attendee_names: ['B Owner'] });
+      const onB = (start: string, end: string, etag: string) => event('sync', { start, end, etag, attendees: 2, attendee_names: ['A Owner'] });
+      h.fakes.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [onA('2026-11-04T10:00:00Z', '2026-11-04T11:00:00Z', '"a-1"')] });
+      b.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [onB('2026-11-04T15:30:00+05:30', '2026-11-04T16:30:00+05:30', '"b-1"')] });
+      expect((await h.check(both)).code).toBe('enqueued');
+      expect(h.rows()[0]!.filter(change => change.source === 'calendar')).toHaveLength(1);
+      h.settle();
+      // b2 answers the invite: only its copy's etag changes, on its own push.
+      const pushB = async (version: CalendarDeltaEvent) => {
+        b.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [version] });
+        h.settle();
+        const at = h.later(60_000);
+        h.updates.pend('cal:b2:primary', at);
+        return (await h.check(both)).code;
+      };
+      expect(await pushB(onB('2026-11-04T15:30:00+05:30', '2026-11-04T16:30:00+05:30', '"b-2"')), 'an RSVP on one copy').toBe('unchanged');
+      // A real move, read first from b2, then from a1 on the poll: said once.
+      expect(await pushB(onB('2026-11-04T17:30:00+05:30', '2026-11-04T18:30:00+05:30', '"b-3"'))).toBe('enqueued');
+      h.fakes.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [onA('2026-11-04T12:00:00Z', '2026-11-04T13:00:00Z', '"a-2"')] });
+      h.settle();
+      h.later();
+      expect((await h.check(both)).code).toBe('unchanged');
+      expect(h.rows()).toHaveLength(2);
+    });
+  });
+
+  it('a version read again keeps its row fresh, so it is not news again once the first sighting ages out', async () => {
+    await withDelta(async (h) => {
+      const at = h.later(0);
+      expect(h.updates.shown([{ key: 'evt:kept', version: 'v1' }], at)).toEqual(new Set(['evt:kept']));
+      const later = at + 13 * 24 * 60 * 60_000;
+      expect(h.updates.shown([{ key: 'evt:kept', version: 'v1' }], later)).toEqual(new Set());
+      // Fourteen days after the first sighting another read prunes what was not seen since.
+      h.updates.shown([{ key: 'evt:other', version: 'v1' }], later + 2 * 24 * 60 * 60_000);
+      expect(h.updates.shown([{ key: 'evt:kept', version: 'v1' }], later + 2 * 24 * 60 * 60_000)).toEqual(new Set());
+    });
+  });
+
   it('removing an account forgets only its sources', async () => {
     await withDelta(async (h) => {
       seed(h, { 'mail:a1': '100', 'cal:a1:primary': 's1', 'cal:a1:team': 't1', 'mail:b2': '900', 'cal:b2:primary': 'w1' });

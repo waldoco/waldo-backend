@@ -72,8 +72,10 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   [verified]) within the same page cap, and emits nothing from the baseline. The gap is then read **once** with the
   existing time-watermark read for that source, so nothing is lost and nothing is replayed. A calendar whose baseline
   exceeds the cap stays on the time-watermark read and is logged `sync_capped`.
-- **Dedupe:** by message id, and by event id plus a digest of what the owner is shown of the event (status, times,
-  title, location, description, attendees, series), in `google_delta_shown`. Each event keeps only the version last
+- **Dedupe:** by message id, and by event id plus a digest of what the owner is shown of the event in a form every
+  account's copy shares (status, times as instants, title, location, description, guest count, series; not the guest
+  names, which leave out each copy's own account, nor a time's offset, which each calendar gives its own), in
+  `google_delta_shown`. A version read again refreshes its row, so it does not age out while it is still being read. Each event keeps only the version last
   shown, so a re-baseline overlap, a gap read, a redelivered push, and the same meeting on two accounts' calendars (each
   copy has its own etag and link) never produce the same change twice, while a change back to an earlier version (moved
   back, or restored after a cancel) is news again. A new etag that changes nothing the owner is shown is no longer
