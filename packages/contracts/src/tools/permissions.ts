@@ -63,6 +63,7 @@ export const toolNameSchema = z.enum([
   'open_loop',
   'close_loop',
   'raise_approval',
+  'approve_shown',
   'track_responsibility',
   'update_todo',
   'list_responsibilities',
@@ -127,6 +128,8 @@ export const toolNameSchema = z.enum([
   'connect_app',
   // send_agent_mail: propose an email Waldo sends as itself from the owner's Waldo address; the owner approves it on a card.
   'send_agent_mail',
+  // search_history: the owner's past runs, tasks, scheduled runs and decided cards, hot and archived; owner turns only, read-only.
+  'search_history',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -290,6 +293,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'open_loop',
     'close_loop',
     'raise_approval',
+    'approve_shown',
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
@@ -318,6 +322,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'cancel_task',
     'record_owner_finding',
     'list_owner_findings',
+    'search_history',
   ],
   dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
   // Always carries send_message — a Spot is never silent (ADR-0042).

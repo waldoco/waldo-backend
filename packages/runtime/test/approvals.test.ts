@@ -943,7 +943,7 @@ describe('approval presentations', () => {
       expect(part).toMatchObject({ type: 'approval', approval_id: proposed, kind: 'calendar_change', actions: ['approve', 'edit', 'skip', 'defer'], payload_digest: `sha256:${await sha256Hex(payload)}`, expires_at: Date.parse('2026-10-10T15:00:00Z') });
       expect(part!.review).toContain('Add "Walk"');
       expect(appApprovalParts(sql)('another-run')).toEqual({ live: [], fallbacks: [] });
-      expect(sql.exec<{ name: string }>('PRAGMA table_info(approval_presentations)').toArray().map(column => column.name)).toEqual(['approval_id', 'surface', 'message_ref', 'presented_at', 'approvable', 'payload_digest', 'retired_at']);
+      expect(sql.exec<{ name: string }>('PRAGMA table_info(approval_presentations)').toArray().map(column => column.name)).toEqual(['approval_id', 'surface', 'message_ref', 'presented_at', 'approvable', 'payload_digest', 'retired_at', 'in_full', 'conversation_ref']);
       expect(unpresented(sql)).toBe(0);
     });
   });

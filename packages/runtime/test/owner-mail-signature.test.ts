@@ -10,7 +10,11 @@ import { agentMailFirstName } from '../src/channels/agent-mail/handles';
 import { WALDO_SITE, ownerMailText, renderOwnerMail } from '../src/channels/agent-mail/render';
 import { approvalDesk } from '../src/channels/approvals';
 import type { GoogleClient } from '../src/connectors/google';
+import { buildSessionState } from '@waldo/contracts';
+import { sanitise } from '../src/scribe/sanitiser';
+import { dispatchTool } from '../src/tools/dispatcher';
 import { googleHandlers } from '../src/tools/live/google';
+import { approvalHandlers } from '../src/tools/live/raise-approval';
 import { sentMime } from './fixtures/email-send';
 
 const DRAFT = { subject: 'Waldo update for Varun', body_markdown: 'Hi Varun and JJ,\n\nShivansh would like to share an update on **Waldo**.\n\nThanks,' };
@@ -140,6 +144,28 @@ describe('send_email signs what it freezes, and the card shows it', () => {
       const second = await f.propose({ body_markdown: `${DRAFT.body_markdown.replace('an update', 'a short update')}` });
       expect(f.cards.at(-1)!.split("Shivansh's personal assistant")).toHaveLength(2);
       expect(f.stored(second).signature).toEqual({ first_name: 'Shivansh' });
+    });
+  });
+
+  // What raise_approval list hands the model, through the real dispatcher and its hooks: the draft unsigned. The owner's
+  // card stays signed.
+  it('raise_approval list shows the model its draft unsigned, while the owner\'s card stays signed', async () => {
+    await owner('sig-raise-list', async state => {
+      const f = harness(state, 'Shivansh');
+      const id = await f.propose();
+      await f.desk.decide(id, 'e', 'trace');
+      const context = {
+        authenticatedUserId: 'owner', trigger: 'user_message' as const, turnId: 'turn-list',
+        session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }),
+        hasApproval: () => false, sourceTaint: null, toolArgSourceTaint: null, sanitise,
+      };
+      const listed = await dispatchTool({ id: 'call-list', name: 'raise_approval', args: { operation: 'list' } }, context as never, { handlers: approvalHandlers(f.desk) as never });
+      expect(listed.ok).toBe(true);
+      const read = JSON.stringify(listed);
+      expect(read).toContain('Shivansh would like to share an update on **Waldo**.');
+      expect(read).not.toContain('personal assistant');
+      expect(read).not.toContain(WALDO_SITE);
+      expect(f.cards[0]).toContain("Shivansh's personal assistant");
     });
   });
 

@@ -98,6 +98,20 @@ describe('send_agent_mail', () => {
     });
   });
 
+  // The owner's card shows the signed mail; what Waldo reads back is its own markdown, so a revision never signs twice.
+  it('lists its card back to the model as the words it wrote, without the signature the owner sees', async () => {
+    await owner('agent-mail-tool-unsigned-list', async state => {
+      const f = harness(state);
+      await f.call(ARGS);
+      const [row] = f.rows();
+      expect(row!.payload.body).toContain("Sam's personal assistant");
+      const [card] = f.desk.waiting();
+      expect(card!.card).toContain('See you at **4**.');
+      expect(card!.card).not.toContain('personal assistant');
+      expect(card!.card).not.toContain(WALDO_SITE);
+    });
+  });
+
   it('refuses arguments the schema does not allow, before any card', async () => {
     await owner('agent-mail-tool-invalid', async state => {
       const f = harness(state);
