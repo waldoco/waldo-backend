@@ -150,7 +150,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
-import { applyDayPlan, applyReplan, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, pullBriefForWake, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -316,7 +316,8 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   // The owner's derived health rows: asked for by each upload that changed a reading and each wearable sync, and recomputed
   // once for every window of asks.
-  healthSamples(cause?: HealthRecomputeCause): Promise<void>;
+  // `woke` says the upload carried a night that just ended, which pulls today's Brief forward.
+  healthSamples(cause?: HealthRecomputeCause, woke?: boolean): Promise<void>;
   healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
@@ -1667,9 +1668,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Worker-to-DO only: an upload changed this owner's readings, and asks for one recompute of the derived rows.
   private async healthSamples(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
-    const cause=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
-    if(!cause)return Response.json({error:'unavailable'},{status:403,headers});
-    await this.setup('app').healthSamples(cause);
+    const notice=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!notice)return Response.json({error:'unavailable'},{status:403,headers});
+    await this.setup('app').healthSamples(notice.cause,notice.woke);
     return Response.json({ok:true},{headers});
   }
   // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
@@ -4980,8 +4981,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         readContext: async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } } });
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
-    const healthSamples = async (cause: HealthRecomputeCause = 'readings') => {
+    const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false) => {
       await recompute.ask();
+      // The code is a closed word, never the time: when the Brief moved would reveal when the owner woke.
+      if (woke) log({ trace: `brief_wake:${Date.now()}`, hop: 'brief_wake', ms: 0, ok: true, code: await pullBriefForWake(scheduler, plans, clock.timezone, Date.now()) });
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
     const healthRecomputeRun = async () => {

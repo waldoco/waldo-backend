@@ -130,9 +130,9 @@ const tableExists = (state: DurableObjectState, name: string) => state.storage.s
 const earlierToday = (day = '2026-10-21') => plane.rows.set(day, { recovery: { score: 20, zone: 'low', algorithm_version: 'recovery.candidate.v1' }, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } });
 
 describe('the readings-changed notice', () => {
-  const capture = async (doName = 'owner-a', cause: 'readings' | 'settings' = 'readings') => {
+  const capture = async (doName = 'owner-a', cause: 'readings' | 'settings' = 'readings', woke = false) => {
     let sent!: Request;
-    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName, cause);
+    await notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: async (request: Request) => { sent = request; return Response.json({ ok: true }); } }) }, SECRET, doName, cause, woke);
     return sent;
   };
   const resend = async (request: Request, over: { headers?: Record<string, string>; body?: unknown; method?: string } = {}) =>
@@ -143,13 +143,24 @@ describe('the readings-changed notice', () => {
     const request = await capture();
     expect(new URL(request.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     expect(await request.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('readings');
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toEqual({ cause: 'readings', woke: false });
+  });
+
+  it('says a night just ended with one signed word and no time, which a readings signature does not cover', async () => {
+    const request = await capture('owner-a', 'readings', true);
+    expect(await request.clone().json()).toEqual({ woke: true });
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toEqual({ cause: 'readings', woke: true });
+    const swapped = await resend(await capture(), { body: { woke: true } });
+    expect(await verifiedHealthSamples(swapped, SECRET, isOwnerA)).toBeNull();
+    for (const body of [{ woke: false }, { woke: '07:12' }, { woke: true, at: '2026-10-21T07:12:00Z' }, { woke: true, settings: true }]) {
+      expect(await verifiedHealthSamples(await resend(request, { body }), SECRET, isOwnerA), JSON.stringify(body)).toBeNull();
+    }
   });
 
   it('says a stated sleep need changed with one signed word, which a readings signature does not cover', async () => {
     const request = await capture('owner-a', 'settings');
     expect(await request.clone().json()).toEqual({ settings: true });
-    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toBe('settings');
+    expect(await verifiedHealthSamples(request, SECRET, isOwnerA)).toEqual({ cause: 'settings', woke: false });
     const readings = await capture();
     const swapped = await resend(readings, { body: { settings: true } });
     expect(await verifiedHealthSamples(swapped, SECRET, isOwnerA)).toBeNull();

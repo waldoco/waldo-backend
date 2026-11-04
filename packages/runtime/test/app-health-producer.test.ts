@@ -65,7 +65,30 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
     expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
     expect(await toOwner[0]!.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('readings');
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'readings', woke: false });
+  });
+
+  it('says woke, and nothing more, only when the batch carries a night that ended within the last three hours', async () => {
+    ownerAnswer = () => Response.json({ ok: true });
+    const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+    const night = (endedMsAgo: number, intervals = true) => ({
+      sample_id: `sleep-${endedMsAgo}`, revision: 1_760_000_000, signal: 'sleep_duration', unit: 'minutes', value: 420,
+      start_at: at(endedMsAgo + 8 * 3_600_000), end_at: at(endedMsAgo), day: today, utc_offset_minutes: 0,
+      ...(intervals ? { sleep_context: { source_ref: 'watch', session_ref: `s-${endedMsAgo}`, waking_day: today, reducer_version: 'asleep-interval-union.v1', contributor_ids: ['c1'],
+        intervals: [{ contributor_id: 'c1', start_at: at(endedMsAgo + 8 * 3_600_000), end_at: at(endedMsAgo), kind: 'asleep' }] } } : {}),
+    });
+    const sent = async (samples: unknown[]) => {
+      toOwner.length = 0;
+      const d = deferrals();
+      await ingest({ ...batch, samples }, d.defer);
+      await Promise.all(d.work);
+      return toOwner[0]!.clone().json();
+    };
+    expect(await sent([night(20 * 60_000)])).toEqual({ woke: true });
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'readings', woke: true });
+    expect(await sent([sample, night(2 * 3_600_000, false)])).toEqual({ woke: true });
+    expect(await sent([night(5 * 3_600_000)])).toEqual({});
+    expect(await sent([sample])).toEqual({});
   });
 
   it('asks nothing for a replayed, empty or refused batch', async () => {
@@ -218,7 +241,7 @@ describe('a saved sleep need asks the owner\'s object to recompute', () => {
       expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 480 }]);
       await expect(Promise.all(d.work)).resolves.toBeDefined();
       expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
-      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('settings');
+      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'settings', woke: false });
     }
   });
 

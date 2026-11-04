@@ -306,6 +306,23 @@ export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook
   return resumed;
 };
 
+// The owner just woke up, so today's Brief runs now rather than at its planned time. The planned time stays the fallback for
+// a morning with no wake signal. A night that "ends" long before the Brief's planned time (waking at 3 for a moment, a nap
+// upload) is not taken as the start of the day; the planner sets that time from their routine, shift workers included.
+export const WAKE_BRIEF_LEAD_MS = 3 * 60 * 60_000;
+export type WakeBrief = 'pulled_forward' | 'not_pending' | 'not_planned' | 'too_early' | 'not_armed';
+
+export const pullBriefForWake = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<WakeBrief> => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const brief = book.read(day).find((row) => row.card === 'card:brief');
+  if (!brief || brief.state !== 'pending') return 'not_pending';
+  if (brief.time === null) return 'not_planned';
+  const planned = localToEpoch(`${day}T${brief.time}`, timezone);
+  if (planned - now > WAKE_BRIEF_LEAD_MS) return 'too_early';
+  // An entry already due or running is left alone; quiet hours still hold the card when it runs.
+  return await scheduler.pullForward('card:brief', now) ? 'pulled_forward' : 'not_armed';
+};
+
 export const CARD_RETRIES_PER_DAY = 3;
 const RETRIES_KEY = 'day_card_retries_v1';
 export type CardRetry = 'started' | 'running' | 'sent' | 'not_needed' | 'limit' | 'unknown_card' | 'unreadable';

@@ -1,4 +1,5 @@
 import { fromRowZone } from '@waldo/contracts';
+import { sleepJustEnded } from '../health/wake-notice';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import {
   checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
@@ -26,7 +27,8 @@ export type AppHealthInput = Readonly<{
   // it, once for a run of uploads, in the owner's own zone; without a way to tell it, or when it cannot take the notice, the
   // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
-  notifySamples?: () => Promise<void>;
+  // `woke` says the upload carries a night that just ended; the notice carries that yes and nothing else.
+  notifySamples?: (woke?: boolean) => Promise<void>;
   // Tells the owner's object that their stated sleep need changed, so it recomputes their rows on it.
   notifySettings?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
@@ -216,7 +218,7 @@ const settings = async ({ request, doName, rpc, readBody, defer, notifySettings 
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching }: AppHealthInput, result: unknown, timezone: string, woke: boolean): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -230,7 +232,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
   }, { now: Date.now(), timezone });
-  defer(notifySamples ? notifySamples().catch(() => { console.error('health samples notice failed'); return here(); }) : here());
+  defer(notifySamples ? notifySamples(woke).catch(() => { console.error('health samples notice failed'); return here(); }) : here());
 };
 
 // Health revision 3: each change is checked on its own. A rejected change stays in its position as its reason and kind of
@@ -294,6 +296,6 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   // would refuse whole as invalid; this answers as the oversize body it is.
   if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(input, refuse('invalid_request', 413));
   const result = await invokeHealth(rpc, doName, operation, payload);
-  recompute(input, result, body.data.timezone);
+  recompute(input, result, body.data.timezone, sleepJustEnded(body.data.samples, Date.now()));
   return logRefusal(input, settle(result, responseSchema));
 };
