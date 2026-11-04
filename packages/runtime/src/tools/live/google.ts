@@ -12,8 +12,9 @@ import {
 import { PEOPLE_UNREADABLE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
 import { agentMailFirstName } from '../../channels/agent-mail/handles';
 import { renderOwnerMail } from '../../channels/agent-mail/render';
-import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
+import type { CalendarEgressScreen } from '../../health/trigger';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
 import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
@@ -325,6 +326,19 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
   return shownMessages;
 };
 
+// An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can
+// say which list a task is on without a list_task_lists read. A failed title read leaves them out and fails nothing.
+const listTitles = async (client: GoogleClient, ids: readonly string[]): Promise<readonly Readonly<{ id: string; title: string }>[] | undefined> => {
+  if (!client.taskListsPage || ids.length === 0) return undefined;
+  try {
+    const lists = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(100));
+    return lists.items.filter((list) => ids.includes(list.id)).map(({ id, title }) => ({ id, title }));
+  } catch (error) {
+    console.log(JSON.stringify({ hop: 'task_list_titles', ok: false, code: error instanceof GoogleError ? `provider_${error.status}` : error instanceof UnreadableAnswer ? 'unreadable_answer' : 'failed' }));
+    return undefined;
+  }
+};
+
 // One content-free line per failed calendar read: which operation and how it failed, never the provider's words.
 const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result: ToolResult<T>): ToolResult<T> => {
   if (!result.ok) console.log(JSON.stringify({ hop: 'calendar_read', ok: false, code: `op_${operation === 'list_calendars' ? 'calendars' : 'events'}:${result.error === UNREADABLE_ANSWER ? 'unreadable_answer' : result.code}${result.connect ? `:${result.connect.reason}` : ''}` }));
@@ -332,7 +346,7 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 };
 
 // ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null) => [
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null, calendarEgress?: CalendarEgressScreen) => [
   {
     name: 'query_calendar',
     description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
@@ -527,7 +541,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         assertCollectionAccount(page.account, client);
       }
       const tasks = page?.tasks ?? await client.tasks(status, limit);
-      return { status, tasks, next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
+      const task_lists = page && !task_list_id ? await listTitles(client, page.task_list_ids) : undefined;
+      return { status, tasks, ...(task_lists ? { task_lists } : {}), next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
         coverage: { scope: page ? task_list_id ? 'selected_task_list' : 'all_task_lists' : 'legacy_default_list_sample', task_list_ids: page?.task_list_ids ?? ['@default'], result_scope: 'current_page', page_limit: limit, fetched_count: page?.fetched_count ?? null, returned_count: tasks.length, page_exhausted: page ? page.next_page_token === null : null, complete: Boolean(page && !page_token && page.next_page_token === null), limitation: page ? 'One account. Each result contains its current page only; continue to cover further tasks/lists. Task due dates are provider date semantics, not scheduled times.' : 'Legacy default-list sample with unknown pagination; empty does not prove absence across lists.' },
         ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
       };
@@ -544,11 +559,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      const screened = await calendarEgress?.check(ctx?.turnId, args);
+      if (screened === 'refused') return { ok: false, code: 'rejected', error: "Nothing was proposed: a word about the owner's health is in the title, notes, place or a guest's address, and the calendar is read by others. Propose it again without it.", source_taint: null };
+      if (screened === 'unchecked') return { ok: false, code: 'rejected', error: "Nothing was proposed: the owner's health context could not be read to check this change before it reaches their calendar.", source_taint: null };
       // replaces is the desk's to act on, never part of the change the owner approves.
       const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {
         try {
-          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}) });
+          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}), why: callWhy(ctx) });
           // A change the owner's standing grant covers ran without a card; the reply tells them what was done.
           const granted = desk.grantOutcome?.(proposal_id) ?? null;
           if (granted) return { proposal_id, status: granted.message, applied: granted.state === 'done' };
@@ -632,7 +650,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
           ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
-        }, { replaces: args.replaces, outside: turnReadOutside(ctx) });
+        }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx) });
         return { ok: true, data: { account: gate.data.account, proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
       } catch (error) {
         if (error instanceof ApprovalReplaceError) return { ok: false, code: 'rejected', error: replaceRefusal(args.replaces!, error), source_taint: null };

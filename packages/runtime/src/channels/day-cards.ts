@@ -1,4 +1,7 @@
 import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName, type ScheduleEntry } from '@waldo/contracts';
+import { appWhy, storedWhy } from '../tools/why-trail';
+import { whyCarries } from './approvals';
+import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
@@ -41,6 +44,8 @@ export const dayPlanBook = (sql: Sql) => {
   if (!columns.has('revised_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_message_id TEXT');
   if (!columns.has('revised_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_record TEXT');
   if (!columns.has('revised_row_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_row_record TEXT');
+  // The steps behind the changes the card's writing proposed ("Why this changed"), gone with the row.
+  if (!columns.has('why_json')) sql.exec('ALTER TABLE day_plan ADD COLUMN why_json TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -74,6 +79,23 @@ export const dayPlanBook = (sql: Sql) => {
     // Whether the card reached the owner today, on any surface, so a change can revise it.
     reached(day: string, card: string): boolean {
       return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
+    },
+    // A written card's steps, or null when its writing proposed nothing; a Try again's writing replaces them.
+    why(day: string, card: CardId, json: string | null): void {
+      if (json === null) sql.exec('UPDATE day_plan SET why_json = NULL WHERE day = ? AND card = ?', day, card);
+      else sql.exec(`INSERT INTO day_plan (day, card, time, reason, why_json) VALUES (?, ?, NULL, 'sent', ?)
+        ON CONFLICT (day, card) DO UPDATE SET why_json = excluded.why_json`, day, card, json);
+    },
+    whys(day: string): ReadonlyMap<string, string> {
+      return new Map(sql.exec<{ card: string; why_json: string }>('SELECT card, why_json FROM day_plan WHERE day = ? AND why_json IS NOT NULL', day).toArray().map(row => [row.card, row.why_json]));
+    },
+    // Owner forget: a day card's steps that name the forgotten text are cleared. Answers how many still name it.
+    forgetWhy(texts: readonly string[]): number {
+      const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
+      if (!topics.length) return 0;
+      const carrying = () => sql.exec<{ day: string; card: string; why_json: string }>('SELECT day, card, why_json FROM day_plan WHERE why_json IS NOT NULL').toArray().filter(row => whyCarries(row.why_json, topics));
+      for (const row of carrying()) sql.exec('UPDATE day_plan SET why_json = NULL WHERE day = ? AND card = ?', row.day, row.card);
+      return carrying().length;
     },
     revisedRow(day: string, card: CardId, messageId: string, record: string): void {
       sql.exec('UPDATE day_plan SET revised_message_id = ?, revised_row_record = ? WHERE day = ? AND card = ?', messageId, record, day, card);
@@ -443,13 +465,13 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
-  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) });
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true);
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
   if (wireSize(build(whole)) <= cap) return build(whole);
   const wanted = [
@@ -484,6 +506,12 @@ type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type CardDelivery = Readonly<{ message_id: string; delivered_at: number }>;
 type LegacyCardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
 export type CardLatest = CardDelivery & Readonly<{ excerpt: string }>;
+
+// The app's "Why this changed" for each of a day's cards that has one.
+export const dayCardsWhy = (book: DayPlanBook, day: string): ReadonlyMap<string, AppWhyV1> => new Map([...book.whys(day)].flatMap(([card, json]) => {
+  const why = appWhy(storedWhy(json));
+  return why ? [[card, why] as const] : [];
+}));
 
 export const cardDeliveries = (book: DayPlanBook, kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
   const legacy = kv.get<LegacyCardDeliveries>(LEGACY_CARD_DELIVERY_KEY);

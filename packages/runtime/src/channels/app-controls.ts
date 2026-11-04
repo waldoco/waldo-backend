@@ -1,4 +1,5 @@
-import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -24,6 +25,8 @@ export type AppControlsHost = Readonly<{
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
   cardsLatest?(view:ConsoleView,revised:boolean):Promise<ConsoleView['cards']>;
+  // The steps behind each of a day's cards that proposed changes ("Why this changed"), by card id.
+  cardsWhy?(date:string):ReadonlyMap<string,AppWhyV1>;
   // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
   days?(date?:string):Promise<object|null>;
   act(action:ConsoleAction,fields?:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt>;
@@ -97,6 +100,12 @@ const namesOwner=(request:Request)=>appContractRevision(request.headers.get(APP_
 const signalsMemory=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_SIGNAL_REVISION;
 // Controls revision 9 shows a revised day card as revised; builds below it read the card as first delivered.
 const showsRevisions=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_DAY_CARD_REVISION;
+// Controls revision 14 shows the steps behind a card's proposals, outside the day's revision like latest; builds below it never receive them.
+const explainCards=(request:Request,host:AppControlsHost,shown:Record<string,unknown>)=>{
+  if(!host.cardsWhy||appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_WHY_REVISION)return shown;
+  const data=shown.data as {date:string;cards:readonly Record<string,unknown>[]},why=host.cardsWhy(data.date);
+  return why.size?{...shown,data:{...data,cards:data.cards.map(card=>{const steps=why.get(card.id as string);return steps?{...card,why:steps}:card;})}}:shown;
+};
 // The sign-in email and, once verified, the number on file. Each is left out when the directory cannot say, and neither read can fail the view.
 const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
   const [email,phone]=await Promise.all([ownerAccountEmail(env,owner),phoneSms(env).state(owner).catch(()=>null)]);
@@ -178,7 +187,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built,showsRevisions(request))},'day'):result;
     const named=query.data.view==='day'&&namesOwner(request)?host.ownerName?.()??null:null;
     const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
-    const day=query.data.view==='day'?dayForRevision(request,shown):shown;
+    const day=query.data.view==='day'?explainCards(request,host,dayForRevision(request,shown)):shown;
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.

@@ -26,9 +26,9 @@ const ROUTER = ['get_context', 'web_search', 'search_communication', 'start_task
 const FULL = [...ROUTER, 'browse_page', 'browse_act', 'read_drive'];
 
 it('off, the prompt is the same bytes as before; on, the ladder climbs to a background task and says what to tell the owner', () => {
-  expect(messagingSystemPrompt(FULL, undefined, 'harness', false)).toBe(messagingSystemPrompt(FULL, undefined, 'harness'));
-  expect(messagingSystemPrompt(ROUTER)).toBe(messagingSystemPrompt(ROUTER, undefined, false, false));
-  const router = messagingSystemPrompt(ROUTER, undefined, false, true);
+  expect(messagingSystemPrompt(FULL, undefined, 'harness', undefined, false)).toBe(messagingSystemPrompt(FULL, undefined, 'harness'));
+  expect(messagingSystemPrompt(ROUTER)).toBe(messagingSystemPrompt(ROUTER, undefined, false, undefined, false));
+  const router = messagingSystemPrompt(ROUTER, undefined, false, undefined, true);
   expect(router).toContain('mail, web_search, a background task, their Mac last.');
   expect(router).toContain('call start_task with a brief that holds everything its worker needs');
   expect(router).toContain('say in this reply what you started');
