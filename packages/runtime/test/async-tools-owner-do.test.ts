@@ -323,7 +323,8 @@ it('a start_task title quoting a health reading is refused: no job, and the repl
     expect(jobs(state.storage.sql)).toEqual([]);
     const chat = await history(owner, name);
     expect(chat).toContain('I will look into what changed this week.');
-    expect(chat).not.toContain('47');
+    // Ids, timestamps and digests carry digits, so the check is for the reading and the title around it.
+    for (const leaked of ['47 ms', 'HRV']) expect(chat).not.toContain(leaked);
     expect(JSON.stringify([...state.storage.kv.list()])).not.toContain('47 ms');
   });
 }, 60_000);
