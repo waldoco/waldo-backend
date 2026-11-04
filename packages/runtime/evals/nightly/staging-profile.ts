@@ -55,6 +55,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
+  PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it off'),

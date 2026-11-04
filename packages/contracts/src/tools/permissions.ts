@@ -128,6 +128,8 @@ export const toolNameSchema = z.enum([
   'connect_app',
   // send_agent_mail: propose an email Waldo sends as itself from the owner's Waldo address; the owner approves it on a card.
   'send_agent_mail',
+  // offer_replies: short answers the owner can tap for the one question a planning card asks; they go out with the card.
+  'offer_replies',
   // search_history: the owner's past runs, tasks, scheduled runs and decided cards, hot and archived; owner turns only, read-only.
   'search_history',
   // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
@@ -281,6 +283,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'draft_email',
     'send_email',
     'send_agent_mail',
+    'offer_replies',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',
