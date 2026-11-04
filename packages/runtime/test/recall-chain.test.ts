@@ -19,7 +19,7 @@ import { recallChain } from '../src/history/recall-chain';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { holdsIn } from '../src/memory/forget-guard';
-import { episodesFromSearchTool, recallForTurn } from '../src/memory/turn-recall';
+import { episodesFromSearchTool, recallForTurn, withinReach } from '../src/memory/turn-recall';
 import { jobBook } from '../src/tasks/jobs';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
@@ -82,9 +82,8 @@ const seed = async (state: DurableObjectState, held: string[] = []) => {
   const chain = recallChain({ sql, claims: barrierMemory(memory, topics), held: () => holdsIn(topics()), approvalSummary: id => ledgerSummary(sql, id) });
   const episodes = searchEpisodesHandler(index, chain);
   const history = searchHistoryHandler(sql, id => ledgerSummary(sql, id), chain);
-  const ctx = {} as never;
-  const read = async (handler: typeof episodes | typeof history, args: unknown) => {
-    const result = await handler.handle(handler.schema.parse(args) as never, ctx);
+  const read = async (handler: typeof episodes | typeof history, args: unknown, ctx: Readonly<{ memoryOutside?: boolean }> = {}) => {
+    const result = await handler.handle(handler.schema.parse(args) as never, ctx as never);
     if (!result.ok) throw new Error(result.error);
     return result.data as never;
   };
@@ -151,11 +150,16 @@ describe('search_episodes with the recall chain', () => {
       const world = await seed(state);
       const before = await world.read(world.episodes, { ref: world.rowOf(`${world.wa}-reply`) }) as EpisodeRead;
       const health = await world.read(world.episodes, { ref: world.rowOf('whatsapp-140') }) as EpisodeRead;
-      return { before: before.episode!.links!, health: health.episode!.links! };
+      const outside = await world.read(world.episodes, { ref: world.rowOf('whatsapp-140') }, { memoryOutside: true }) as EpisodeRead;
+      const outsideSeat = await world.read(world.episodes, { ref: world.rowOf(world.wa) }, { memoryOutside: true }) as EpisodeRead;
+      return { before: before.episode!.links!, health: health.episode!.links!, outside: outside.episode!.links!, outsideSeat: outsideSeat.episode!.links! };
     });
     const lines = [...result.before, ...result.health].map(link => link.line).join('\n');
     expect(lines).not.toMatch(/\b5 hours\b|\b38\b/);
     expect(result.health.find(link => link.rel === 'learned')?.line).toBe('health note');
+    // A turn built from outside content reads memory without health, so the health note is not linked there at all.
+    expect(result.outside.some(link => link.rel === 'learned')).toBe(false);
+    expect(result.outsideSeat.some(link => link.rel === 'learned')).toBe(true);
   });
 });
 
@@ -178,6 +182,8 @@ describe('search_history with the recall chain', () => {
     const result = await inOwner(async state => { const world = await seed(state); return await world.read(world.history, { query: 'Lisbon' }) as SearchHistoryResult; });
     expect(result.entries.length).toBeGreaterThan(1);
     expect(result.entries.every(entry => (entry.links ?? []).length <= 2)).toBe(true);
+    // A list never looks a message up by its entry id, which reads the whole index; a read by ref does.
+    expect(result.entries.flatMap(entry => entry.links ?? []).some(link => link.rel === 'from')).toBe(false);
   });
 });
 
@@ -260,6 +266,27 @@ describe('turn recall with the recall chain', () => {
 // week": the fewest calls that reach the owner's message, Waldo's reply and what the delegated run found, given only what
 // each answer shows, and the characters the model reads on the way. The path is fixed, not a model's choice; a live model is
 // measured by the nightly eval, not here. Each extra call is one more model round, which sends the whole prompt again.
+describe('turn recall in one chat with the recall chain', () => {
+  it('leaves out a link to a message of another chat, as it leaves out that message', async () => {
+    const result = await inOwner(async state => {
+      const world = await seed(state);
+      // A second app thread, right after the first: the first thread's next app turn, in another chat.
+      let at = NOW;
+      const store = indexedConversationStore(durableConversationStore(state.storage), world.index, () => at);
+      await store.save([entry('app-60', 'app', 'Second thread: dinner plans for Friday', null)], 'app-60');
+      at += 1;
+      const search = episodesFromSearchTool(world.episodes as never, {} as never);
+      const linked = (await search.search('agenda draft', 5)).find(hit => hit.entry_id === 'app-55')!.links!;
+      const otherChat = (entryId: string) => !entryId.startsWith('app-60');
+      const hits = await withinReach(search, otherChat).search('agenda draft', 5);
+      return { linked, kept: hits.find(hit => hit.entry_id === 'app-55')!.links!, entries: hits.map(hit => hit.entry_id), other: world.rowOf('app-60') };
+    });
+    expect(rels(result.linked)).toContain(`after ${result.other}`);
+    expect(result.entries).not.toContain('app-60');
+    expect(result.kept).toEqual(result.linked.filter(link => link.ref !== result.other));
+  });
+});
+
 describe('the recall chain, measured', () => {
   it('reaches the thread in one call instead of two, for a bounded cost in definitions and recall', async () => {
     const result = await inOwner(async state => {

@@ -1,6 +1,7 @@
 import type { RecallLink, RecallLinkRel } from '@waldo/contracts';
 import { surfaceOfTrace, traceSurfacePrefix } from '../channels/owner-turn-envelope';
 import type { Claim, ClaimStore } from '../memory/claims';
+import { outsideSafe } from '../memory/outside-view';
 import { redactNumericHealth } from '../scribe/sanitiser';
 
 // The recall chain: a recalled row names the rows next to it, so the model follows a thread by ref instead of searching
@@ -15,16 +16,23 @@ type Sql = Pick<SqlStorage, 'exec'>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 export type RecallChainDeps = Readonly<{
   sql: Sql;
-  // The owner's memory as the turn may see it (the forget barrier's view), read once per call.
+  // The owner's memory as the turn may see it (the forget barrier's view).
   claims: Pick<ClaimStore, 'claims'>;
   // Whether a stored text carries a topic the owner asked to forget whose purge has not finished.
   held: () => Holds;
   approvalSummary: (id: string) => string | null;
 }>;
-export type RecallChain = Readonly<{
+// One tool call's read: memory and the held topics are read once for all its rows.
+export type RecallRead = Readonly<{
   // skip: refs the caller already shows (the other hits of a search), which a link would only repeat.
   ofEpisode(ref: string, limit: number, skip?: ReadonlySet<string>): readonly RecallLink[];
-  ofHistory(ref: string, limit: number): readonly RecallLink[];
+  // byRef: a read of this one entry. Only then is the message a run or task came from looked up, since the index can find
+  // a message by its entry id only by reading every row.
+  ofHistory(ref: string, limit: number, byRef: boolean): readonly RecallLink[];
+}>;
+export type RecallChain = Readonly<{
+  // outside: the call is part of a turn built from outside content, which reads memory without health (outsideSafe).
+  open(options?: Readonly<{ outside?: boolean }>): RecallRead;
 }>;
 export const recallChainOn = (value: string | undefined): boolean => value === '1';
 // Links shown inline beside each hit or entry of a search, and on a read of one row by its ref.
@@ -53,19 +61,25 @@ const EPISODE = "SELECT rowid AS row, entry_id, CASE speaker WHEN 'owner_said' T
 const episodeLine = (row: EpisodeRow) => line(`${row.speaker} ${isoDay(row.at)}: ${row.text}`);
 const claimLine = (claim: Claim) => claim.kind === 'health' ? 'health note' : line(`${claim.kind}: ${claim.text}`);
 
-export const recallChain = (deps: RecallChainDeps): RecallChain => {
+export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (options = {}) => {
   const { sql } = deps;
+  const holds = deps.held();
+  let claims: readonly Claim[] | undefined;
+  const learnedFrom = (turn: string): readonly Claim[] => {
+    claims ??= deps.claims.claims().filter(claim => typeof claim.source_ref === 'string' && (!options.outside || outsideSafe(claim)));
+    return claims.filter(claim => claim.source_ref === `owner, ${turn}`);
+  };
   const episodes = () => tableExists(sql, 'episodes');
   // The first stored row of an entry near a row: an owner message the index split keeps its own words first.
   const entryRow = (entryId: string, near: number): EpisodeRow | undefined =>
     sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid BETWEEN ? AND ? AND entry_id = ? ORDER BY rowid LIMIT 1`, near - NEAR_ROWS, near + NEAR_ROWS, entryId).toArray()[0];
   const anyRow = (entryId: string): EpisodeRow | undefined => episodes() ? sql.exec<EpisodeRow>(`${EPISODE} WHERE entry_id = ? ORDER BY rowid LIMIT 1`, entryId).toArray()[0] : undefined;
-  const episodeLink = (rel: RecallLinkRel, row: EpisodeRow | undefined, holds: Holds): RecallLink[] =>
+  const episodeLink = (rel: RecallLinkRel, row: EpisodeRow | undefined): RecallLink[] =>
     row && !holds(row.text) ? [{ ref: String(row.row), rel, line: episodeLine(row) }] : [];
 
   const runSummary = (summary: string | null, kind: string, status: string) => line(summary ? `${kind} ${status}: ${summary}` : `${kind} ${status}`);
   // Runs and tasks a turn started, in the hot tables (each bounded by its own cap).
-  const started = (turn: string, holds: Holds): RecallLink[] => [
+  const started = (turn: string): RecallLink[] => [
     ...(tableExists(sql, 'background_runs') ? sql.exec<{ id: string; kind: string; status: string; summary: string | null }>('SELECT id, kind, status, summary FROM background_runs WHERE parent_id = ? ORDER BY started_at', turn).toArray()
       .filter(run => !holds(run.summary)).map(run => ({ ref: `background_runs:${run.id}`, rel: 'started' as const, line: runSummary(run.summary, run.kind, run.status) })) : []),
     ...(tableExists(sql, 'task_jobs') ? sql.exec<{ id: string; status: string; title: string | null }>("SELECT id, status, CASE WHEN json_valid(brief_json) THEN json_extract(brief_json, '$.title') END AS title FROM task_jobs WHERE origin = ? ORDER BY created_at", turn).toArray()
@@ -77,19 +91,19 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => {
     if (!Number.isSafeInteger(at) || at < 1 || String(at) !== ref || !episodes()) return [];
     const row = sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid = ?`, at).toArray()[0];
     if (!row) return [];
-    const holds = deps.held(), turn = turnOf(row.entry_id), surface = surfaceOfTrace(row.entry_id);
+    const turn = turnOf(row.entry_id), surface = surfaceOfTrace(row.entry_id);
     const reply = row.entry_id.endsWith('-reply');
-    const pair = episodeLink(reply ? 'reply_to' : 'reply', entryRow(reply ? turn : `${turn}-reply`, row.row), holds);
-    const learned = reply ? [] : deps.claims.claims().filter(claim => claim.source_ref === `owner, ${turn}`).map(claim => ({ ref: `c${claim.id}`, rel: 'learned' as const, line: claimLine(claim) }));
+    const pair = episodeLink(reply ? 'reply_to' : 'reply', entryRow(reply ? turn : `${turn}-reply`, row.row));
+    const learned = reply ? [] : learnedFrom(turn).map(claim => ({ ref: `c${claim.id}`, rel: 'learned' as const, line: claimLine(claim) }));
     // The turns either side on the same surface; the app's threads share one surface, so this reads across them.
     const side = (rel: 'before' | 'after') => surface === null ? [] : episodeLink(rel, sql.exec<EpisodeRow>(
       `${EPISODE} WHERE rowid ${rel === 'before' ? '<' : '>'} ? AND rowid ${rel === 'before' ? '>=' : '<='} ? AND entry_id LIKE ? AND entry_id NOT IN (?, ?) ORDER BY rowid ${rel === 'before' ? 'DESC' : ''} LIMIT 1`,
-      row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${traceSurfacePrefix(surface)}%`, turn, `${turn}-reply`).toArray()[0], holds);
-    return [...pair, ...learned, ...(reply ? [] : started(turn, holds)), ...side('after'), ...side('before')].filter(link => !skip.has(link.ref)).slice(0, limit);
+      row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${traceSurfacePrefix(surface)}%`, turn, `${turn}-reply`).toArray()[0]);
+    return [...pair, ...learned, ...(reply ? [] : started(turn)), ...side('after'), ...side('before')].filter(link => !skip.has(link.ref)).slice(0, limit);
   };
 
   // The turn a run or task came from, if its message is in the index.
-  const fromTurn = (turn: unknown, holds: Holds): RecallLink[] => typeof turn === 'string' && surfaceOfTrace(turn) !== null ? episodeLink('from', anyRow(turn), holds) : [];
+  const fromTurn = (turn: unknown, byRef: boolean): RecallLink[] => byRef && typeof turn === 'string' && surfaceOfTrace(turn) !== null ? episodeLink('from', anyRow(turn)) : [];
   const hotOrArchived = (source: 'background_runs' | 'task_jobs', id: string): Record<string, unknown> | undefined => {
     const hot = tableExists(sql, source) ? sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${source} WHERE id = ?`, id).toArray()[0] : undefined;
     if (hot) return hot;
@@ -112,21 +126,20 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => {
     return [];
   };
 
-  const ofHistory = (ref: string, limit: number): RecallLink[] => {
+  const ofHistory = (ref: string, limit: number, byRef: boolean): RecallLink[] => {
     const split = ref.indexOf(':');
     const source = ref.slice(0, split), id = ref.slice(split + 1);
-    const holds = deps.held();
-    if (source === 'background_runs') return fromTurn(hotOrArchived(source, id)?.parent_id, holds).slice(0, limit);
+    if (source === 'background_runs') return fromTurn(hotOrArchived(source, id)?.parent_id, byRef).slice(0, limit);
     if (source === 'task_jobs') {
       const job = hotOrArchived(source, id);
       if (!job) return [];
       const approval = briefOf(job.brief_json).approval_id;
       const card = typeof approval === 'string' ? deps.approvalSummary(approval) : null;
-      return [...fromTurn(job.origin, holds), ...(card !== null && !holds(card) ? [{ ref: `ledger:${approval as string}`, rel: 'card' as const, line: line(card) }] : [])].slice(0, limit);
+      return [...fromTurn(job.origin, byRef), ...(card !== null && !holds(card) ? [{ ref: `ledger:${approval as string}`, rel: 'card' as const, line: line(card) }] : [])].slice(0, limit);
     }
     if (source === 'ledger') return actsOn(id).slice(0, limit);
     return [];
   };
 
   return { ofEpisode, ofHistory };
-};
+} });

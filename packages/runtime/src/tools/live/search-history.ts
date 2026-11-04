@@ -16,7 +16,7 @@ export const searchHistoryHandler = (sql: Pick<SqlStorage, 'exec'>, approvalSumm
   async handle(args) {
     const found = searchHistory(sql, args, approvalSummary);
     if (!chain) return { ok: true, data: found, source_taint: null };
-    const links = args.ref === undefined ? INLINE_LINKS : REF_LINKS;
-    return { ok: true, data: { ...found, entries: found.entries.map(entry => ({ ...entry, links: chain.ofHistory(entry.ref, links) })) }, source_taint: null };
+    const read = chain.open(), byRef = args.ref !== undefined;
+    return { ok: true, data: { ...found, entries: found.entries.map(entry => ({ ...entry, links: read.ofHistory(entry.ref, byRef ? REF_LINKS : INLINE_LINKS, byRef) })) }, source_taint: null };
   },
 });
