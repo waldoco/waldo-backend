@@ -60,8 +60,8 @@ export const NUDGE_LINES: Readonly<Record<NudgeCode, string>> = {
   drifting: `[Waldo checked this task's progress: the recent steps have moved away from the goal above. Go back to it, or call ${FINISH_TASK} with what you have.]`,
 };
 
-// No CHECK lists on these tables: CREATE TABLE IF NOT EXISTS never updates one in an object that already has the table, so a
-// code added later would fail to insert there. The types bound the values.
+// No CHECK lists on these tables: an "if not exists" create leaves an existing table's CHECK as it was, so a code added later
+// would fail to insert in an object that already has the table. The types bound the values.
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS watchdog_jobs (
     job_id     TEXT PRIMARY KEY,
