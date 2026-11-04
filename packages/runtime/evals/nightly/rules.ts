@@ -25,7 +25,7 @@ export const promptRules = async (system: string): Promise<readonly PromptRule[]
   return rules;
 };
 
-const VOICE = ['v01-wrong-fact', 'v02-own-double-booking', 'v03-week-one-preference', 'v04-unwise-late-call', 'v05-small-fall', 'v06-does-not-know', 'v07-time-request', 'v08-stressed-owner'];
+const VOICE = ['v01-wrong-fact', 'v02-own-double-booking', 'v03-week-one-preference', 'v04-unwise-late-call', 'v05-small-fall', 'v06-does-not-know', 'v07-time-request', 'v08-stressed-owner', 'v09-plan-not-interview'];
 
 // Each entry names a rule by words only it contains. `boundary` says which hard line it holds (auth, secrets, egress,
 // schema, health values, medication dosing, emergency safety, untrusted text): those are excluded from ablation.
