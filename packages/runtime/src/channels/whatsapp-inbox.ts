@@ -1,8 +1,8 @@
-import { literalTextRedactor } from '@waldo/contracts';
+import { literalTextRedactor, LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
 import { carriesTopic } from '../memory/forget-guard';
 import { WHATSAPP_INBOX_DUE_KEY } from '../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { plainOwnerText, WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
+import { burstOwnerMessage, plainOwnerText, WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
 
 // Owner-DO side of WhatsApp ingress: one durable row per owner message, written in the same synchronous step that claims its
 // wamid and before Meta gets its 200. The alarm drains the rows one turn at a time, so a message that arrives while another
@@ -30,12 +30,19 @@ export type WhatsAppInboxRecord = {
   id: string; updateId: number; wamid: string; subject: string;
   /** The turn's input, built at admission; null once the row closes, so no closed row keeps the owner's words. */
   update: WaSyntheticUpdate | null;
+  /** A claimed burst's earlier messages, oldest first, which ride with `update` in its one turn; gone once the row closes. */
+  earlier?: WaSyntheticUpdate[];
   admittedAt: number;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
 };
 
 const open = (r: WhatsAppInboxRecord) => r.state === 'admitted' || r.state === 'running';
+// The files a row hands its turn's model; one turn's burst stops before it would carry more than the model takes.
+const attached = (r: WhatsAppInboxRecord): number => [...(r.earlier ?? []), r.update].filter(update => {
+  const message = (update as { message?: { document?: unknown; photo?: unknown } } | null)?.message;
+  return message?.document !== undefined || message?.photo !== undefined;
+}).length;
 
 // The owner's words an update carries: its text or caption, the quoted message of Waldo's it replies to, and a file's name.
 const TEXT_PATHS = [['text'], ['caption'], ['reply_to_message', 'text'], ['document', 'file_name']] as const;
@@ -94,9 +101,10 @@ export class WhatsAppOwnerInbox {
   }
 
   /**
-   * Claims the next turn in one step: running, with a new attempt and its deadline. When the oldest waiting row is plain owner
-   * text, the plain owner texts from the same sender right behind it join it under the newest message (its update id and
-   * wamid), and their own rows close. Null when no row waits, or while the owner may still be typing; the inbox's due wake
+   * Claims the next turn in one step: running, with a new attempt and its deadline. When the oldest waiting row is a burst
+   * message (text, a forward or a file the owner sent), the burst messages from the same sender right behind it ride in its
+   * turn under the newest one (its update id and wamid), and their own rows close: plain texts join into one text, and any
+   * other burst keeps the newest message as the update and the rest, oldest first, as `earlier`. Null when no row waits, or while the owner may still be typing; the inbox's due wake
    * brings the drain back when the quiet window ends.
    */
   claimNext(deadline: number): WhatsAppInboxRecord | null {
@@ -107,8 +115,12 @@ export class WhatsAppOwnerInbox {
       if (this.now() < this.readyAt(run)) { this.refreshDue(); return null; }
       const last = run.at(-1)!;
       if (run.length > 1) {
-        const joined = run.map(row => (row.update as { message: { text: string } }).message.text).join('\n');
-        r.update = { ...last.update!, message: { ...(last.update!.message as object), text: joined } };
+        const members = run.flatMap(row => [...(row.earlier ?? []), row.update!]);
+        if (members.every(plainOwnerText)) {
+          const joined = members.map(update => (update as { message: { text: string } }).message.text).join('\n');
+          r.update = { ...last.update!, message: { ...(last.update!.message as object), text: joined } };
+          delete r.earlier;
+        } else { r.update = last.update; r.earlier = members.slice(0, -1); }
         r.wamid = last.wamid;
         for (const row of run.slice(1)) this.close(row, 'completed');
       }
@@ -136,10 +148,10 @@ export class WhatsAppOwnerInbox {
     };
   }
 
-  /** Whether newer plain text from the same sender waits behind this running plain-text row, so its reply may be dropped for one turn that answers both. */
+  /** Whether a newer burst message from the same sender waits behind this running burst row, so its reply may be dropped for one turn that answers both. */
   overtaken(id: string): boolean {
     const r = this.get(id), next = this.next();
-    return this.merge && !!r && r.state === 'running' && plainOwnerText(r.update) && !!next && next.subject === r.subject && plainOwnerText(next.update);
+    return this.merge && !!r && r.state === 'running' && burstOwnerMessage(r.update) && !!next && next.subject === r.subject && burstOwnerMessage(next.update);
   }
 
   /** The running turn's model folded a waiting row into its own answer: it completes without a turn of its own. Only a row still admitted folds. Runs inside the running turn's commit. */
@@ -207,30 +219,35 @@ export class WhatsAppOwnerInbox {
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
     let rewritten = 0;
     for (const r of this.records()) {
-      if (!open(r) || !r.update || !texts(r.update).some(holds)) continue;
+      if (!open(r) || !r.update || ![r.update, ...(r.earlier ?? [])].some(update => texts(update).some(holds))) continue;
       r.update = redacted(r.update, redact);
+      if (r.earlier) r.earlier = r.earlier.map(update => redacted(update, redact));
       this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }
-    return { rewritten, remaining: this.records().filter(r => texts(r.update).some(holds)).length };
+    return { rewritten, remaining: this.records().filter(r => [r.update, ...(r.earlier ?? [])].some(update => texts(update).some(holds))).length };
   }
 
   private close(r: WhatsAppInboxRecord, state: 'completed' | 'interrupted' | 'revoked'): void {
-    r.state = state; r.closedAt = this.now(); r.update = null;
+    r.state = state; r.closedAt = this.now(); r.update = null; delete r.earlier;
     this.storage.kv.put(PREFIX + r.id, r);
   }
-  // The oldest waiting row, with the plain owner texts from the same sender right behind it when it is one.
+  // The oldest waiting row, with the burst messages from the same sender right behind it when it is one.
   private nextRun(): WhatsAppInboxRecord[] {
     const waiting = this.records().filter(r => r.state === 'admitted');
     const first = waiting[0];
     if (!first) return [];
-    if (!this.merge || !plainOwnerText(first.update)) return [first];
+    if (!this.merge || !burstOwnerMessage(first.update)) return [first];
     const run = [first];
-    for (const r of waiting.slice(1)) { if (r.subject !== first.subject || !plainOwnerText(r.update)) break; run.push(r); }
+    let files = attached(first);
+    for (const r of waiting.slice(1)) {
+      if (r.subject !== first.subject || !burstOwnerMessage(r.update) || files + attached(r) > LLM_ATTACHMENTS_MAX) break;
+      run.push(r); files += attached(r);
+    }
     return run;
   }
   // When a run of text may start: the quiet window after its newest message, never past the cap after its oldest.
   private readyAt(run: readonly WhatsAppInboxRecord[]): number {
-    if (!this.merge || !this.quietMs || !run.length || !plainOwnerText(run[0]!.update)) return 0;
+    if (!this.merge || !this.quietMs || !run.length || !burstOwnerMessage(run[0]!.update)) return 0;
     return Math.min(run.at(-1)!.admittedAt + this.quietMs, run[0]!.admittedAt + WHATSAPP_QUIET_MAX_MS);
   }
   private refreshDue(): void {

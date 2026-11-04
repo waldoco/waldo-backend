@@ -1,6 +1,6 @@
 // WhatsApp messages the owner sends close together get one reply, through the owner object's real admission path: texts in
 // one payload or within the quiet window are one turn, and a reply that newer texts overtook before it did anything is not
-// sent; one turn answers them all. A turn that acted keeps its reply, and a command or forward is never folded in.
+// sent; one turn answers them all. Forwards and files ride in that turn too. A turn that acted keeps its reply.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -51,6 +51,8 @@ const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<vo
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === 'https://graph.facebook.com/v26.0/media-sticker') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=sticker' });
+      if (url === 'https://graph.facebook.com/v26.0/media-notes') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=notes' });
+      if (url.endsWith('mid=notes')) return new Response('# Saved workout references\nMon heavy lift, Fri rest.', { headers: { 'content-type': 'text/markdown' } });
       if (url.startsWith('https://lookaside.fbsbx.com/')) return new Response(webp, { headers: { 'content-type': 'image/webp' } });
       if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
         const body = JSON.parse(String(init?.body)) as GraphCall;
@@ -127,7 +129,7 @@ it('keeps the reply of a turn that acted, and answers the newer message on its o
   });
 }, 60_000);
 
-it('never folds a reply into a forward that arrives while it is being written', async () => {
+it('a forward that arrives while a reply is being written overtakes it: one reply answers both, the forward still marked as forwarded', async () => {
   await whatsappOwner('wa-merge-forward', async (admit, drain, graph) => {
     const hold = holdReply();
     await admit(text('Hey Waldo', 'wamid.hey'));
@@ -137,7 +139,26 @@ it('never folds a reply into a forward that arrives while it is being written', 
     hold.release();
     await draining;
     await drain();
-    expect(replies(graph)).toHaveLength(2);
+    expect(lastMessage()).toContain('Hey Waldo');
+    expect(lastMessage()).toMatch(/[Ff]orwarded[^"]*\\n\\"Meeting moved to 4pm/);
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+it('a forwarded note, a file and a text sent together are one turn: the model reads all three and one reply answers them', async () => {
+  await whatsappOwner('wa-merge-burst', async (admit, drain, graph) => {
+    await admit(
+      text('Found both saved workout references', 'wamid.fwd', { forwarded: true }),
+      { id: 'wamid.file', type: 'document', document: { id: 'media-notes', filename: 'workout-info.md', mime_type: 'text/markdown' }, context: { forwarded: true } },
+      text('i had asked instinct to save this some time back', 'wamid.said'),
+    );
+    await drain();
+    expect(turns()).toHaveLength(1);
+    const input = JSON.stringify(turns()[0]!.input);
+    expect(input).toContain('Found both saved workout references');
+    expect(input).toContain('workout-info.md');
+    expect(input).toContain('i had asked instinct to save this some time back');
+    expect(replies(graph)).toHaveLength(1);
   });
 }, 60_000);
 
