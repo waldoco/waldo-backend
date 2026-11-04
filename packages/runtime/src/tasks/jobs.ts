@@ -13,7 +13,9 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type JobKind = 'task' | 'retry_turn' | 'approval_replay';
-export type JobStatus = 'queued' | 'running' | 'reported' | 'applied' | 'cancelled' | 'parked';
+// awaiting_owner: a task's worker reached a step only the owner can approve. The job holds no lease and no running slot, its
+// checkpoint names the step and its card, and it waits for the decision or its deadline.
+export type JobStatus = 'queued' | 'running' | 'awaiting_owner' | 'reported' | 'applied' | 'cancelled' | 'parked';
 export type JobOutcome = TaskResult['status'];
 export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect' | 'deadline' | 'brief_changed';
 export type CancelReason = 'owner' | 'forgotten';
@@ -52,14 +54,18 @@ export type RetryBrief = Readonly<{ message_ref: string; text: string; conversat
 // the card was approved under. The brain runs it once, later, under the job's own run scope.
 export type ReplayBrief = Readonly<{ approval_id: string; tool: string; args: Record<string, unknown>; args_digest: string; approved_at: number }>;
 export type ReplayOutcome = TaintedActionOutcome;
-export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[] }>;
+// The step a job waits on the owner for: the card raised for it and the worker's call exactly as the card froze it, and once
+// the owner has decided, the decision the next attempt resumes with.
+// An approved step runs once as the card's own replay job; its outcome is what the job resumes with.
+export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id: string; name: string; arguments: string }>; decision?: 'approved' | 'declined' }>;
+export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep }>;
 
 export type JobRow = Readonly<{
   id: string; kind: JobKind; profile: TaskProfile | null; idempotency_key: string; origin: string; surface: string;
   brief_json: string; brief_digest: string; status: JobStatus; attempt: number; lease_token: string | null; lease_until: number | null;
   crashes: number; deferrals: number; due_at: number | null; deadline_at: number; checkpoint_seq: number; checkpoint_json: string | null; inflight_json: string | null;
   taint: 'external' | null; result_json: string | null; outcome: JobOutcome | null; park_reason: ParkReason | null; cancel_reason: CancelReason | null;
-  rounds: number; cost_usd: number; notes_sent: number; last_note_at: number | null; created_at: number; updated_at: number; settled_at: number | null;
+  rounds: number; cost_usd: number; notes_sent: number; last_note_at: number | null; park_retries: number; created_at: number; updated_at: number; settled_at: number | null;
 }>;
 export type TaskTicket = Readonly<{ jobId: string; attempt: number; token: string }>;
 
@@ -107,7 +113,7 @@ export type CreateJob = Readonly<{
 }>;
 export type Fenced = 'fenced';
 
-const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
+const OPEN: readonly JobStatus[] = ['queued', 'running', 'awaiting_owner', 'reported'];
 const SETTLED = "status IN ('applied', 'cancelled', 'parked')";
 const MACHINE_ROW = `origin LIKE '${MACHINE_ORIGIN}%'`;
 // What a settled row keeps of its brief: a task's title (cancel_task names it) and start time, a retry's references and
@@ -139,15 +145,16 @@ type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; 
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string; archive?: HistoryArchive }>) => {
-  // A table an earlier build created does not admit approval replays; it is rebuilt with the same columns and rows in this
-  // synchronous block, which the storage commits as one transaction.
+  // A table an earlier build created does not admit approval replays or jobs awaiting the owner; it is rebuilt with every column
+  // it had, and park_retries at its default, in this synchronous block, which the storage commits as one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
-  if (made !== undefined && !made.includes("'approval_replay'")) {
+  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'"))) {
     sql.exec('DROP INDEX IF EXISTS task_jobs_open');
-    sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_replay');
+    sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_ask');
     for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
-    sql.exec('INSERT INTO task_jobs SELECT * FROM task_jobs_before_replay');
-    sql.exec('DROP TABLE task_jobs_before_replay');
+    const kept = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('task_jobs_before_ask')").toArray().map(({ name }) => name).join(', ');
+    sql.exec(`INSERT INTO task_jobs (${kept}) SELECT ${kept} FROM task_jobs_before_ask`);
+    sql.exec('DROP TABLE task_jobs_before_ask');
   }
   for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
   const get = (id: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE id = ?', id).toArray()[0] ?? null;
@@ -176,7 +183,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     const now = deps.now();
     return sql.exec(
       `UPDATE task_jobs SET status = 'reported', outcome = ?, park_reason = ?, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ?
-       WHERE id = ? AND status IN ('queued', 'running')`, outcome, reason, now, now, id,
+       WHERE id = ? AND status IN ('queued', 'running', 'awaiting_owner')`, outcome, reason, now, now, id,
     ).rowsWritten > 0;
   };
 
@@ -320,6 +327,45 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     // A job the brain itself parks (a retry whose promised time came, an effect that cannot be replayed, a changed brief).
     park,
+    // The attempt reached a step only the owner can approve, and its card is raised: the job leaves its lease and its running
+    // slot and waits, with the step in its checkpoint, until the decision or its deadline (due_at). The step never started, so
+    // nothing is in flight. Only the attempt holding the lease moves it.
+    await(ticket: TaskTicket, step: AskedStep): boolean {
+      const row = current(ticket);
+      if (!row) return false;
+      const now = deps.now();
+      return sql.exec(
+        `UPDATE task_jobs SET status = 'awaiting_owner', lease_token = NULL, lease_until = NULL, inflight_json = NULL, due_at = deadline_at, checkpoint_json = ?, updated_at = ?
+         WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
+        JSON.stringify({ turns: jobCheckpoint(row).turns, asked: step }), now, ticket.jobId, ticket.attempt, ticket.token,
+      ).rowsWritten > 0;
+    },
+    // The job waiting on card `approvalId`, if any.
+    asking: (approvalId: string): JobRow | null => sql.exec<JobRow>(
+      "SELECT * FROM task_jobs WHERE status = 'awaiting_owner' AND json_extract(checkpoint_json, '$.asked.approval_id') = ?", approvalId,
+    ).toArray()[0] ?? null,
+    awaiting: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'awaiting_owner' ORDER BY created_at").toArray(),
+    // The card the job waits on was decided: the job queues for its next attempt, due now, which runs an approved step under
+    // its own scope and resumes from the checkpoint.
+    resume(approvalId: string, decision: 'approved' | 'declined'): boolean {
+      const row = this.asking(approvalId);
+      if (!row) return false;
+      const checkpoint = jobCheckpoint(row);
+      const now = deps.now();
+      return sql.exec(
+        "UPDATE task_jobs SET status = 'queued', due_at = ?, checkpoint_json = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_owner'",
+        now, JSON.stringify({ ...checkpoint, asked: { ...checkpoint.asked!, decision } }), now, row.id,
+      ).rowsWritten > 0;
+    },
+    // A task parked for a crash or a provider outage runs once more after `dueAt` before the owner hears it stopped: its last
+    // attempt's checkpoint stays, so the retry resumes from it. Only once per job, and never one parked with an effect in doubt.
+    retryParked(id: string, dueAt: number): boolean {
+      return sql.exec(
+        `UPDATE task_jobs SET status = 'queued', outcome = NULL, park_reason = NULL, crashes = 0, park_retries = park_retries + 1, due_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'reported' AND park_retries = 0 AND park_reason IN ('crashed', 'provider_unavailable') AND inflight_json IS NULL AND deadline_at > ?`,
+        dueAt, deps.now(), id, dueAt,
+      ).rowsWritten > 0;
+    },
     // The owner is no longer admitted: running attempts (all, or job `id`'s) end without counting as a crash, and wait in the
     // queue until the owner is admitted again; one with an effect in flight parks, as a lost attempt would. Answers the ids.
     suspend(id?: string): readonly string[] {
@@ -385,9 +431,9 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     // An approved action's replay holds no task or machine slot; one runs at a time.
     replaying: (): boolean => sql.exec("SELECT 1 FROM task_jobs WHERE status = 'running' AND kind = 'approval_replay' LIMIT 1").toArray().length > 0,
-    // Work the brain owes now: queued attempts whose time came, and reported jobs not yet applied.
+    // Work the brain owes now: queued attempts whose time came, reported jobs not yet applied, and asks past their deadline.
     due: (): readonly JobRow[] => sql.exec<JobRow>(
-      "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
+      "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported', 'awaiting_owner') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
     ).toArray(),
     // Intent before a report's apply turn, which holds the owner's tools: a reported row still carrying it was lost partway
     // through that turn (applyInterrupted), and the lane does not run the turn again.
