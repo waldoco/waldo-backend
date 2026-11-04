@@ -145,6 +145,14 @@ export class IMessageOwnerInbox {
       return current ? structuredClone(r) : null;
     });
   }
+  /** The running turn's model folded a waiting message into its own answer: it completes without a turn of its own. Only a row still admitted folds. Runs inside the running turn's commit. */
+  fold(id: string): boolean {
+    const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + id);
+    if (!r || r.state !== 'admitted') return false;
+    r.state = 'completed'; r.closedAt = this.now(); clear(r);
+    this.storage.kv.put(PREFIX + id, r); this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
+    return true;
+  }
   scope(record: IMessageInboxRecord, signal: AbortSignal): RunEffectScope {
     const admit = () => {
       const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + record.id);

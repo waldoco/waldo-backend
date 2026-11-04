@@ -104,6 +104,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_QUIET_MS?: string;
   // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
   WHATSAPP_REPLY_MERGE?: string;
+  // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
+  WALDO_OWNER_FIRST?: string;
+  // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
+  WALDO_SECOND_MESSAGE?: string;
+  // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;

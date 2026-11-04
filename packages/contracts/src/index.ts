@@ -39,6 +39,7 @@ export * from './tools/schemas/reads';
 export * from './tools/schemas/console-link';
 export * from './tools/schemas/connect-app';
 export * from './tools/schemas/progress-note';
+export * from './tools/schemas/owner-message-heard';
 export * from './tools/schemas/reactions';
 export * from './tools/schemas/attach-file';
 export * from './tools/schemas/offer-replies';
