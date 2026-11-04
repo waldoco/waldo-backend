@@ -261,11 +261,14 @@ export const healthCardBudget = (store: DeliveryGateStore, owner: string, timezo
 
 // The words this run put in front of the model about the owner's health. Calendar fields go to Google, where guests can
 // read them (ADR-0081: no health reason reaches a calendar), so none of these may appear in one.
-export const healthWordsOf = (view: HealthTriggerView): readonly string[] => {
+// Without a view (nothing shared, or no row today) only the subjects themselves are held back.
+const HEALTH_SUBJECTS = ['recovery', 'form', 'load', 'health', 'sleep', 'hrv', 'readiness', 'strain'];
+export const healthWordsOf = (view: HealthTriggerView | null): readonly string[] => {
+  if (view === null) return HEALTH_SUBJECTS;
   const zones = [view.now, ...(view.before ? [view.before.zones] : [])].flatMap((z): (string | null)[] => [z.recovery, z.form, z.load]).filter((word): word is string => word !== null);
   // A driver's subject names a signal of the owner's health, so it stays out of what reaches Google as well.
   const subjects = DRIVER_SUBJECTS.filter(subject => view.drivers.some(phrase => phrase.startsWith(subject)));
-  return [...new Set([...zones, 'recovery', 'form', 'load', 'health', 'sleep', 'hrv', 'readiness', 'strain', ...subjects])];
+  return [...new Set([...zones, ...HEALTH_SUBJECTS, ...subjects])];
 };
 const mentions = (text: string, words: readonly string[]): boolean => {
   const lower = text.toLowerCase();
@@ -448,9 +451,27 @@ export const parseHealthDecision = (raw: string, items: readonly ComingItem[], n
 
 // The calendar fields that reach Google carry no health word from this run. Egress is a hard boundary, so a hit refuses
 // the whole proposal rather than editing it. On a move the title only names the event as it is now, on the card; Google
-// receives the new name, rename_to.
-export const calendarEgressClear = (args: Pick<ProposeCalendarChangeArgs, 'title' | 'description' | 'location' | 'rename_to'> & Partial<Pick<ProposeCalendarChangeArgs, 'action'>>, words: readonly string[]): boolean =>
-  ![args.action === 'move' ? undefined : args.title, args.description, args.location, args.rename_to].some(field => typeof field === 'string' && mentions(field, words));
+// receives the new name, rename_to. Guest addresses reach Google, and each guest's inbox, too.
+export const calendarEgressClear = (args: Pick<ProposeCalendarChangeArgs, 'title' | 'description' | 'location' | 'rename_to'> & Partial<Pick<ProposeCalendarChangeArgs, 'action' | 'attendees'>>, words: readonly string[]): boolean =>
+  ![args.action === 'move' ? undefined : args.title, args.description, args.location, args.rename_to, ...(args.attendees ?? [])].some(field => typeof field === 'string' && mentions(field, words));
+
+// The same boundary for a scheduled run that reads the owner's health and may propose calendar changes (the planning Brief):
+// a run opens its slot by trace before its turn and closes it after. Each proposal in an open run is checked against the
+// words of the health view read for that run, once; a read that fails refuses the proposal, so nothing passes unchecked.
+export type CalendarEgressScreen = Readonly<{ check(turnId: string | undefined, args: Parameters<typeof calendarEgressClear>[0]): Promise<'clear' | 'refused' | 'unchecked'> }>;
+export const calendarEgressRuns = (readWords: () => Promise<readonly string[]>) => {
+  const runs = new Map<string, Promise<readonly string[]> | null>();
+  const screen: CalendarEgressScreen = {
+    async check(turnId, args) {
+      if (turnId === undefined || !runs.has(turnId)) return 'clear';
+      let words = runs.get(turnId) ?? null;
+      if (words === null) { words = readWords(); runs.set(turnId, words); }
+      try { return calendarEgressClear(args, await words) ? 'clear' : 'refused'; }
+      catch { if (runs.has(turnId)) runs.set(turnId, null); return 'unchecked'; }
+    },
+  };
+  return { screen, open(trace: string): void { runs.set(trace, null); }, close(trace: string): void { runs.delete(trace); } };
+};
 
 export type HealthTriggerDeps = Readonly<{
   book: HealthTriggerBook;

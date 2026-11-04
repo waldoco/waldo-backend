@@ -279,6 +279,12 @@ export const toContextHealthMaterial = (
   }
 };
 
+// The zone words a rendered health block shows the model (renderHealth), for checks that keep them out of what leaves.
+export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => material === null ? [] : [
+  'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
+  material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),
+];
+
 export type HealthContextBook = Readonly<{
   linked(): boolean;
   latest(trace?: string): Promise<ContextHealthMaterial | null>;
