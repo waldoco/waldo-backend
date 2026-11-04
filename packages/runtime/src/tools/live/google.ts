@@ -326,6 +326,19 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
   return shownMessages;
 };
 
+// An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can
+// say which list a task is on without a list_task_lists read. A failed title read leaves them out and fails nothing.
+const listTitles = async (client: GoogleClient, ids: readonly string[]): Promise<readonly Readonly<{ id: string; title: string }>[] | undefined> => {
+  if (!client.taskListsPage || ids.length === 0) return undefined;
+  try {
+    const lists = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(100));
+    return lists.items.filter((list) => ids.includes(list.id)).map(({ id, title }) => ({ id, title }));
+  } catch (error) {
+    console.log(JSON.stringify({ hop: 'task_list_titles', ok: false, code: error instanceof GoogleError ? `provider_${error.status}` : error instanceof UnreadableAnswer ? 'unreadable_answer' : 'failed' }));
+    return undefined;
+  }
+};
+
 // One content-free line per failed calendar read: which operation and how it failed, never the provider's words.
 const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result: ToolResult<T>): ToolResult<T> => {
   if (!result.ok) console.log(JSON.stringify({ hop: 'calendar_read', ok: false, code: `op_${operation === 'list_calendars' ? 'calendars' : 'events'}:${result.error === UNREADABLE_ANSWER ? 'unreadable_answer' : result.code}${result.connect ? `:${result.connect.reason}` : ''}` }));
@@ -528,7 +541,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         assertCollectionAccount(page.account, client);
       }
       const tasks = page?.tasks ?? await client.tasks(status, limit);
-      return { status, tasks, next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
+      const task_lists = page && !task_list_id ? await listTitles(client, page.task_list_ids) : undefined;
+      return { status, tasks, ...(task_lists ? { task_lists } : {}), next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
         coverage: { scope: page ? task_list_id ? 'selected_task_list' : 'all_task_lists' : 'legacy_default_list_sample', task_list_ids: page?.task_list_ids ?? ['@default'], result_scope: 'current_page', page_limit: limit, fetched_count: page?.fetched_count ?? null, returned_count: tasks.length, page_exhausted: page ? page.next_page_token === null : null, complete: Boolean(page && !page_token && page.next_page_token === null), limitation: page ? 'One account. Each result contains its current page only; continue to cover further tasks/lists. Task due dates are provider date semantics, not scheduled times.' : 'Legacy default-list sample with unknown pagination; empty does not prove absence across lists.' },
         ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
       };
