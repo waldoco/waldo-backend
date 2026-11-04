@@ -55,7 +55,7 @@ export const episodesFromSearchTool = (handler: ToolHandler<any, unknown, ToolDi
     return result.data.hits;
   },
   async get(ref) {
-    const result = await handler.handle(handler.schema.parse({ ref }), ctx) as { ok?: boolean; data?: { episode?: RecalledEpisode | null } };
+    const result = await handler.handle(handler.schema.parse({ ref }), { ...ctx, recallRowOnly: true } as ToolDispatcherContext) as { ok?: boolean; data?: { episode?: RecalledEpisode | null } };
     if (!result.ok) throw new Error('episode read failed');
     return result.data?.episode ?? null;
   },
@@ -69,7 +69,11 @@ export const withinReach = (episodes: RecallEpisodes, reach: (entryId: string) =
     const hits = (await episodes.search(query, limit)).filter((hit) => reach(hit.entry_id));
     return Promise.all(hits.map(async (hit) => {
       if (!hit.links?.length) return hit;
-      const kept = await Promise.all(hit.links.map(async (link) => !/^\d+$/.test(link.ref) || ((row) => row !== null && reach(row.entry_id))(await episodes.get(link.ref))));
+      // A link whose row cannot be read back is left out; the hit and the leg stay.
+      const kept = await Promise.all(hit.links.map(async (link) => {
+        if (!/^\d+$/.test(link.ref)) return true;
+        try { const row = await episodes.get(link.ref); return row !== null && reach(row.entry_id); } catch { return false; }
+      }));
       return { ...hit, links: hit.links.filter((_link, index) => kept[index]) };
     }));
   },
@@ -155,10 +159,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     }
   }
   if (episodesFailed) failed.push('episodes');
-  // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines.
-  const lines: readonly Readonly<{ full?: string; stub?: string }>[] = [
+  // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. linked is a hit's
+  // line with its links, which only takes the room left once every line is placed, so links never cost a match its place.
+  const lines: readonly Readonly<{ full?: string; stub?: string; linked?: string }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
-    ...hits.map((hit) => { const linked = linkedLine(hit); return linked === undefined ? { full: episodeLine(hit) } : { full: linked, stub: episodeLine(hit) }; }),
+    ...hits.map((hit) => { const linked = linkedLine(hit); return { full: episodeLine(hit), ...(linked === undefined ? {} : { linked }) }; }),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
@@ -167,12 +172,17 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   let used = ['<recalled>', HEADER, '</recalled>'].join('\n').length;
   if (!lines.length || used + reserve > budget) return { text: '', failed };
   // A line that does not fit is skipped, not cut, and a shorter one after it may still fit.
-  const kept: string[] = [];
-  for (const { full, stub } of lines) {
+  const kept: string[] = [], linkedOf: (string | undefined)[] = [];
+  for (const { full, stub, linked } of lines) {
     const line = [full, stub].find((text) => text !== undefined && used + text.length + 1 + reserve <= budget);
     if (line === undefined) continue;
-    kept.push(line); used += line.length + 1;
+    kept.push(line); linkedOf.push(line === full ? linked : undefined); used += line.length + 1;
   }
+  kept.forEach((line, index) => {
+    const linked = linkedOf[index];
+    if (linked === undefined || used - line.length + linked.length + reserve > budget) return;
+    kept[index] = linked; used += linked.length - line.length;
+  });
   const cut = lines.length - kept.length;
   return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed };
 };

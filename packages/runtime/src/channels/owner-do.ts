@@ -1770,8 +1770,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ];
   }
 
-  // A forget that stops an approved action's replay leaves its card for the jobs lane to settle, and nothing else may be due to
-  // run that lane: the wake is written in the cancel's own transaction and the alarm armed once it commits.
   // search_episodes and search_history; with WALDO_RECALL_CHAIN on, each recalled row names the rows next to it, read
   // through the forget barrier's view of memory.
   private recallTools(episodes: EpisodeIndex, memory: ClaimStore) {
@@ -1781,6 +1779,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       : undefined;
     return [searchEpisodesHandler(episodes, chain), searchHistoryHandler(sql, approvalSummary, chain)];
   }
+  // A forget that stops an approved action's replay leaves its card for the jobs lane to settle, and nothing else may be due to
+  // run that lane: the wake is written in the cancel's own transaction and the alarm armed once it commits.
   private taskJobsForgetStore(): ForgetStore {
     const storage = this.ctx.storage;
     let stopped = false;

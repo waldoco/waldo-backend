@@ -4,6 +4,7 @@ import type { Claim, ClaimStore } from '../memory/claims';
 import { outsideSafe } from '../memory/outside-view';
 import { redactNumericHealth } from '../scribe/sanitiser';
 import { storedWhy } from '../tools/why-trail';
+import { UNDECIDED_CARD_STATUSES } from './archive';
 
 // The recall chain: a recalled row names the rows next to it, so the model follows a thread by ref instead of searching
 // again. Every link is a row that already exists, found by a column its writer fills: a reply is `<turn>-reply`; a memory
@@ -34,7 +35,8 @@ export type RecallRead = Readonly<{
 }>;
 export type RecallChain = Readonly<{
   // outside: the call is part of a turn built from outside content, which reads memory without health (outsideSafe).
-  open(options?: Readonly<{ outside?: boolean }>): RecallRead;
+  // history: the turn has search_history, which reads the runs and tasks a message started; without it they are not linked.
+  open(options?: Readonly<{ outside?: boolean; history?: boolean }>): RecallRead;
 }>;
 export const recallChainOn = (value: string | undefined): boolean => value === '1';
 // Links shown inline beside each hit or entry of a search, and on a read of one row by its ref.
@@ -72,10 +74,11 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
     return claims.filter(claim => claim.source_ref === `owner, ${turn}`);
   };
   const episodes = () => tableExists(sql, 'episodes');
-  // The first stored row of an entry near a row: an owner message the index split keeps its own words first.
+  // An entry's row to link: the owner's own words when the index split the message (a quote may come first), else its first.
+  const OWN_FIRST = "ORDER BY episodes.speaker = 'owner_said' DESC, rowid LIMIT 1";
   const entryRow = (entryId: string, near: number): EpisodeRow | undefined =>
-    sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid BETWEEN ? AND ? AND entry_id = ? ORDER BY rowid LIMIT 1`, near - NEAR_ROWS, near + NEAR_ROWS, entryId).toArray()[0];
-  const anyRow = (entryId: string): EpisodeRow | undefined => episodes() ? sql.exec<EpisodeRow>(`${EPISODE} WHERE entry_id = ? ORDER BY rowid LIMIT 1`, entryId).toArray()[0] : undefined;
+    sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid BETWEEN ? AND ? AND entry_id = ? ${OWN_FIRST}`, near - NEAR_ROWS, near + NEAR_ROWS, entryId).toArray()[0];
+  const anyRow = (entryId: string): EpisodeRow | undefined => episodes() ? sql.exec<EpisodeRow>(`${EPISODE} WHERE entry_id = ? ${OWN_FIRST}`, entryId).toArray()[0] : undefined;
   const episodeLink = (rel: RecallLinkRel, row: EpisodeRow | undefined): RecallLink[] =>
     row && !holds(row.text) ? [{ ref: String(row.row), rel, line: episodeLine(row) }] : [];
 
@@ -97,11 +100,18 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
     const reply = row.entry_id.endsWith('-reply');
     const pair = episodeLink(reply ? 'reply_to' : 'reply', entryRow(reply ? turn : `${turn}-reply`, row.row));
     const learned = reply ? [] : learnedFrom(turn).map(claim => ({ ref: `c${claim.id}`, rel: 'learned' as const, line: claimLine(claim) }));
-    // The turns either side on the same surface; the app's threads share one surface, so this reads across them.
-    const side = (rel: 'before' | 'after') => prefix === null ? [] : episodeLink(rel, sql.exec<EpisodeRow>(
-      `${EPISODE} WHERE rowid ${rel === 'before' ? '<' : '>'} ? AND rowid ${rel === 'before' ? '>=' : '<='} ? AND entry_id LIKE ? AND entry_id NOT IN (?, ?) ORDER BY rowid ${rel === 'before' ? 'DESC' : ''} LIMIT 1`,
-      row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${prefix}%`, turn, `${turn}-reply`).toArray()[0]);
-    return [...pair, ...learned, ...(reply ? [] : started(turn)), ...side('after'), ...side('before')].filter(link => !skip.has(link.ref)).slice(0, limit);
+    // The turns either side on the same surface; the app's threads share one surface, so this reads across them (turn recall
+    // keeps a chat's links in that chat). Only an owner turn or its reply counts: the prefix also starts other rows' ids.
+    const side = (rel: 'before' | 'after'): RecallLink[] => {
+      if (prefix === null) return [];
+      for (const candidate of sql.exec<EpisodeRow>(
+        `${EPISODE} WHERE rowid ${rel === 'before' ? '<' : '>'} ? AND rowid ${rel === 'before' ? '>=' : '<='} ? AND entry_id LIKE ? AND entry_id NOT IN (?, ?) ORDER BY rowid ${rel === 'before' ? 'DESC' : ''}`,
+        row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${prefix}%`, turn, `${turn}-reply`)) {
+        if (surfaceOfTrace(candidate.entry_id) !== null) return episodeLink(rel, candidate);
+      }
+      return [];
+    };
+    return [...pair, ...learned, ...(reply || options.history === false ? [] : started(turn)), ...side('after'), ...side('before')].filter(link => !skip.has(link.ref)).slice(0, limit);
   };
 
   // The turn a run or task came from, if its message is in the index.
@@ -146,7 +156,10 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
       const job = hotOrArchived(source, id);
       if (!job) return [];
       const approval = briefOf(job.brief_json).approval_id;
-      const card = typeof approval === 'string' ? deps.approvalSummary(approval) : null;
+      // Only a decided card: search_history leaves the others to the desk.
+      const decided = typeof approval === 'string' && tableExists(sql, 'ledger')
+        && sql.exec(`SELECT 1 FROM ledger WHERE id = ? AND status NOT IN (${UNDECIDED_CARD_STATUSES.map(() => '?').join(', ')})`, approval, ...UNDECIDED_CARD_STATUSES).toArray().length > 0;
+      const card = decided ? deps.approvalSummary(approval) : null;
       return [...fromTurn(job.origin, byRef), ...(card !== null && !holds(card) ? [{ ref: `ledger:${approval as string}`, rel: 'card' as const, line: line(card) }] : [])].slice(0, limit);
     }
     if (source === 'ledger') return cardLinks(id).slice(0, limit);

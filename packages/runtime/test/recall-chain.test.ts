@@ -31,6 +31,7 @@ const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse('2026-11-04T18:00:00Z');
 const LAST_WEEK = NOW - 7 * DAY;
 const OWNER = 'owner:1';
+const OWNER_TURN = { trigger: 'user_message' } as never;
 let sequence = 0;
 
 const entry = (id: string, surface: string, text: string, parentId: string | null) => ({
@@ -90,8 +91,8 @@ const seed = async (state: DurableObjectState, held: string[] = []) => {
   const chain = recallChain({ sql, claims: barrierMemory(memory, topics), held: () => holdsIn(topics()), approvalSummary: id => ledgerSummary(sql, id) });
   const episodes = searchEpisodesHandler(index, chain);
   const history = searchHistoryHandler(sql, id => ledgerSummary(sql, id), chain);
-  const read = async (handler: typeof episodes | typeof history, args: unknown, ctx: Readonly<{ memoryOutside?: boolean }> = {}) => {
-    const result = await handler.handle(handler.schema.parse(args) as never, ctx as never);
+  const read = async (handler: typeof episodes | typeof history, args: unknown, ctx: Readonly<{ memoryOutside?: boolean; trigger?: string; recallRowOnly?: boolean }> = {}) => {
+    const result = await handler.handle(handler.schema.parse(args) as never, { trigger: 'user_message', ...ctx } as never);
     if (!result.ok) throw new Error(result.error);
     return result.data as never;
   };
@@ -171,6 +172,51 @@ describe('search_episodes with the recall chain', () => {
   });
 });
 
+describe('what a link names', () => {
+  it('links a message\'s runs and tasks only on a turn that has search_history, and links nothing on a row-only read', async () => {
+    const result = await inOwner(async state => {
+      const world = await seed(state);
+      const at = (trigger: string) => world.read(world.episodes, { ref: world.rowOf(world.wa) }, { trigger }) as Promise<EpisodeRead>;
+      return { owner: await at('user_message'), sweep: await at('pre_brief_sweep'), row: await world.read(world.episodes, { ref: world.rowOf(world.wa) }, { recallRowOnly: true }) as EpisodeRead };
+    });
+    expect(rels(result.owner.episode!.links).some(rel => rel.startsWith('started '))).toBe(true);
+    expect(rels(result.sweep.episode!.links).some(rel => rel.startsWith('started '))).toBe(false);
+    expect(rels(result.sweep.episode!.links).some(rel => rel.startsWith('reply '))).toBe(true);
+    expect(result.row.episode).toMatchObject({ entry_id: 'whatsapp-101' });
+    expect(result.row.episode).not.toHaveProperty('links');
+  });
+
+  it('names an owner\'s own words over a quote that came first, and skips rows that only share the prefix', async () => {
+    const result = await inOwner(async state => {
+      const world = await seed(state);
+      const index = world.index;
+      let at = NOW;
+      // A split owner message stores its quote before its own words; a did-not-finish row shares the app prefix.
+      index.add('app-70', 'quoted', 'Forwarded: the venue contract terms', at);
+      index.add('app-70', 'owner_said', 'Can you check these terms tonight?', at);
+      at += 1;
+      index.add('app-70-did-not-finish', 'system', 'That turn did not finish.', at);
+      index.add('app-70-reply', 'waldo', 'Checking the terms now.', at + 1);
+      index.add('app-71', 'owner_said', 'Thanks for that', at + 2);
+      const reply = await world.read(world.episodes, { ref: world.rowOf('app-70-reply') }) as EpisodeRead;
+      return { links: reply.episode!.links!, own: world.sql.exec<{ ref: number }>("SELECT rowid AS ref FROM episodes WHERE entry_id = 'app-70' AND speaker = 'owner_said'").one().ref, next: world.rowOf('app-71') };
+    });
+    expect(result.links.find(link => link.rel === 'reply_to')).toMatchObject({ ref: String(result.own), line: expect.stringContaining('check these terms') });
+    expect(result.links.find(link => link.rel === 'after')?.ref).toBe(result.next);
+  });
+
+  it('keeps turn recall\'s messages when a link cannot be read back', async () => {
+    const result = await inOwner(async state => {
+      const world = await seed(state);
+      const search = episodesFromSearchTool(world.episodes as never, OWNER_TURN);
+      const failing = { ...search, get: async (ref: string) => { if (ref === world.rowOf(`${world.wa}-reply`) || ref === world.rowOf('whatsapp-140')) throw new Error('read failed'); return search.get(ref); } };
+      return { hits: await withinReach(failing, () => true).search('Lisbon flight', 5), reply: world.rowOf(`${world.wa}-reply`) };
+    });
+    expect(result.hits.length).toBeGreaterThan(0);
+    expect(result.hits.flatMap(hit => hit.links ?? []).some(link => link.ref === result.reply)).toBe(false);
+  });
+});
+
 describe('search_history with the recall chain', () => {
   it('reads a run, a task and a card with what they came from and what they act on', async () => {
     const result = await inOwner(async state => {
@@ -239,7 +285,7 @@ describe('the recall chain switched off', () => {
       const world = await seed(state);
       const index = world.index;
       const plainEpisodes = searchEpisodesHandler(index), plainHistory = searchHistoryHandler(world.sql, id => ledgerSummary(world.sql, id));
-      const plain = async (handler: typeof plainEpisodes | typeof plainHistory, args: unknown) => JSON.stringify(await handler.handle(handler.schema.parse(args) as never, {} as never));
+      const plain = async (handler: typeof plainEpisodes | typeof plainHistory, args: unknown) => JSON.stringify(await handler.handle(handler.schema.parse(args) as never, OWNER_TURN));
       return {
         hits: await plain(plainEpisodes, { query: 'Lisbon flight' }), ref: await plain(plainEpisodes, { ref: world.rowOf(world.wa) }), history: await plain(plainHistory, { query: 'Lisbon' }),
         surfaceArg: plainEpisodes.schema.safeParse({ query: 'x', surface: 'app' }).success, refArg: plainHistory.schema.safeParse({ ref: 'ledger:card1' }).success,
@@ -260,7 +306,7 @@ describe('turn recall with the recall chain', () => {
   it('inlines a hit\'s surface and its links, and falls back to the plain line when the links do not fit', async () => {
     const result = await inOwner(async state => {
       const world = await seed(state);
-      const recall = (handler: typeof world.episodes, room: number) => recallForTurn({ claims: { recall: () => [] }, episodes: episodesFromSearchTool(handler as never, {} as never), question: 'what was the Lisbon flight thing', room, holds: () => false });
+      const recall = (handler: typeof world.episodes, room: number) => recallForTurn({ claims: { recall: () => [] }, episodes: episodesFromSearchTool(handler as never, OWNER_TURN), question: 'what was the Lisbon flight thing', room, holds: () => false });
       return { on: (await recall(world.episodes, 3_000)).text, tight: (await recall(world.episodes, 520)).text, off: (await recall(searchEpisodesHandler(world.index), 3_000)).text };
     });
     expect(result.on).toMatch(/whatsapp, ref \d+\] .*Lisbon/);
@@ -278,6 +324,32 @@ describe('turn recall with the recall chain', () => {
 // week": the fewest calls that reach the owner's message, Waldo's reply and what the delegated run found, given only what
 // each answer shows, and the characters the model reads on the way. The path is fixed, not a model's choice; a live model is
 // measured by the nightly eval, not here. Each extra call is one more model round, which sends the whole prompt again.
+describe('turn recall under its budget with the recall chain', () => {
+  it('recalls the same messages and notes as with the chain off, and spends only the room left on links', async () => {
+    const result = await inOwner(async state => {
+      const world = await seed(state);
+      let at = NOW;
+      const store = indexedConversationStore(durableConversationStore(state.storage), world.index, () => at);
+      for (let n = 0; n < 6; n += 1) {
+        at += 60_000;
+        await store.save([entry(`whatsapp-${200 + n}`, 'whatsapp', `Lisbon flight detail number ${n}: the offsite agenda, the hotel and the long ride from the airport`, null)], `whatsapp-${200 + n}`);
+        // A reply that shares no word with the question, so each hit links a row recall does not show.
+        await store.save([entry(`whatsapp-${200 + n}-reply`, 'whatsapp', `Noted, will keep it in mind ${n}`, `whatsapp-${200 + n}`)], `whatsapp-${200 + n}-reply`);
+      }
+      const notes = Array.from({ length: 8 }, (_value, n) => ({ id: 900 + n, kind: 'fact', text: `Lisbon offsite note ${n}: ${'the team wants a quiet hotel near the river with an early checkin and late checkout '.repeat(2)}`, source: 'stated', evidence: 'owner said', origin: 'owner', status: 'active', created_at: '2026-10-28T00:00:00Z', last_seen_at: '2026-10-28T00:00:00Z', seen_count: 1 }));
+      const recall = async (handler: typeof world.episodes) => (await recallForTurn({ claims: { recall: () => notes }, episodes: episodesFromSearchTool(handler as never, OWNER_TURN), question: 'the Lisbon flight and offsite agenda', room: 3_000, holds: () => false, stubs: true })).text;
+      return { on: await recall(world.episodes), off: await recall(searchEpisodesHandler(world.index)) };
+    });
+    const refs = (text: string) => [...text.matchAll(/ref (\d+)\]/g)].map(match => match[1]).sort();
+    const notes = (text: string) => [...text.matchAll(/\[c(\d+)/g)].map(match => match[1]).sort();
+    // The budget binds: something did not fit.
+    expect(result.off).toMatch(/more matches did not fit/);
+    expect(refs(result.on)).toEqual(refs(result.off));
+    expect(notes(result.on)).toEqual(notes(result.off));
+    expect(result.on.length).toBeLessThanOrEqual(3_000);
+  });
+});
+
 describe('turn recall in one chat with the recall chain', () => {
   it('leaves out a link to a message of another chat, as it leaves out that message', async () => {
     const result = await inOwner(async state => {
@@ -287,7 +359,7 @@ describe('turn recall in one chat with the recall chain', () => {
       const store = indexedConversationStore(durableConversationStore(state.storage), world.index, () => at);
       await store.save([entry('app-60', 'app', 'Second thread: dinner plans for Friday', null)], 'app-60');
       at += 1;
-      const search = episodesFromSearchTool(world.episodes as never, {} as never);
+      const search = episodesFromSearchTool(world.episodes as never, OWNER_TURN);
       const linked = (await search.search('agenda draft', 5)).find(hit => hit.entry_id === 'app-55')!.links!;
       const otherChat = (entryId: string) => !entryId.startsWith('app-60');
       const hits = await withinReach(search, otherChat).search('agenda draft', 5);
@@ -304,12 +376,12 @@ describe('the recall chain, measured', () => {
     const result = await inOwner(async state => {
       const world = await seed(state);
       const plainEpisodes = searchEpisodesHandler(world.index), plainHistory = searchHistoryHandler(world.sql, id => ledgerSummary(world.sql, id));
-      const call = async (handler: typeof plainEpisodes | typeof plainHistory, args: unknown) => JSON.stringify(await handler.handle(handler.schema.parse(args) as never, {} as never));
+      const call = async (handler: typeof plainEpisodes | typeof plainHistory, args: unknown) => JSON.stringify(await handler.handle(handler.schema.parse(args) as never, OWNER_TURN));
       // Off: the messages carry no link to what was done about them, so a second search finds the run by its words.
       const off = [await call(plainEpisodes, { query: 'Lisbon flight' }), await call(plainHistory, { query: 'Lisbon' })];
       const on = [await call(world.episodes, { query: 'Lisbon flight', surface: 'whatsapp' })];
       const definition = (handler: typeof plainEpisodes | typeof plainHistory) => handler.description.length + JSON.stringify(z.toJSONSchema(handler.schema, { io: 'input' })).length;
-      const recall = async (handler: typeof world.episodes, question: string) => (await recallForTurn({ claims: { recall: () => [] }, episodes: episodesFromSearchTool(handler as never, {} as never), question, room: 3_000, holds: () => false })).text.length;
+      const recall = async (handler: typeof world.episodes, question: string) => (await recallForTurn({ claims: { recall: () => [] }, episodes: episodesFromSearchTool(handler as never, OWNER_TURN), question, room: 3_000, holds: () => false })).text.length;
       return {
         off, on,
         definitions: { off: definition(plainEpisodes) + definition(plainHistory), on: definition(world.episodes) + definition(world.history) },

@@ -18,7 +18,9 @@ export const searchEpisodesHandler = (index: EpisodeIndex, chain?: RecallChain):
   trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('search_episodes')),
   autonomy_gated: false,
   async handle({ query, ref, limit, date_range, surface }, ctx) {
-    const read = chain?.open({ outside: (ctx as { memoryOutside?: boolean }).memoryOutside === true });
+    // recallRowOnly: turn recall checking a row, which never shows its links.
+    const host = ctx as { memoryOutside?: boolean; recallRowOnly?: boolean };
+    const read = host.recallRowOnly ? undefined : chain?.open({ outside: host.memoryOutside === true, history: TOOL_PERMISSIONS[ctx.trigger]?.includes('search_history') ?? false });
     if (ref !== undefined) {
       const found = index.get(ref);
       const episode = found === null ? null : { ref, entry_id: found.entry_id, speaker: found.speaker, saved_at: found.at > 0 ? new Date(found.at).toISOString() : null, text: found.text };
