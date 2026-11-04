@@ -91,7 +91,7 @@ export const surfaceOfTrace = (entryId: string): string | null => {
   return found ? (found[1] === 'tg' ? 'telegram' : found[1]!) : null;
 };
 // The entry-id prefix of a surface's turns, which a stored row can be filtered by.
-export const traceSurfacePrefix = (surface: string): string => surface === 'telegram' ? 'tg-' : `${surface}-`;
+export const traceSurfacePrefix = (surface: string): string => ownerTurnTrace(surface, 0).slice(0, -1);
 
 export const ownerTurnAttachments = (turn: Pick<OwnerTurnEnvelope, 'attachment' | 'attachments'>): readonly LLMAttachment[] | undefined => {
   if (turn.attachment !== undefined && turn.attachments !== undefined) throw new Error('ambiguous turn media');

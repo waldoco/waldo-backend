@@ -24,7 +24,7 @@ export const searchEpisodesHandler = (index: EpisodeIndex, chain?: RecallChain):
       const episode = found === null ? null : { ref, entry_id: found.entry_id, speaker: found.speaker, saved_at: found.at > 0 ? new Date(found.at).toISOString() : null, text: found.text };
       return { ok: true, data: { episode: episode && read ? { ...episode, surface: surfaceOfTrace(episode.entry_id), links: read.ofEpisode(ref, REF_LINKS) } : episode }, source_taint: null };
     }
-    const hits = index.search(query!, limit, date_range ? Date.parse(date_range.from) : undefined, date_range ? Date.parse(date_range.to) : undefined, surface === undefined ? undefined : traceSurfacePrefix(surface));
+    const hits = index.search(query!, limit, date_range ? Date.parse(date_range.from) : undefined, date_range ? Date.parse(date_range.to) : undefined, surface ? traceSurfacePrefix(surface) : undefined);
     if (!read) return { ok: true, data: { hits }, source_taint: null };
     const shown = new Set(hits.map((hit) => hit.ref));
     return { ok: true, data: { hits: hits.map((hit) => ({ ...hit, surface: surfaceOfTrace(hit.entry_id), links: read.ofEpisode(hit.ref, INLINE_LINKS, shown) })) }, source_taint: null };

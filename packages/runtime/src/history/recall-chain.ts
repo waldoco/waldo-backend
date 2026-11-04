@@ -93,14 +93,14 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
     if (!Number.isSafeInteger(at) || at < 1 || String(at) !== ref || !episodes()) return [];
     const row = sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid = ?`, at).toArray()[0];
     if (!row) return [];
-    const turn = turnOf(row.entry_id), surface = surfaceOfTrace(row.entry_id);
+    const turn = turnOf(row.entry_id), onSurface = surfaceOfTrace(row.entry_id), prefix = onSurface === null ? null : traceSurfacePrefix(onSurface);
     const reply = row.entry_id.endsWith('-reply');
     const pair = episodeLink(reply ? 'reply_to' : 'reply', entryRow(reply ? turn : `${turn}-reply`, row.row));
     const learned = reply ? [] : learnedFrom(turn).map(claim => ({ ref: `c${claim.id}`, rel: 'learned' as const, line: claimLine(claim) }));
     // The turns either side on the same surface; the app's threads share one surface, so this reads across them.
-    const side = (rel: 'before' | 'after') => surface === null ? [] : episodeLink(rel, sql.exec<EpisodeRow>(
+    const side = (rel: 'before' | 'after') => prefix === null ? [] : episodeLink(rel, sql.exec<EpisodeRow>(
       `${EPISODE} WHERE rowid ${rel === 'before' ? '<' : '>'} ? AND rowid ${rel === 'before' ? '>=' : '<='} ? AND entry_id LIKE ? AND entry_id NOT IN (?, ?) ORDER BY rowid ${rel === 'before' ? 'DESC' : ''} LIMIT 1`,
-      row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${traceSurfacePrefix(surface)}%`, turn, `${turn}-reply`).toArray()[0]);
+      row.row, rel === 'before' ? row.row - NEAR_ROWS : row.row + NEAR_ROWS, `${prefix}%`, turn, `${turn}-reply`).toArray()[0]);
     return [...pair, ...learned, ...(reply ? [] : started(turn)), ...side('after'), ...side('before')].filter(link => !skip.has(link.ref)).slice(0, limit);
   };
 
