@@ -32,7 +32,7 @@ export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'ch
 export const CONTEXT_KINDS: readonly Change['kind'][] = ['read', 'archived', 'starred'];
 // A cursor that moved between the read and its write: the write is rolled back and the next tick reads again.
 export class CursorMovedError extends Error { constructor() { super('cursor_moved'); this.name = 'CursorMovedError'; } }
-const DELTA_SEEN_KEPT_MS = 14 * DAY_MS;
+const DELTA_SHOWN_KEPT_MS = 14 * DAY_MS;
 // An event as the sweep last saw it.
 type SeenEvent = Readonly<{ event_id: string; start: string; end: string; all_day: boolean; title_digest: string; attendees?: number }>;
 
@@ -52,8 +52,9 @@ export const updateBook = (sql: Sql) => {
   if (!columns.has('delivered_at')) sql.exec('ALTER TABLE update_cards ADD COLUMN delivered_at INTEGER');
   if (!columns.has('app_row')) sql.exec('ALTER TABLE update_cards ADD COLUMN app_row TEXT');
   for (const statement of CALENDAR_LAST_SEEN_TABLE_SCHEMA) sql.exec(statement);
-  // The changes the delta reads already reported, by message id or event id and version, so an overlap is reported once.
-  sql.exec('CREATE TABLE IF NOT EXISTS google_delta_seen (key TEXT PRIMARY KEY, seen_at INTEGER NOT NULL)');
+  // What the delta reads last reported of each message and event: a message once, an event as the version last shown, so an
+  // overlap is reported once and a change back to an earlier version is news again.
+  sql.exec('CREATE TABLE IF NOT EXISTS google_delta_shown (key TEXT PRIMARY KEY, version TEXT NOT NULL, shown_at INTEGER NOT NULL)');
   const state = (key: string) => sql.exec<{ value: string }>('SELECT value FROM watch_state WHERE key = ?', key).toArray()[0]?.value ?? null;
   const setState = (key: string, value: string) => sql.exec('INSERT INTO watch_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
   // The triage turn's interrupts on one owner-local day: how many, and when the last went (whatever its day, for the cooldown).
@@ -130,13 +131,15 @@ export const updateBook = (sql: Sql) => {
         sql.exec('DELETE FROM watch_state WHERE substr(key, 1, ?) = ?', `${kind}:cal:${account}:`.length, `${kind}:cal:${account}:`);
       }
     },
-    // Marks each key seen, and answers which were new.
-    firstSeen(keys: readonly string[], at: number): ReadonlySet<string> {
-      const fresh = new Set(keys.filter(key => sql.exec('INSERT INTO google_delta_seen (key, seen_at) VALUES (?, ?) ON CONFLICT (key) DO NOTHING RETURNING key', key, at).toArray().length > 0));
-      sql.exec('DELETE FROM google_delta_seen WHERE seen_at < ?', at - DELTA_SEEN_KEPT_MS);
+    // Keeps each key's version as shown, and answers which keys are news: never shown, or shown as another version.
+    shown(keys: readonly DeltaKey[], at: number): ReadonlySet<string> {
+      const fresh = new Set(keys.filter(({ key, version }) => sql.exec(`INSERT INTO google_delta_shown (key, version, shown_at) VALUES (?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET version = excluded.version, shown_at = excluded.shown_at WHERE google_delta_shown.version != excluded.version RETURNING key`,
+      key, version, at).toArray().length > 0).map(({ key }) => key));
+      sql.exec('DELETE FROM google_delta_shown WHERE shown_at < ?', at - DELTA_SHOWN_KEPT_MS);
       return fresh;
     },
-    seen(key: string): boolean { return sql.exec('SELECT 1 FROM google_delta_seen WHERE key = ?', key).toArray().length > 0; },
+    seen(key: string): boolean { return sql.exec('SELECT 1 FROM google_delta_shown WHERE key = ?', key).toArray().length > 0; },
     // What a mail was when it was recorded: its detail, read back to say which mail the owner read, archived or starred.
     mailDetail(messageId: string): string | null {
       return sql.exec<{ detail: string }>(`SELECT json_extract(j.value, '$.detail') AS detail FROM update_cards c, json_each(c.changes) j
@@ -249,9 +252,11 @@ export type ChangeRead = Readonly<{
   seen?: Readonly<{ day: string; seed: readonly SeenEvent[] | null; seedCapped: boolean; changed: ReadonlyMap<string, SeenEvent | null> }>;
   // With the delta reads: each change's dedupe key (null: never deduped), the cursors to move, the sources read (with the
   // push that was waiting on each when its read began), and what each source did.
-  delta?: Readonly<{ keys: readonly (string | null)[]; cursors: readonly CursorMove[]; reads: readonly SourceRead[]; codes: readonly DeltaCode[] }>;
+  delta?: Readonly<{ keys: readonly (DeltaKey | null)[]; cursors: readonly CursorMove[]; reads: readonly SourceRead[]; codes: readonly DeltaCode[] }>;
 }>;
 type CursorMove = Readonly<{ key: string; from: string | null; to: string }>;
+// A message is keyed by its id alone; an event by its id, with what the owner is shown of it as the version.
+type DeltaKey = Readonly<{ key: string; version: string }>;
 // at: when the source was read up to (null: this read). A source that failed before any read keeps the watermark it would
 // have read its gap from, since the shared watermark moves on without it.
 type SourceRead = Readonly<{ source: string; pending: string | null; at: number | null }>;
@@ -328,7 +333,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };
   });
   const changes = [...calendar, ...mail, ...(found?.after ?? [])];
-  const deltaFields = found ? { delta: { keys: [...found.eventKeys, ...mailItems.map(item => `msg:${item.id}`), ...(found.after.map(() => null))], cursors: found.cursors, reads: found.reads, codes: found.codes } } : {};
+  const deltaFields = found ? { delta: { keys: [...found.eventKeys, ...mailItems.map(item => ({ key: `msg:${item.id}`, version: '' })), ...(found.after.map(() => null))], cursors: found.cursors, reads: found.reads, codes: found.codes } } : {};
   if (!dayState) return { changes, observed, now, ...deltaFields };
   const seed = book.seedDue(dayState.day)
     ? await Promise.all((await dayState.events(new Date(from).toISOString(), new Date(to).toISOString(), SEED_EVENTS, true)).map(seenOf(dayState.titleDigest))) : null;
@@ -410,7 +415,7 @@ const readDelta = async (book: UpdateBook, delta: DeltaSource,
         const found = await google.mailDelta!(held, 20);
         moves.push({ key: mailSource(account.id), from: held, to: found.history_id });
         if (found.state === 'delta') ({ added, labels, left_out: leftOut } = found);
-        else codes.push(held === null ? 'mail_baseline' : 'mail_rebased');
+        else codes.push(found.state === 'capped' ? 'mail_capped' : held === null ? 'mail_baseline' : 'mail_rebased');
       } catch { codes.push('mail_delta_failed'); }
       added ??= since === null ? [] : await google.newMail(since, 10);
       for (const item of added) if (!mail.has(item.id)) { mail.set(item.id, item); mailAccounts.set(item.id, account.email); }
@@ -425,11 +430,11 @@ const readDelta = async (book: UpdateBook, delta: DeltaSource,
   // An outage, not one source: the tick fails as before and nothing moves. A tick with nothing due reads nothing.
   if (due > 0 && done === 0) throw firstFailure;
   const items = [...events.values()];
-  // Each account's copy of a meeting has its own etag, link and reply: the key is the event id and what the owner is shown
-  // of it, so a change is said once whichever account reads it, in this tick or a later one.
-  const eventKeys = await Promise.all(items.map(async (event) => `evt:${event.id}:${(await sha256Hex(JSON.stringify([event.status, event.start, event.end,
+  // Each account's copy of a meeting has its own etag, link and reply: the key is the event id, and its version what the owner
+  // is shown of it, so a change is said once whichever account reads it, and a change back to an earlier version is said again.
+  const eventKeys = await Promise.all(items.map(async (event) => ({ key: `evt:${event.id}`, version: (await sha256Hex(JSON.stringify([event.status, event.start, event.end,
     event.all_day, event.title, event.location ?? null, event.description ?? null, event.attendees ?? null, event.attendee_names ?? null,
-    event.recurring_event_id ?? null, event.original_start ?? null, 'series' in event ? event.series ?? null : null]))).slice(0, 32)}`));
+    event.recurring_event_id ?? null, event.original_start ?? null, 'series' in event ? event.series ?? null : null]))).slice(0, 32) })));
   return { items, mail: [...mail.values()], after, cursors, reads, codes, eventKeys, eventAccounts, mailAccounts };
 };
 // Records what the read observed and moves the watermarks. With the day state it also keeps each event as last seen, and
@@ -439,11 +444,11 @@ export const writeChanges = (book: UpdateBook, read: ChangeRead): readonly Chang
     for (const move of read.delta.cursors) book.moveCursor(move.key, move.from, move.to);
     for (const source of read.delta.reads) book.markRead(source.source, source.at ?? read.now, source.pending);
     const keys = read.delta.keys;
-    const fresh = book.firstSeen(keys.filter((key): key is string => key !== null), read.now);
+    const fresh = book.shown(keys.filter((key): key is DeltaKey => key !== null), read.now);
     // A key seen twice in one read is new only once.
     const counted = new Set<string>();
     read = { ...read, changes: read.changes.filter((_change, index) => {
-      const key = keys[index] ?? null;
+      const key = keys[index]?.key ?? null;
       if (key === null) return true;
       if (!fresh.has(key) || counted.has(key)) return false;
       counted.add(key);

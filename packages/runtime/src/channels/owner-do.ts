@@ -2433,8 +2433,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const admitted = realtime ? calendarChannelsBook(kv).admit(channel, state, number) : null;
     if (!admitted && legacy.admit(channel, state, number) !== 'wake') return new Response('ok');
     ensureSchema(this.ctx.storage);
-    const heir = admitted ? null : realtime
-      ? ((await this.ctx.storage.get<GoogleAccount[]>('google:accounts')) ?? []).find(account => legacyConnection === null ? account.refresh_token : account.id === legacyConnection) : undefined;
+    const heirs = admitted || !realtime ? []
+      : ((await this.ctx.storage.get<GoogleAccount[]>('google:accounts')) ?? []).filter(account => legacyConnection === null ? account.refresh_token : account.id === legacyConnection);
+    const heir = heirs.length === 1 ? heirs[0] : undefined;
     const source = admitted ? calendarSource(admitted.account, admitted.calendarId) : heir ? calendarSource(heir.id, 'primary') : null;
     if (source) updateBook(this.ctx.storage.sql).pend(source, Date.now());
     const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());

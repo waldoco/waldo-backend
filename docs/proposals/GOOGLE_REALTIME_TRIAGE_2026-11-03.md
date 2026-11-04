@@ -35,7 +35,7 @@ table, no new store of record.
 | Gmail cursor (`historyId`) per account | `watch_state` key `cursor:mail:<account>` (existing key/value table) | update sweep, in the record's transaction, compare-and-set |
 | Calendar `syncToken` per account and calendar | `watch_state` key `cursor:cal:<account>:<calendarId>` | same |
 | Last read and waiting push per source | `watch_state` keys `read:<source>` and `pending:<source>` | the sweep (read time; clears a push only if it is the one the read began with); push admission (marks a source) |
-| Delta dedupe (`msg:<id>`, `evt:<id>:<digest>`) | `google_delta_seen`, created by the update book like `observed_mail` (no DO migration), pruned after 14 days | same |
+| Delta dedupe (`msg:<id>`; `evt:<id>` with the digest of the version last shown) | `google_delta_shown`, created by the update book like `observed_mail` (no DO migration), pruned after 14 days | same |
 | Calendar channel per account and calendar | `calendar_channels_v1` KV book on the owner's object, entries by account then calendar | watch upkeep (start, renew, stop); push admission (message number) |
 | Gmail watch per mail account | `gmail_watches_v1` KV book, entries by account (connection id) | watch upkeep; push admission (history id) |
 | Calendars read per account | `realtime_calendars_v1` KV, entries by account | watch upkeep (from each account's calendar list) |
@@ -54,7 +54,10 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   at most 5 pages. Added messages in `INBOX` (not `SPAM`/`TRASH`/`DRAFT`/`SENT`, and `category:primary` as today, for
   cost parity) are fetched as metadata (`mailPromptProjection`: from, subject, snippet, time). Label changes on
   `UNREAD`, `INBOX`, `STARRED`, `IMPORTANT` become `read` / `archived` / `starred` changes on messages already seen.
-  More than the cap: the cursor still moves to the response's `historyId` and the batch says how many were left out.
+  More added messages than the open cap (20): the newest are opened and the batch says how many were left out (a cost
+  bound beyond the accepted four, listed in §7). More history than the page cap: every page carries the mailbox's
+  current `historyId`, not the last record's, so moving there would skip what was not read; the read is `capped`
+  instead: the cursor moves to the current id and the gap is read once the older way, like a re-baseline.
 - **Calendar:** `events.list(calendarId, syncToken, showDeleted, singleEvents=false, maxResults=250)`, at most 8 pages,
   per calendar the owner reads (§2.3). `singleEvents=false` keeps a baseline finite: an endless daily series is one
   master, not unbounded instances. So a series change is one change flagged `series` (it counts as touching today for
@@ -70,9 +73,10 @@ committed, so a lost or reordered push costs latency, never data. Pushes are hin
   existing time-watermark read for that source, so nothing is lost and nothing is replayed. A calendar whose baseline
   exceeds the cap stays on the time-watermark read and is logged `sync_capped`.
 - **Dedupe:** by message id, and by event id plus a digest of what the owner is shown of the event (status, times,
-  title, location, description, attendees, series), in `google_delta_seen`. So a re-baseline overlap, a gap read, a
-  redelivered push, and the same meeting on two accounts' calendars (each copy has its own etag and link) never produce
-  the same change twice, in one tick or a later one. A new etag that changes nothing the owner is shown is no longer
+  title, location, description, attendees, series), in `google_delta_shown`. Each event keeps only the version last
+  shown, so a re-baseline overlap, a gap read, a redelivered push, and the same meeting on two accounts' calendars (each
+  copy has its own etag and link) never produce the same change twice, while a change back to an earlier version (moved
+  back, or restored after a cancel) is news again. A new etag that changes nothing the owner is shown is no longer
   news. Within one tick, when one account's copy is an invite still to answer, that copy is the one read; across
   ticks, an invite copy read after another copy of an unchanged meeting is deduped [known limit].
 - **Fallback:** a delta read that throws (an older proxy without the method, a provider error) leaves that cursor where
@@ -220,6 +224,8 @@ per-account channels and Gmail watches wake nothing and mark nothing, and lapse 
      are not news: today's window and last-seen rule, since Google's deltas carry no window;
   3. a batch of only owner actions on mail (read, archived, starred) starts no turn: the owner already acted;
   4. at most 20 calendars are read and watched: a cost and rate-limit bound.
+  5. raised by the gate review: more than 20 new mails in one mailbox read are opened newest first, and the rest become a
+     count (`more`): a cost bound.
 - **Accounts:** ruled 3 November: every connected account with the grant, up to 5 (§2.3). The gate accepted the four
   filters above as scope and cost bounds, and the 20-calendar cap counts across accounts.
 

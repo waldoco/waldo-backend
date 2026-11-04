@@ -112,6 +112,20 @@ describe('every calendar the owner reads', () => {
   });
 });
 
+describe('the older channel with no account named', () => {
+  it('moves to the one account held the older way, and to none when two are', async () => {
+    const one = world({ a1: { list: LIST, local: true }, b2: { list: LIST_B } });
+    one.legacy.record({ channelId: 'legacy-1', resourceId: 'legacy-res', expiration: one.now() + 5 * DAY }, null);
+    await one.run();
+    expect(one.book.admit('legacy-1', 'exists', 1)).toEqual({ account: 'a1', calendarId: 'primary' });
+    const two = world({ a1: { list: LIST, local: true }, b2: { list: LIST_B, local: true } });
+    two.legacy.record({ channelId: 'legacy-2', resourceId: 'legacy-res', expiration: two.now() + 5 * DAY }, null);
+    expect(await two.run()).toMatchObject({ started: 5 });
+    expect(two.book.admit('legacy-2', 'exists', 1)).toBeNull();
+    expect(two.legacy.state()).toBeNull();
+  });
+});
+
 describe('every connected account', () => {
   it('watches each account on its own channels, and a push names the account and calendar it is for', async () => {
     const w = world({ a1: { list: LIST }, b2: { list: LIST_B } });

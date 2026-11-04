@@ -81,7 +81,7 @@ const TABLES: Record<string, Row> = {
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
   calendar_last_seen: exempt('Google event ids, start and end times, an all-day flag, an HMAC of the title under a random per-object key (never the title) and an attendee count; rows expire two weeks after the event was last seen'),
-  google_delta_seen: exempt('dedupe keys: a Google message id, or an event id with its version etag, and when it was first seen; no sender, subject, title or body; rows expire after fourteen days'),
+  google_delta_shown: exempt('dedupe keys: a Google message id, or an event id with a digest of the version last shown, and when; no sender, subject, title or body; rows expire after fourteen days'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget

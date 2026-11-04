@@ -57,6 +57,19 @@ describe('mailDelta', () => {
     expect(urls.filter(url => url.pathname.includes('/messages/'))).toHaveLength(2);
   });
 
+  it('past the page cap it reads nothing more and moves to the mailbox\'s current history id as capped, so the gap is read the older way', async () => {
+    let pages = 0;
+    const { urls, client: google } = client((url) => {
+      if (!url.pathname.endsWith('/history')) return undefined;
+      pages += 1;
+      // Google answers every page with the mailbox's current history id, not the last record's.
+      return Response.json({ historyId: '9000', nextPageToken: `p${pages + 1}`, history: [{ id: String(100 + pages), messagesAdded: [{ message: message(`m${pages}`, ['INBOX']) }] }] });
+    });
+    expect(await google.mailDelta!('100', 20)).toEqual({ state: 'capped', history_id: '9000' });
+    expect(pages).toBe(5);
+    expect(urls.filter(url => url.pathname.includes('/messages/')), 'nothing is opened from a partial read').toEqual([]);
+  });
+
   it('re-baselines on a cursor Google no longer knows (404): the profile history id, and no changes', async () => {
     const { client: google } = client((url) => {
       if (url.pathname.endsWith('/history')) return Response.json({ error: { code: 404, message: 'Requested entity was not found.' } }, { status: 404 });

@@ -248,7 +248,9 @@ export type MailItem = Readonly<{ id: string; thread_id: string; from: string; s
 // history id with no changes; the caller reads the gap the older way.
 export type MailLabelChange = Readonly<{ message_id: string; thread_id: string; change: 'read' | 'archived' | 'starred' }>;
 export type MailDelta = Readonly<{ state: 'delta'; history_id: string; added: readonly MailItem[]; labels: readonly MailLabelChange[]; left_out: number }>
-  | Readonly<{ state: 'rebased'; history_id: string }>;
+  | Readonly<{ state: 'rebased'; history_id: string }>
+  // More history than the page cap: the mailbox's current history id, to be read up to the older way.
+  | Readonly<{ state: 'capped'; history_id: string }>;
 // What changed on one calendar since a sync token, in no time window. A recurring series is one change, its exceptions are
 // their own. An invalid token is re-based from the window start with no changes; a baseline past the page cap gives up.
 export type CalendarDeltaEvent = CalendarChange & Readonly<{ invite?: true; series?: true }>;
@@ -1059,8 +1061,10 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         records.push(...(data.history ?? []) as GmailHistoryRecord[]);
         historyId = data.historyId;
         pageToken = data.nextPageToken as string | undefined;
-        // Past the cap the cursor still moves to the newest point read: what was not read is counted, never re-read forever.
-        if (!pageToken || page + 1 >= MAIL_DELTA_PAGES) break;
+        if (!pageToken) break;
+        // Each page carries the mailbox's current history id, not the last record's: past the cap, moving there would skip
+        // the records not read, so the caller reads that gap the older way instead.
+        if (page + 1 >= MAIL_DELTA_PAGES) return { state: 'capped', history_id: historyId };
       }
       const { added, labels } = historyChanges(records);
       const opened = added.slice(-limit);

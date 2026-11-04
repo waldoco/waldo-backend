@@ -87,9 +87,11 @@ export const ensureCalendarWatches = async (deps: Readonly<{
   const lists = await Promise.all(accounts.map(account => account.listCalendars().catch(() => null)));
   deps.set.set(capCalendars(accounts.map((account, i) => [account.id, lists[i] ? readableCalendars(lists[i]) : deps.set.calendars(account.id)])));
   // The older watch's primary channel moves here once, to the account it was started on, so that calendar is never watched
-  // twice; the older book is left empty, and starts its own channel again if the switch goes back off.
+  // twice; the older book is left empty, and starts its own channel again if the switch goes back off. A channel started on
+  // a token held here names no account: it moves only when one such account is read, and otherwise lapses unread.
   const legacy = deps.legacy.handOver();
-  const heir = legacy && accounts.find(account => legacy.connection === null ? account.local : account.id === legacy.connection);
+  const heirs = legacy ? accounts.filter(account => legacy.connection === null ? account.local : account.id === legacy.connection) : [];
+  const heir = heirs.length === 1 ? heirs[0] : undefined;
   if (legacy && heir && !book.live(heir.id, 'primary')) book.record(heir.id, 'primary', legacy, legacy.connection);
   let started = 0, failed = 0, fresh = 0, stopped = 0;
   for (const account of accounts) {

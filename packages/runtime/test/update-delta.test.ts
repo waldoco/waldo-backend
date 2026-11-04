@@ -164,6 +164,53 @@ describe('exact deltas', () => {
     });
   });
 
+  it('an event that goes back to an earlier state is news each time: moved, then moved back', async () => {
+    await withDelta(async (h) => {
+      const at = (start: string, end: string) => event('standup', { start, end });
+      const tick = async (version: CalendarDeltaEvent) => {
+        h.fakes.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [version] });
+        h.settle();
+        h.later();
+        return (await h.check()).code;
+      };
+      expect(await tick(at('2026-11-04T10:00:00Z', '2026-11-04T11:00:00Z'))).toBe('enqueued');
+      expect(await tick(at('2026-11-04T12:00:00Z', '2026-11-04T13:00:00Z'))).toBe('enqueued');
+      expect(await tick(at('2026-11-04T10:00:00Z', '2026-11-04T11:00:00Z')), 'back to 10:00').toBe('enqueued');
+      expect(await tick(at('2026-11-04T10:00:00Z', '2026-11-04T11:00:00Z')), 'the same again is not news').toBe('unchanged');
+      expect(h.rows().map(row => (JSON.parse(row[0]!.detail) as { start: string }).start)).toEqual(['2026-11-04T10:00:00Z', '2026-11-04T12:00:00Z', '2026-11-04T10:00:00Z']);
+    });
+  });
+
+  it('a meeting cancelled and then restored is said both times', async () => {
+    await withDelta(async (h) => {
+      const meeting = event('review');
+      h.updates.see({ event_id: 'review', start: meeting.start, end: meeting.end, all_day: false, title_digest: 'shown' }, T0);
+      const tick = async (version: CalendarDeltaEvent) => {
+        h.fakes.calendar = async (_id, token) => ({ state: 'delta', sync_token: `${token}+`, events: [version] });
+        h.settle();
+        h.later();
+        return (await h.check()).code;
+      };
+      expect(await tick(meeting)).toBe('enqueued');
+      expect(await tick({ ...meeting, status: 'cancelled', etag: '"review-2"' })).toBe('enqueued');
+      expect(await tick({ ...meeting, etag: '"review-3"' }), 'back on').toBe('enqueued');
+      expect(h.rows().map(row => row[0]!.kind)).toEqual(['changed', 'cancelled', 'changed']);
+    });
+  });
+
+  it('a mailbox read past the page cap moves to its current history id and reads the gap the older way', async () => {
+    await withDelta(async (h) => {
+      seed(h, { 'mail:a1': '100' });
+      h.fakes.mail = async () => ({ state: 'capped', history_id: '9000' });
+      h.fakes.newMail = [mailItem('after-bulk-archive')];
+      const result = await h.check();
+      expect(result.code).toBe('enqueued');
+      expect(result.delta).toContain('mail_capped');
+      expect(h.rows()[0]!.map(change => change.ref)).toEqual(['message:after-bulk-archive']);
+      expect(h.cursor('mail:a1')).toBe('9000');
+    });
+  });
+
   it('a delta read that fails falls back to the older read for that source and leaves its cursor where it was', async () => {
     await withDelta(async (h) => {
       seed(h, { 'mail:a1': '100', 'cal:a1:primary': 's1' });
