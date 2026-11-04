@@ -29,6 +29,11 @@ export type ProducerDeps = Readonly<{
   backfillLimit?: number;
   // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
   trainingLoad?: boolean;
+  // Off unless true. On, today's and yesterday's rows carry the parts of each available pillar (scoreParts) and the owner's usual
+  // bands (usual), which the row writer must admit. They are computed in the same pass as the scores, from the provisional
+  // engine only, and never on a backfilled row; neither changes a score, and each is its own column the model's read never has.
+  scoreParts?: boolean;
+  usual?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
@@ -393,6 +398,12 @@ const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trai
   workouts: sessionsOf(source.readings.filter(r => r.signal === 'workout')).map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
 });
 
+// What a row carries of the parts and bands, when asked for and when the engine had them: absent otherwise, which clears the column.
+const scoreDetailOf = (scores: DailyScores, ask: Readonly<{ parts: boolean; usual: boolean }>): object => ({
+  ...(ask.parts && scores.components ? { components: scores.components } : {}),
+  ...(ask.usual && scores.usual && scores.usual.length > 0 ? { usual: scores.usual } : {}),
+});
+
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
@@ -525,13 +536,14 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         if (outcome === 'refused') break;
       }
     };
+    const ask = { parts: deps.scoreParts === true, usual: deps.usual === true };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
     let provisional = false, needMoved = false;
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt, ...(ask.parts ? { parts: true } : {}), ...(ask.usual ? { usual: true } : {}) });
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
@@ -552,6 +564,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+        ...scoreDetailOf(scores, ask),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));

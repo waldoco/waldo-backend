@@ -422,6 +422,137 @@ export const healthSleepDebtV1Schema = z.union([
     algorithm_version: algorithmVersion, activation,
   }),
 ]);
+
+// The owner's own sleep need, when they have stated one, in whole minutes and inside the range the score engine trusts (six to
+// ten hours). null clears it, and the engine goes back to the owner's own nights. It is the owner's statement, not a reading:
+// no source holds it, so one source's withdrawal leaves it, and account deletion removes it. The app reads it with GET and
+// replaces it whole with PUT, which answers with what is now stored.
+export const HEALTH_SLEEP_NEED_MIN_MINUTES_V1 = 360;
+export const HEALTH_SLEEP_NEED_MAX_MINUTES_V1 = 600;
+export const healthSleepNeedMinutesV1Schema = z.int().min(HEALTH_SLEEP_NEED_MIN_MINUTES_V1).max(HEALTH_SLEEP_NEED_MAX_MINUTES_V1);
+
+// Health revision 8: what each score is made of, and the owner's own usual for each reading. A part is one row of a pillar's
+// score: its own score, its share of the pillar, the points it adds (the points add up to the pillar's score), and which way the
+// reading stood against the owner's usual. Direction describes a reading, never good or bad: a heavier day is not worse and a
+// resting heart rate below its usual is not better. Both are served only to a build that names revision 8, and a build below
+// it gets exactly the scores and history it had. Part keys and usual signals are closed lists spelled out here, because an
+// installed build pins them strictly; a runtime test keeps the lists the producer draws from equal to these.
+export const HEALTH_PARTS_REVISION_V1 = 8;
+export const HEALTH_USUAL_WINDOW_DAYS_V1 = 30;
+export const healthPartKeysV1 = {
+  recovery: ['sleep', 'hrv', 'resting_heart_rate'],
+  form: ['from_the_night', 'sleep_midpoint', 'daylight', 'movement', 'stress'],
+  weight: ['calendar', 'tasks', 'messages', 'physical_load'],
+} as const;
+export const healthUsualSignalV1Schema = z.enum([
+  'overnight_hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'stress_heart_rate',
+  'breathing_rate', 'spo2', 'wrist_temperature', 'awake_time', 'walking_heart_rate', 'steps', 'active_energy', 'vo2_max',
+]);
+const usualSignals = healthUsualSignalV1Schema.options;
+// Which statistic backs a signal. A component of a score reads against a centre and a predictive spread that a population
+// prior may still be carrying (shrunk_predictive); every other signal against the plain mean and spread of the owner's own days
+// (own_mean_sd), which is what the driver phrases use, so a band and a driver phrase never disagree.
+const SHRUNK_SIGNALS: readonly string[] = ['overnight_hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'stress_heart_rate'];
+const RESTING_METHODS: readonly string[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown', 'asleep_hours_low'];
+export const healthUsualMethodV1Schema = z.enum(['rmssd', 'sdnn', 'overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown', 'asleep_hours_low', 'absolute', 'baseline_delta']);
+const usualMethodFits = (signal: string, method: string | null): boolean => {
+  if (signal === 'overnight_hrv') return method === 'rmssd' || method === 'sdnn';
+  if (signal === 'resting_heart_rate') return method !== null && RESTING_METHODS.includes(method);
+  if (signal === 'wrist_temperature') return method === 'absolute' || method === 'baseline_delta';
+  return method === null;
+};
+// low and high are one spread either side of the centre, in the signal's own unit; a natural-log signal is back-transformed, so
+// its band is not symmetric. sleep_midpoint is a minute of the owner's local day, 0 to 1439, and its band may cross midnight: low
+// is then later in the day than high, and the centre lies in the stretch from low through midnight to high.
+const minuteOfDay = z.number().finite().min(0).max(1439.999999);
+export const healthUsualV1Schema = z.strictObject({
+  signal: healthUsualSignalV1Schema,
+  method: healthUsualMethodV1Schema.nullable(),
+  // personal once the owner's own days reach the fourteen needed, as the baseline label counts; provisional before.
+  state: z.enum(['provisional', 'personal']),
+  low: z.number().finite(), centre: z.number().finite(), high: z.number().finite(),
+  own_days: z.int().min(0).max(HEALTH_USUAL_WINDOW_DAYS_V1),
+  // How much of the centre is the owner's own data rather than a population prior, 0 to 1.
+  own_share: z.number().finite().min(0).max(1),
+  // The days short of the fourteen that make the band the owner's own: 0 once personal. The client never subtracts.
+  days_until_personal: z.int().min(0).max(14),
+  window_days: z.literal(HEALTH_USUAL_WINDOW_DAYS_V1),
+  estimator: z.enum(['shrunk_predictive', 'own_mean_sd']),
+}).refine(usual => usualMethodFits(usual.signal, usual.method), { error: 'the method belongs to the signal', path: ['method'] })
+  .refine(usual => usual.estimator === (SHRUNK_SIGNALS.includes(usual.signal) ? 'shrunk_predictive' : 'own_mean_sd'), { error: 'the estimator belongs to the signal', path: ['estimator'] })
+  .refine(usual => (usual.own_days >= 14) === (usual.state === 'personal'), { error: 'personal from fourteen own days', path: ['state'] })
+  .refine(usual => usual.days_until_personal === Math.max(0, 14 - usual.own_days), { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] })
+  .refine(usual => usual.estimator === 'shrunk_predictive' || (usual.state === 'personal' && usual.own_share === 1), { error: 'an own-days band is the owner\'s own', path: ['own_share'] })
+  .refine(usual => (usual.signal === 'sleep_midpoint'
+    ? [usual.low, usual.centre, usual.high].every(minute => minuteOfDay.safeParse(minute).success)
+      && (usual.low <= usual.centre && usual.centre <= usual.high || usual.low > usual.high && (usual.centre >= usual.low || usual.centre <= usual.high))
+    : usual.low <= usual.centre && usual.centre <= usual.high), { error: 'the centre lies inside the band', path: ['centre'] });
+export const healthUsualListV1Schema = z.array(healthUsualV1Schema).max(usualSignals.length)
+  .refine(list => new Set(list.map(usual => usual.signal)).size === list.length, { error: 'one band per signal' });
+
+export const healthPartDirectionV1Schema = z.enum(['above_usual', 'usual', 'below_usual']);
+export const healthPartBaselineV1Schema = z.strictObject({
+  state: z.enum(['provisional', 'personal']),
+  own_days: z.int().min(0).max(HEALTH_USUAL_WINDOW_DAYS_V1),
+  own_share: z.number().finite().min(0).max(1),
+  days_until_personal: z.int().min(0).max(14),
+}).refine(baseline => (baseline.own_days >= 14) === (baseline.state === 'personal'), { error: 'personal from fourteen own days', path: ['state'] })
+  .refine(baseline => baseline.days_until_personal === Math.max(0, 14 - baseline.own_days), { error: 'the days left are fourteen less the own days', path: ['days_until_personal'] });
+export const healthPartUnavailableReasonV1Schema = z.enum(['no_reading', 'baseline_immature']);
+const partCommon = {
+  state: z.literal('available'),
+  score: z.number().finite().min(0).max(100),
+  // The part's share of the pillar over the parts that had a reading, so the shares add up to 1, and the points it adds.
+  share: z.number().finite().min(0).max(1),
+  points: z.number().finite().min(0).max(100),
+  // Null for a part that is judged against a need or is itself made of parts (sleep, from_the_night), not against a usual.
+  direction: healthPartDirectionV1Schema.nullable(),
+  // The usual bands, by signal, this part's direction is read against: the same estimate, so a value inside the band is a part
+  // that is usual. Empty for a part with no band of its own.
+  signals: z.array(healthUsualSignalV1Schema).max(3),
+  baseline: healthPartBaselineV1Schema.nullable(),
+};
+const partOf = <Key extends z.ZodType>(key: Key) => z.union([
+  z.strictObject({ key, ...partCommon }),
+  z.strictObject({ key, state: z.literal('unavailable'), reason: healthPartUnavailableReasonV1Schema }),
+]);
+// The sleep part is read against the owner's need, and says which need and how it was found.
+export const healthSleepPartV1Schema = z.union([
+  z.strictObject({ key: z.literal('sleep'), ...partCommon, need_minutes: healthSleepNeedMinutesV1Schema, need_basis: z.enum(['owner_confirmed', 'own_average', 'blended_average']) }),
+  z.strictObject({ key: z.literal('sleep'), state: z.literal('unavailable'), reason: healthPartUnavailableReasonV1Schema }),
+]);
+const partsOf = <Part extends z.ZodType<{ key: string }>>(part: Part, max: number) =>
+  z.array(part).min(1).max(max).refine(parts => new Set(parts.map(entry => entry.key)).size === parts.length, { error: 'one row per part' });
+export const healthRecoveryPartV1Schema = z.union([healthSleepPartV1Schema, partOf(z.enum(['hrv', 'resting_heart_rate']))]);
+export const healthFormPartV1Schema = partOf(z.enum(healthPartKeysV1.form));
+export const healthWeightPartV1Schema = partOf(z.enum(healthPartKeysV1.weight));
+// The two rows the app's screens show, each the sum of two fine parts of one pillar, which stay as they are: Resting State
+// (hrv and resting_heart_rate, in Recovery) and Circadian (sleep_midpoint and daylight, in Form). Score is the weighted mean of
+// the two by the weights the pillar's formula already gives them, so share and points are the sums of the parts' and still add
+// up to the pillar. Direction is the one both parts share and null when they differ: two readings have no common direction to
+// average, and a score cannot stand in for one, since it says better or worse and not which way. With either part missing the
+// group is unavailable, for that part's reason.
+export const healthGroupKeysV1 = { resting_state: { pillar: 'recovery', parts: ['hrv', 'resting_heart_rate'] }, circadian: { pillar: 'form', parts: ['sleep_midpoint', 'daylight'] } } as const;
+export const healthGroupKeyV1Schema = z.enum(['resting_state', 'circadian']);
+const groupFits = (group: { key: 'resting_state' | 'circadian'; pillar: string }) => healthGroupKeysV1[group.key].pillar === group.pillar;
+export const healthPartGroupV1Schema = z.union([
+  z.strictObject({
+    key: healthGroupKeyV1Schema, pillar: z.enum(['recovery', 'form']), state: z.literal('available'),
+    score: z.number().finite().min(0).max(100), share: z.number().finite().min(0).max(1), points: z.number().finite().min(0).max(100),
+    direction: healthPartDirectionV1Schema.nullable(), parts: z.array(z.string()).length(2),
+    signals: z.array(healthUsualSignalV1Schema).max(3), baseline: healthPartBaselineV1Schema.nullable(),
+  }).refine(group => groupFits(group) && group.parts.join() === healthGroupKeysV1[group.key].parts.join(), { error: 'the group is its pillar\'s two named parts', path: ['parts'] }),
+  z.strictObject({ key: healthGroupKeyV1Schema, pillar: z.enum(['recovery', 'form']), state: z.literal('unavailable'), reason: healthPartUnavailableReasonV1Schema })
+    .refine(groupFits, { error: 'the group belongs to its pillar', path: ['pillar'] }),
+]);
+// Present for a pillar only while that pillar is available, and only the pillars that are.
+export const healthPartsV1Schema = z.strictObject({
+  groups: z.array(healthPartGroupV1Schema).min(1).max(2).refine(groups => new Set(groups.map(group => group.key)).size === groups.length, { error: 'one row per group' }).optional(),
+  recovery: partsOf(healthRecoveryPartV1Schema, healthPartKeysV1.recovery.length).optional(),
+  form: partsOf(healthFormPartV1Schema, healthPartKeysV1.form.length).optional(),
+  weight: partsOf(healthWeightPartV1Schema, healthPartKeysV1.weight.length).optional(),
+});
+
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -437,6 +568,9 @@ export const healthScoresV1Schema = z.strictObject({
   // Revision 4 and later; absent when the row has none.
   drivers: z.array(healthDriverPhraseV1Schema).max(8).optional(),
   windows: z.array(healthEnergyWindowV1Schema).max(4).optional(),
+  // Revision 8 and later; absent when the row has none.
+  components: healthPartsV1Schema.optional(),
+  usual: healthUsualListV1Schema.optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third
@@ -465,6 +599,8 @@ export const healthScoresHistoryDayV1Schema = z.strictObject({
   form: pillar(healthFormZoneV1Schema),
   weight: pillar(healthWeightZoneV1Schema),
   backfilled: z.literal(true).optional(),
+  // Revision 8 and later: the day's parts, as /scores shows them; absent when the row has none.
+  components: healthPartsV1Schema.optional(),
 });
 export const healthScoresHistoryV1Schema = z.strictObject({
   state: z.literal('available'),
@@ -479,13 +615,6 @@ export const healthScoresHistoryV1Schema = z.strictObject({
 export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
 export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
 
-// The owner's own sleep need, when they have stated one, in whole minutes and inside the range the score engine trusts (six to
-// ten hours). null clears it, and the engine goes back to the owner's own nights. It is the owner's statement, not a reading:
-// no source holds it, so one source's withdrawal leaves it, and account deletion removes it. The app reads it with GET and
-// replaces it whole with PUT, which answers with what is now stored.
-export const HEALTH_SLEEP_NEED_MIN_MINUTES_V1 = 360;
-export const HEALTH_SLEEP_NEED_MAX_MINUTES_V1 = 600;
-export const healthSleepNeedMinutesV1Schema = z.int().min(HEALTH_SLEEP_NEED_MIN_MINUTES_V1).max(HEALTH_SLEEP_NEED_MAX_MINUTES_V1);
 export const healthSettingsV1Schema = z.strictObject({ sleep_need_minutes: healthSleepNeedMinutesV1Schema.nullable() });
 
 // The runtime may attach a short message; a client acts on `error` only.

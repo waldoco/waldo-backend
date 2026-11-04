@@ -5,9 +5,9 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
-  healthSettingsV1Schema,
+  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema,
 } from '../../../contracts/src/app/health-ingest';
-import { healthHistoryView, historyWindowOf } from './app-health-history';
+import { healthHistoryView, historyWindowOf, partsOfShownPillars } from './app-health-history';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
@@ -31,6 +31,11 @@ export type AppHealthInput = Readonly<{
   notifySettings?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
   trainingLoad?: boolean;
+  // Off unless true. On, the recompute writes the parts of each score (scoreParts) and the owner's usual bands (usual) beside
+  // the scores, and a build that names health revision 8 is shown them. Off, nothing is written and nothing is shown, whatever
+  // rows already hold: setting a switch back to off is the rollback.
+  scoreParts?: boolean;
+  usual?: boolean;
   // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
   coaching?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
@@ -124,7 +129,7 @@ const pillarView = (pillar: Pillar, stored: unknown, revision: number): object |
 
 // A stored extra of the scores row that does not read as the contract's is left out, with a tag that holds no value, so it
 // cannot cost the owner their scores.
-const readExtra = <K extends 'drivers' | 'windows'>(stored: Record<string, unknown> | null, key: K): Record<string, unknown> => {
+const readExtra = <K extends 'drivers' | 'windows' | 'components' | 'usual'>(stored: Record<string, unknown> | null, key: K): Record<string, unknown> => {
   if (!stored || !(key in stored)) return {};
   const parsed = healthScoresV1Schema.shape[key].safeParse(stored[key]);
   if (parsed.success) return { [key]: parsed.data };
@@ -134,7 +139,9 @@ const readExtra = <K extends 'drivers' | 'windows'>(stored: Record<string, unkno
 
 // The one reading of a scores_read answer, for the app and for the owner's console: the contract body, or the closed error.
 // revision is the client's health revision: builds pinned before the app took sleep_debt parse the scores strictly without it.
-export const healthScoresView = (result: unknown, day: string | null, now: number, revision: number): View => {
+// extras names which of the revision-8 additions this answer may carry; the owner's console and every earlier caller show none.
+export type ScoreExtras = Readonly<{ scoreParts?: boolean; usual?: boolean }>;
+export const healthScoresView = (result: unknown, day: string | null, now: number, revision: number, extras: ScoreExtras = {}): View => {
   // No row to show is an answer, not an error: a 200 that says why, never a zero score.
   const nothing = (reason: unknown): View => {
     const body = healthScoresUnavailableV1Schema.safeParse({ state: 'unavailable', day, reason });
@@ -159,11 +166,17 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   const { trend: _trend, ...storedDebt } = asObject(stored?.sleep_debt) ?? {};
   const debt = shown && !priorLed && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(asObject(stored.sleep_debt) ? storedDebt : stored.sleep_debt) : null;
   if (debt && !debt.success) console.error('app health scores sleep debt shape');
-  const body = stored && {
+  const views = stored && { recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision) };
+  // The parts of a pillar are shown only while the pillar is: a score the view withholds is not given back as the sum of its parts.
+  const shownParts = stored && views && extras.scoreParts === true && revision >= HEALTH_PARTS_REVISION_V1 ? readExtra(stored, 'components') : {};
+  const partsOfShown = 'components' in shownParts && views ? partsOfShownPillars(shownParts.components as Record<string, unknown>, views) : {};
+  const body = stored && views && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
-    recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision),
+    ...views,
     ...(debt?.success ? { sleep_debt: debt.data } : {}),
     ...(revision >= HEALTH_BASELINE_REVISION_V1 ? { ...readExtra(stored, 'drivers'), ...readExtra(stored, 'windows') } : {}),
+    ...(Object.keys(partsOfShown).length ? { components: partsOfShown } : {}),
+    ...(revision >= HEALTH_PARTS_REVISION_V1 && extras.usual === true ? readExtra(stored, 'usual') : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return { body: parsed.data };
@@ -184,18 +197,24 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
   if (unknown || !query.success) return refuse('invalid_request');
   const revision = appContractRevision(input.request.headers.get(APP_CONTRACT_HEADER), 'health');
-  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision));
+  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision, { scoreParts: input.scoreParts === true, usual: input.usual === true }));
 };
 
 // Score history exists only for a build that names health revision 4; below it the route is not there, as with the provider routes.
 // It spends the same per-owner health budget as every route under /app/v1/health.
-const scoresHistory = async ({ request, url, doName, rpc }: AppHealthInput): Promise<Response> => {
-  if (appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') < HEALTH_SCORES_HISTORY_REVISION_V1) return refuse('invalid_request', 404);
+const scoresHistory = async ({ request, url, doName, rpc, scoreParts }: AppHealthInput): Promise<Response> => {
+  const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health');
+  if (revision < HEALTH_SCORES_HISTORY_REVISION_V1) return refuse('invalid_request', 404);
   if (request.method !== 'GET') return refuse('unavailable', 405);
   const days = historyWindowOf(url);
   if (!days) return refuse('invalid_request');
-  const readers = { pillar: (pillar: Pillar, stored: unknown) => pillarView(pillar, stored, HEALTH_SCORES_HISTORY_REVISION_V1), failure: failureCode };
-  return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })), days, readers));
+  // A day's parts reach a build that names revision 8 only, and only while the switch is on; the pillars are read at revision 4 as ever.
+  const readers = {
+    pillar: (pillar: Pillar, stored: unknown) => pillarView(pillar, stored, HEALTH_SCORES_HISTORY_REVISION_V1), failure: failureCode,
+    ...(revision >= HEALTH_PARTS_REVISION_V1 && scoreParts === true ? { parts: (stored: unknown) => healthPartsV1Schema.safeParse(stored) } : {}),
+  };
+  // The database returns each day's parts only when asked, so a build below revision 8 and the producer's own read never carry them.
+  return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days, ...(readers.parts ? { parts: true } : {}) })), days, readers));
 };
 
 // The owner's stated sleep need. The health plane answers with when it last changed too; the app is shown the need alone.
@@ -216,7 +235,7 @@ const settings = async ({ request, doName, rpc, readBody, defer, notifySettings 
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching, scoreParts, usual }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -226,6 +245,8 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
     ...(trainingLoad ? { trainingLoad } : {}),
+    ...(scoreParts ? { scoreParts } : {}),
+    ...(usual ? { usual } : {}),
     ...(coaching ? { readSettings: () => invokeHealth(rpc, doName, 'settings_read', '{}') } : {}),
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),

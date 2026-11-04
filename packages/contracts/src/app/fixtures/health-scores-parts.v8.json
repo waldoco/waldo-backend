@@ -1,0 +1,452 @@
+{
+  "notes": [
+    "Synthetic values only. Send x-waldo-app-contract: health=8 (or later) to GET /app/v1/health/scores and /scores/history to receive components and usual; a build below revision 8 gets exactly the bodies it had.",
+    "components is keyed by pillar and holds a pillar's parts only while that pillar is available. share is the part's share over the parts that had a reading, so shares add up to 1; points = share x score; the points add up to the pillar's score before it is rounded.",
+    "direction says which way the reading stood against the owner's usual at one spread (above_usual, usual, below_usual). It is null for sleep (read against the owner's need) and for from_the_night (made of parts). It is a description of a reading, not good or bad.",
+    "usual is one band per signal, low to high in the signal's unit. A natural-log signal (overnight_hrv) is back-transformed, so its band is not symmetric about its centre. sleep_midpoint is a minute of the owner's local day, 0 to 1439, and its band may cross midnight (low later in the day than high).",
+    "Show a band as 'your usual' only at state personal; at provisional say the usual is still being learned and show own_days of 14. own_share is how much of the centre is the owner's own data rather than a population prior.",
+    "A part with no reading is { key, state: unavailable, reason: no_reading | baseline_immature }, never a zero.",
+    "days_until_personal is fourteen less own_days, never below 0: the client shows it and never subtracts. It is on every band (usual) and every part and group baseline.",
+    "groups holds the two rows the app's screens show, each the sum of two fine parts that stay in their pillar's list: resting_state (hrv + resting_heart_rate, in recovery) and circadian (sleep_midpoint + daylight, in form). score is the weighted mean of the two by the weights the pillar's formula already gives them, share and points are the sums of the parts', so the points still add up to the pillar. direction is the one both parts share, null when they differ (two readings have no common direction to average, and a score says better or worse, not which way). With either part missing the group is unavailable for that part's reason.",
+    "sleep and from_the_night carry no direction: sleep is the night's asleep minutes against the owner's need (no usual of nightly sleep is computed, and a direction against a need would say enough or short, which is a verdict), and from_the_night mixes sleep against need with two readings that point opposite ways. A direction for sleep arrives only with its own usual (a later revision)."
+  ],
+  "scores": {
+    "day": "2026-11-02",
+    "timezone": "Asia/Kolkata",
+    "compiled_at": "2026-11-02T07:00:00.000Z",
+    "freshness": "fresh",
+    "recovery": {
+      "state": "available",
+      "score": 71,
+      "zone": "solid",
+      "algorithm_version": "recovery.v5",
+      "activation": "accepted",
+      "confidence": 0.8,
+      "hrv_method": "rmssd",
+      "baseline": {
+        "state": "personal",
+        "personal_days": 21,
+        "needed": 14,
+        "prior": "adults"
+      }
+    },
+    "form": {
+      "state": "available",
+      "score": 64,
+      "zone": "steady",
+      "algorithm_version": "form.v9",
+      "activation": "accepted",
+      "confidence": 0.7,
+      "hrv_method": "rmssd",
+      "baseline": {
+        "state": "provisional",
+        "personal_days": 9,
+        "needed": 14,
+        "prior": "adults"
+      }
+    },
+    "weight": {
+      "state": "available",
+      "score": 51,
+      "zone": "moderate",
+      "algorithm_version": "weight.v5",
+      "activation": "accepted",
+      "confidence": 0.6,
+      "hrv_method": null,
+      "baseline": {
+        "state": "personal",
+        "personal_days": 30,
+        "needed": 14,
+        "prior": "none"
+      }
+    },
+    "components": {
+      "recovery": [
+        {
+          "key": "sleep",
+          "state": "available",
+          "score": 90,
+          "share": 0.5,
+          "points": 45,
+          "direction": null,
+          "signals": [],
+          "baseline": {
+            "state": "personal",
+            "own_days": 21,
+            "own_share": 0.6,
+            "days_until_personal": 0
+          },
+          "need_minutes": 462,
+          "need_basis": "blended_average"
+        },
+        {
+          "key": "hrv",
+          "state": "available",
+          "score": 60,
+          "share": 0.3,
+          "points": 18,
+          "direction": "above_usual",
+          "signals": [
+            "overnight_hrv"
+          ],
+          "baseline": {
+            "state": "personal",
+            "own_days": 21,
+            "own_share": 0.91,
+            "days_until_personal": 0
+          }
+        },
+        {
+          "key": "resting_heart_rate",
+          "state": "available",
+          "score": 40,
+          "share": 0.2,
+          "points": 8,
+          "direction": "below_usual",
+          "signals": [
+            "resting_heart_rate"
+          ],
+          "baseline": {
+            "state": "personal",
+            "own_days": 21,
+            "own_share": 0.87,
+            "days_until_personal": 0
+          }
+        }
+      ],
+      "form": [
+        {
+          "key": "from_the_night",
+          "state": "available",
+          "score": 71,
+          "share": 0.4,
+          "points": 28.4,
+          "direction": null,
+          "signals": [
+            "overnight_hrv",
+            "resting_heart_rate"
+          ],
+          "baseline": {
+            "state": "personal",
+            "own_days": 21,
+            "own_share": 0.6,
+            "days_until_personal": 0
+          }
+        },
+        {
+          "key": "sleep_midpoint",
+          "state": "available",
+          "score": 80,
+          "share": 0.1,
+          "points": 8,
+          "direction": "usual",
+          "signals": [
+            "sleep_midpoint"
+          ],
+          "baseline": {
+            "state": "provisional",
+            "own_days": 9,
+            "own_share": 1,
+            "days_until_personal": 5
+          }
+        },
+        {
+          "key": "daylight",
+          "state": "available",
+          "score": 50,
+          "share": 0.1,
+          "points": 5,
+          "direction": "usual",
+          "signals": [
+            "daylight"
+          ],
+          "baseline": {
+            "state": "provisional",
+            "own_days": 9,
+            "own_share": 1,
+            "days_until_personal": 5
+          }
+        },
+        {
+          "key": "movement",
+          "state": "available",
+          "score": 60,
+          "share": 0.2,
+          "points": 12,
+          "direction": "above_usual",
+          "signals": [
+            "movement"
+          ],
+          "baseline": {
+            "state": "provisional",
+            "own_days": 9,
+            "own_share": 1,
+            "days_until_personal": 5
+          }
+        },
+        {
+          "key": "stress",
+          "state": "available",
+          "score": 55,
+          "share": 0.2,
+          "points": 11,
+          "direction": "usual",
+          "signals": [
+            "stress_heart_rate"
+          ],
+          "baseline": {
+            "state": "provisional",
+            "own_days": 9,
+            "own_share": 1,
+            "days_until_personal": 5
+          }
+        }
+      ],
+      "weight": [
+        {
+          "key": "calendar",
+          "state": "available",
+          "score": 40,
+          "share": 0.636364,
+          "points": 25.45456,
+          "direction": "below_usual",
+          "signals": [],
+          "baseline": {
+            "state": "personal",
+            "own_days": 30,
+            "own_share": 1,
+            "days_until_personal": 0
+          }
+        },
+        {
+          "key": "physical_load",
+          "state": "available",
+          "score": 70,
+          "share": 0.363636,
+          "points": 25.45452,
+          "direction": "above_usual",
+          "signals": [],
+          "baseline": {
+            "state": "personal",
+            "own_days": 30,
+            "own_share": 1,
+            "days_until_personal": 0
+          }
+        }
+      ],
+      "groups": [
+        {
+          "key": "resting_state",
+          "pillar": "recovery",
+          "state": "available",
+          "score": 52,
+          "share": 0.5,
+          "points": 26,
+          "direction": null,
+          "parts": [
+            "hrv",
+            "resting_heart_rate"
+          ],
+          "signals": [
+            "overnight_hrv",
+            "resting_heart_rate"
+          ],
+          "baseline": {
+            "state": "personal",
+            "own_days": 21,
+            "own_share": 0.87,
+            "days_until_personal": 0
+          }
+        },
+        {
+          "key": "circadian",
+          "pillar": "form",
+          "state": "available",
+          "score": 65,
+          "share": 0.2,
+          "points": 13,
+          "direction": "usual",
+          "parts": [
+            "sleep_midpoint",
+            "daylight"
+          ],
+          "signals": [
+            "sleep_midpoint",
+            "daylight"
+          ],
+          "baseline": {
+            "state": "provisional",
+            "own_days": 9,
+            "own_share": 1,
+            "days_until_personal": 5
+          }
+        }
+      ]
+    },
+    "usual": [
+      {
+        "signal": "overnight_hrv",
+        "method": "rmssd",
+        "state": "personal",
+        "low": 34.1,
+        "centre": 41.6,
+        "high": 50.7,
+        "own_days": 21,
+        "own_share": 0.91,
+        "days_until_personal": 0,
+        "window_days": 30,
+        "estimator": "shrunk_predictive"
+      },
+      {
+        "signal": "resting_heart_rate",
+        "method": "overnight_resting",
+        "state": "personal",
+        "low": 57.2,
+        "centre": 60.4,
+        "high": 63.6,
+        "own_days": 21,
+        "own_share": 0.87,
+        "days_until_personal": 0,
+        "window_days": 30,
+        "estimator": "shrunk_predictive"
+      },
+      {
+        "signal": "sleep_midpoint",
+        "method": null,
+        "state": "provisional",
+        "low": 1409,
+        "centre": 1432,
+        "high": 25,
+        "own_days": 9,
+        "own_share": 1,
+        "days_until_personal": 5,
+        "window_days": 30,
+        "estimator": "shrunk_predictive"
+      },
+      {
+        "signal": "daylight",
+        "method": null,
+        "state": "provisional",
+        "low": 11.2,
+        "centre": 19.8,
+        "high": 28.4,
+        "own_days": 9,
+        "own_share": 1,
+        "days_until_personal": 5,
+        "window_days": 30,
+        "estimator": "shrunk_predictive"
+      },
+      {
+        "signal": "breathing_rate",
+        "method": null,
+        "state": "personal",
+        "low": 13.1,
+        "centre": 14.2,
+        "high": 15.3,
+        "own_days": 21,
+        "own_share": 1,
+        "days_until_personal": 0,
+        "window_days": 30,
+        "estimator": "own_mean_sd"
+      },
+      {
+        "signal": "wrist_temperature",
+        "method": "absolute",
+        "state": "personal",
+        "low": 33.6,
+        "centre": 34.1,
+        "high": 34.6,
+        "own_days": 21,
+        "own_share": 1,
+        "days_until_personal": 0,
+        "window_days": 30,
+        "estimator": "own_mean_sd"
+      }
+    ]
+  },
+  "history": {
+    "state": "available",
+    "window_days": 7,
+    "from": "2026-10-27",
+    "to": "2026-11-02",
+    "days": [
+      {
+        "day": "2026-11-01",
+        "recovery": {
+          "state": "available",
+          "score": 64,
+          "zone": "mixed",
+          "algorithm_version": "recovery.v5",
+          "activation": "accepted",
+          "confidence": 0.8,
+          "hrv_method": "rmssd",
+          "baseline": {
+            "state": "personal",
+            "personal_days": 20,
+            "needed": 14,
+            "prior": "adults"
+          }
+        },
+        "form": {
+          "state": "unavailable",
+          "reason": "intraday_inputs_unavailable"
+        },
+        "weight": {
+          "state": "unavailable",
+          "reason": "calendar_demand_unavailable"
+        },
+        "components": {
+          "recovery": [
+            {
+              "key": "sleep",
+              "state": "available",
+              "score": 70,
+              "share": 0.625,
+              "points": 43.75,
+              "direction": null,
+              "signals": [],
+              "baseline": {
+                "state": "personal",
+                "own_days": 20,
+                "own_share": 0.59,
+                "days_until_personal": 0
+              },
+              "need_minutes": 480,
+              "need_basis": "owner_confirmed"
+            },
+            {
+              "key": "hrv",
+              "state": "available",
+              "score": 55,
+              "share": 0.375,
+              "points": 20.625,
+              "direction": "usual",
+              "signals": [
+                "overnight_hrv"
+              ],
+              "baseline": {
+                "state": "personal",
+                "own_days": 20,
+                "own_share": 0.9,
+                "days_until_personal": 0
+              }
+            },
+            {
+              "key": "resting_heart_rate",
+              "state": "unavailable",
+              "reason": "no_reading"
+            }
+          ],
+          "groups": [
+            {
+              "key": "resting_state",
+              "pillar": "recovery",
+              "state": "unavailable",
+              "reason": "no_reading"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

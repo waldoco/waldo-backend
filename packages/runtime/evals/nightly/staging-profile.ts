@@ -61,6 +61,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it off'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
+  HEALTH_SCORE_PARTS: gap('the parts of each score are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102010000'),
+  HEALTH_USUAL: gap('the usual bands are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261102010000'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),

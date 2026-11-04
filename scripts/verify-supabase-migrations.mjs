@@ -110,6 +110,7 @@ const expectedMigrations = [
   '20261101040000_health_medications.sql',
   '20261101060000_waldo_open_signup_capped.sql',
   '20261101070000_waldo_owner_google_signin.sql',
+  '20261102010000_health_body_parts_usual.sql',
   '20261103090000_console_session_touch_throttle.sql',
   '20261103120000_screen_time.sql',
 ];
