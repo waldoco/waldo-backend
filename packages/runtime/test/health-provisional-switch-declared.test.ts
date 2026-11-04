@@ -73,6 +73,13 @@ describe('MEDICATIONS in the Worker config', () => {
   });
 });
 
+describe('WALDO_RECALL_CHAIN in the Worker config', () => {
+  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+    expect(parsed.vars.WALDO_RECALL_CHAIN).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_RECALL_CHAIN).toBe('0');
+  });
+});
+
 describe('PLANNING_BRIEF in the Worker config', () => {
   it('is off in both blocks until a judged planning Brief passes and the gate turns it on at a named deploy', () => {
     expect(parsed.vars.PLANNING_BRIEF).toBe('0');

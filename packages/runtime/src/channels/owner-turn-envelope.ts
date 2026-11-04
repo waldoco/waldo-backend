@@ -85,6 +85,13 @@ export type OwnerResponder = Readonly<{
 
 // Host-selected surface, never inferred from owner text or transport payload.
 export const ownerTurnTrace = (surface: string, updateId: number): string => surface === 'telegram' ? `tg-${updateId}` : `${surface}-${updateId}`;
+// The inverse, for a stored turn's id or its reply's (`<trace>-reply`); null for anything else (scheduled and machine rows).
+export const surfaceOfTrace = (entryId: string): string | null => {
+  const found = /^([a-z]{1,16})-\d+(?:-reply)?$/.exec(entryId);
+  return found ? (found[1] === 'tg' ? 'telegram' : found[1]!) : null;
+};
+// The entry-id prefix of a surface's turns, which a stored row can be filtered by.
+export const traceSurfacePrefix = (surface: string): string => surface === 'telegram' ? 'tg-' : `${surface}-`;
 
 export const ownerTurnAttachments = (turn: Pick<OwnerTurnEnvelope, 'attachment' | 'attachments'>): readonly LLMAttachment[] | undefined => {
   if (turn.attachment !== undefined && turn.attachments !== undefined) throw new Error('ambiguous turn media');

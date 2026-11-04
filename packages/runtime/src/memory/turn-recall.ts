@@ -1,6 +1,7 @@
 import type { ConversationEntry, ToolHandler } from '@waldo/contracts';
 import { claimTag, fence, type Claim, type ClaimStore } from './claims';
 import { ftsTerms, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
+import { cutLine as cutLinkLine } from '../history/recall-chain';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 
 // Recall for one turn: the stored claims and past messages that share words with what the owner just said, as a
@@ -73,7 +74,11 @@ const stubLine = (claim: Claim) => {
   const cut = text.length <= STUB_CHARS || /\s/.test(text[STUB_CHARS]!) ? head : head.replace(/\S+$/, '').trimEnd() || head.replace(/\d+$/, '');
   return `- [c${claim.id} stub · ${claim.kind}] ${cut.trimEnd()}${text.length > STUB_CHARS ? '…' : ''}`;
 };
-const episodeLine = (hit: EpisodeHit) => `- [${hit.speaker}, ${hit.at?.slice(0, 10) ?? 'undated'}, ref ${hit.ref}] ${oneLine(hit.snippet)}`;
+const episodeLine = (hit: EpisodeHit) => `- [${hit.speaker}, ${hit.at?.slice(0, 10) ?? 'undated'}, ${hit.surface ? `${hit.surface}, ` : ''}ref ${hit.ref}] ${oneLine(hit.snippet)}`;
+// With the recall chain on, a hit names the rows next to it, each by ref with how it relates and the start of its line; the
+// plain line stands in when that does not fit.
+const LINK_CHARS = 48;
+const linkedLine = (hit: EpisodeHit) => hit.links?.length ? `${episodeLine(hit)} ${hit.links.map(link => `→ ${link.ref} ${link.rel} "${cutLinkLine(oneLine(link.line), LINK_CHARS)}"`).join(' ')}` : undefined;
 const OWNER_REF = 'owner, ';
 const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? claim.source_ref.slice(OWNER_REF.length) : undefined;
 
@@ -124,7 +129,13 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
       const rows = await Promise.all(found.map(async (hit) => {
         try { return await episodes.get(hit.ref); } catch { episodesFailed = true; return null; }
       }));
-      hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); });
+      // A link is judged by its own line, which the chain built from a row it already checked; one that holds is dropped alone.
+      hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); })
+        .map((hit, _index, kept) => {
+          // A link to another recalled message would only repeat it.
+          const shown = new Set(kept.map((other) => other.ref));
+          return hit.links ? { ...hit, links: hit.links.filter((link) => !shown.has(link.ref) && !holds(link.ref, link.line)) } : hit;
+        });
     } catch {
       episodesFailed = true;
     }
@@ -133,7 +144,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines.
   const lines: readonly Readonly<{ full?: string; stub?: string }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
-    ...hits.map((hit) => ({ full: episodeLine(hit) })),
+    ...hits.map((hit) => { const linked = linkedLine(hit); return linked === undefined ? { full: episodeLine(hit) } : { full: linked, stub: episodeLine(hit) }; }),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
