@@ -107,6 +107,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
   WALDO_SECOND_MESSAGE?: string;
+  // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
+  WALDO_ASYNC_TOOLS?: string;
+  // "1": the owner's own reply runs on the provider's auxiliary model and every task worker on its chat model (async-tools.ts).
+  WALDO_LIGHT_CHAT?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
