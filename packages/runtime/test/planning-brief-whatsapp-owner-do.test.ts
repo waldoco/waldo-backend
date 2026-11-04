@@ -44,8 +44,10 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '8d7c6b5a-4938-4a27-9b16-0f5e4d3c2b1a';
 const SUBJECT = '15550004444';
 const today = () => new Date().toISOString().slice(0, 10);
-const SYNC = { id: 'ev-sync', title: 'Team sync', start: `${today()}T12:00:00Z`, end: `${today()}T14:30:00Z`, status: 'confirmed' };
-const MOVE = { action: 'move', event_id: 'ev-sync', title: 'Team sync', start: `${today()}T17:00:00Z`, end: `${today()}T18:00:00Z`, reason: 'Free the afternoon for the deck' };
+// Hours from now, not fixed clock times: a move to a time already past is refused, so fixed times fail late in the day.
+const hoursAhead = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const SYNC = { id: 'ev-sync', title: 'Team sync', start: hoursAhead(1), end: hoursAhead(3.5), status: 'confirmed' };
+const MOVE = { action: 'move', event_id: 'ev-sync', title: 'Team sync', start: hoursAhead(5), end: hoursAhead(6), reason: 'Free the afternoon for the deck' };
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
 const google = { GOOGLE_CLIENT_ID: 'planning-wa-fixture', GOOGLE_CLIENT_SECRET: 'fictional-secret', WALDO_OAUTH_STATE_SECRET: 'fictional-state-secret' };
