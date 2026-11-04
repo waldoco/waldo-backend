@@ -14,6 +14,7 @@ import { TOOL_PERMISSIONS, type ToolName } from './permissions';
 // A failing tool's own next step, in place of its code's generic one: the field, offset or account that would make the
 // call work, or why no retry will. The tool's own words, never provider text.
 export const toolResultFixSchema = z.string().min(1).max(500);
+export const TOOL_SPILL_VIEW_MAX_CHARS = 8_000;
 export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
   z.discriminatedUnion('ok', [
     z.strictObject({
@@ -237,7 +238,8 @@ export interface ToolHandler<Args, Result, Ctx> {
   turn_bound?: true;
   // spill: the view shown in place of a result too long to show, which is stored behind read_tool_output. It names every
   // item with its id and a short summary, so the model sees the whole result and reads back only the part it needs.
-  // Absent, the stored result's first characters are shown instead.
+  // A view longer than TOOL_SPILL_VIEW_MAX_CHARS as JSON is no summary, and the stored result's first characters are shown
+  // instead, as when spill is absent.
   spill?(data: Result): unknown;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;

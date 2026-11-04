@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, type ToolHandler, type ToolName } from '@waldo/contracts';
+import { buildSessionState, TOOL_SPILL_VIEW_MAX_CHARS, type ToolHandler, type ToolName } from '@waldo/contracts';
 import { b64url, googleClient } from '../src/connectors/google';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { sanitise } from '../src/scribe/sanitiser';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
-import { googleHandlers } from '../src/tools/live/google';
+import { googleHandlers, threadSpill } from '../src/tools/live/google';
 
 // A Google call that fails the same way on every retry says so: a code the model does not retry, and the one step that
 // would make the call work. Synthetic mail only.
 const app = { clientId: 'c', clientSecret: 's', redirectUri: 'https://example.invalid' };
-const message = (id: string, body: string) => ({
+const message = (id: string, body: string, extra: readonly { name: string; value: string }[] = []) => ({
   id, internalDate: '1791417600000',
-  payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'sender@example.test' }, { name: 'Subject', value: 'Notes' }, { name: 'Message-ID', value: `<${id}@example.test>` }], body: { data: b64url(new TextEncoder().encode(body)) } },
+  payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'sender@example.test' }, { name: 'Subject', value: 'Notes' }, { name: 'Message-ID', value: `<${id}@example.test>` }, ...extra], body: { data: b64url(new TextEncoder().encode(body)) } },
 });
 const thread = (messages: unknown[]) => googleClient(app, { refresh_token: 'r' }, (async (input: RequestInfo | URL) =>
   String(input).includes('oauth2') ? Response.json({ access_token: 'a' }) : Response.json({ messages })) as typeof fetch);
@@ -109,5 +109,58 @@ describe('Inline & Spill: the view shown for a result too long to show', () => {
   it('withholds a secret in the view as the store does', async () => {
     const shown = await run(() => ({ note: `token ${'1111111111111111'}` }));
     expect(JSON.stringify(shown)).not.toContain('1111111111111111');
+  });
+});
+
+describe('the read_thread index on a long thread', () => {
+  const people = (prefix: string, n: number) => Array.from({ length: n }, (_, k) => `${prefix}${k}@example.test`).join(', ');
+  const longThread = (n: number, to: number, cc: number) => thread(Array.from({ length: n }, (_, i) =>
+    message(`m${i}`, `message ${i} ${'lorem ipsum dolor '.repeat(200)}`, [{ name: 'To', value: people(`to${i}-`, to) }, { name: 'Cc', value: people(`cc${i}-`, cc) }])));
+  const index = async (n: number, to: number, cc: number) => {
+    const result = await dispatchTool({ id: 'c1', name: 'read_thread', args: { thread_id: 't', limit: n } }, ctx, { handlers: [handler(longThread(n, to, cc), 'read_thread')], offload: inMemoryToolOutputStore() });
+    return (result as { data: { head?: string; inline?: { messages: { id: string; opening?: string; body_chars_here: number; body_next_offset?: number }[]; next: string } } }).data;
+  };
+
+  for (const [n, to, cc] of [[15, 1, 0], [20, 1, 0], [20, 3, 3], [10, 6, 6]] as const) {
+    it(`names all ${n} messages, each with its opening or where its body starts, when every message has ${to} to and ${cc} cc`, async () => {
+      const shown = await index(n, to, cc);
+      expect(shown.head).toBeUndefined();
+      expect(shown.inline!.messages.map((m) => m.id)).toEqual(Array.from({ length: n }, (_, i) => `m${i}`));
+      // The first read shares one body budget, so a later message can arrive with none of its body yet.
+      for (const [i, m] of shown.inline!.messages.entries()) {
+        if (m.body_chars_here > 0) expect(m.opening).toMatch(new RegExp(`^message ${i} lorem`));
+        else expect(m.body_next_offset).toBe(0);
+      }
+      expect(shown.inline!.messages[0]!.opening!.length).toBeGreaterThan(0);
+      expect(JSON.stringify(shown.inline).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+    });
+  }
+
+  it('keeps id, sender, time and subject when the headers alone are too long for openings', () => {
+    const wide = Array.from({ length: 5 }, (_, k) => `a-rather-long-mailbox-name-number-${k}@a-long-company-domain.example.test`);
+    const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, from: 'sender@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'x'.repeat(500), to: wide, cc: wide }));
+    const view = threadSpill({ thread_id: 't', account: null, cursor: null, messages }) as { messages: Record<string, unknown>[]; next: string };
+    expect(view.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
+    expect(Object.keys(view.messages[0]!).sort()).toEqual(['at', 'from', 'id', 'subject']);
+    expect(view.next).toContain('body_message_id');
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('flags a preview-only body and a capped recipient list', () => {
+    const view = threadSpill({ thread_id: 't', account: null, cursor: null, messages: [
+      { id: 'm0', from: 'a@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'preview', body_source: 'snippet', recipients_capped: true },
+      { id: 'm1', from: 'a@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'whole', body_source: 'plain' },
+    ] }) as { messages: Record<string, unknown>[] };
+    expect(view.messages[0]).toMatchObject({ body_source: 'snippet', recipients_capped: true });
+    expect(view.messages[1]).not.toHaveProperty('body_source');
+  });
+});
+
+describe('a reply whose parent cannot be found', () => {
+  it('a parent id past the first 200 messages is not found, and the fix does not ask for the id already given', async () => {
+    const long = thread(Array.from({ length: 205 }, (_, i) => message(`p${i}`, 'note')));
+    const result = await dispatch(long, 'send_email', { to: ['sam@example.test'], subject: 'Notes', body_markdown: 'Thanks,', reply_to_thread_id: 't', in_reply_to_msg_id: 'far' });
+    expect(result).toMatchObject({ ok: false, code: 'not_found', retryable: false });
+    expect(result.ok ? '' : result.fix).not.toContain('Pass in_reply_to_msg_id');
   });
 });

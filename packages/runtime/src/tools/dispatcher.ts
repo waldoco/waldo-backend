@@ -15,6 +15,7 @@ import {
   trustedToolEffectReceiptUnavailableSchema,
   toolError,
   toolResultFixSchema,
+  TOOL_SPILL_VIEW_MAX_CHARS,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
@@ -932,12 +933,10 @@ const spillView = (handler: Pick<ToolHandler<unknown, unknown, ToolDispatcherCon
   if (handler?.spill === undefined) return undefined;
   try { return handler.spill(data); } catch { return undefined; }
 };
-// A spill view is a summary: one longer than this is not one, so the plain head is shown instead.
-const SPILL_VIEW_MAX_CHARS = 8_000;
 // The view passes the same guard as the stored text, and is shown only when it survives whole and still parses.
 const guardedView = (view: unknown, ctx: ToolDispatcherContext): unknown => {
   const text = JSON.stringify(view);
-  if (typeof text !== 'string' || text.length > SPILL_VIEW_MAX_CHARS) return undefined;
+  if (typeof text !== 'string' || text.length > TOOL_SPILL_VIEW_MAX_CHARS) return undefined;
   const guarded = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: ctx.session?.canary_tokens ?? [], source_taint: 'external' });
   if (!guarded.ok || typeof guarded.payload !== 'string') return undefined;
   try { return JSON.parse(guarded.payload); } catch { return undefined; }

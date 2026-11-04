@@ -6,7 +6,7 @@ import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKin
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, TOOL_SPILL_VIEW_MAX_CHARS,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { PEOPLE_UNREADABLE, UNKNOWN_THREAD_MESSAGE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
@@ -202,7 +202,9 @@ const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
     if (args.in_reply_to_msg_id) parent ??= page.messages.find(m => m.id === args.in_reply_to_msg_id);
     else parent = page.messages.at(-1) ?? parent;
     if ((parent && args.in_reply_to_msg_id) || !page.cursor) break;
-    if (pageNumber === 9) throw new GoogleCallRefused('invalid_args', 'The thread is too long to find the latest message in it.', 'Pass in_reply_to_msg_id: the id of the message being replied to, from read_thread.');
+    if (pageNumber === 9) throw args.in_reply_to_msg_id
+      ? new GoogleCallRefused('not_found', 'in_reply_to_msg_id is not among the first 200 messages of this thread, which is as far as Waldo looks.', 'Check the id against what read_thread returned for this thread; for a message further in, send it as a new email without reply_to_thread_id and tell the owner it will not sit in the thread.')
+      : new GoogleCallRefused('invalid_args', 'The thread is too long to find the latest message in it.', 'Pass in_reply_to_msg_id: the id of the message being replied to, from read_thread.');
     cursor = page.cursor;
   }
   if (!parent || !validMessageId(parent.message_id)) throw new GoogleCallRefused('not_found', args.in_reply_to_msg_id ? 'in_reply_to_msg_id is not a message in this thread that can be replied to.' : 'The thread\'s latest message cannot be replied to.', 'Pass in_reply_to_msg_id as a message id read_thread returned for this thread, or send it as a new email without reply_to_thread_id.');
@@ -340,27 +342,45 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
 };
 
 // The view of a read_thread result too long to show: every message's id, sender, recipients, time, subject and opening,
-// with how much body it holds, so the model picks the message it needs and reads that one whole. The openings share a
-// fixed budget, so a long thread keeps every message in view.
-const SPILL_OPENINGS_CHARS = 6_000;
+// with how much body it holds, so the model picks the message it needs and reads that one whole. The openings share what
+// is left of the view's cap after everything else; a thread too long even for that keeps id, sender, time and subject.
+const SPILL_OPENING_MAX = 300;
 const SPILL_RECIPIENTS = 5;
-type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
+const SPILL_SUBJECT_MAX = 120;
+const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads the full result in order.';
+type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; recipients_capped?: true; body_source?: ThreadMessage['body_source']; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
 const recipients = (list: readonly string[] | undefined) => list === undefined ? {} : { addresses: list.slice(0, SPILL_RECIPIENTS), ...(list.length > SPILL_RECIPIENTS ? { more: list.length - SPILL_RECIPIENTS } : {}) };
+const fitsSpill = (view: unknown) => JSON.stringify(view).length <= TOOL_SPILL_VIEW_MAX_CHARS;
 export const threadSpill = (data: unknown) => {
   const { thread_id, account, cursor, messages } = data as Readonly<{ thread_id: string; account: unknown; cursor: string | null; messages: readonly ShownMessage[] }>;
   if (!Array.isArray(messages)) throw new Error('not a thread result');
-  const opening = Math.min(300, Math.max(80, Math.floor(SPILL_OPENINGS_CHARS / Math.max(1, messages.length))));
-  return {
+  const withOpenings = (opening: number) => ({
     thread_id, account, cursor,
     messages: messages.map((message) => ({
       id: message.id, from: message.from, at: message.at, subject: message.subject,
-      ...(message.to ? { to: recipients(message.to) } : {}), ...(message.cc ? { cc: recipients(message.cc) } : {}),
+      ...(message.to ? { to: recipients(message.to) } : {}), ...(message.cc ? { cc: recipients(message.cc) } : {}), ...(message.recipients_capped ? { recipients_capped: true } : {}),
       opening: message.body.slice(0, opening), body_chars_here: message.body.length,
+      ...(message.body_source === 'snippet' || message.body_source === 'none' ? { body_source: message.body_source } : {}),
       ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
       ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
       ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
     })),
-    next: 'This thread is too long to show whole: each message above shows its opening. To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads the full result in order.',
+    next: `This thread is too long to show whole: each message above shows its opening. ${READ_ONE}`,
+  });
+  const bare = withOpenings(0);
+  if (fitsSpill(bare)) {
+    let opening = Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length)));
+    // JSON escapes can make an opening longer than its characters, so the measured view decides.
+    for (;;) {
+      const view = withOpenings(opening);
+      if (opening === 0 || fitsSpill(view)) return view;
+      opening = Math.floor(opening * 0.8);
+    }
+  }
+  return {
+    thread_id, account, cursor,
+    messages: messages.map((message) => ({ id: message.id, from: message.from, at: message.at, subject: message.subject.slice(0, SPILL_SUBJECT_MAX) })),
+    next: `This thread is too long to show whole, even with openings: each message above shows its id, sender, time and subject. ${READ_ONE}`,
   };
 };
 
