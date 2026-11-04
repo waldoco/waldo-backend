@@ -103,6 +103,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_QUIET_MS?: string;
   // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
   WHATSAPP_REPLY_MERGE?: string;
+  // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
+  WALDO_TASK_ASK?: string;
+  // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
+  WALDO_TASK_NOTES?: string;
   // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).

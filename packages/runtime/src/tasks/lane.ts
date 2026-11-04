@@ -50,7 +50,15 @@ export type JobsLaneDeps = Readonly<{
   }>;
   // Each machine job's apply, which names its own tools and delivery; a job with none settles silently.
   machine?: MachineAppliers;
+  // WALDO_TASK_NOTES: a machine job that stopped tells the owner (machine.ts), and a task parked for a crash or an outage
+  // runs once more before the owner hears it stopped.
+  followUp?: boolean;
+  // WALDO_TASK_ASK: how a card a task asked on stands, by id.
+  askedCard?(approvalId: string): 'waiting' | 'approved' | 'declined';
 }>;
+
+// A task parked for a crash or a provider outage runs once more after this long.
+export const PARK_RETRY_MS = 10 * 60_000;
 
 // What a replay job's end means for its card. A job parked with its call in flight may have acted; one parked before the
 // call began did nothing.
@@ -115,8 +123,11 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     settled = [];
   };
 
+  const machineNote = deps.followUp ? (key: string, text: string, settle: () => void) => deps.quiet() ? Promise.resolve(settle()) : deps.deliver(key, `machine:${key}`, text, settle) : undefined;
   const apply = async (row: JobRow) => {
-    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop });
+    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop, ...(machineNote ? { note: machineNote } : {}) });
+    if (deps.followUp && row.kind === 'task' && book.retryParked(row.id, deps.now() + PARK_RETRY_MS)) { hop(row, 'task_park_retry', { ok: false, code: row.park_reason ?? 'parked' }); return; }
+    if (row.kind === 'task' && row.park_reason) deps.host.endAsk(row);
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
@@ -165,7 +176,10 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const { approval_id: id } = replayBrief(row);
     const card = replayCard(row);
     await deps.deliver(replayKey(id), `approval:${id}`, deps.approvals.replayReceipt(id, card.status, card.message), () => {
-      if (book.settle(row.id)) { deps.approvals.settleReplay(id, card.status); settled.push(row); }
+      if (book.settle(row.id)) {
+        deps.approvals.settleReplay(id, card.status);
+        settled.push(row);
+      }
     });
     logSettled();
   };
@@ -241,9 +255,28 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   };
   for (const row of topics.length ? book.running() : []) forgotten(row);
 
+  // A job asking on a card that is no longer waiting resumes with how the card ended: approved (an approval that landed
+  // before the job began to wait), or declined (withdrawn, expired, said no to).
+  if (deps.askedCard) {
+    for (const row of book.awaiting()) {
+      const asked = jobCheckpoint(row).asked;
+      const card = asked ? deps.askedCard(asked.approval_id) : 'waiting';
+      if (card === 'waiting' || !book.resume(asked!.approval_id, card)) continue;
+      hop(row, 'task_ask_closed', { ok: card === 'approved', code: card });
+    }
+  }
+
   let leftOver = false, slotsFull = false, machineFull = false, replayWaits = false;
   for (const row of book.due()) {
     if (forgotten(row)) continue;
+    // Past its deadline while it waited on the owner: it parks, its card is withdrawn, and the owner hears it ran out of time.
+    if (row.status === 'awaiting_owner') {
+      if (!book.park(row.id, 'deadline')) continue;
+      deps.host.cancelled(row.id);
+      hop(row, 'task_parked', { ok: false, code: 'deadline' });
+      if (deps.room()) await apply(book.get(row.id)!); else leftOver = true;
+      continue;
+    }
     // An approved action's replay takes no model turn, no task slot and no machine slot, and is never applied as a task.
     if (row.kind === 'approval_replay') {
       if (row.status === 'reported') { await applyReplay(row); continue; }
