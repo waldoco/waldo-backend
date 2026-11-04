@@ -1,0 +1,43 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select no_plan();
+delete from vault.secrets where name='waldo_router_hmac';
+select vault.create_secret('fixture-router','waldo_router_hmac');
+create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
+insert into auth.users(id) values ('30000000-0000-0000-0000-000000000001'),('30000000-0000-0000-0000-000000000002');
+insert into waldo.owners(id,do_name,auth_user_id) values
+ ('10000000-0000-0000-0000-000000000001','basic-owner','30000000-0000-0000-0000-000000000001'),
+ ('10000000-0000-0000-0000-000000000002','foreign-owner','30000000-0000-0000-0000-000000000002');
+select is(waldo.console_session_open('basic-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('consolesess.open.basic-owner.'||repeat('a',64))),true,'existing signed session rail opens without a Telegram presence');
+create function pg_temp.authority(name text,hash text) returns jsonb language sql as $$ select waldo.app_session_authority(name,hash,pg_temp.at(),pg_temp.sig('app.session.'||name||'.'||hash)) $$;
+select is(pg_temp.authority('basic-owner',repeat('a',64))->>'owner_id','10000000-0000-0000-0000-000000000001','session resolves canonical owner UUID');
+select is(pg_temp.authority('foreign-owner',repeat('a',64)),null,'a foreign owner cannot use this session hash');
+select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'unknown session denied');
+select throws_ok($$select waldo.app_session_authority('basic-owner',repeat('a',64),pg_temp.at(),'forged')$$,'42501','unsigned or invalid session call','forged signature denied');
+select throws_ok($$select waldo.app_session_authority('basic-owner','short',pg_temp.at(),pg_temp.sig('app.session.basic-owner.short'))$$,'42501','unsigned or invalid session call','malformed session denied');
+select is((select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='waldo' and c.relname in ('app_push_devices','app_push_operations') and c.relrowsecurity and c.relforcerowsecurity),2,'both custody tables enable and force RLS');
+select is(has_table_privilege('anon','waldo.app_push_devices','select'),false,'anon cannot read push tokens');
+select is(has_table_privilege('authenticated','waldo.app_push_devices','select'),false,'authenticated cannot read push tokens');
+select is(has_table_privilege('service_role','waldo.app_push_devices','select'),false,'service role has no direct push token privilege');
+insert into waldo.app_push_devices(owner_id,installation_id,session_hash,provider,environment,device_epoch,state,secret_id,token_hash)
+ values('10000000-0000-0000-0000-000000000001','40000000-0000-0000-0000-000000000001',repeat('a',64),'apns','sandbox',1,'active',vault.create_secret('synthetic-push-token'),repeat('c',64));
+select is(waldo.app_push_revoke_session('foreign-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('app.push.revoke-session.foreign-owner.'||repeat('a',64))),0::bigint,'foreign signout revokes no device');
+select is((select state from waldo.app_push_devices where owner_id='10000000-0000-0000-0000-000000000001'),'active','foreign owner preserves custody');
+select is(waldo.app_push_revoke_session('basic-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('app.push.revoke-session.basic-owner.'||repeat('a',64))),1::bigint,'signed push-first signout revokes exact session custody');
+select is((select secret_id is null and state='revoked' from waldo.app_push_devices where owner_id='10000000-0000-0000-0000-000000000001'),true,'push secret removed and custody revoked');
+select is(waldo.app_push_revoke_session('basic-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('app.push.revoke-session.basic-owner.'||repeat('a',64))),0::bigint,'push revocation replay is idempotent');
+select is(waldo.console_session_revoke('basic-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('consolesess.revoke.basic-owner.'||repeat('a',64))),true,'console session revokes after push custody');
+select is(pg_temp.authority('basic-owner',repeat('a',64)),null,'revoked session no longer admits app work');
+select is(jsonb_array_length(waldo.console_session_list('basic-owner',pg_temp.at(),pg_temp.sig('consolesess.list.basic-owner'))),0,'fresh inventory proves signout');
+select is(waldo.console_session_open('basic-owner',repeat('b',64),pg_temp.at(),pg_temp.sig('consolesess.open.basic-owner.'||repeat('b',64))),true,'new session can be opened');
+update waldo.console_sessions set created_at=now()-interval '12 hours 1 second' where session_hash=repeat('b',64);
+select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'absolute expiry remains fixed');
+update waldo.console_sessions set created_at=now() where session_hash=repeat('b',64);
+update waldo.owners set state='suspended' where do_name='basic-owner';
+select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'suspended account denied');
+update waldo.owners set state='active' where do_name='basic-owner';
+delete from auth.users where id='30000000-0000-0000-0000-000000000001';
+select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'auth deletion invalidates canonical session');
+select * from finish();
+rollback;

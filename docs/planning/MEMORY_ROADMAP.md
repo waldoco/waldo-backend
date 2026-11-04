@@ -9,6 +9,7 @@ The bar is state-of-the-art personal memory. This roadmap merges the locked MVP 
 - Vector search is external (pgvector or Vectorize) and fused with full-text results by reciprocal rank fusion.
 - Wearables feed a health-summary lane only. Raw data stays on the phone.
 - Health routines and preferences are first-class memory content.
+- Sources stay sources (owner direction, 27 Sept 2026): connected accounts (Gmail, Calendar, Drive) are read live at ask time. Durable memory holds meaning - preferences, relationships, commitments, decisions and explicit remember-this - plus pointers to where things live, never copies of source content. Every claim carries provenance, and a correction replaces the old claim rather than piling up next to it.
 
 ## Stages
 
@@ -30,7 +31,7 @@ The bar is state-of-the-art personal memory. This roadmap merges the locked MVP 
 
 ## What already exists
 
-The DO schema (`packages/runtime/src/do-schema.ts`) and contracts (`packages/contracts/src/memory/hall.ts`) already define the five halls (facts, events, discoveries, preferences, advice), bi-temporal `memory_blocks` (valid_from, valid_to, superseded_by), trust classes, confidence, and a `memory_inbox` with conditions and conflict classes (ADR-0005, 0037, 0046, 0049). `SqliteTemporalRecallGateway` reads committed blocks. Nothing writes them yet, and the Telegram path runs with recall unavailable.
+The contracts (`packages/contracts/src/memory/hall.ts`) define the five halls (facts, events, discoveries, preferences, advice), trust classes, confidence, and conditions and conflict classes (ADR-0005, 0037, 0046, 0049). The DO tables that carried them, `memory_blocks` and `memory_inbox`, were never written and were dropped by DO migration 13; owner memory lives in `claims` and `episodes`.
 
 ## Stage 2 plan
 

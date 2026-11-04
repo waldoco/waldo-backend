@@ -145,7 +145,7 @@ export const AUTONOMY_GATE: HookGate = {
 };
 
 // ADR-0049 accepted amendment: a privileged action (execute_action, external send_message,
-// update_memory/Scribe writes, connector writes, MCP writes, message/thread mutations) whose
+// memory writes, connector writes, MCP writes, message/thread mutations) whose
 // arguments derive from external-tainted content routes through propose_action (human confirm)
 // or blocks — enforced in code-owned hooks, never prompt text. This is an ADDITIONAL
 // Pre/PostToolUse gate, deliberately NOT one of the six numbered PreToolUse priorities. OPEN,

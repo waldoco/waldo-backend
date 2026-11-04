@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+// Guard: wrangler.jsonc deploy contracts.
+// 1. Remote-only bindings (Workers AI, Vectorize) must never sit at top level:
+//    vitest-pool-workers starts a remote proxy for them and the whole runtime
+//    test pool dies demanding wrangler auth (2026-09-25, c76f7cd).
+// 2. Bindings/vars/secrets are NON-INHERITABLE into named environments (official
+//    wrangler docs): env.staging must mirror every top-level binding block
+//    (durable_objects, ratelimits, migrations, ...) plus its own ai/vectorize.
+//    The 2026-09-25 deploy shipped staging with ONLY ai+vectorize and healthz 404'd.
+import { readFileSync } from 'node:fs';
+import { parseJsonc } from '../jsonc.mjs';
+
+const path = process.env.WRANGLER_CONFIG_PATH ?? 'packages/runtime/wrangler.jsonc';
+const raw = readFileSync(path, 'utf8');
+const bad = [];
+for (const key of ['"ai"', '"vectorize"']) {
+  if (new RegExp(`^  ${key}\\s*:`, 'm').test(raw)) bad.push(`${key} at top level`);
+}
+
+// comment/trailing-comma-tolerant parse for the structural checks
+const cfg = parseJsonc(raw);
+const staging = cfg?.env?.staging;
+// Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
+// code/state. Automatic traces also include url.full/url.path. Until #205 removes those
+// credentials from URLs and proves query redaction, retain only structured custom logs.
+for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
+  const observability = node?.observability;
+  if (observability?.enabled !== true || observability.logs?.enabled !== true) {
+    bad.push(`${name} must retain structured Workers logs`);
+  }
+  if (observability?.logs?.invocation_logs !== false) {
+    bad.push(`${name} must disable full-URL invocation logs until #205`);
+  }
+  if (observability?.redact_query_string !== true) {
+    bad.push(`${name} must redact request query strings in logs and traces`);
+  }
+  if (observability?.traces?.enabled !== false) {
+    bad.push(`${name} must disable automatic traces until #205`);
+  }
+}
+if (!staging || staging.name !== 'waldo-runtime-staging') {
+  bad.push('env.staging missing or name != waldo-runtime-staging');
+} else {
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const key of ['assets', 'durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
+    if (cfg[key] !== undefined && !eq(cfg[key], staging[key])) {
+      bad.push(`env.staging does not mirror top-level "${key}"`);
+    }
+  }
+  // vars mirror by KEY SET, not value: trace identity (WALDO_ENVIRONMENT) must differ per
+  // environment or staging traces pollute production. Every top-level var key must exist in
+  // staging and vice versa, and both sides must pin the trace identity vars.
+  const topVars = cfg.vars ?? {};
+  const stagingVars = staging.vars ?? {};
+  for (const k of Object.keys(topVars)) if (!(k in stagingVars)) bad.push(`env.staging missing var "${k}"`);
+  for (const k of Object.keys(stagingVars)) if (!(k in topVars)) bad.push(`top level missing var "${k}" present in env.staging`);
+  if (topVars.WALDO_ENVIRONMENT !== 'production') bad.push('top-level WALDO_ENVIRONMENT must be "production"');
+  if (stagingVars.WALDO_ENVIRONMENT !== 'staging') bad.push('env.staging WALDO_ENVIRONMENT must be "staging"');
+  if (!('WALDO_RELEASE' in topVars) || !('WALDO_RELEASE' in stagingVars)) bad.push('WALDO_RELEASE must exist at top level and in env.staging (deploy wrapper restamps it)');
+  if (!staging.ai) bad.push('env.staging missing ai binding');
+  if (!staging.vectorize) bad.push('env.staging missing vectorize binding');
+}
+
+// 3. The public console signup FAILS CLOSED when RESPONSIBILITY_RATE_LIMITER is absent
+//    (owner decision 2026-09-25 16:39): the binding must exist at top level and in every
+//    named env, so no deployable environment can serve signup unthrottled.
+const hasLimiter = (cfgNode) =>
+  Array.isArray(cfgNode?.ratelimits) && cfgNode.ratelimits.some((b) => b?.name === 'RESPONSIBILITY_RATE_LIMITER');
+if (!hasLimiter(cfg)) bad.push('top-level ratelimits missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)');
+for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
+  if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
+}
+
+// 4. Staging browses through Cloudflare Browser Rendering, bound as BROWSER, by owner ruling; the S0 network-block
+//    test no longer gates it. Production binds no browser: a binding there would ship on the next promote.
+if (JSON.stringify(staging?.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging must bind Cloudflare Browser Rendering as BROWSER');
+if (cfg.browser !== undefined) bad.push('the top-level (production) config must not bind a browser');
+
+// 5. WALDO_PUBLIC_ORIGIN is what every owner object and webhook route issues; the runtime refuses anything but a bare
+//    https origin, at owner startup too, so a bad value is caught here before a deploy rather than by every owner.
+for (const [name, node] of [['top level', cfg], ...Object.entries(cfg?.env ?? {}).map(([envName, envCfg]) => [`env.${envName}`, envCfg])]) {
+  const origin = node?.vars?.WALDO_PUBLIC_ORIGIN;
+  if (!origin) continue;
+  let parsed = null;
+  try { parsed = new URL(origin); } catch { /* reported below */ }
+  if (parsed?.protocol !== 'https:' || parsed.origin !== origin) bad.push(`${name} WALDO_PUBLIC_ORIGIN must be empty or a bare https origin`);
+}
+
+if (bad.length) {
+  process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
+  process.exit(1);
+}
+console.log('guard-wrangler-local-bindings: ok');

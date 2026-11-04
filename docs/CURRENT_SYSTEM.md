@@ -28,7 +28,6 @@ Limits of the live path:
 
 - Staging Worker `waldo-runtime-staging` serves `POST /telegram/webhook` (commit `06c7eb5`), handing each verified update to `TelegramOwnerDO`. The local runner uses the same code path for development.
 - On the staging Worker, each turn's user and assistant entries are saved to the owner Durable Object's storage and restored on wake, so eviction and redeploys keep the conversation. The local runner still keeps history in memory only. The full history goes to the model on every turn; context budgeting is tracked in #145.
-- `POST /signals` takes moments from the owner's devices and apps (any `source`/`event`, plus closed `health` body moments), authenticated by `WALDO_SIGNAL_SECRET`. Each one runs a proactive turn in `TelegramOwnerDO`, where the model decides whether to message and may schedule its own check-back; an optional morning-deadline alarm covers days without a wake-up signal. Not yet deployed or exercised on a real device. See [ops/PROACTIVE_SIGNALS.md](ops/PROACTIVE_SIGNALS.md).
 - No tools are granted to the Telegram chat. The model is told so and says so.
 - Consequential approvals are not accepted over Telegram.
 
@@ -40,7 +39,6 @@ Runner environment: `TELEGRAM_BOT_TOKEN`, `WALDO_OWNER_TELEGRAM_ID`, `OPENAI_API
 |---|---|---|
 | Local S1 chat CLI and explicit OpenAI S2 route | `runtime/src/cli/local-chat.ts` | `d39bc52`, `a6dbf1f` |
 | Layered context observability | `runtime/src/context-composer` | `50b1c76` |
-| Correctable memory recall: correction, forget, provenance, aggregate-only health summaries | `runtime/src/recall/correctable.ts` | `952b3bd` |
 | Joined Conversation Path: owner-bound composer, model, append-only tree, publication record | `runtime/src/conversation/joined-path.ts` | `acfa34e` |
 
 ## Contracts

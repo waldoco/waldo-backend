@@ -22,7 +22,8 @@ Closes/Refs #
 
 ## Acceptance and falsifier
 
-- Acceptance:
+- Acceptance (the staging/console trace that shows the outcome working, or why none yet):
+- Serving-path caller in this PR (file:line), or N/A for non-runtime changes:
 - Falsifier:
 - Authority/privacy impact:
 

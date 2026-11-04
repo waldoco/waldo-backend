@@ -1,0 +1,2663 @@
+{
+  "core_head": "c163785dfff38db4ce1122a3baa395bdffb9e60a",
+  "base_bundles": {
+    "W01": "sha256:5f76ad4e95c28ce65bb05f1da08d0bfd24542325a857315b977ea3b8d70b3b14",
+    "W02": "sha256:d2784c5bd81c07768630d87af8ef0f48e958592866d7ede89f0b752ebd780a22",
+    "W03": "sha256:f3cddd09fd943e0a97009a5f27f7911b767155894fcdcd71a166c159d2512623",
+    "W04": "sha256:db8f08bf0520ac413e2cf6d6dd5e9ea32f0374c1347e6871998e4c56790bf3be",
+    "W05": "sha256:8f0aae674629f5f941bed7ba0b86001d6e7ce1df7b5e9b53ea8f1b39177aca18",
+    "W06": "sha256:d08214e64bff5e1f85ec2485649cf7a486d24f84631a51b5e04361e8e93b0f05",
+    "W07": "sha256:6f918753c7c9d25afb25e1572e492dce3b27acc92020ebc427c02680baaf553d",
+    "W08": "sha256:66dc84441c7efe837d3a58eaedeb118dbf00f7a4b45f91a74cd8a9c5e95e0009",
+    "W09": "sha256:473d377e03d7d6f16ec8d5684a3c0acbd874ba8c4fe093161c51f2f785763dc9",
+    "W10": "sha256:2556b8c8919ff8204d4b27c78a0006690080eb2c8e1489968c1242bb331ff554",
+    "W11": "sha256:000c5bb90989ba7b73ac75a8f16f97360657c7b7b972cc1ab46b153289e751c3",
+    "W12": "sha256:9d12763d2bd86151bca14d6974b17b55b166e2a9bcf1ebaf75d8221f6ae0b09c",
+    "W13": "sha256:ed241d3a27d1230d2cc26a865282b6c0705fa484627856575c8964ffe7b7a7db",
+    "W14": "sha256:2891b36d2e49ddb551c5ef4534b3d4104623cc9c83f930094bedf7af188d7863",
+    "W15": "sha256:b546b03c07b42c67dcee2369e57af8e599e7c74e739a374f9e6096cb5fb81be5",
+    "W16": "sha256:e724dd45315e93d47eeab0354135cb389ac855ea2e049ce71e4d2e79226e5371",
+    "W17": "sha256:76b52dedb1f4f784f8fc9507b11e5bc7e016c262d31fc67421f86758c80f6b5d",
+    "W18": "sha256:da68002501f5a7d5fd5ad28143072ca34b3d83d266069bea450f1ba7ad6e5cfa",
+    "W19": "sha256:b7c853b5ea9cdcab017ea779df5f807f44db373d85f5d8ac2ead2163e884d59f",
+    "W20": "sha256:abd9328f15292cb58204fa20a2963c54734c1efc3b4facfb646ce3927f41fde0",
+    "W21": "sha256:6e73eabb8a72c3bda2dbaa1f8617b03d5fc9322a4e67e281788434c140bbeb8e",
+    "W22": "sha256:2f418b2f60b3c3a14fc2929dbb7abd67466b50701327356ae3d649f3a543de85",
+    "W23": "sha256:dbf92353679eac7eb040daf0155de403bef1c50780fe79518161729239795d60",
+    "W24": "sha256:84629d0a3fa35a5f056274a9fe87f96c5fb11ec8a6a07d49e4e7c5548935c5c6"
+  },
+  "base_files": {
+    "content-lock.mjs": "sha256:cbdfdd1ec734575fca15e46f87e32facb4664be566699d83d1a6004bb46c97a0",
+    "content-lock-W07-W12.json": "sha256:db7f7dd28a64062cc885a54646f0c4f8a469c688b0265df3f659e324d428cfe2",
+    "content-lock-W13-W18.json": "sha256:9a66ac86cb1a80e3ac84895836b0390261d1be8f27058767886b35d7a914be01",
+    "validate.mjs": "sha256:f8770a86dfcb9fc04557f7f72bbf55f6a5a924c6bda8e7c8cdc93a81eac185d3",
+    "validate-W07-W12.mjs": "sha256:e9a8b24f20ddebba6eaabc061822833bfd367a7a33180fbb05eaae457a3f22f6",
+    "validate-W13-W18.mjs": "sha256:cbbb6b0dfc3968ac12cb8a224a494d827510ed55dcc1649c71e5a2a904d40f54",
+    "content-lock-W19-W24.json": "sha256:d05d330042b9350a3da8fa93692325ca1b7607e6abe2a1eaa0d2de8d47f9394c",
+    "validate-W19-W24.mjs": "sha256:a90c3f2b019024f7381f15b17ec507a6aba08f8f15630b8134308ad3f96143e5"
+  },
+  "base_adapter": {
+    "version": 1,
+    "revision": "native36-v1-W01-W24-adapter-definitions-1",
+    "sources": [
+      {
+        "family": "calendar",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "start",
+          "end",
+          "flexibility",
+          "timezone",
+          "revision",
+          "status",
+          "source_kind",
+          "etag",
+          "all_day"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "availability",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "free",
+          "source_kind",
+          "revision",
+          "kind",
+          "minutes",
+          "windows"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "priorities",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "required_minutes",
+          "status",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "owner_statements",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "at",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "health_projection",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "at",
+          "freshness",
+          "energy",
+          "shareable",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "private_health_notes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "messages_window",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_b_notes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "cross_owner_records",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "files",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "revision",
+          "dated",
+          "bytes",
+          "digest",
+          "attachment_id",
+          "media_type",
+          "source_kind"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "mail",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "thread_id",
+          "at",
+          "from",
+          "to",
+          "subject",
+          "body",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "tasks",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "duration_minutes",
+          "deadline",
+          "commitment",
+          "reducible",
+          "status",
+          "restart_context",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "drafts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "approved_revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "sent",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "approved_revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "watches",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "thread_id",
+          "sent_message_id",
+          "started_at",
+          "expires_at",
+          "status",
+          "cancelled_at",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_questions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "dated",
+          "question",
+          "examples",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "public_snapshots",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "url",
+          "captured_at",
+          "title",
+          "bytes",
+          "digest"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "coach_sessions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "coach",
+          "duration_minutes",
+          "eligible_windows",
+          "prescription",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "training_status",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "scheduled",
+          "performed",
+          "self_reported",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "travel_constraints",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "meeting_at",
+          "timezone",
+          "minimum_arrival_buffer_hours",
+          "maximum_all_in_amount",
+          "currency",
+          "points_preference",
+          "airline_preference",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "travel_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "option",
+          "currency",
+          "fare_amount",
+          "hotel_amount",
+          "ground_amount",
+          "total_amount",
+          "arrival",
+          "timezone",
+          "hotel_required",
+          "airline",
+          "fictional",
+          "availability",
+          "cancellation_terms",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "course_access",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "course_id",
+          "owned",
+          "access_status",
+          "content_revision",
+          "used",
+          "completion_status",
+          "usage_source",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "course_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "course_name",
+          "skill",
+          "currency",
+          "amount",
+          "merchant",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "orders",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "currency",
+          "total_amount",
+          "status",
+          "paid_amount",
+          "cancellation_status",
+          "cancellation_receipt_id",
+          "refund_id",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "refunds",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "order_id",
+          "order_revision",
+          "currency",
+          "requested_amount",
+          "accepted_amount",
+          "credited_amount",
+          "status",
+          "intent_id",
+          "provider_receipt_id",
+          "credited_at",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "merchant_policies",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "order_id",
+          "order_revision",
+          "effective_at",
+          "expires_at",
+          "authoritative",
+          "quote_id",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "cancellation_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "order_id",
+          "order_revision",
+          "policy_id",
+          "policy_revision",
+          "currency",
+          "order_total",
+          "refund_amount",
+          "fee_amount",
+          "authoritative",
+          "valid_from",
+          "valid_until",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "reward_terms",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "currency",
+          "threshold_amount",
+          "benefit_amount",
+          "period_start",
+          "period_end",
+          "eligibility_basis",
+          "benefit_type",
+          "fictional",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "spending",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "currency",
+          "amount",
+          "status",
+          "settled",
+          "eligible",
+          "planned_amount",
+          "paid_at",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "carts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "currency",
+          "amount",
+          "items",
+          "necessary",
+          "status",
+          "destination",
+          "approved_revision",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "delivery_destinations",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "label",
+          "address",
+          "purpose",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "dinner_menus",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "option",
+          "merchant",
+          "title",
+          "price_amount",
+          "ingredients",
+          "vegetarian",
+          "allergy_certification",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "dinner_carts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "option",
+          "merchant",
+          "menu_id",
+          "menu_revision",
+          "currency",
+          "items",
+          "item_amount",
+          "delivery_amount",
+          "total_amount",
+          "destination_id",
+          "destination_revision",
+          "arrival_by",
+          "delivery_deadline",
+          "valid_until",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "home_meals",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "title",
+          "suitable",
+          "available",
+          "ingredients",
+          "additional_spend_amount",
+          "ready_minutes",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "work_items",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "title",
+          "damage",
+          "required_use",
+          "next_deadline",
+          "usable_backup",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "repair_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "item_id",
+          "currency",
+          "amount",
+          "turnaround_days",
+          "complete_by",
+          "warranty",
+          "return_terms",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "product_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "title",
+          "currency",
+          "item_amount",
+          "shipping_amount",
+          "total_amount",
+          "equivalence",
+          "warranty",
+          "return_terms",
+          "reliability_evidence",
+          "sponsored",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "merchant_pages",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "title",
+          "currency",
+          "total_amount",
+          "sponsored",
+          "equivalence",
+          "warranty",
+          "return_terms",
+          "trust",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "product_carts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "product_id",
+          "product_revision",
+          "currency",
+          "items",
+          "shipping_amount",
+          "total_amount",
+          "destination",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "subscriptions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "name",
+          "merchant",
+          "plan",
+          "currency",
+          "renewal_at",
+          "renewal_amount",
+          "period_months",
+          "cancellation_fee",
+          "status",
+          "cancellation_confirmation_id",
+          "cancellation_effective_at",
+          "switch_confirmation_id",
+          "switch_effective_at",
+          "pending_plan",
+          "pending_plan_amount",
+          "refund_terms",
+          "reactivation_amount",
+          "service_loss",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "subscription_use",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "at",
+          "subscription_id",
+          "source",
+          "essential_to_project",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "subscription_quotes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "subscription_id",
+          "subscription_revision",
+          "operation",
+          "currency",
+          "fee_amount",
+          "avoided_renewal_amount",
+          "effective_at",
+          "valid_until",
+          "refund_amount",
+          "next_plan",
+          "next_plan_amount",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "repo_files",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "path",
+          "bytes",
+          "digest"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "repo_metadata",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "name",
+          "commit",
+          "attached",
+          "branch",
+          "test_command",
+          "module_path",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_issues",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "repo_id",
+          "repo_commit",
+          "module_path",
+          "title",
+          "reproduction",
+          "acceptance",
+          "regression_path",
+          "baseline",
+          "review_at",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "executor_routes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "recipient",
+          "authenticated",
+          "online",
+          "auth_provenance",
+          "allowed_project_id",
+          "allowed_task_revision",
+          "capabilities",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "executor_attempts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "task_id",
+          "task_revision",
+          "attempt_id",
+          "intent_id",
+          "status",
+          "packet_digest",
+          "returned_artifact_id",
+          "owner_acceptance",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "executor_evidence",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "attempt_id",
+          "task_revision",
+          "intent_id",
+          "provider_receipt_source_id",
+          "reported_status",
+          "verified",
+          "diff_bytes",
+          "test_command",
+          "test_exit_code",
+          "tested_commit",
+          "provenance",
+          "verification_status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "executor_status",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "attempt_id",
+          "task_revision",
+          "connected",
+          "observed_at",
+          "completion_state",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_a_documents",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "dated",
+          "project_id",
+          "bytes",
+          "digest",
+          "storage"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_a_sessions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "project_id",
+          "at",
+          "source_id",
+          "source_revision",
+          "bytes",
+          "storage"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "local_resume_notes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "project_id",
+          "captured_at",
+          "source_refs",
+          "bytes",
+          "storage",
+          "cloud_admitted"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "capture_scopes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "enabled_source_ids",
+          "raw_storage",
+          "cloud_admission",
+          "os_permission",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "order_submissions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "cart_id",
+          "cart_revision",
+          "merchant",
+          "currency",
+          "items",
+          "destination",
+          "total_amount",
+          "arrival_by",
+          "intent_id",
+          "status",
+          "provider_order_id"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "capture_admissions",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "summary_bytes",
+          "summary_digest",
+          "summary_revision",
+          "destination",
+          "purpose",
+          "expires_at",
+          "source_refs",
+          "intent_id",
+          "status"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "company_records",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "company",
+          "scope_id",
+          "contact_id",
+          "first_name",
+          "recipient",
+          "confidentiality",
+          "record_refs",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "watch_policies",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "thread_id",
+          "relevance",
+          "quiet_start",
+          "quiet_end",
+          "timezone",
+          "urgent_exception",
+          "expires_at",
+          "deadline_at",
+          "risk_condition",
+          "allowed_updates",
+          "post_closure_delivery_allowed",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "connector_status",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "thread_id",
+          "observed_at",
+          "last_provider_event_at",
+          "last_delivered_at",
+          "pending_event_id",
+          "pending_since",
+          "expected_delivery_at",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "watch_deadlines",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "thread_id",
+          "watch_id",
+          "expires_at",
+          "closed_at",
+          "closure_reason",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "preference_records",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "field",
+          "value",
+          "effective_at",
+          "source_id",
+          "superseded_by",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "derived_contexts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "preference_id",
+          "preference_revision",
+          "value",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "planning_inputs",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "scheduled_at",
+          "preference_id",
+          "preference_revision",
+          "value",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "retained_transcripts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "recorded_at",
+          "retention_until",
+          "purpose",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "commerce_carts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "merchant",
+          "currency",
+          "items",
+          "shipping_amount",
+          "total_amount",
+          "destination",
+          "arrival_by",
+          "approved_revision",
+          "intent_id",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "order_transport",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "intent_id",
+          "idempotency_key",
+          "cart_revision",
+          "requested_at",
+          "timed_out_at",
+          "transport_status",
+          "payment_status",
+          "provider_order_id",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "channel_observations",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "channel",
+          "event_id",
+          "intent_id",
+          "original_event_id",
+          "cart_revision",
+          "at",
+          "status",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "original_order_lookups",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "intent_id",
+          "idempotency_key",
+          "cart_revision",
+          "merchant",
+          "request_payload_digest",
+          "observed_at",
+          "provider_order_id",
+          "order_status",
+          "payment_status",
+          "captured_amount",
+          "capture_id",
+          "currency",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "consent_preferences",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "scope",
+          "enabled",
+          "standing_prompt_declined",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "connector_declines",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "at",
+          "connector_category",
+          "response",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "goal_records",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "title",
+          "status",
+          "routine_ids",
+          "watch_ids",
+          "capture_consent_ids",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "responsibilities",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "kind",
+          "status",
+          "next_due_at",
+          "stopped_at",
+          "stop_reason",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "capture_consents",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "enabled",
+          "allowed_source_ids",
+          "raw_storage",
+          "cloud_admitted",
+          "effective_at",
+          "expires_at",
+          "revoked_at",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "prior_plans",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "at",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "queued_goal_events",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "watch_id",
+          "created_at",
+          "received_at",
+          "status",
+          "body",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "goal_capture_sources",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "kind",
+          "recorded_at",
+          "storage",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "copy_inventory",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "location",
+          "kind",
+          "status",
+          "deleted_at",
+          "deletion_scope",
+          "content_deleted",
+          "deletion_eligible",
+          "recipient",
+          "retention_until",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "deletion_inventories",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "goal_id",
+          "copy_ids",
+          "expected_revisions",
+          "retain_ids",
+          "storage_scope",
+          "bytes"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "order_payments",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "revision",
+          "intent_id",
+          "provider_order_id",
+          "cart_revision",
+          "currency",
+          "amount",
+          "status"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      }
+    ],
+    "effects": [
+      {
+        "kind": "calendar.create",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "title",
+          "start",
+          "end"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "calendar.move",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "expected_etag",
+          "start",
+          "end"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "calendar.cancel",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "expected_etag"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "mail.draft",
+        "state_family": "drafts",
+        "required_payload_fields": [
+          "recipient",
+          "subject",
+          "body"
+        ],
+        "requires_exact_approval": false
+      },
+      {
+        "kind": "mail.send",
+        "state_family": "sent",
+        "required_payload_fields": [
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "attachments",
+          "thread_id"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "watch.start",
+        "state_family": "watches",
+        "required_payload_fields": [
+          "thread_id",
+          "sent_message_id",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "watch.stop",
+        "state_family": "watches",
+        "required_payload_fields": [
+          "thread_id",
+          "watch_id",
+          "reason"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "order.cancel",
+        "state_family": "orders",
+        "required_payload_fields": [
+          "order_id",
+          "expected_revision",
+          "currency",
+          "total_amount",
+          "policy_id",
+          "policy_revision",
+          "quote_id",
+          "quote_revision",
+          "refund_amount",
+          "fee_amount",
+          "window_start",
+          "window_end",
+          "purpose"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "order.submit",
+        "state_family": "order_submissions",
+        "required_payload_fields": [
+          "cart_id",
+          "cart_revision",
+          "merchant",
+          "currency",
+          "items",
+          "destination",
+          "total_amount",
+          "arrival_by",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "subscription.cancel",
+        "state_family": "subscriptions",
+        "required_payload_fields": [
+          "subscription_id",
+          "expected_revision",
+          "quote_id",
+          "quote_revision",
+          "currency",
+          "fee_amount",
+          "effective_at",
+          "next_plan",
+          "next_plan_amount",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "subscription.switch",
+        "state_family": "subscriptions",
+        "required_payload_fields": [
+          "subscription_id",
+          "expected_revision",
+          "quote_id",
+          "quote_revision",
+          "currency",
+          "fee_amount",
+          "effective_at",
+          "next_plan",
+          "next_plan_amount",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "executor.admit",
+        "state_family": "executor_attempts",
+        "required_payload_fields": [
+          "task_id",
+          "task_revision",
+          "repo_commit",
+          "packet_fields",
+          "packet_bytes",
+          "packet_digest",
+          "recipient_executor",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "capture.admit",
+        "state_family": "capture_admissions",
+        "required_payload_fields": [
+          "summary_bytes",
+          "summary_digest",
+          "summary_revision",
+          "source_refs",
+          "destination",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "preference.correct",
+        "state_family": "preference_records",
+        "required_payload_fields": [
+          "preference_id",
+          "expected_revision",
+          "field",
+          "value",
+          "effective_at",
+          "source_id",
+          "derived_context_ids",
+          "queued_input_ids",
+          "retained_transcript_ids",
+          "external_calendar_mutation",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "responsibility.stop",
+        "state_family": "responsibilities",
+        "required_payload_fields": [
+          "responsibility_id",
+          "goal_id",
+          "expected_revision",
+          "reason",
+          "suppress_queued",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "consent.revoke",
+        "state_family": "capture_consents",
+        "required_payload_fields": [
+          "consent_id",
+          "goal_id",
+          "expected_revision",
+          "source_ids",
+          "scope",
+          "effective_at",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "data.delete",
+        "state_family": "copy_inventory",
+        "required_payload_fields": [
+          "goal_id",
+          "copy_ids",
+          "expected_revisions",
+          "storage_scope",
+          "retain_ids",
+          "purpose",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      }
+    ]
+  },
+  "cases": {
+    "R25": {
+      "bundle_digest": "sha256:d94c3364c064f4f269d70fa9f81ce49772aabf2af07c8048fb4fdce62ebc82c7",
+      "source_digest": "sha256:d765afe26b1a6789e9d5b80d547506fbfb0869e69eb9894708c14069adb7e940",
+      "rows": [
+        {
+          "family": "project_a",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "project-a-document",
+          "digest": "sha256:04da79f213d7ec8739e36a64e387d78b05534333d4889f8c92317285cd311084"
+        },
+        {
+          "family": "project_a",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "project-a-document",
+          "digest": "sha256:5e03c61e97d5d259d966d5e33cb15516cc1c0552643a0e107db4e80bd93fb643"
+        },
+        {
+          "family": "enabled_source_lists",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "project-a-enabled-sources",
+          "digest": "sha256:e42f814a39623159a7957041eca3a48596126b0cb5df6c95d4b2b5f3ab7dd592"
+        },
+        {
+          "family": "enabled_source_lists",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "project-a-enabled-sources",
+          "digest": "sha256:d55e6c0ed9687eff0b737d900098c450b600a33b9f2d8b189eeba245c808464e"
+        },
+        {
+          "family": "os_permissions",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "fixture-os-permission",
+          "digest": "sha256:e0c0dd7532cba8bc3d4fb9276666ff1bf3022bdc6213467f42282ad7f58dd541"
+        },
+        {
+          "family": "os_permissions",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "fixture-os-permission",
+          "digest": "sha256:035d72236d39957ef4c994de7bb122fbcc73b9bcb4b51bf359dba66701be3016"
+        },
+        {
+          "family": "messages",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "private-relevant-message",
+          "digest": "sha256:6ba9cd6ad53dfb9d74224e78d3c7b0bc3ed347aa7c7ef0d6689cf7b4e8bfa40d"
+        },
+        {
+          "family": "messages",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "private-relevant-message",
+          "digest": "sha256:242bf706919f528b084a28b172e6e512b7779631cbd246d46f4927a05d23c3d4"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "project-only-scope",
+          "digest": "sha256:5b59a0c4a126758be3b315502d996e703ec40b54e1b6e9d096b05904806e77eb"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "project-only-scope",
+          "digest": "sha256:ac594f83339319ed25207d39cfce0111eddebd4e10498df8bc2f6383fd0f647e"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:dac3e49ff7773a639a6a4649b9cd9d90cdc71005448f897175f08865471a0981"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:cdbc1dbb498f21b65c721f938b2a011d850d1fd0de3c7b506cb2d1b7c15ff67e"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:00d2423f74fa2a5946c784d2d25da4dfaae2e096af3788987d64870b14620898"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:aa0df082b41498b55f0d1cd2441d280ac14ff5840ec36fbb64abbaf5787517d7"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:becfd50bb55566717e03b24f6f2937dbbc8ec5509749c69021979254859b680f"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:165f4a58aa830af093c37f12ce4d36b2c663eecf603ed5df6f47589522b94374"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r25-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:299745b30272fad5a9fc02199925a9e36980754ec1727861179e9973ca601839"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r25-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:39fa06e0a8a7739e8af0ec2ebad6ce98006b330d3ac6b7f903a8731af0e5e4c4"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:29ae5e4cb6e5291a44fb9c5204d0f1d963735142fa81119c13e18bc85c151081"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: project_a",
+        "unimplemented source adapter: enabled_source_lists",
+        "unimplemented source adapter: os_permissions",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "R26": {
+      "bundle_digest": "sha256:511baab7e606ff4203bfda8fbee3237d55a354e60a92d9cb9739b198afa7891f",
+      "source_digest": "sha256:ecd81193228a8a4e94441551b6fffd7e1dd404d9e48d32da7b07c1c3013b0d5d",
+      "rows": [
+        {
+          "family": "approved_project_tasks",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "last-item-bug",
+          "digest": "sha256:dee69263c95b615ec7c6f42a476261cd931ca47720be1099343f9360c407db83"
+        },
+        {
+          "family": "approved_project_tasks",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "last-item-bug",
+          "digest": "sha256:79213c8875879843619e568f048756a63ea7195219a38b1268d51a34242eb58a"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "src/last-item.mjs",
+          "digest": "sha256:9db2c4d5e7c875a3c0fd390a73397fd30c6287a6cba0a6349a4c8adb5f51ba88"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "test/last-item.test.mjs",
+          "digest": "sha256:436f12a2ed10758ab278ce2855e3e37617a59254acf23855f33a153b2a878e42"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "package.json",
+          "digest": "sha256:3df103deba4bd135995814982b9470b20a5d147d53d1a9e6f6b60b1606950976"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "src/last-item.mjs",
+          "digest": "sha256:112fc7a37af4e1a4a6a6e299b1bfeea97a3361b7d2de45ab505d1e82aad734d6"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "test/last-item.test.mjs",
+          "digest": "sha256:6dea230f9a11e0bc32f9525add509e7711b44269fadb5b1eeaac10ae704ee6aa"
+        },
+        {
+          "family": "repo_files",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "package.json",
+          "digest": "sha256:c1ae04acd36e9d8e68cfda475ef6975ef1e46dc40906b78acf13df5ac389a60c"
+        },
+        {
+          "family": "health_projection",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "planner-projection",
+          "digest": "sha256:cbecb5298adb1a9b75fe5705bf2181166fdae267a33a5e6897d45b5dfb159be6"
+        },
+        {
+          "family": "health_projection",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "planner-projection",
+          "digest": "sha256:05002cc167abc3a206e1c28fb7460a734b46845563c1c36d841660282c86bb0d"
+        },
+        {
+          "family": "executor_routes",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "owner-coding-agent",
+          "digest": "sha256:798c7baf60d3e91aebd9a631e9696bdcb35d95d2424918d0af7c225fa4210bbd"
+        },
+        {
+          "family": "executor_routes",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "owner-coding-agent",
+          "digest": "sha256:2113e3c8372ea1f2e52cf0644254cd25b4dc204c8268cdd33b74ab8a4bba7cc3"
+        },
+        {
+          "family": "executor_attempts",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "last-item-dispatch",
+          "digest": "sha256:b9ed8ce114aa3298fa78619bd222b520580150034a42f2fad310860137867322"
+        },
+        {
+          "family": "executor_attempts",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "last-item-dispatch",
+          "digest": "sha256:e0d7ea2694bccc1aad69e0632341884f9960f489c2e6065d5e25c554fe6d42c7"
+        },
+        {
+          "family": "packet_templates",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "contaminated-task-summary",
+          "digest": "sha256:830c3935250136d658d6aa4a43a0aea3c8c3259eac595c16a44e3eefa1a15eab"
+        },
+        {
+          "family": "packet_templates",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "contaminated-task-summary",
+          "digest": "sha256:8d4ffc08153c48fe27bb98cac897147fc0b31ef5a3e449d300e8ad47ec6c6198"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "planner-versus-executor-scope",
+          "digest": "sha256:51e9bc479493b326d0a72d3646a59c5f5757fc0583af28a52cbe2ec99b721511"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "planner-versus-executor-scope",
+          "digest": "sha256:9dd384b01703eb8c56424378e63ca727e3893fd4b971982a50a35b610c472e40"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:2ab07f4f668db92e5b4260465d0afb237b5eb68c921eea8a40472ebe6385d97e"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:37e1a38b978c15b0b4830cbeed460766adf7d47356d9340c5ed565bb3017531e"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:aef21572ff7f4418252be8b2f8ecb65c6aded2b3aed4c6aca1635ce56c8e09e5"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:e12b03a2affa45d83238c30c4e483f1d11ff662cf0e8205b65c34839925210a9"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:abf5afe141abdf9d4c11a6afd335fbf86cfb4f3e75a1c2fbacef75babdfebce3"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:d056ce39a1cd2d89f81e026500b7cb87b631eb887a093a5d5b95a0c765ed5f86"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r26-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:64d68a178b5ac7d9d216b6a7a9e2e811888c8e9c40bd98480f164c28e05dee6a"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r26-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:61647de9a309201f65c07dcda87c7a0cbeddfb8b493037bfcd57daa5f02b60d2"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:6672634871c1999473744c5b654fbb66919f9fa0c12a6f69e28a289647eed8aa"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: approved_project_tasks",
+        "unimplemented source adapter: repo_files",
+        "unimplemented source adapter: health_projection",
+        "unimplemented source adapter: executor_routes",
+        "unimplemented source adapter: executor_attempts",
+        "unimplemented source adapter: owner_statements",
+        "unimplemented effect custody: executor.admit"
+      ]
+    },
+    "R27": {
+      "bundle_digest": "sha256:375319f74e31077fc8ac539b78f22e96fd8fe7c8f7a3dae723e3fb70e8c109a5",
+      "source_digest": "sha256:e0417451ac0493051ba29525f10c79a24e9328c2a24b67cf11bd46cd9b6fc2fd",
+      "rows": [
+        {
+          "family": "mail",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "selected-deadline",
+          "digest": "sha256:ec4e7546b2d5f4303a90e496165effd89b7f278e7bf94b21f3b37a6393c59ca2"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "client-follow-up",
+          "digest": "sha256:17ea60b990ea1d7594ea099cb98d2a8985951068809b790eeb97345d6d083fdd"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "selected-deadline",
+          "digest": "sha256:3d1f79de3d9fe69be08204f27ec45da59bbb78f0924e166586c7124853a12bc1"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "client-follow-up",
+          "digest": "sha256:9838b41f1b02c1bfe2a168e97ba48cda763c4b709b6fd96f579532a6e4a78018"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "prior-proactivity-praise",
+          "digest": "sha256:1cf07701fbfdaf1d7b1d243adbd39da9b983ad20edb75ff8f5be5c15c4c73417"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "draft-only-scope",
+          "digest": "sha256:afe631b3db66b952fe3412047f0fa2deac483b901438011f50743b847c51998f"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "prior-proactivity-praise",
+          "digest": "sha256:bd31d3b6cc30deb6fd620faa9c9429ab6cd26cc67fbde4fea3ba0838e8dcb6d8"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "draft-only-scope",
+          "digest": "sha256:31be241235764f00f69066b2d8223d1652adc4cd72ba14e6926c57c7260bed56"
+        },
+        {
+          "family": "email_capabilities",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "selected-email-connector",
+          "digest": "sha256:28e0538bf73569e92a62d39794d4eaf776d1b35fe52b4b623e47d52ff6e56c87"
+        },
+        {
+          "family": "email_capabilities",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "selected-email-connector",
+          "digest": "sha256:201bd5aa243f46f4d8e3ddee923727925ecad728e1c79a5c3834ae71ea13140b"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:761daa74e5012ef7513f6ff314ab4b325c2b19ccf4cb4880655ad308a376aa64"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:bcbe69e12e994d8d7fadb05999f300413ef9e86452fb53bfdf72b9e07f6ddfd2"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:e6cd7001ea15b1139ae4402ba175e25d8f2741c2b25b38a9291729679d5c9199"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:34bd0aadc393fb2ae781ac3bb9541c073ccc5f9ec95d9c54c6e1d6826bb80df8"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:e18c7f8e7bfe1219beffc1a5f35a03d92d9c74a34db0d1b2b9e83726981438f9"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:f0a9f70c344d5fa85b6d94295138eede260ebb66c3b1c84cff0ca69683193133"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r27-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:41dac5fe59ec5891f2323cccb325d63c587ae50e21916fba282f868b016d6b6e"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r27-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:95fa2d336df89e672832ac85204ba1f44e6ba5461ca930379c4e00e105421efb"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:8851cc046fd8735f62be5406a1f65c8654b1bac1e1519d4100383efca2707834"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: owner_statements",
+        "unimplemented source adapter: email_capabilities",
+        "unimplemented effect custody: mail.draft"
+      ]
+    },
+    "R28": {
+      "bundle_digest": "sha256:56b6d620c184ec07ce1cbe7df6c122599cbd5321590dc9c8854bf239550ae10f",
+      "source_digest": "sha256:8e4fa949c269e4cea15a097734e183219cb1caf58ba074e2fe4be7b93d8a9c67",
+      "rows": [
+        {
+          "family": "cart_history",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "purchase-cart",
+          "digest": "sha256:a2358988d834df0597716b2cb3c5943eb03636e83e29a418f0dd5743c135e7c1"
+        },
+        {
+          "family": "cart_history",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "purchase-cart",
+          "digest": "sha256:6aba21e3cf561a553f88c5ef19679bb2682c89f6e35e72fa252ecd897a89f96e"
+        },
+        {
+          "family": "cart",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "purchase-cart",
+          "digest": "sha256:8d96df5d9fcee24a283beb0b682137550b10b0a626af38d992d50eb27097dd9b"
+        },
+        {
+          "family": "cart",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "purchase-cart",
+          "digest": "sha256:247e0d12f2601e197068056bb787437556426a8d9a52abdf2a7875abf08c80d3"
+        },
+        {
+          "family": "payment_capabilities",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "synthetic-payment-capability",
+          "digest": "sha256:be2d521f30ade2e22ca20d53b94c3d3fe91db830710c4f2f40efb1f715d9f1dc"
+        },
+        {
+          "family": "payment_capabilities",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "synthetic-payment-capability",
+          "digest": "sha256:44ca42becd47c423a559167486f27a60ff834b7760a808e636f440fd4a533def"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:c2734174cfe815926fdb0351ee051d7f09714e13df0ee5b9a96d67404549abaf"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:a74ce335e87e09dd24334c5e5134e45cae6bd903bdd1e4627220a9a147dc994b"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:49fc053be61b374d04a401fe60b04987720763b3951f3ddb27c7372ab0873540"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:579f6af14bb4f2c7f5e756b3a008f598590527864e91a14fbe1035d370236a21"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:0b2f9584364d4734278380d4d9252639a484e7a92f006a6e53490242a97a4e29"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:802c167e6924c9b2210c93a73f07ca745519af99410714dca4ef995cec0f2e34"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r28-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:184551511a06555abf61f571eb4d43c1935573a545dc406770c20e9e94965b94"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r28-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:e6f4282973a220b5a0f317a75bbb86637839084ba95375c31cc50a339f3c27e5"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:1cb74fcbb8e584fc7c284d15441ce1773149c30866a49f743d9163461c65c1d5"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: cart_history",
+        "unimplemented source adapter: cart",
+        "unimplemented source adapter: payment_capabilities",
+        "unimplemented effect custody: order.submit"
+      ]
+    },
+    "R29": {
+      "bundle_digest": "sha256:86ea0fad2d36d6948f8278059b7d5fee0a381ae094d535be31879176173b30f9",
+      "source_digest": "sha256:570a0c26308f3c2aa6850e9e33b7efeb0b92ab27d878ef37e2f499ef6d8ab7b0",
+      "rows": [
+        {
+          "family": "sale_items",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "desk-lamp",
+          "digest": "sha256:2245a54ab1640c46fa92b49c071d34515f9b64b9a74579f4b81d01ccdb8da37c"
+        },
+        {
+          "family": "sale_items",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "desk-lamp",
+          "digest": "sha256:6e9a0e8b8dbb5eb32f95d4408bb53c99109b64f702d8317bed5d044490ecb8ef"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "buyer-item-question",
+          "digest": "sha256:def105cdd071b2ce4c472ac61ea6d6c4e030b13ba4217870f44168f8723f9e7f"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "buyer-pickup-inquiry",
+          "digest": "sha256:27e07ebc8e55ec1258f83d1e3a83ec78bf3280cb04c98d8afd511b0ffc75b103"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "buyer-item-question",
+          "digest": "sha256:62bb46017d102037c9a0695d909a102c370ee2bd3792061630a42c85dee6b32c"
+        },
+        {
+          "family": "mail",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "buyer-pickup-inquiry",
+          "digest": "sha256:b212561c3d5e431ebecd8428e5e35b9c44e2ad62aebc2c95078d70299e3915af"
+        },
+        {
+          "family": "auto_reply_rules",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "lamp-basic-question-rule",
+          "digest": "sha256:56f7a5834bb9d1d223c59bbb7ae8adfbec84f9bc65f9cd6f695bf40714f8df8b"
+        },
+        {
+          "family": "auto_reply_rules",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "lamp-basic-question-rule",
+          "digest": "sha256:7057681ab0d65b5e1e2dab74815cd214576cd2aa85c948d362d6f1ace0b7c709"
+        },
+        {
+          "family": "listing_private_addresses",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "listing-setup-address",
+          "digest": "sha256:a2d1b250f72928309f55527dafc758d07ff4fd1d214de5860172b1d501f2b3a1"
+        },
+        {
+          "family": "listing_private_addresses",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "listing-setup-address",
+          "digest": "sha256:668749f35cdad6752dfffc34b26714c36a7fd6fb4707c4fb7273174bcc37a551"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "item-only-inquiry-scope",
+          "digest": "sha256:a96bf938fd37073ffeddcfa5ca33f91e749030f641cfe4f2575639aa8c616c88"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "item-only-inquiry-scope",
+          "digest": "sha256:73622465c0650b92de94860bfe25b2522fd8506235ad5dce85f82626324062f9"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:ff5617c3ac13174ff5c3a6bf150379cd1350928161a21b00997ed2909e274833"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:4aa566e6d8981f4b0e28cc7dfe308cf23476b7434de381780b958dd9d9246ac1"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:8f73fdc9fb79e960fb14af764553d5b4c7d88437bc81e523ffad201c762754c8"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:0799fa0cebee3432e6210a53d80a2015a999ec244c383951a2bb8734ee49e08d"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:852290fe885aedc0eaa701e39d3640608756f052a53dc3014367dc619f74978f"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:3bd1d7f735f12dee40744aa6872fe9a48aacfbaba5e8daf085a3c8f3fc46b7e9"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r29-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:9b901ae6db711eebf39c88c2f0c158f77b9ddb863e5638e001c62a22fcfd61d5"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r29-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:291b19870560d3891149245a607c4adda1e12c2aef475832af6e48e127b76752"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:f4ce5c76abfec6394401081cc63bdf761af3061a3cd7b5c4807f2f7f09f7ddf7"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: sale_items",
+        "unimplemented source adapter: auto_reply_rules",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "R30": {
+      "bundle_digest": "sha256:83c3f9cfa3827183d41e8de2421a80e28b298946f4ac316fbeabc51619d0ef81",
+      "source_digest": "sha256:439d976bf66f5038839bd7c6a3107158b366f85e565c8b31c0d562c199ca7007",
+      "rows": [
+        {
+          "family": "subject_audit",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "generated-reply-observation",
+          "digest": "sha256:47d022fd5fdb77cadc3f5562775047e937631d0f5ae685c1d4c75289a75d0522"
+        },
+        {
+          "family": "subject_audit",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "provenance-lookup",
+          "digest": "sha256:5f0196909de12ff8671eae0fc40f29fe060fd683560cbddf2a9c6cd5289f077a"
+        },
+        {
+          "family": "subject_audit",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "generated-reply-observation",
+          "digest": "sha256:e14bf98863589aa1222b74dde22f5b1c22447844c188dbbe400a6629fc37173b"
+        },
+        {
+          "family": "subject_audit",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "provenance-lookup",
+          "digest": "sha256:cf73b01bfac82830c947d2055615e5eea4405970b99844b11b9bfbc040af8b24"
+        },
+        {
+          "family": "incident_support_metadata",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "scoped-support-option",
+          "digest": "sha256:8eb037ee97f9f969765911a03d87ecaf4a5b9de7fd720e00822cc005fd45b55a"
+        },
+        {
+          "family": "incident_support_metadata",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "scoped-support-option",
+          "digest": "sha256:4a62a91e4a52b636d7cbea0d391fdb6eef287da95ddde972ada9ce504ec1d8a3"
+        },
+        {
+          "family": "foreign_personal_records",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "postcode-record",
+          "digest": "sha256:d3f839a381fccce6e5f9f22f8dc18f323f0f03ac041e4e0b01866f64146fa782"
+        },
+        {
+          "family": "foreign_personal_records",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "postcode-record",
+          "digest": "sha256:edc908c750af2155893466859ce02008a6e0dba638066498e3b2a101bd4668b3"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "current-subject-audit-only",
+          "digest": "sha256:da39a513e206e9360750fa33b511a974e7db172fbfdf7e66c27a1bd9bcc6ef5c"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "current-subject-audit-only",
+          "digest": "sha256:14c89db79f8cbd4ef0e47b4c1e655fbc833b9127f975f2f68dc56674d310fe2d"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:3e749acb9a9a125bd91b8045e9d35a56e1b47a271286b59026ca027cc9ea8425"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:f2d5a5fee96e6344719bd6dff361a36ffda770f0ed202e7d69c29e7f1e3cb195"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:514b223aa1bc5e0960dffb93209f68451666ac03c540a2be62bbe216c531d098"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:da61fd11273285a5f77c867bb76ec692a1ea986c191204858fe89ca291cc6286"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:3882ef6b9ceb85f07030388c6c3a59e08354933ad978ef4e0bb1798841ae655c"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:27e480a131034d2c9698a8c9a0242889d4e0fdfe0a93a4576363832cd29def15"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r30-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:344eb24541262b78e9f6963b4fec0f811e97e62bde678bee32095faf934d3aa7"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-r30-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:ae14eb639c063e61b3bf06a8ecf8b928153a59addb728ba3eb27ce35195d0a6b"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:2ae737408218f033673d5c310d5ebdda32d9041da50e7ef796156e9daea2c546"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: subject_audit",
+        "unimplemented source adapter: incident_support_metadata",
+        "unimplemented source adapter: owner_statements"
+      ]
+    }
+  }
+}

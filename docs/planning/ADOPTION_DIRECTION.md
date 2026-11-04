@@ -47,6 +47,57 @@ Adopted: small, inspectable cores and version-bound provider transforms. Not ado
 - **Next horizon.** Agent-to-agent communication, and a plugin system for external agents and harnesses (Meta Muse, Codex, Claude and others).
 - **Later ambition (not scheduled).** Train our own orchestrator model for partner agents, in the spirit of [Sakana AI Fugu](https://sakana.ai/fugu/), one model that routes work across other models and agents.
 
+## Frontier reassessment (23 September 2026)
+
+This is a first pass over research published since March 2026, grouped by pillar. Each item says what Waldo takes from it. A second pass the same day added prompt-injection defense, voice and on-device.
+
+### Memory
+
+- Update-on-write beats embedding retrieval when facts change. In the MERIT benchmark ([arXiv 2609.05441](https://arxiv.org/abs/2609.05441)), memory lifts dependent-task success from 0 to 0.55-1.00. On updated facts, embedding retrieval swings between 0.30 and 0.95 across models, while a structured fact store and LLM summarization stay at 0.70-1.00. A hybrid of the two scored worse than the fact store alone. Agents acted on a correctly retrieved value only 55% of the time. Take: the four core files (LLM-maintained, update-on-write) are the right first layer. The locked plan to fuse an external vector index with RRF should be measured against the files before it becomes the default.
+- No memory substrate wins everywhere, and retrieving too much hurts decision-making ([arXiv 2608.15008](https://arxiv.org/abs/2608.15008)). Take: keep the prompt's memory lean, and pick recall depth by the kind of turn.
+- Retrieval should reshape memory. REALM reconsolidates memories based on retrieval feedback and beats baselines on LoCoMo and LongMemEval ([arXiv 2609.16053](https://arxiv.org/abs/2609.16053)). Take: stage 7-8 (ACT-R activation, nightly reflection) should use what was actually recalled and used.
+- Derived memory can be stale. Hindsight tags its consolidated layers with a staleness grade and falls back to raw facts when a layer is behind ([Hindsight, June 2026](https://hindsight.vectorize.io/blog/2026/06/17/freshness-aware-memory)). It also separates cheap recall ("what did I say about X") from model-driven reflect ("what should I do about X") ([Hindsight, July 2026](https://hindsight.vectorize.io/blog/2026/07/24/recall-vs-reflect)). Take: intelligence-summary is derived, so it carries a last-refreshed marker. Recall and reflect stay separate operations.
+- Sleep-style consolidation with value-based forgetting is still at research-preview stage ([arXiv 2604.20943](https://arxiv.org/abs/2604.20943)). Take: this supports the stage 7-8 direction, but the evidence is thin.
+
+### Orchestration
+
+- Skills with clear input and output contracts do better as subagents with a fresh context than as instructions loaded into the main context ([arXiv 2609.09233](https://arxiv.org/abs/2609.09233)). LangChain's Deep Agents now drive many subagents from a short model-written script instead of one tool call at a time ([LangChain, June 2026](https://www.langchain.com/blog/introducing-dynamic-subagents-in-deep-agents)). Take: give long Waldo skills explicit contracts and run them as subagents.
+
+### Proactivity
+
+- PASK splits proactivity into demand detection, memory modeling and an action system, with a cache, main memory and storage hierarchy ([arXiv 2604.08000](https://arxiv.org/abs/2604.08000)). VibeLifeBench runs 200 multi-week everyday-life tasks. The best of seven frontier models reported scores 32.5, and every model loses 10-15 points between the start and end of a timeline ([CCTest summary](https://cctest.ai/en/articles/vibelifebench-tests-whether-life-agents-can-stay-proactive-for-weeks); secondary source). Take: Waldo's evals need multi-week scripted timelines that score when to act, when to ask and when to stay quiet.
+
+### Evals
+
+- Capability (pass@1) and reliability across repeated runs drift apart as tasks get longer ([arXiv 2603.29231](https://arxiv.org/abs/2603.29231)). Take: report pass^k for Waldo's end-to-end scenarios, not single runs.
+
+### Protocols
+
+- The MCP 2026-07-28 revision is stateless: no sessions, no initialize handshake, capabilities sent per request, and tasks moved to an extension ([MCP changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)). Take: build new MCP work against this revision. It suits Workers better than the session-based version.
+
+### Health behavior
+
+- SIM-VAIL audits chatbots across multi-turn psychiatric conversations and targets quieter interactional harms, not just overtly unsafe replies ([Nature Medicine, August 2026](https://www.nature.com/articles/s41591-026-04577-2)). Take: `scripts/health-scenarios.ts` only covers single turns. Add multi-turn health and wellness audits.
+
+### Prompt-injection defense and authority
+
+- Security enforced outside the model is where the field has converged. Capabilities, information-flow labels and reference monitors (CaMeL, FIDES, Progent and others) nearly eliminate attacks on AgentDojo. But every one of them has only been tested against fixed attack sets, and adaptive attacks broke twelve earlier in-model defenses at over 90% ([arXiv 2606.26479](https://arxiv.org/abs/2606.26479)). Take: keep Waldo's hard lines deterministic and outside the model. Test them with adaptive attacks, not only a fixed list.
+- ROPE allows a value to reach a state-changing tool only if it traces to the user, a source the user named, or the user's own records. Enforcement is a deterministic origin check on sensitive parameters ([arXiv 2608.27496](https://arxiv.org/abs/2608.27496)). A related paper argues capabilities should be scoped to the current task intent and to where each input came from, not to a session ([arXiv 2609.14631](https://arxiv.org/abs/2609.14631)). Take: this fits Waldo's source-taint and trust classes. Recipients, destinations and amounts must trace to the owner.
+- AttriGuard asks why a tool call was produced. It replays the agent with outside content attenuated and blocks calls that only untrusted content caused ([arXiv 2603.10749](https://arxiv.org/abs/2603.10749)). Take: a candidate check for high-stakes actions, at the cost of extra model calls.
+- Every consequential action should trace to a human principal, stay inside what they delegated, and be open to challenge afterwards ([arXiv 2609.15906](https://arxiv.org/abs/2609.15906)). Take: the approval queue and activity ledger should record all three.
+
+### Voice
+
+- OpenAI's GPT-Live is full-duplex. The voice model listens and speaks at once with no separate turn detector, while reasoning and tool calls run asynchronously ([OpenAI, August 2026](https://openai.com/index/continuous-voice-interaction-with-gpt-live/)). Google's Gemini 3.8 Live models do native speech-to-speech that keeps talking while tasks run ([Google, September 2026](https://blog.google/innovation-and-ai/technology/developers-tools/build-real-time-voice-applications-gemini-audio/)). A self-hosted end-to-end speech model is still not practical: Qwen3-Omni runs at about 702 ms through its cloud API only, so self-hosted voice stays STT, then LLM, then TTS ([arXiv 2603.05413](https://arxiv.org/abs/2603.05413)). Take: when Waldo adds voice, use a hosted speech-to-speech model as the front and hand work to the existing run loop asynchronously. This matches the "never feel stalled" rule.
+
+### On-device
+
+This search found only hobby repositories, no primary research or vendor evidence. Nothing to adopt yet. Raw wearable data stays on the phone as before.
+
+### Decision for the owner
+
+MERIT's result cuts against the locked memory decision to fuse an external vector index with RRF. The proposal: ship the core files first, add the updated-fact eval (roadmap stage 13), and add vector recall only where that eval shows it helps.
+
 ## Queue
 
 Day program, in order:

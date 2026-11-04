@@ -1,0 +1,449 @@
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { describe, expect, it } from 'vitest';
+import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
+import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
+
+const memoryStore = () => {
+  const data = new Map<string, unknown>();
+  return {
+    get: async <T>(key: string) => data.get(key) as T | undefined,
+    put: async (key: string, value: unknown) => { data.set(key, value); },
+    delete: async (key: string) => data.delete(key),
+  };
+};
+const formOf = (fields: Record<string, string>) => {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
+  return form;
+};
+
+describe('console session rows', () => {
+  const at = Date.parse('2026-10-06T00:00:00Z');
+  const sessions = [
+    { token: 'secret-token-a', csrf: 'secret-csrf-a', expires: at + 3 * 3_600_000 },
+    { token: 'secret-token-b', csrf: 'secret-csrf-b', expires: at + 10 * 3_600_000 },
+  ];
+  it('lists newest sign-in first, marks this browser, and carries no credentials', () => {
+    const rows = consoleSessionRows(sessions, sessions[0]!, 'Asia/Kolkata');
+    expect(rows).toEqual([
+      { signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false },
+      { signed_in: '2026-10-05 20:30', until: '2026-10-06 08:30', current: true },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('secret');
+  });
+});
+
+describe('owner console', () => {
+  it('opening a link only shows a sign-in button, so link previews cannot spend the token', async () => {
+    const html = await signInPage('ab12"><zz>').text();
+    expect(html).toContain('<form method="post" action="/console">');
+    expect(html).toContain('name="t" value="ab12"');
+    expect(html).not.toContain('<zz>');
+  });
+
+  it('redeems a link once, before it expires, into a session with its own csrf token', async () => {
+    let now = 1_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const token = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    expect(await access.redeem('wrong')).toBeNull();
+    const cookie = await access.redeem(token);
+    expect(cookie).toMatch(/^[0-9a-f]{64}$/);
+    expect(await access.redeem(token)).toBeNull();
+    const session = await access.session(cookie);
+    expect(session?.csrf).toMatch(/^[0-9a-f]{64}$/);
+    expect(session?.csrf).not.toBe(cookie);
+    expect(await access.session(null)).toBeNull();
+    await access.signOut(cookie!);
+    expect(await access.session(cookie)).toBeNull();
+    const again = await access.redeem(new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!);
+    now += CONSOLE_SESSION_IDLE_MS + 1;
+    expect(await access.session(again)).toBeNull();
+    const late = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    now += 11 * 60_000;
+    expect(await access.redeem(late)).toBeNull();
+  });
+
+  it('redeeming on a browser that already holds a live session replaces it, and the old one runs out instead of stacking', async () => {
+    let now = 1_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const cookie = (await access.redeem(await mint()))!;
+    now += 60_000;
+    const again = (await access.redeem(await mint(), cookie))!;
+    expect(again).not.toBe(cookie);
+    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    expect((await access.session(cookie))?.expires).toBe(now + CONSOLE_REPLACED_SESSION_MS);
+    const signedIn = now;
+    now += CONSOLE_REPLACED_SESSION_MS + 1;
+    expect(await access.session(cookie)).toBeNull();
+    expect(await access.list()).toHaveLength(1);
+    now = signedIn + CONSOLE_SESSION_IDLE_MS - 1;
+    expect(await access.session(again)).not.toBeNull();
+  });
+
+  it('keeps sessions per browser: a second browser gets its own, sign-out kills only that one', async () => {
+    const access = consoleAccess(memoryStore(), () => 1_000);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const browserA = (await access.redeem(await mint()))!;
+    const browserB = (await access.redeem(await mint()))!;
+    expect(browserB).not.toBe(browserA);
+    expect(await access.session(browserA)).not.toBeNull();
+    expect(await access.session(browserB)).not.toBeNull();
+    await access.signOut(browserA);
+    expect(await access.session(browserA)).toBeNull();
+    expect(await access.session(browserB)).not.toBeNull();
+    // An expired session cookie does not refresh: redeeming with it creates a fresh session.
+    let clock = 5_000;
+    const store = memoryStore();
+    const timed = consoleAccess(store, () => clock);
+    const mintTimed = async () => new URL(await timed.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const old = (await timed.redeem(await mintTimed()))!;
+    clock += CONSOLE_SESSION_IDLE_MS + 1;
+    expect(await timed.session(old)).toBeNull();
+    const fresh = (await timed.redeem(await mintTimed(), old))!;
+    expect(fresh).not.toBe(old);
+    expect(await timed.session(old)).toBeNull();
+    expect(await timed.session(fresh)).not.toBeNull();
+  });
+
+  it('lists live sessions and sign-out-everywhere kills them all', async () => {
+    let now = 1_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const a = (await access.redeem(await mint()))!;
+    const b = (await access.redeem(await mint()))!;
+    expect((await access.list()).map((session) => session.token).sort()).toEqual([a, b].sort());
+    now += CONSOLE_SESSION_IDLE_MS + 1;
+    expect(await access.list()).toEqual([]);
+    const c = (await access.redeem(await mint()))!;
+    const d = (await access.redeem(await mint()))!;
+    await access.signOutAll();
+    expect(await access.list()).toEqual([]);
+    expect(await access.session(c)).toBeNull();
+    expect(await access.session(d)).toBeNull();
+  });
+
+  it('renders background runs with status and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
+    expect(html).toContain('Background tasks');
+    expect(html).toContain('delegate_task');
+    expect(html).toContain('Pulled the last three invoices');
+    expect(html).toContain('from so-77');
+    expect(html).toContain('completed');
+    // Failed runs carry the bad-row marker.
+    expect(html).toContain('<div class="t bad"><span>09-23 23:00</span><span>heartbeat</span>');
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, runs: [] }, 'activity');
+    expect(none).toContain('No background tasks yet.');
+  });
+
+  it('builds the Overview only from recorded state, without inventing a Brief or a successful tool read', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('id="overview"');
+    expect(html).toContain('The Brief is marked sent.');
+    expect(html).toContain('does not confirm delivery');
+    expect(html).toContain('1 decision waiting.');
+    expect(html).toContain('Google is not connected.');
+    const granted = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'test@example.com', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } });
+    expect(granted).toContain('Google access saved. Live reads still need a real check.');
+    expect(html).not.toContain('Protected window');
+    const empty = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [], runs: [], trace: [], google: { accounts: [], connectAvailable: true }, cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })) });
+    expect(empty).toContain('No Brief to read here yet.');
+    expect(empty).toContain('Nothing needs your approval.');
+    expect(empty).toContain('Google is not connected.');
+    expect(empty).toContain('Nothing recorded yet.');
+  });
+
+  it('does not mistake a past or skipped card for the next one, or an older activity page for latest movement', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, now: '2026-09-23 23:40', cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })), page: { trace_before: null, runs_before: null, trace_applied: 1, runs_applied: 1 } });
+    expect(html).toContain('No more cards scheduled ahead.');
+    expect(html).not.toContain('22:15 · The Close');
+    expect(html).toContain('Nothing recorded yet.');
+  });
+
+  it('renders the stat row as Figma-style cards: uppercase small labels, serif values, hover affordance', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('text-transform:uppercase');
+    expect(html).toContain('.stat:hover{border-color:var(--ink4)}');
+    expect(html).toContain('border-radius:16px');
+  });
+
+  it('paginates the activity lists with keyset cursors, keeping the other list in place', () => {
+    const paged = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: 111, runs_before: 222, trace_applied: null, runs_applied: null } }, 'activity');
+    expect(paged).toContain('href="/console/activity?trace_before=111"');
+    expect(paged).toContain('href="/console/activity?runs_before=222"');
+    expect(paged).toContain('Older activity');
+    expect(paged).not.toContain('&larr; Latest');
+    const deep = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: null, runs_before: 222, trace_applied: 90, runs_applied: null } }, 'activity');
+    expect(deep).toContain('href="/console/activity"');
+    expect(deep).toContain('href="/console/activity?trace_before=90&runs_before=222"');
+    const plain = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
+    expect(plain).not.toContain('Older activity');
+    expect(plain).not.toContain('Older tasks');
+  });
+
+  it('ships purpose-gated micro-interactions: pressed states, focus rings, and a reduced-motion off-ramp', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('.btn:active{transform:translateY(1px)}');
+    expect(html).toContain(':focus-visible{outline:2px solid var(--teal)');
+    expect(html).toContain('prefers-reduced-motion:reduce');
+    expect(html).toContain('transition:border-color .15s ease-out');
+  });
+
+  it('renders pending approvals with acting buttons and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'waiting');
+    expect(html).toContain('id="approvals"');
+    expect(html).toContain('Waiting on you');
+    expect(html).toContain('Move &#34;Gym&#34;');
+    expect(html).toContain('value="approval.approve"');
+    expect(html).toContain('value="approval.skip"');
+    expect(html).toContain(`value="p1"`);
+    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', kind: 'calendar_change', summary: 'Moved Gym', state: 'done' as const, undoable: true, review: { kind: 'calendar_change' as const, action: 'move' as const, title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Move' } }] }, 'waiting');
+    expect(withUndo).toContain('value="approval.undo"');
+    const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] }, 'waiting');
+    expect(noneLeft).toContain('Nothing waiting on you');
+  });
+
+  it('shows the stored recipients and full words before a send, and refuses summary-only approval', () => {
+    const proposals = [
+      { id: 'mail', kind: 'email_send', summary: 'Send email to me@example.test: "Deck"', state: 'open' as const, undoable: false, review: { kind: 'email_send' as const, to: ['me@example.test'], cc: ['team@example.test'], bcc: ['audit@example.test'], subject: 'Deck', body: 'First line\nSecond line with <script>x</script>' } },
+      { id: 'msg', kind: 'message_send', summary: 'Send this on Telegram: "Hello"', state: 'open' as const, undoable: false, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Hello, full message.' } },
+      { id: 'mcp', kind: 'mcp_call', summary: 'Run lookup on MCP server', state: 'open' as const, undoable: false, review: null },
+      { id: 'browser', kind: 'browser_submit', summary: 'Click submit', state: 'open' as const, undoable: false, review: null },
+    ];
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals }, 'waiting');
+    expect(html).toContain('To: me@example.test');
+    expect(html).toContain('CC: team@example.test');
+    expect(html).toContain('BCC: audit@example.test');
+    expect(html).toContain('First line\nSecond line with &#60;script&#62;');
+    expect(html).not.toContain('<script>x</script>');
+    expect(html).toContain('Channel: Telegram');
+    expect(html).toContain('Hello, full message.');
+    expect(html).not.toContain('>Send it</button>');
+    expect(html).not.toContain('value="approval.approve"');
+    expect(html).toContain("approving this send happens there. Don't do this dismisses it");
+    // Dismissal is the safe direction: open send proposals carry Don't do this, never Do it.
+    expect(html).toContain('value="approval.skip"');
+    expect(html).toContain('This console cannot approve or dismiss it.');
+    // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
+    expect((html.match(/value="approval.skip"/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('Modify</button>');
+    const wrongKind = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...proposals[0]!, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Wrong' } }] }, 'waiting');
+    expect(wrongKind).not.toContain('value="approval.approve"');
+    expect(consoleMayApprove(proposals[0])).toBe(false);
+    expect(consoleMayApprove(SAMPLE_CONSOLE_VIEW.approvals[0])).toBe(true);
+    expect(consoleMayApprove(proposals[2])).toBe(false);
+    expect(consoleMayApprove({ ...proposals[0]!, review: null })).toBe(false);
+  });
+
+  it('labels stranded and overlong email proposals without a send affordance', () => {
+    const base = { id: 'mail', kind: 'email_send', summary: 'Send email to me@example.test: "Deck"', undoable: false, review: { kind: 'email_send' as const, to: ['me@example.test'], cc: [], bcc: [], subject: 'Deck', body: 'Text' } };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [
+      { ...base, state: 'unconfirmed' as const }, { ...base, id: 'long', state: 'review_only' as const },
+    ] }, 'waiting');
+    expect(html).toContain('Card unconfirmed');
+    expect(html).toContain('Too long to approve');
+    expect(html).toContain('This email cannot be approved here or in chat');
+    expect(html).toContain('no Send it button was offered');
+    expect(html).not.toContain('value="approval.approve"');
+    expect((html.match(/value="approval.skip"/g) ?? []).length).toBe(1);
+  });
+
+  it('shows gate holds as kind + reason + day only - refused words never reach the page', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
+    expect(html).toContain('Held at the gate (1)');
+    expect(html).toContain('self report');
+    expect(html).toContain('2026-09-25');
+    expect(html).not.toContain('fingerprint');
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, holds: [] }, 'spots');
+    expect(none).not.toContain('Held at the gate');
+  });
+
+  it('distinguishes stored evidence notes from original-source links, and corrects only through the owner\'s edit', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
+    expect(html).toContain('Evidence note:');
+    expect(html).toContain('not a link to the original message');
+    expect(html).toContain('edit it here or tell Waldo in chat');
+    expect(html).toContain('name="action" value="spot.edit"');
+    expect(html).not.toContain('name="action" value="spot.correct"');
+    const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] }, 'spots');
+    expect(unknown).toContain('Source unverified');
+    expect(unknown).not.toContain('chip">You said this');
+  });
+
+  it('shows source reference only as escaped audit hint, never as a provider link', () => {
+    const fresh = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, source_ref: 'owner, tg-123', verification_status: 'owner-grounded' };
+    const legacy = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, id: 44, source_ref: 'https://evil.example/x', verification_status: null };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [fresh, legacy] }, 'spots');
+    expect(html).toContain('Owner-grounded');
+    expect(html).toContain('Source ID: owner, tg-123');
+    expect(html).toContain('Provenance unverified');
+    expect(html).not.toContain('evil.example');
+    expect(html).not.toContain('href="https://evil.example');
+  });
+
+  it('labels constellation links tentative and lists supporting claim ids', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'constellation');
+    if (SAMPLE_CONSOLE_VIEW.nodes.length) {
+      expect(html).toContain('Tentative association');
+      expect(html).toContain('supporting spots');
+      expect(html).toContain('uncalibrated estimate');
+      expect(html).toContain('Tentative link');
+    }
+  });
+
+  it('marks spots grounded only in shared content', () => {
+    const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots');
+    expect(html).toContain('from shared content');
+    expect(renderConsole(SAMPLE_CONSOLE_VIEW, 'spots')).not.toContain('from shared content');
+  });
+
+  it('renders chips from the semantic taxonomy, every state backed by view data', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
+    // muted: a forget still clearing storage is in hand, not a failure the owner must act on
+    expect(html).toContain('chip muted">Clearing');
+    // good: settled positive states only (a promoted spot, a sent card)
+    expect(html).toContain('chip good">In constellation');
+    // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
+    expect(html).toContain('chip provisional">Waldo&#39;s inference');
+    const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots')).toContain('chip provisional">from shared content');
+    // neutral is the bare class: stated sources and kind labels carry no state
+    expect(html).toContain('chip">You said this');
+    expect(html).not.toContain('chip teal');
+    expect(html).not.toContain('chip red');
+    // honest consumers: with no forgetting spots, no danger chip renders
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] }, 'spots')).not.toContain('chip danger');
+  });
+
+  it('renders real usage numbers with a total, and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'usage');
+    expect(html).toContain('id="usage"');
+    expect(html).toContain(OPENAI_GPT_6_LUNA_MODEL);
+    expect(html).toContain('12 calls, 48.2k in (25% cached), 3.9k out');
+    expect(html).toContain('$0.0231');
+    expect(html).toContain('Total');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, usage: [] }, 'usage')).toContain('No model calls recorded yet');
+  });
+
+  it('checklist reflects real connection state, honestly marking what is not done', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'setup');
+    expect(html).toContain('id="checklist"');
+    // Fixture: telegram linked, no google account, quiet hours set.
+    const row = (label: string) => html.slice(html.indexOf(label), html.indexOf(label) + 400);
+    expect(row('Link Telegram')).toContain('Done');
+    expect(row('Connect Google')).toContain('To do');
+    expect(html).not.toContain('Allow Gmail');
+    expect(row('Set quiet hours')).toContain('Done');
+    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'setup');
+    expect(done.slice(done.indexOf('Connect Google'), done.indexOf('Connect Google') + 500)).toContain('Done');
+    const doneConnections = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'connections');
+    expect(doneConnections).toContain('Access granted');
+    expect(doneConnections).toContain('Calendar, Gmail, Tasks');
+    expect(doneConnections).toContain('Access granted · read unverified');
+    expect(doneConnections).toContain('permission states, not proof');
+    expect(done).not.toContain('Gmail is a separate step');
+    expect(doneConnections).toContain('does not confirm that live reads work');
+    const unhealthy = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'setup');
+    expect(unhealthy.slice(unhealthy.indexOf('Connect Google'), unhealthy.indexOf('Connect Google') + 500)).toContain('To do');
+    const unhealthyConnections = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'connections');
+    expect(unhealthyConnections).toContain('Needs reconnect');
+  });
+
+  it('keeps connection health separate from access and does not call the WhatsApp route missing', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'work@example.test', error: 'invalid_grant', calendar: true, mail: true, tasks: true }] } }, 'connections');
+    expect(html).toContain('Reconnect needed');
+    expect(html).toContain('Needs reconnect');
+    expect(html).toContain('Status unknown here');
+    expect(html).not.toContain('WhatsApp</div><div class="sub">Chat with Waldo on WhatsApp. Needs');
+    expect(html).toContain('invite-gated email OTP');
+  });
+
+  it('shows the browser count and always offers sign-out-everywhere, which also covers app sign-ins this count omits', () => {
+    const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 }, 'connections');
+    expect(one).toContain('on 1 browser.');
+    expect(one).toContain('session.signout.all');
+    expect(one).toContain('Sign out of every browser and the app?');
+    const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 }, 'connections');
+    expect(two).toContain('on 2 browsers.');
+    expect(two).toContain('session.signout.all');
+  });
+
+  it('reads the session cookie', () => {
+    expect(sessionCookie(new Request('https://x/console', { headers: { cookie: 'a=1; waldo_console=abc' } }))).toBe('abc');
+    expect(sessionCookie(new Request('https://x/console'))).toBeNull();
+  });
+
+  it('shows every scheduled behavior with its state and a reset, and parses the schedule actions', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, schedules: { ...SAMPLE_CONSOLE_VIEW.schedules, heartbeat: false } }, 'day');
+    expect(html).toContain('Scheduled behaviors');
+    expect(html).toContain('periodic open-loop check: <b>off</b>');
+    expect(html).toContain('prep notes before events: <b>on</b>');
+    expect(html).toContain('name="value" value="on"><span>periodic open-loop check');
+    expect(html).toContain('value="schedule.reset"');
+    expect(parseConsoleAction(formOf({ action: 'schedule.set', id: 'heartbeat', value: 'on', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.set', id: 'heartbeat', value: 'on' });
+    expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
+  });
+
+  it('names a job the scheduler paused and when it tries again, and shows nothing when none is paused', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'day');
+    expect(html).toContain('<b>My overnight memory pass</b>');
+    expect(html).toContain('Waldo tries again around Sat 2 Nov, 03:00.');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [] }, 'day')).not.toContain('tries again around');
+  });
+
+  it('accepts only known actions carrying the session csrf token', () => {
+    expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'good' }), 'good')).toEqual({ action: 'spot.dismiss', id: '4', value: '' });
+    expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'bad' }), 'good')).toBeNull();
+    expect(parseConsoleAction(formOf({ action: 'drop.tables', csrf: 'good' }), 'good')).toBeNull();
+  });
+
+  it('renders every page with working controls and escapes stored text', () => {
+    const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
+    const byPage: Readonly<Record<string, string>> = { setup: 'checklist', waiting: 'approvals', connections: 'connections', spots: 'spots', constellation: 'constellation', day: 'day', memory: 'memory', usage: 'usage', activity: 'activity', account: 'account' };
+    for (const [slug, id] of Object.entries(byPage)) expect(renderConsole(view, slug)).toContain(`id="${id}"`);
+    const spots = renderConsole(view, 'spots');
+    expect(spots).toContain('&#60;script&#62;x&#60;/script&#62;');
+    expect(spots).not.toContain('<zz>');
+    expect(spots).toContain('value="spot.forget"');
+    const connections = renderConsole(view, 'connections');
+    // S5: connect is a CSRF-checked POST that 303s to the console start path; no GET link that a preview could mint from.
+    expect(connections).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
+    expect(connections).not.toContain('href="/console/google');
+    expect(connections).toContain(`name="csrf" value="${view.csrf}"`);
+    expect(connections).toContain('Not built yet');
+    const day = renderConsole(view, 'day');
+    expect(day.indexOf('The Brief')).toBeLessThan(day.indexOf('Check-in'));
+    expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } }, 'connections')).toContain('OAuth app keys are not set');
+  });
+
+  it('splits the console into pages: nav links to page paths, the active page marked, other pages absent', () => {
+    const overview = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(overview).toContain('<a href="/console" aria-current="page">Overview</a>');
+    expect(overview).toContain('<a href="/console/waiting">Waiting</a>');
+    expect(overview).toContain('id="overview"');
+    expect(overview).not.toContain('id="approvals"');
+    const waiting = renderConsole(SAMPLE_CONSOLE_VIEW, 'waiting');
+    expect(waiting).toContain('<a href="/console/waiting" aria-current="page">Waiting</a>');
+    expect(waiting).toContain('id="approvals"');
+    expect(waiting).not.toContain('id="checklist"');
+    expect(waiting).not.toContain('id="overview"');
+    const activity = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
+    expect(activity).toContain('<a href="/console/activity" aria-current="page">Activity</a>');
+    // Separate pages reachable from every page's nav: invites, devices and iMessage.
+    for (const page of [overview, waiting, activity]) {
+      expect(page).toContain('<a href="/console/devices">Devices</a><a href="/console/imessage">iMessage</a></nav>');
+    }
+  });
+
+  it('a topic still clearing stays visible, masked, with what is left and a working Retry action', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
+    expect(html).toContain('Forgetting (1)');
+    expect(html).toContain('p·········· (12)');
+    expect(html).toContain('1 of 2 stores clear · waiting on imessage');
+    // The page never repeats the forgotten words, neither the purging claim's text nor the topic.
+    expect(html).not.toContain('Old phone number ending 4123');
+    expect(html).toMatch(/name="action" value="forget\.retry"><input type="hidden" name="id" value="fnv1a:5e1c0a2b"/);
+  });
+});

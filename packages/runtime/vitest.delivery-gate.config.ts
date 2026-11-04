@@ -4,17 +4,17 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: [
-      'test/delivery-gate.test.ts',
+      'test/delivery-gate-admission.test.ts',
+      'test/delivery-gate-local-day.test.ts',
       'test/delivery-gate.property.test.ts',
-      'test/outbox-delivery.test.ts',
-      'test/run-journal-interface.test.ts',
-      'test/tracer.test.ts',
     ],
     fileParallelism: false,
   },
   plugins: [
     cloudflareTest({
+      main: './test/support/worker-entry.ts',
       miniflare: {
+        durableObjects: { TEST_STORAGE_DO: { className: 'TestStorageDO', useSQLite: true } },
         bindings: {
           WALDO_ENV: 'test',
           RUN_LOOP_PROVIDER_MODE: 'fake',

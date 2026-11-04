@@ -9,12 +9,14 @@
 // key smuggled into the contract, a throwing adapter stalling the fallback ladder, and a
 // fallback hop replaying the previous hop's rendered prompt.
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
 import type { ModelName } from '../model/roster';
 import { modelNameSchema, ROSTER } from '../model/roster';
 import type { LLMProvider, LLMRequest, LLMResponse } from './llm';
 import {
   GATEWAY_CONSTANT_HEADERS,
+  toolParameters,
   gatewayConstantHeadersSchema,
   llmMessageSchema,
   llmRequestSchema,
@@ -82,9 +84,11 @@ describe('llmRequest', () => {
     );
   });
 
-  it('rejects max_tokens outside 1..8192', () => {
+  it('rejects max_tokens outside 1..128000 (wire ceiling, S5)', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 0 }).success).toBe(false);
-    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_193 }).success).toBe(false);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_192 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 32_768 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 128_001 }).success).toBe(false);
   });
 
   it('rejects temperature outside 0..2', () => {
@@ -101,6 +105,25 @@ describe('llmRequest', () => {
       false,
     );
   });
+
+  it('carries an optional reasoning effort of low or medium, never none or minimal', () => {
+    expect(llmRequestSchema.safeParse(baseRequest).success).toBe(true);
+    for (const effort of ['low', 'medium']) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, reasoning_effort: effort }).success, effort).toBe(true);
+    }
+    for (const effort of ['none', 'minimal', 'max', '']) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, reasoning_effort: effort }).success, effort).toBe(false);
+    }
+  });
+
+  it('carries an optional hosted web search with an approximate location', () => {
+    for (const web_search of [{}, { country: 'IN' }, { timezone: 'Asia/Kolkata' }, { country: 'IN', timezone: 'Asia/Kolkata' }]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(true);
+    }
+    for (const web_search of [{ country: 'India' }, { country: 'in' }, { timezone: '' }, { city: 'Bengaluru' }, null]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(false);
+    }
+  });
 });
 
 describe('llmResponse metering', () => {
@@ -108,11 +131,54 @@ describe('llmResponse metering', () => {
     expect(Object.keys(llmResponseSchema.shape)).toEqual([
       'model',
       'text',
+      'tool_calls',
       'input_tokens',
       'output_tokens',
       'cache_read_input_tokens',
+      'cache_write_input_tokens',
       'latency_ms',
+      'output_items',
+      'truncated',
+      'ttft_ms',
     ]);
+  });
+
+  it('may carry cache writes as a whole, non-negative count, and needs none', () => {
+    expect(llmResponseSchema.safeParse({ ...baseResponse, cache_write_input_tokens: 900 }).success).toBe(true);
+    for (const cache_write_input_tokens of [-1, 1.5, '900', null]) expect(llmResponseSchema.safeParse({ ...baseResponse, cache_write_input_tokens }).success, String(cache_write_input_tokens)).toBe(false);
+  });
+
+  it('a streamed response may carry its time to first token as a whole, non-negative number of ms', () => {
+    expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms: 420 }).success).toBe(true);
+    for (const ttft_ms of [-1, 1.5, '420', null]) expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms }).success, String(ttft_ms)).toBe(false);
+  });
+
+  it('requests may declare tools and replay prior tool turns', () => {
+    const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+    const tools = [{ name: 'get_context', description: 'Current time and timezone', parameters: { type: 'object', properties: {} } }];
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
+  });
+
+  it('a replayed tool turn may carry the dispatcher\'s external stamp, and only that one', () => {
+    const call = { call_id: 'c1', name: 'raise_approval', arguments: '{}' };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint: 'external' }] }).success).toBe(true);
+    for (const source_taint of [null, 'internal', true]) expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint }] }).success, String(source_taint)).toBe(false);
+  });
+
+  it('tool-call arguments use a wire ceiling, not a size policy (S4)', () => {
+    // A legitimately long tool call (long email body, big doc) must clear the wire schema;
+    // per-destination size policy is the scribe's job, not the wire's. The ceiling only
+    // rejects absurdly large payloads.
+    const legit = { call_id: 'c1', name: 'draft_email', arguments: JSON.stringify({ body: 'x'.repeat(100_000) }) };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call: legit, output: '{"ok":true}' }] }).success).toBe(true);
+    const absurd = { call_id: 'c1', name: 'draft_email', arguments: 'x'.repeat(131_073) };
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '', tool_calls: [absurd] }).success).toBe(false);
+  });
+
+  it('carries text or tool calls, never neither', () => {
+    const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '' }).success).toBe(false);
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '', tool_calls: [call] }).success).toBe(true);
   });
 
   it('accepts a fully metered success', () => {
@@ -246,5 +312,23 @@ describe('LLMProvider seam — fake providers', () => {
     const provider = new ScriptedProvider(() => ({ ok: true, data: baseResponse }));
     const labels = await provider.classify('a constellation ask', ['constellation', 'pattern']);
     expect(labels).toEqual(['constellation']);
+  });
+});
+
+describe('toolParameters', () => {
+  it('returns pure JSON: no ~standard marker, no non-JSON values anywhere in the tree', () => {
+    const params = toolParameters(
+      z.object({ q: z.string().min(1).max(200), n: z.number().int().optional() }),
+    );
+    expect(params).not.toHaveProperty('~standard');
+    // JSON round-trip equality catches functions, undefined, symbols, and class instances
+    // nested anywhere - the values that broke request sanitisation and would ride the wire.
+    expect(JSON.parse(JSON.stringify(params))).toEqual(params);
+    expect(params.type).toBe('object');
+  });
+
+  // Every definition rides every round's tool list; a dialect URI tells the model nothing.
+  it('omits the $schema dialect marker', () => {
+    expect(toolParameters(z.strictObject({ q: z.string() }))).not.toHaveProperty('$schema');
   });
 });

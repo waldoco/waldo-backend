@@ -72,6 +72,42 @@ describe('pushNotification', () => {
   });
 });
 
+describe('pushNotification for an approval', () => {
+  it('accepts the approval trigger with the id of the approval it opens', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'approval', approval_id: 'p0001' }).success).toBe(true);
+  });
+
+  it.each([
+    ['no approval id', { trigger: 'approval' }],
+    ['an approval id on another trigger', { trigger: 'patrol', approval_id: 'p0001' }],
+    ['an id that is not an approval id', { trigger: 'approval', approval_id: 'not an id' }],
+    ['an empty approval id', { trigger: 'approval', approval_id: '' }],
+    ['a zone word', { trigger: 'approval', approval_id: 'p0001', form_zone: 'flagging' }],
+    ['a reason', { trigger: 'approval', approval_id: 'p0001', reason: 'A short night.' }],
+    ['a variant', { trigger: 'approval', approval_id: 'p0001', variant: 'morning' }],
+  ] as const)('rejects %s', (_shape, payload) => {
+    expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe('pushNotification for an update to the day', () => {
+  it('accepts the update trigger alone, or with the day card it revised', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'update' }).success).toBe(true);
+    expect(pushNotificationSchema.safeParse({ trigger: 'update', card_ref: 'card:brief' }).success).toBe(true);
+  });
+
+  it.each([
+    ['a zone word', { trigger: 'update', form_zone: 'flagging' }],
+    ['a load word', { trigger: 'update', card_ref: 'card:brief', load_zone: 'peak' }],
+    ['a variant', { trigger: 'update', variant: 'morning' }],
+    ['an approval id', { trigger: 'update', approval_id: 'p0001' }],
+    ['an empty card ref', { trigger: 'update', card_ref: '' }],
+    ['the changed meeting', { trigger: 'update', title: 'Sync with Krati' }],
+  ] as const)('rejects %s', (_shape, payload) => {
+    expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
 describe('accountEventKind', () => {
   it('is exactly the three ADR-0067 notice events, in order', () => {
     expect(accountEventKindSchema.options).toEqual(['bind', 'rebind', 'unlink']);

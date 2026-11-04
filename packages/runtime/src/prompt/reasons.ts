@@ -5,14 +5,15 @@ import {
   renderBlock,
   renderRecall,
   renderSkill,
+  type CanaryTokens,
   type ChannelPersona,
   type ConflictPair,
   type DominanceAuthority,
   type NarrativeContext,
   type PromptBuilder,
   type PromptBuilderDeps,
+  type RecallKey,
 } from '@waldo/contracts';
-import type { RuntimeRecallContext } from '../recall/gateway';
 import type { RuntimeSkillLoadContext } from '../skills/loader';
 
 export type RuntimePromptWorkspace = Readonly<{
@@ -34,6 +35,12 @@ export type RuntimePromptCanvas = Readonly<{
 
 // This attempt context composes selection and recall inputs with pre-formed canvas values.
 // Hydration stays outside this module.
+type RuntimeRecallContext = Readonly<{
+  recallKey: RecallKey | undefined;
+  zone: NarrativeContext['zone'] | undefined;
+  canaryTokens: CanaryTokens;
+}>;
+
 export type RuntimePromptContext = RuntimeSkillLoadContext &
   RuntimeRecallContext &
   Readonly<{
@@ -82,7 +89,11 @@ function renderApproach(
 }
 
 function renderStructure(ctx: RuntimePromptContext): string {
-  return `Allowed tools: ${TOOL_PERMISSIONS[ctx.trigger].join(', ')}.`;
+  // This is the ACL CEILING, not the live tool list: contracts grant capabilities ahead of
+  // their handlers (search_connector, execute_code). The callable set is this request's
+  // function list (registered handlers within the ceiling) - say so or the model attempts
+  // ceiling-only tools and eats handler_unavailable rejections mid-task.
+  return `Tool ACL ceiling: ${TOOL_PERMISSIONS[ctx.trigger].join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`;
 }
 
 function renderOperations(
@@ -103,24 +114,18 @@ function renderMemoryContext(recall: string): string {
 
 function renderHealthContext(canvas: RuntimePromptCanvas): string {
   const health = canvas.healthContext;
-  if (health === null) {
-    return [
-      'No derived health context is available for this invocation.',
-      'Active goals: unavailable in this phase.',
-    ].join('\n');
-  }
+  if (health === null) return 'No derived health context is available for this invocation.';
 
   const upcoming =
     health.upcoming_high_stakes.length === 0
       ? ['Upcoming high-stakes: none.']
       : ['Upcoming high-stakes:', ...health.upcoming_high_stakes.map((value) => `- ${value}`)];
   return [
-    `Form zone: ${health.zone}.`,
+    `Form zone: ${health.zone ?? 'unavailable'}.`,
     `Recovery: ${health.recovery_descriptor}.`,
-    `Load: ${health.load_descriptor}.`,
+    `Load: ${health.load_descriptor ?? 'unavailable'}.`,
     `Day summary: ${health.day_summary}`,
     ...upcoming,
-    'Active goals: unavailable in this phase.',
   ].join('\n');
 }
 

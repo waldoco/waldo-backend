@@ -50,6 +50,7 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
   }
 
   async complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+    if (request.request.attachments) return { ok: false, error: 'gateway_attachments_unsupported', code: 'invalid_args' };
     const startedAt = this.now();
     const apiToken = await credentialValue(this.credential);
     if (apiToken === null) {
@@ -113,6 +114,9 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
       throw new Error('gateway URL is outside the Cloudflare AI Gateway allowlist');
     }
     const controller = new AbortController();
+    // A stopped run gives up its reply mid-flight instead of paying for tokens the fence will discard.
+    const run = request.runScope?.signal, abortRun = () => controller.abort();
+    if (run?.aborted) controller.abort(); else run?.addEventListener('abort', abortRun, { once: true });
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       return await this.fetchImpl(url, {
@@ -123,6 +127,7 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
       });
     } finally {
       clearTimeout(timeout);
+      run?.removeEventListener('abort', abortRun);
     }
   }
 

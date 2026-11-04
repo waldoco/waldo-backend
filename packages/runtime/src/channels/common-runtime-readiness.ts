@@ -1,0 +1,39 @@
+import {commonBrowserAllowanceDiagnostic} from './common-browser-allowance-diagnostic';
+import {localOwnerBinding,ownerBindingCurrent,verifyOwnerBinding} from '../identity/owner-binding';
+import {signedRpc} from '../identity/owner-directory';
+import type {TelegramWebhookEnv} from './telegram-webhook';
+// Fixed owner-console read checks. No schema mutation, model, root run, raw health,
+// secret values, identity rows or request-selected target leaves the endpoint.
+export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:DurableObjectStorage,actualDoId:string,limiter:RateLimit|undefined):Promise<Response>{
+ const headers={'cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY'};
+ if(env.WALDO_ENVIRONMENT!=='staging')return new Response('not found',{status:404,headers});
+ if(!limiter)return Response.json({error:'unavailable'},{status:503,headers});
+ try{if(!(await limiter.limit({key:`common-runtime-readiness:${actualDoId}`})).success)return Response.json({error:'rate_limited'},{status:429,headers:{...headers,'retry-after':'60'}});}catch{return Response.json({error:'unavailable'},{status:503,headers});}
+ // The owner's binding on this physical object: a Telegram presence or the app account.
+ const binding=localOwnerBinding(storage.kv,env.OWNER_DO,actualDoId);
+ if(!binding)return Response.json({error:'owner_unavailable'},{status:503,headers});
+ const {doName,subject}=binding;
+ const verify=()=>verifyOwnerBinding(env,binding,actualDoId,env.OWNER_DO);
+ let browser:ReturnType<typeof commonBrowserAllowanceDiagnostic>|undefined;
+ let owner:'verified'|'unlinked'|'unverifiable'='unverifiable',workspace:'verified'|'unlinked'|'unverifiable'='unverifiable';
+ try{
+  const authority=await verify();
+  const assertCurrent=async()=>{const fresh=await verify();if(!fresh||JSON.stringify(fresh)!==JSON.stringify(authority))throw Error('owner authority changed');};
+  if(!authority){owner='unlinked';workspace='unlinked';}
+  else{
+   await assertCurrent();owner='verified';
+   const environment=env.WALDO_ENVIRONMENT,namespace=env.WALDO_OWNER_DO_NAMESPACE,call=signedRpc(env);
+   if(namespace&&call){
+    const locator=JSON.stringify([environment,namespace,doName,actualDoId]);
+    const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(locator)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const value=await call('workspace_owner_binding',`workspace.bind.${hash}`,{p_environment:environment,p_namespace:namespace,p_do_name:doName,p_do_id:actualDoId,p_locator:locator});
+    const row=value as Record<string,unknown>|null;
+    workspace=row===null?'unlinked':row&&row.owner_id===authority.directoryOwnerId&&row.environment===environment&&row.namespace===namespace&&row.do_name===doName&&row.do_id===actualDoId&&row.state_version===authority.stateVersion&&Number.isSafeInteger(row.mapping_version)&&Number(row.mapping_version)>0?'verified':'unverifiable';
+   }
+   browser=commonBrowserAllowanceDiagnostic({env,storage,actualDoId,now:Date.now(),owner:{directoryOwnerId:authority.directoryOwnerId,custodyDigest:authority.custodyDigest,doName,subject}});
+   await assertCurrent();
+  }
+ }catch{owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ if(!ownerBindingCurrent(storage.kv,env.OWNER_DO,actualDoId,binding)){owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ return Response.json({version:1,owner_authority:owner,workspace_binding:workspace,...(browser?{browser}:{}),scope:'signed_read_checks_only_not_schema_health_issuer_or_execution_acceptance'}, {headers});
+}

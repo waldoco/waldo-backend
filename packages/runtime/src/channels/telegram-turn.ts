@@ -1,120 +1,46 @@
-import {
-  acceptTrustedInvocation, ConversationTree, OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER, routingPolicySchema,
-} from '@waldo/contracts';
-import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
-import { JoinedConversationPath } from '../conversation/joined-path';
-import { OpenAIGpt5NanoAdapter, type OpenAIResponsesClient } from '../llm/openai';
-import { RuntimeLLMProvider } from '../llm/provider';
-import { messagingSystemPrompt } from '../prompt/messaging-behavior';
-import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
-import { restoreConversation, type ConversationStore } from './conversation-store';
-import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
-import type { TelegramOwnerListenerOptions } from './telegram-listener';
+import { createOwnerResponder, ownerToolApproval, type OwnerContextIntegration, type OwnerSkillHost } from './owner-turn';
+import { ownerTurnTrace, type OwnerTurnEnvelope, type ReminderTiming } from './owner-turn-envelope';
+import type { TelegramInboundTurn } from './telegram-polling';
+import { loadTelegramMedia, type MediaReaders } from './telegram-media';
+import type { TelegramOwnerListenerOptions, TurnTimer } from './telegram-listener';
+import { TELEGRAM_REACTIONS } from './reactions';
+import { surfaceChatRef } from '../context-composer/owner-turn';
 
-const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
-
-export type ProactiveTurn = Readonly<{
-  id: string;
-  chatId: number;
-  entryText: string;
-  instruction: string;
-}>;
-
-export type TelegramResponder = Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & Readonly<{
-  // Resolves to the model's raw reply. `commit` saves the turn into the conversation and must be
-  // called only after a message from it was delivered.
-  proactive(turn: ProactiveTurn): Promise<Readonly<{ text: string; commit(): Promise<void> }>>;
-}>;
-
-// Staging responder: the fixture invocation stands in for real per-user admission,
-// which the production tenancy work replaces.
-export const createTelegramResponder = (
-  openaiApiKey: string,
-  store?: ConversationStore,
-  memory?: CoreFileStore,
-  log: (entry: object) => void = () => undefined,
-  client?: OpenAIResponsesClient,
-): TelegramResponder => {
-  const fixture = localTrustedBriefScheduleInput();
-  const accepted = acceptTrustedInvocation(fixture.admission);
-  if (!accepted.ok) throw new Error('fixture admission failed');
-  const invocation = accepted.value;
-  const ownerId = invocation.verified_authority.principal_ref;
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
-  const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey, client }) });
-  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
-  const ask = async (system: string, content: string) => {
-    const result = await runtime.complete({
-      trigger: 'user_message',
-      policy,
-      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2 }),
-    }, {
-      authenticatedUserId: ownerId, trigger: 'user_message', canaryTokens: CANARIES,
-      sourceTaint: null, toolArgSourceTaint: null,
-      sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
-    });
-    if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
-    return result.response.text;
+// Compatibility exports keep the durable object and existing callers stable.
+// Only this adapter knows Telegram's numeric update/chat IDs and media formats.
+export const telegramOwnerApproval = ownerToolApproval;
+export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'telegram'): OwnerTurnEnvelope => ({
+  traceId: ownerTurnTrace(surface, turn.updateId),
+  conversationRef: surfaceChatRef(surface, turn.chatId),
+  surface,
+  presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: turn.canAttach === true && turn.runScope !== undefined } },
+  text: turn.text,
+  parts: turn.parts,
+  ...(turn.runScope ? { runScope: turn.runScope } : {}),
+  ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
+  ...(turn.replyStream ? { replyStream: turn.replyStream } : {}),
+});
+type CoreArgs = Parameters<typeof createOwnerResponder>;
+type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?, unknown?, unknown?] ? Public : never : never];
+export const createTelegramResponder = (...args: [...AdapterArgs, surface?: string, privateSkillHost?: OwnerSkillHost, contextIntegration?: OwnerContextIntegration]) => {
+  const surface = args[20] ?? 'telegram';
+  const readers = args[4];
+  const coreArgs: CoreArgs = [args[0], args[1], args[2], args[3], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15], args[16], args[17], args[18], args[19]];
+  coreArgs[18] = coreArgs[18] ?? TELEGRAM_REACTIONS;
+  coreArgs[21] = args[21] || args[22] ? { ...(args[21] ? { skillHost: args[21] } : {}), ...args[22] } : undefined;
+  const core = createOwnerResponder(...coreArgs);
+  const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
+  const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {
+    turn.runScope?.admit();
+    const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
+    turn.runScope?.admit();
+    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}),
+      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }, time);
   };
-  const tree = new ConversationTree();
-  // Set only for the duration of one proactive submit; the owner DO serialises turns.
-  let turnInstruction: string | null = null;
-  const path = new JoinedConversationPath(adapters.contextComposer!, {
-    complete: (request) => ask(
-      [
-        messagingSystemPrompt(request.system, request.tools),
-        ...(memory ? [memoryPrompt(memory.read())] : []),
-        ...(turnInstruction ? [turnInstruction] : []),
-      ].join('\n\n'),
-      request.messages.join('\n'),
-    ),
-  }, tree);
-  let parentId: string | null = null;
-  const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   return {
-    async respond(turn, time) {
-      await restored;
-      const id = `tg-${turn.updateId}`;
-      const publication = await time('joined_path', () => path.submit({
-        authenticatedOwnerId: ownerId, invocation,
-        context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.text, appPayload: turn.text, modelProjection: { mode: 'include' } },
-        assistantEntryId: `${id}-reply`,
-      }));
-      await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
-      parentId = publication.leafId;
-      if (memory) {
-        const files = memory.read();
-        void ask(MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
-          .then((raw) => log({ trace: id, hop: 'memory', ok: true, changed: applyMemoryEdits(memory, raw, new Date().toISOString()) }))
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ok: false, error: String(error) }));
-      }
-      return publication.text;
-    },
-    chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),
-    async proactive(turn) {
-      await restored;
-      const id = `signal-${turn.id}`;
-      turnInstruction = turn.instruction;
-      let publication;
-      try {
-        publication = await path.submit({
-          authenticatedOwnerId: ownerId, invocation,
-          context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
-          userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.entryText, appPayload: turn.entryText, modelProjection: { mode: 'include' } },
-          assistantEntryId: `${id}-reply`,
-        });
-      } finally {
-        turnInstruction = null;
-      }
-      const leafId = publication.leafId;
-      return {
-        text: publication.text,
-        async commit() {
-          await store?.save([tree.get(id)!, tree.get(leafId)!], leafId);
-          parentId = leafId;
-        },
-      };
-    },
+    ...core, respond,
+    chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
+    remind: (id: string, chatId: number, note: string, time: TurnTimer, timing?: ReminderTiming) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface, timing),
+    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9], ownerModel?: boolean, attachments?: Parameters<typeof core.prompt>[11]) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments),
   };
 };

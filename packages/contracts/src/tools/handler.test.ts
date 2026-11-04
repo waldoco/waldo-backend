@@ -27,6 +27,7 @@ import {
   PRIVILEGED_ACTION_TOOLS,
   taintGateBlocksDirectExecution,
   toolResultSchema,
+  VARYING_ORIGIN_TOOLS,
 } from './handler';
 import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS } from './permissions';
 
@@ -66,6 +67,16 @@ describe('toolResultSchema', () => {
     }
   });
 
+  it('accepts a failure carrying a typed connect intent (CONNECT_FLOW_DESIGN 4.4)', () => {
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' } }).success).toBe(true);
+  });
+
+  it('rejects a connect intent with an unknown service or reason', () => {
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'spotify', reason: 'not_connected' } }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'expired' } }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', url: 'https://evil.test' } }).success).toBe(false);
+  });
+
   it('rejects a failure without a code', () => {
     expect(resultSchema.safeParse({ ok: false, error: 'provider unreachable' }).success).toBe(false);
   });
@@ -93,8 +104,13 @@ describe('toolResultSchema', () => {
     expect(resultSchema.safeParse({ ...baseErr, retriable: true }).success).toBe(false);
   });
 
-  it('rejects a taint stamp on the content-free failure branch', () => {
-    expect(resultSchema.safeParse({ ...baseErr, source_taint: null }).success).toBe(false);
+  it('accepts an optional taint stamp on the content-free failure branch (ADR-0049: external-origin auth failures must carry it)', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: 'external' }).success).toBe(true);
+    expect(resultSchema.safeParse({ ...baseErr }).success).toBe(true);
+  });
+
+  it('rejects an invalid taint value on the failure branch', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: 'bogus' }).success).toBe(false);
   });
 
   it('rejects a malformed card', () => {
@@ -137,15 +153,15 @@ describe('privileged-action set — ADR-0049', () => {
     // superset — the connector/copilot writes AND the MCP write bridge AND every thread/message
     // mutation (create/delete/restore/archive/topics) — so tainted content can drive none of
     // them straight to execution. Union order is contract (permissions.toolNameSchema).
+    // draft_email is deliberately absent (owner decision 2026-09-25): a draft is a reviewable
+    // artifact, not a send.
     expect(PRIVILEGED_ACTION_TOOLS).toEqual([
-      'update_memory',
       'execute_action',
       'send_message',
       'call_mcp_tool',
       'write_task',
       'update_task',
       'draft_document',
-      'draft_email',
       'propose_schedule',
       'write_sheet_cell',
       'create_thread',
@@ -153,6 +169,9 @@ describe('privileged-action set — ADR-0049', () => {
       'restore_message',
       'archive_thread',
       'update_thread_topics',
+      'skills_install',
+      'skills_disable',
+      'use_mac',
     ]);
   });
 
@@ -241,13 +260,34 @@ describe('external-origin tool classification — ADR-0049', () => {
   it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
+      'query_availability',
       'get_communication',
+      'search_communication',
+      'search_contacts',
+      'read_thread',
       'get_tasks',
       'web_search',
       'read_document',
       'call_mcp_tool',
+      'read_mcp_tool',
+      'search_mcp_tools',
+      'read_drive',
       'search_connector',
+      'read_tool_output',
+      'read_artifact',
+      'workspace_list',
+      'workspace_read',
+      'workspace_search',
+      'browse_page',
+      'browse_act',
+      'delegate_task',
+      'list_owner_findings',
     ]);
+  });
+
+  it('a tool whose results are outside text on some calls only stamps each result, and is never also always-external', () => {
+    expect(VARYING_ORIGIN_TOOLS).toEqual(['raise_approval']);
+    expect(VARYING_ORIGIN_TOOLS.filter(tool => EXTERNAL_ORIGIN_TOOLS.includes(tool))).toEqual([]);
   });
 });
 

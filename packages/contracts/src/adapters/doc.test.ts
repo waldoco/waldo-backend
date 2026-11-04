@@ -1,8 +1,8 @@
 // Owning ADR: ADR-0025 (DocAdapter contract). Rejected framing recorded: mapping binary
 // refusal onto invalid_args/oversize — the wave ships 'unsupported_type' as a doc-local
-// literal instead, leaving core/error's seven-code union untouched.
+// literal instead, leaving core/error's eight-code union untouched.
 // Invariants under test: provider literals are exactly the four ADR providers ('scratch' is
-// not one); the doc-local error enum is core's seven codes plus 'unsupported_type'; the bucket
+// not one); the doc-local error enum is core's eight codes plus 'unsupported_type'; the bucket
 // map totally covers the enum; search hits carry title + url + snippet only (no body key);
 // writes demand a canonical idempotency key; r2_scratch stays user-private (shareable=true
 // refused) and keeps its documented key shape; search limit defaults 10 and caps at 50.
@@ -74,7 +74,7 @@ describe('docProvider', () => {
 });
 
 describe('docErrorCode — doc-local divergence from core/error', () => {
-  it("is exactly core's seven codes plus 'unsupported_type', in order", () => {
+  it("is exactly core's eight codes plus 'unsupported_type', in order", () => {
     expect(docErrorCodeSchema.options).toEqual([
       'auth_failed',
       'not_found',
@@ -83,12 +83,13 @@ describe('docErrorCode — doc-local divergence from core/error', () => {
       'transient',
       'oversize',
       'invalid_args',
+      'rejected',
       'unsupported_type',
     ]);
   });
 
-  it("derives from core: the first seven codes are core/error's union verbatim", () => {
-    expect(docErrorCodeSchema.options.slice(0, 7)).toEqual([...errorCodeSchema.options]);
+  it("derives from core: the first eight codes are core/error's union verbatim", () => {
+    expect(docErrorCodeSchema.options.slice(0, 8)).toEqual([...errorCodeSchema.options]);
   });
 
   it("core/error still omits 'unsupported_type' — the divergence stays doc-local by design", () => {
@@ -96,7 +97,7 @@ describe('docErrorCode — doc-local divergence from core/error', () => {
     expect(docErrorCodeSchema.safeParse('unsupported_type').success).toBe(true);
   });
 
-  it('rejects a ninth code', () => {
+  it('rejects a tenth code', () => {
     expect(docErrorCodeSchema.safeParse('binary_refused').success).toBe(false);
   });
 });
@@ -119,6 +120,7 @@ describe('DOC_ERROR_BUCKET', () => {
       transient: 'transient',
       oversize: 'model_recoverable',
       invalid_args: 'model_recoverable',
+      rejected: 'model_recoverable',
       unsupported_type: 'model_recoverable',
     });
   });

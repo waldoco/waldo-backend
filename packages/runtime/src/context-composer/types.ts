@@ -90,6 +90,8 @@ export type RuntimeContextMaterials = Readonly<{
   safety_rules: ContextFragment;
   health: ContextHealthMaterial | null;
   workspace: readonly ContextFragment[];
+  // Recent tool outputs, staged as tool_result sources. Each fragment carries its own taint.
+  tool_outputs: readonly ContextFragment[];
 }>;
 
 export type StagedInputResolver = Readonly<{
@@ -210,6 +212,8 @@ export type ContextComposerDependencies = Readonly<{
   skill_budget: ResolvedSkillBudget;
   recall: ContextRecallGateway;
   unexpected_error_observer?: ContextComposerUnexpectedErrorObserver;
+  // Receives each phase name with the milliseconds the previous phase took. Content-free.
+  phase_observer?: (phase: string, previousMs: number) => void;
 }>;
 
 export type ContextCompositionEvidence = Readonly<{
@@ -252,6 +256,15 @@ export type ContextCompositionResult =
   | Readonly<{
       ok: true;
       prompt: string;
+      // The same verified layers as prompt, split for a caller that keeps a byte-stable system prompt and sends the
+      // invocation's inputs as the message itself: the layers that hold for every turn of an owner and trigger, and the
+      // operations material (recall, health, workspace, tool results).
+      instructions: string;
+      operations: string;
+      // Provider-ready admitted skill section, never parsed back out of prompt text.
+      skillPrompt?: string;
+      // The admitted health rendering inside prompt, for callers that build their own system prompt.
+      healthPrompt?: string;
       checkpoint: RuntimeContextCheckpoint;
       evidence: ContextCompositionEvidence;
     }>

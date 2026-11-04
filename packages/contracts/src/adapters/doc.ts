@@ -35,6 +35,7 @@ export const DOC_ERROR_BUCKET: Readonly<Record<DocErrorCode, DocErrorBucket>> = 
   transient: 'transient',
   oversize: 'model_recoverable',
   invalid_args: 'model_recoverable',
+  rejected: 'model_recoverable',
   unsupported_type: 'model_recoverable',
 };
 

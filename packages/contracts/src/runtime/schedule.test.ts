@@ -24,7 +24,7 @@ const baseEntry = {
 };
 
 describe('scheduleKind', () => {
-  it('is exactly the seven ADR-0065 scheduler kinds, in priority order', () => {
+  it('is the seven ADR-0065 scheduler kinds plus owner reminders, the heartbeat tick, standing orders and watch upkeep, in priority order', () => {
     expect(scheduleKindSchema.options).toEqual([
       'journal',
       'handoff',
@@ -33,6 +33,13 @@ describe('scheduleKind', () => {
       'pre_brief_sweep',
       'patrol',
       'dreaming',
+      'reminder',
+      'heartbeat',
+      'standing_order',
+      'watch_upkeep',
+      'provider_sync',
+      'forget_purge',
+      'connect_poll',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -42,6 +49,13 @@ describe('scheduleKind', () => {
       pre_brief_sweep: 4,
       patrol: 5,
       dreaming: 6,
+      reminder: 7,
+      heartbeat: 8,
+      standing_order: 9,
+      watch_upkeep: 10,
+      provider_sync: 11,
+      forget_purge: 12,
+      connect_poll: 13,
     });
   });
 
@@ -54,6 +68,13 @@ describe('scheduleKind', () => {
       pre_brief_sweep: 'pre_brief_sweep',
       patrol: 'patrol',
       dreaming: 'dreaming_mode',
+      reminder: null,
+      heartbeat: null,
+      standing_order: null,
+      watch_upkeep: null,
+      provider_sync: null,
+      forget_purge: null,
+      connect_poll: null,
     });
   });
 

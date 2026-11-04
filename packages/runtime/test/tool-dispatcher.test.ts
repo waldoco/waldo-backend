@@ -1,9 +1,12 @@
 import {
+  RUNG_BLOCKED_FIX,
+  TOOL_ERRORS,
   TOOL_PERMISSIONS,
   buildSessionState,
   executeActionArgsSchema,
   executeCodeArgsSchema,
   getCrsArgsSchema,
+  raiseApprovalArgsSchema,
   queryCalendarArgsSchema,
   sendMessageArgsSchema,
   webSearchArgsSchema,
@@ -21,17 +24,24 @@ import {
   type WriteTaskArgs,
 } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   dispatchTool,
   formatToolDefinitions,
+  MAX_TOOL_ERROR_CHARS,
   parseToolCalls,
   type ToolDispatcherContext,
   type RuntimeToolCall,
 } from '../src/tools/dispatcher';
-import type { HookRegistry } from '../src/hooks/registry';
+import { invalidArgumentsCause, MAX_ARGUMENT_ISSUES, type HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { webSearchHandler } from '../src/tools/live/web-search';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+
+// The dispatcher's error shape for a catalogue code; cause overridden where the tool's own text rides it.
+const shaped = (code: keyof typeof TOOL_ERRORS, cause = TOOL_ERRORS[code].cause) => ({ error: cause, error_code: code, fix: TOOL_ERRORS[code].fix, retryable: TOOL_ERRORS[code].retryable });
 
 function triggerAllowlistFor(tool: ToolName): TriggerType[] {
   return (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) =>
@@ -272,7 +282,7 @@ describe('ToolDispatcher', () => {
         ok: false,
         call_id: `call-${label}-subject`,
         tool: 'get_crs',
-        error: 'tool authentication failed',
+        ...shaped('unauthenticated'),
         code: 'auth_failed',
         reason: 'hook_halt',
       });
@@ -340,14 +350,14 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-health-args',
       tool: 'send_message',
-      error: 'hook halted',
+      ...shaped('sanitise_denied'),
       code: 'forbidden',
       reason: 'sanitise_denied',
     });
     expect(handled).toBe(0);
   });
 
-  it('passes only Scribe-replaced PII args to the handler', async () => {
+  it('passes owner-intent PII args to the handler unchanged (owner-readable seam)', async () => {
     let received: SendMessageArgs | undefined;
     const handler: ToolHandler<SendMessageArgs, { queued: true }, ToolDispatcherContext> = {
       name: 'send_message',
@@ -376,7 +386,51 @@ describe('ToolDispatcher', () => {
     );
 
     expect(result).toMatchObject({ ok: true, source_taint: null });
-    expect(received?.content).toBe('email [REDACTED_EMAIL]');
+    expect(received?.content).toBe('email alice@example.com');
+  });
+
+  it("web_search after an earlier tool in the same turn still composes the run's own signal", async () => {
+    const run = new AbortController();
+    const runScope: RunEffectScope = { runId: 'run', attempt: 'one', deadline: Date.now() + 60_000, signal: run.signal, admit() {}, commit: work => work() };
+    const ctx = { ...dispatcherContext('user_message'), runScope };
+    const first: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs', description: 'Return a summary.', schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'), autonomy_gated: false,
+      async handle() { return { ok: true, data: { summary: 'steady' }, source_taint: null }; },
+    };
+    let seen: AbortSignal | undefined;
+    const search = webSearchHandler('key', (async (_url: string, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+    }) as typeof fetch);
+    await dispatchTool({ id: 'call-first', name: 'get_crs', args: {} }, ctx, { handlers: [first, search] });
+    const result = await dispatchTool({ id: 'call-search', name: 'web_search', args: { query: 'waldo', limit: 3 } }, ctx, { handlers: [first, search] });
+    expect(result).toMatchObject({ ok: true });
+    run.abort();
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('a tool whose results are outside text on some calls only keeps each result\'s own stamp, clean or external', async () => {
+    for (const source_taint of [null, 'external'] as const) {
+      const list: ToolHandler<unknown, { approvals: unknown[] }, ToolDispatcherContext> = {
+        name: 'raise_approval', description: 'List the cards.', schema: raiseApprovalArgsSchema as never, trigger_allowlist: triggerAllowlistFor('raise_approval'), autonomy_gated: false,
+        async handle() { return { ok: true, data: { approvals: [] }, source_taint }; },
+      };
+      await expect(dispatchTool({ id: `call-varying-${String(source_taint)}`, name: 'raise_approval', args: { operation: 'list' } }, dispatcherContext('user_message'), { handlers: [list] }))
+        .resolves.toMatchObject({ ok: true, source_taint });
+    }
+  });
+
+  it('a non-external tool failure carrying source_taint null keeps its own error instead of invalid_handler_result', async () => {
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs', description: 'Return a summary.', schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'), autonomy_gated: false,
+      async handle() { return { ok: false, code: 'rejected', error: 'This source is outside the current owner task.', source_taint: null } as never; },
+    };
+    const result = await dispatchTool({ id: 'call-null-taint-failure', name: 'get_crs', args: {} }, dispatcherContext('brief'), { handlers: [handler] });
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toMatchObject({ reason: 'invalid_handler_result' });
+    expect(JSON.stringify(result)).toContain('outside the current owner task');
   });
 
   it('rejects missing or wrong result taint and preserves valid external taint', async () => {
@@ -534,11 +588,29 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-calendar-external-failure',
       tool: 'query_calendar',
-      error: 'provider-controlled failure text',
+      ...shaped('transient', 'provider-controlled failure text'),
       code: 'transient',
       reason: 'tool_result_error',
       source_taint: 'external',
     });
+  });
+
+  it('carries a page\'s structured block to the model, with the fix that names the next rung', async () => {
+    const blockedBy = (blocked: unknown): ToolHandler<QueryCalendarArgs, { events: string[] }, ToolDispatcherContext> => ({
+      name: 'query_calendar', description: 'Read external calendar events.', schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'), autonomy_gated: false,
+      async handle() { return { ok: false, error: 'The site answered with a bot check.', code: 'rejected', source_taint: 'external', blocked } as never; },
+    });
+    for (const blocked of ['challenge', 'login_required', 'js_required'] as const) {
+      await expect(dispatchTool({ id: `call-${blocked}`, name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy(blocked)] })).resolves.toEqual({
+        ok: false, call_id: `call-${blocked}`, tool: 'query_calendar',
+        error: 'The site answered with a bot check.', error_code: 'rejected', fix: RUNG_BLOCKED_FIX[blocked], retryable: false, blocked,
+        code: 'rejected', reason: 'tool_result_error', source_taint: 'external',
+      });
+    }
+    // A block outside the vocabulary is a malformed result, never a guessed reason passed on.
+    await expect(dispatchTool({ id: 'call-captcha', name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy('captcha')] }))
+      .resolves.toMatchObject({ ok: false, error_code: 'invalid_handler_result' });
   });
 
   it('runs immutable Scribe after malicious custom PreTool and PostTool transforms', async () => {
@@ -640,7 +712,7 @@ describe('ToolDispatcher', () => {
             result: {
               ok: true,
               data: { metric: 'hrv', sample: 41, unit: 'ms' },
-              source_taint: null,
+              source_taint: 'external',
             },
           },
         };
@@ -779,7 +851,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -818,7 +890,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-direct-acl-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -853,7 +925,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-drift',
       tool: 'get_crs',
-      error: 'tool handler ACL drift',
+      ...shaped('handler_acl_drift'),
       code: 'transient',
       reason: 'handler_acl_drift',
     });
@@ -895,7 +967,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-no-approval',
       tool: 'write_task',
-      error: 'hook halted',
+      ...shaped('approval_denied'),
       code: 'forbidden',
       reason: 'approval_denied',
     });
@@ -928,7 +1000,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-large',
       tool: 'get_crs',
-      error: 'tool result exceeded bound',
+      ...shaped('result_oversize'),
       code: 'oversize',
       reason: 'result_oversize',
     });
@@ -1046,10 +1118,74 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-invalid-args',
       tool: 'get_crs',
-      error: 'hook halted',
+      // The datetime hint is scoped to datetime validation failures; a range error gets none.
+      ...shaped('invalid_args', 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly'),
       code: 'invalid_args',
       reason: 'invalid_args',
     });
+    expect(handled).toBe(false);
+  });
+
+  it('names the failing field when the handler schema refuses arguments the registry schema accepted', async () => {
+    let handled = false;
+    const handler: ToolHandler<GetCrsArgs, unknown, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived CRS summary.',
+      schema: z.strictObject({ range_days: z.int().min(1).max(30).default(1) }),
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      async handle() {
+        handled = true;
+        return { ok: true, data: { summary: 'form steady' }, source_taint: null };
+      },
+    };
+
+    const result = await dispatchTool(
+      { id: 'call-handler-schema', name: 'get_crs', args: { range_days: 60 } },
+      dispatcherContext('brief'),
+      { handlers: [handler], extraHooks: [] },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      ...shaped('invalid_args', 'invalid tool arguments: range_days: Too big: expected number to be <=30; match the tool schema exactly'),
+      code: 'invalid_args',
+      reason: 'invalid_args',
+    });
+    expect(handled).toBe(false);
+  });
+
+  it('bounds the argument detail: a few issues, each cut short, then how many more', () => {
+    const issues = Array.from({ length: 10 }, (_, index) => ({ path: ['items', index, 'x'.repeat(300)], message: `Invalid input: ${'y'.repeat(500)}` }));
+    const cause = invalidArgumentsCause(issues);
+    expect(cause.startsWith('invalid tool arguments: items.0.')).toBe(true);
+    expect(cause.slice('invalid tool arguments: '.length).split('; ').filter((part) => part.startsWith('items.'))).toHaveLength(MAX_ARGUMENT_ISSUES);
+    expect(cause).toContain(`and ${10 - MAX_ARGUMENT_ISSUES} more`);
+    expect(cause.length).toBeLessThan(MAX_TOOL_ERROR_CHARS);
+  });
+
+  it('keeps the datetime hint for an actual datetime validation failure', async () => {
+    let handled = false;
+    const handler: ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext> = {
+      name: 'query_calendar',
+      description: 'test',
+      schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'),
+      autonomy_gated: false,
+      async handle() {
+        handled = true;
+        return { ok: true, data: { events: [] }, source_taint: null };
+      },
+    };
+
+    const result = await dispatchTool(
+      { id: 'call-bad-date', name: 'query_calendar', args: { date_range: { from: 'tomorrow morning', to: '2026-09-27T10:00:00+05:30' } } },
+      dispatcherContext('brief'),
+      { handlers: [handler], extraHooks: [] },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('invalid_args');
+    expect(result.error).toContain('datetimes need ISO 8601 with seconds and a UTC offset');
     expect(handled).toBe(false);
   });
 
@@ -1130,7 +1266,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-code',
       tool: 'execute_code',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -1208,7 +1344,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-error',
       tool: 'get_crs',
-      error: 'tool returned oversized error',
+      ...shaped('transient', `${'x'.repeat(MAX_TOOL_ERROR_CHARS)}\n[cut: ${20_000 - MAX_TOOL_ERROR_CHARS} more characters]`),
       code: 'transient',
       reason: 'tool_result_error',
     });

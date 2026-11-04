@@ -2,16 +2,16 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { ensureSchema } from '../src/tracer/schema';
-import type { TracerDO } from '../src/tracer/tracer-do';
+import type { TestStorageDO } from './support/worker-entry';
 
 let seq = 0;
-function freshStub(): DurableObjectStub<TracerDO> {
+function freshStub(): DurableObjectStub<TestStorageDO> {
   seq += 1;
-  const id = env.TRACER_DO.idFromName(`schema-migration-${seq}`);
-  return env.TRACER_DO.get(id);
+  const id = env.TEST_STORAGE_DO.idFromName(`schema-migration-${seq}`);
+  return env.TEST_STORAGE_DO.get(id);
 }
 
-describe('TracerDO schema migrations', () => {
+describe('owner substrate schema migrations', () => {
   it('upgrades legacy budget and class-state tables without dropping counters', async () => {
     const stub = freshStub();
 

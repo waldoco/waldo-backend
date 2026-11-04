@@ -1,5 +1,82 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, literalTextIndex, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
+
+describe('forget matches whole words', () => {
+  const forget = (topics: readonly string[], text: string) => literalTextRedactor(topics, '[forgotten]')(text);
+  it('leaves words that only contain the topic alone', () => {
+    expect(forget(['tea'], 'residency banglore team. Steady the rest instead, at the steam room')).toBe('residency banglore team. Steady the rest instead, at the steam room');
+    expect(forget(['tea'], 'teapot and teas')).toBe('teapot and teas');
+  });
+  it('keeps the substring match where a word boundary cannot be read: scripts without spaces and suffixed Indic words', () => {
+    expect(forget(['北京市'], '我住在北京市朝阳区')).toBe('我住在[forgotten]朝阳区');
+    expect(forget(['新宿駅'], '明日新宿駅で会う')).toBe('明日[forgotten]で会う');
+    expect(forget(['부산역'], '부산역에서 만나요')).toBe('[forgotten]에서 만나요');
+    expect(forget(['กรุงเทพ'], 'ฉันอยู่กรุงเทพมาสามปี')).toBe('ฉันอยู่[forgotten]มาสามปี');
+    expect(forget(['मुंबई'], 'मुंबईत भेटू')).toBe('[forgotten]त भेटू');
+    expect(forget(['दिल्ली'], 'उद्या दिल्लीला जाणार')).toBe('उद्या [forgotten]ला जाणार');
+    expect(forget(['சென்னை'], 'நாளை சென்னையில் சந்திப்போம்')).toBe('நாளை [forgotten]யில் சந்திப்போம்');
+  });
+  it('a digit or symbol at the edge matches as before: numbers inside numbers, a name before digits', () => {
+    expect(forget(['9876543210'], 'Call +919876543210 today')).toBe('Call +91[forgotten] today');
+    expect(forget(['sarah'], 'login sarah2024')).toBe('login [forgotten]2024');
+    expect(forget(['C++'], 'written in C++17')).toBe('written in [forgotten]17');
+    expect(forget(['2026'], 'DLD-20261002 and 12026')).toBe('DLD-[forgotten]1002 and 1[forgotten]');
+    expect(forget(['22'], '2222')).toBe('[forgotten][forgotten]');
+  });
+  it('the boundary holds in Latin, Greek and Cyrillic words, and a combining mark continues the letter before it', () => {
+    expect(forget(['чай'], 'чайник и чай')).toBe('чайник и [forgotten]');
+    expect(forget(['cafe'], 'cafe\u0301 and cafe')).toBe('cafe\u0301 and [forgotten]');
+    expect(forget(['tea'], 'e\u0301tea, tea')).toBe('e\u0301tea, [forgotten]');
+    expect(forget(['cafe\u0301'], 'cafe\u0301s and cafe\u0301')).toBe('cafe\u0301s and [forgotten]');
+  });
+  it('a candidate the boundary rejects never hides an overlapping one that passes', () => {
+    expect(forget(['x-x'], 'ax-x-x')).toBe('ax-[forgotten]');
+  });
+  it('still removes the topic in any case, next to punctuation, and as a phrase', () => {
+    expect(forget(['tea'], "Tea, tea's (tea) TEA tea.")).toBe("[forgotten], [forgotten]'s ([forgotten]) [forgotten] [forgotten].");
+    expect(forget(['green tea'], 'Green Tea at four, green teapot at five')).toBe('[forgotten] at four, green teapot at five');
+    expect(forget(['sam'], 'mail sam@example.com or @sam')).toBe('mail [forgotten]@example.com or @[forgotten]');
+  });
+  it('folds non-ASCII case and never matches into a combining mark', () => {
+    expect(forget(['Café Zürich'], 'Lunch at CAFÉ ZÜRICH, not Café Zürichsee')).toBe('Lunch at [forgotten], not Café Zürichsee');
+    expect(forget(['οδος'], 'ΟΔΟΣ 5')).toBe('[forgotten] 5');
+    expect(forget(['kite'], `${String.fromCharCode(0x212a)}ite repair`)).toBe('[forgotten] repair');
+    const dottedI = String.fromCharCode(0x130), iDot = `i${String.fromCharCode(0x307)}`;
+    expect(forget([`A${dottedI}B`], `A${iDot}B and I${String.fromCharCode(0x307)}`)).toBe('[forgotten] and I' + String.fromCharCode(0x307));
+    expect(forget([`a${iDot}b`], `A${dottedI}B, aib`)).toBe('[forgotten], aib');
+    expect(forget(['cafe'], 'café and cafe')).toBe('café and [forgotten]');
+  });
+  it('reads raw JSON escapes: an escape ends a word, and a match never starts inside one', () => {
+    expect(forget(['tea'], String.raw`{"t":"x\ntea y","u":"\u0020Tea"}`)).toBe(String.raw`{"t":"x\n[forgotten] y","u":"\u0020[forgotten]"}`);
+    expect(forget(['tea'], String.raw`{"t":"\tea for two"}`)).toBe(String.raw`{"t":"\tea for two"}`);
+    expect(forget(['tea'], String.raw`{"t":"\\tea"}`)).toBe(String.raw`{"t":"\\[forgotten]"}`);
+    expect(forget(['tea'], String.raw`{"t":"\\\tea"}`)).toBe(String.raw`{"t":"\\\tea"}`);
+  });
+  it('in prose a backslash is a character: only raw JSON keeps an escape whole', () => {
+    expect(forget(['Sarah'], String.raw`C:\Users\Sarah\docs`)).toBe(String.raw`C:\Users\[forgotten]\docs`);
+    expect(forget(['tom'], String.raw`saved to C:\Users\tom\Docs`)).toBe(String.raw`saved to C:\Users\[forgotten]\Docs`);
+    expect(forget(['tea'], String.raw`C:\Tea and C:\Users\Nina\tea`)).toBe(String.raw`C:\[forgotten] and C:\Users\Nina\[forgotten]`);
+    expect(forget(['tom'], String.raw`"Quote" from C:\Users\tom`)).toBe(String.raw`"Quote" from C:\Users\[forgotten]`);
+    expect(forget(['tea'], String.raw`C:\Ntea`)).toBe(String.raw`C:\Ntea`);
+    expect(forget(['tom'], String.raw`{"p":"x\tom"}`)).toBe(String.raw`{"p":"x\tom"}`);
+    // A quoted span is how claim evidence is stored: text in quotes, not a JSON document.
+    expect(forget(['budget'], String.raw`"it is at D:\budget.xlsx"`)).toBe(String.raw`"it is at D:\[forgotten].xlsx"`);
+    expect(forget(['tea'], String.raw`"notes in C:\tea"`)).toBe(String.raw`"notes in C:\[forgotten]"`);
+    expect(forget(['tom'], String.raw`{"p":"C:\\Users\\tom"}`)).toBe(String.raw`{"p":"C:\\Users\\[forgotten]"}`);
+  });
+  it('finds by the same rule the redactor rewrites by, with an open end for a cut prefix', () => {
+    expect(literalTextIndex('a team', 'tea')).toBe(-1);
+    expect(literalTextIndex('a TEA.', 'tea')).toBe(2);
+    expect(literalTextIndex('a teapot', 'tea', true)).toBe(2);
+    expect(literalTextIndex('a steapot', 'tea', true)).toBe(-1);
+    expect(literalTextIndex('ax-x-x', 'x-x')).toBe(3);
+  });
+  it('redacts JSON values and keys by whole word too', () => {
+    const redact = literalJsonTextRedactor(['tea'], '[forgotten]');
+    expect(JSON.parse(redact(JSON.stringify({ team: 'tea time', note: 'steady' })))).toEqual({ team: '[forgotten] time', note: 'steady' });
+    expect(redact('{"team":"tea time"...')).toBe('{"team":"[forgotten] time"...');
+  });
+});
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,
@@ -8,13 +85,38 @@ const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry =>
 });
 
 describe('ConversationTree', () => {
+  it('redacts longest exact clauses before their shorter markers independent of custody order', () => {
+    const topic = 'DLD-20261002-M3';
+    const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
+    for (const targets of [[topic, fact], [fact, topic]]) {
+      expect(literalTextRedactor(targets, '[forgotten]')(`${fact}. Unrelated: tea after lunch.`)).toBe('[forgotten]. Unrelated: tea after lunch.');
+    }
+  });
   it('builds context from the active leaf ancestry instead of siblings', () => {
     const tree = new ConversationTree();
     tree.append(entry());
     tree.append(entry({ id: 'main', parentId: 'root', modelPayload: 'main', appPayload: 'main' }));
     tree.append(entry({ id: 'branch', parentId: 'root', threadAnchorId: 'root', modelPayload: 'branch', appPayload: 'branch' }));
-    expect(tree.modelContext('branch')).toEqual(['model:root', 'branch']);
+    expect(tree.modelContext('branch')).toEqual([{ role: 'user', content: 'model:root' }, { role: 'user', content: 'branch' }]);
     expect(tree.appContext('main')).toEqual(['app:root', 'main']);
+  });
+
+  it('preserves typed user/assistant turns, derives legacy roles, and keeps roles through omit/replace projections', () => {
+    const tree = new ConversationTree();
+    tree.append(entry({ id: 'u1', role: 'user' }));
+    tree.append(entry({ id: 'u1-reply', parentId: 'u1', role: 'assistant', modelPayload: 'waldo answer' }));
+    tree.append(entry({ id: 'u2', parentId: 'u1-reply', role: 'user', modelPayload: 'next question' }));
+    // legacy row without a stamped role: the -reply id convention marks the assistant turn
+    tree.append(entry({ id: 'u2-reply', parentId: 'u2', modelPayload: 'legacy answer' }));
+    tree.append(entry({ id: 'u3', parentId: 'u2-reply', role: 'user', modelPayload: 'hidden note', modelProjection: { mode: 'omit' } }));
+    tree.append(entry({ id: 'u4', parentId: 'u3', role: 'user', modelPayload: 'raw secret', modelProjection: { mode: 'replace', payload: 'summarised' } }));
+    expect(tree.modelContext('u4')).toEqual([
+      { role: 'user', content: 'model:root' },
+      { role: 'assistant', content: 'waldo answer' },
+      { role: 'user', content: 'next question' },
+      { role: 'assistant', content: 'legacy answer' },
+      { role: 'user', content: 'summarised' },
+    ]);
   });
 
   it('keeps model and app payload projections separate', () => {
@@ -22,7 +124,7 @@ describe('ConversationTree', () => {
     tree.append(entry());
     tree.append(entry({ id: 'hidden', parentId: 'root', modelPayload: 'secret', appPayload: 'visible', modelProjection: { mode: 'omit' } }));
     tree.append(entry({ id: 'replaced', parentId: 'hidden', modelPayload: 'raw', appPayload: 'raw-visible', modelProjection: { mode: 'replace', payload: 'summary' } }));
-    expect(tree.modelContext('replaced')).toEqual(['model:root', 'summary']);
+    expect(tree.modelContext('replaced')).toEqual([{ role: 'user', content: 'model:root' }, { role: 'user', content: 'summary' }]);
     expect(tree.appContext('replaced')).toEqual(['app:root', 'visible', 'raw-visible']);
   });
 
@@ -50,5 +152,70 @@ describe('ConversationTree', () => {
     (source as { modelPayload: string }).modelPayload = 'mutated';
     expect(tree.get('root')?.modelPayload).toBe('model:root');
     expect(Object.isFrozen(tree.get('root'))).toBe(true);
+  });
+  it('redacts every retained payload and replacement projection while preserving topology and frozen roles', () => {
+    const tree = new ConversationTree();
+    const needle = 'Synthetic [blue] "note" $&';
+    tree.append(entry({ modelPayload: needle, appPayload: needle.toUpperCase(), role: 'user' }));
+    tree.append(entry({ id: 'leaf', parentId: 'root', threadAnchorId: 'root', role: 'assistant', modelPayload: 'unrelated', appPayload: 'unrelated', modelProjection: { mode: 'replace', payload: `${needle}; unrelated` } }));
+    tree.redact([needle], '[forgotten]');
+    expect(tree.modelContext('leaf')).toEqual([{ role: 'user', content: '[forgotten]' }, { role: 'assistant', content: '[forgotten]; unrelated' }]);
+    expect(tree.appContext('leaf')).toEqual(['[forgotten]', 'unrelated']);
+    expect(tree.get('leaf')).toMatchObject({ id: 'leaf', parentId: 'root', threadAnchorId: 'root', role: 'assistant' });
+    expect(Object.isFrozen(tree.get('leaf'))).toBe(true);
+    expect(Object.isFrozen(tree.get('leaf')!.modelProjection)).toBe(true);
+  });
+
+  it('redacts escaped JSON string values and capped/budget-suffixed copies with literal metacharacters', () => {
+    const needle = 'Synthetic "blue" [origami]';
+    const redact = literalJsonTextRedactor([needle], '[forgotten]');
+    const body = JSON.stringify({ data: { text: needle, unrelated: 'amber' } });
+    expect(JSON.parse(redact(body))).toEqual({ data: { text: '[forgotten]', unrelated: 'amber' } });
+    expect(JSON.parse(redact(JSON.stringify({ [needle]: 'unrelated' })))).toEqual({ '[forgotten]': 'unrelated' });
+    expect(redact(body + '\n[budget: fixture]')).toBe(JSON.stringify({ data: { text: '[forgotten]', unrelated: 'amber' } }) + '\n[budget: fixture]');
+    expect(redact(body.slice(0, -1) + '...')).not.toContain(JSON.stringify(needle).slice(1, -1));
+  });
+
+  it('preserves argument keys and typed result authority, failing closed on protected-key collisions', () => {
+    const argument = literalJsonTextRedactor(['id'], '[forgotten]', 'arguments');
+    expect(() => argument(JSON.stringify({ id: 'unrelated' }))).toThrow('cannot be safely sanitised');
+    const result = literalJsonTextRedactor(['source_taint'], '[forgotten]', 'tool_result');
+    expect(() => result(JSON.stringify({ ok: true, data: 'unrelated', source_taint: 'external' }))).toThrow('cannot be safely sanitised');
+    const data = literalJsonTextRedactor(['private fixture'], '[forgotten]', 'tool_result');
+    expect(JSON.parse(data(JSON.stringify({ ok: true, data: { 'private fixture': 'unrelated' }, source_taint: 'external' })))).toEqual({ ok: true, data: { '[forgotten]': 'unrelated' }, source_taint: 'external' });
+    expect(() => literalJsonTextRedactor(['private fixture'], '[forgotten]')(JSON.stringify({ 'private fixture': 'a', '[forgotten]': 'b' }))).toThrow('cannot be safely sanitised');
+    expect(() => data('{"ok":true,"data":{"text":"private fixture"}...')).toThrow('cannot be safely sanitised');
+    expect(data('Plain private fixture summary')).toBe('Plain [forgotten] summary');
+  });
+
+});
+
+it('preserves exact tool argument bytes when no forget target exists', () => {
+  const original = '{\n  "path": "notes/fixture.txt", "text": "\\u0939"\n}';
+  for (const texts of [[], ['   ']]) {
+    expect(literalJsonTextRedactor(texts, '[forgotten]', 'arguments')(original)).toBe(original);
+  }
+});
+
+it('does not retain overwritten forgotten JSON members during active forgetting', () => {
+  const raw = '{"text":"synthetic forgotten","text":"safe"}';
+  expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'arguments')(raw)).toBe('{"text":"safe"}');
+  const result = '{"ok":true,"data":' + raw + '}';
+  expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'tool_result')(result)).not.toContain('synthetic forgotten');
+});
+
+describe('redactConversationEntry', () => {
+  it('redacts a stored receipt\'s line and targets with the same literal redactor as the text', () => {
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'ok',
+      appPayload: 'ok\n\nDone: workspace file written divorce-plan.md', modelProjection: { mode: 'include' }, role: 'assistant',
+      receipt: { line: 'Done: workspace file written divorce-plan.md', more: 0, items: [
+        { kind: 'workspace_file_written', target: 'divorce-plan.md', outcome: 'accepted', via_task: false, at: 1_790_000_000_000, digest: null },
+        { kind: 'reminder_set', target: null, outcome: 'accepted', via_task: false, at: 1_790_000_000_000, digest: null },
+      ] } };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toContain('divorce');
+    expect(redacted.receipt).toEqual({ ...entry.receipt, line: 'Done: workspace file written [forgotten]-plan.md',
+      items: [{ ...entry.receipt!.items[0]!, target: '[forgotten]-plan.md' }, entry.receipt!.items[1]] });
+    expect(redactConversationEntry({ ...entry, receipt: undefined }, value => value)).not.toHaveProperty('receipt', expect.anything());
   });
 });

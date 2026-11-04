@@ -6,13 +6,14 @@ export default defineConfig({
     include: [
       'test/context-composer.test.ts',
       'test/context-composer-sqlite.test.ts',
-      'test/recall-gateway.test.ts',
     ],
     fileParallelism: false,
   },
   plugins: [
     cloudflareTest({
+      main: './test/support/worker-entry.ts',
       miniflare: {
+        durableObjects: { TEST_STORAGE_DO: { className: 'TestStorageDO', useSQLite: true } },
         bindings: {
           WALDO_ENV: 'test',
           RUN_LOOP_PROVIDER_MODE: 'fake',

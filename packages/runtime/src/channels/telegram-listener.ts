@@ -1,34 +1,65 @@
+import {plainChatText, telegramRichReply} from './rich-format';
+import { sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
+import { redactSecretUrls } from './egress-guard';
+import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
+import type { RunEffectScope } from './run-effect-scope';
+import { createReplyStream, type ReplyDraftSurface, type ReplyStream, type StreamOutcome } from '../conversation/reply-stream';
+
+
+export const TURN_TIMEOUT_MS = 150_000;
+// Reactions are best-effort UX; one hung call must never gate the turn that follows it.
+import { turnFailureCode } from './turn-failure-code';
+
+export const REACTION_TIMEOUT_MS = 5_000;
+
+class TurnTimeout extends Error {
+  constructor(ms: number) { super(`turn timed out after ${ms} ms`); }
+}
 
 export type TelegramOwnerApi = Readonly<{
   setMessageReaction(request: Readonly<{ chat_id: number; message_id: number; reaction: readonly Readonly<{ type: 'emoji'; emoji: string }>[] }>): Promise<unknown>;
   sendChatAction(request: Readonly<{ chat_id: number; action: 'typing' }>): Promise<unknown>;
-  sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
+  sendMessage(request: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>): Promise<unknown>;
 }>;
 
-export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string }>;
-export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;
+export type { TurnLogEntry, TurnText, TurnTimer } from './owner-turn-types';
+import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
+  surface?: 'telegram' | 'whatsapp' | 'app' | 'imessage';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
+  queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
+  // True where the queued reply's outbox settles no hop, so the turn's trace closes once the reply is queued.
+  closesTraceOnQueue?: boolean;
+  clearTurnReceipts?(trace: string): void;
+  // Sends the files the turn queued, after its reply is out. Only for surfaces whose reply is a direct send.
+  deliverAttachments?(trace: string, runScope?: RunEffectScope): Promise<void>;
+  // Surface fields on the reply (WhatsApp: the message it quotes, and the mark that it is the turn's own reply). Only for
+  // surfaces whose reply is a direct send.
+  replyFields?(turn: TelegramInboundTurn): Readonly<Pick<TelegramFinalPayload, 'quote_message_id' | 'turn_reply'>>;
+  // Sends the reaction the turn chose, after its reply and files. Best effort: a failed reaction never fails the turn.
+  deliverReaction?(turn: TelegramInboundTurn): Promise<void>;
+  // Where this turn's reply is shown while it is written. Absent (the default), the reply arrives whole.
+  streamReply?(turn: TelegramInboundTurn): ReplyDraftSurface | undefined;
+  turnTimeoutMs?: number;
+  reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
   saveOffset(offset: number): Promise<void>;
   log?(entry: TurnLogEntry): void;
   now?(): number;
-  progressAfterMs?: number;
   typingEveryMs?: number;
   ackEmoji?: string;
   doneEmoji?: string;
   failedEmoji?: string;
-  progressText?: string;
   failureText?: string;
   unsupportedText?: string;
 }>;
 
-export type TelegramTurnOutcome = 'answered' | 'failed' | 'ignored' | 'unsupported';
+export type TelegramTurnOutcome = 'queued' | 'answered' | 'failed' | 'ignored' | 'unsupported';
 
 export class TelegramOwnerListener {
   constructor(private readonly options: TelegramOwnerListenerOptions) {
@@ -37,11 +68,11 @@ export class TelegramOwnerListener {
     }
   }
 
-  async pollOnce(adapter: TelegramPollingAdapter, timeout = 25): Promise<readonly TelegramTurnOutcome[]> {
+  async pollOnce(adapter: TelegramPollingAdapter, timeout = 25, runScope?: RunEffectScope): Promise<readonly TelegramTurnOutcome[]> {
     const polled = await adapter.poll(timeout);
     const outcomes: TelegramTurnOutcome[] = [];
-    for (const turn of polled.accepted) outcomes.push(await this.handle(turn));
-    for (const turn of polled.unsupported) outcomes.push(await this.handleUnsupported(turn));
+    for (const turn of polled.accepted) outcomes.push(await this.handle(runScope ? { ...turn, runScope } : turn));
+    for (const turn of polled.unsupported) { runScope?.admit(); outcomes.push(await this.handleUnsupported(turn)); }
     await this.options.saveOffset(polled.nextOffset);
     return outcomes;
   }
@@ -51,7 +82,8 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const chat_id = turn.chatId;
-    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can only read plain text messages here for now - forwards, media and some formatting do not come through yet.' }).catch(() => undefined);
+    this.options.log?.({ trace: ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId), hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
+    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos, documents and voice notes here. Videos, stickers and some formatting do not come through yet.' }).catch(() => undefined);
     if (turn.messageId !== null) {
       await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
     }
@@ -61,11 +93,16 @@ export class TelegramOwnerListener {
   async handle(turn: TelegramInboundTurn): Promise<TelegramTurnOutcome> {
     const owner = this.options.ownerTelegramId;
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
-    const { api } = this.options;
+    const originalApi = this.options.api;
+    const api: TelegramOwnerApi = turn.runScope ? {
+      sendMessage: payload => { turn.runScope!.admit(); return originalApi.sendMessage(payload); },
+      setMessageReaction: payload => { turn.runScope!.admit(); return originalApi.setMessageReaction(payload); },
+      sendChatAction: payload => { turn.runScope!.admit(); return originalApi.sendChatAction(payload); },
+    } : originalApi;
     const now = this.options.now ?? Date.now;
-    const trace = `tg-${turn.updateId}`;
-    const log = (hop: string, ms: number, ok: boolean, error?: string) =>
-      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error });
+    const trace = ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId);
+    const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
+      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
     const time: TurnTimer = async (hop, work) => {
       const start = now();
       try {
@@ -73,7 +110,9 @@ export class TelegramOwnerListener {
         log(hop, now() - start, true);
         return value;
       } catch (error) {
-        log(hop, now() - start, false, error instanceof Error ? error.message : String(error));
+        // The typed code is what survives capture-off: the privacy gate drops error text but
+        // keeps `code`, so a failed hop stays diagnosable without free-form content.
+        log(hop, now() - start, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
         throw error;
       }
     };
@@ -82,35 +121,94 @@ export class TelegramOwnerListener {
     const chat_id = turn.chatId;
     const ack = this.options.ackEmoji ?? '👀';
     const message_id = turn.messageId;
-    const react = (hop: string, emoji: string) => message_id === null
-      ? Promise.resolve()
-      : time(hop, () => api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })).then(() => undefined, () => undefined);
+    const react = (hop: string, emoji: string): Promise<void> => {
+      if (message_id === null) return Promise.resolve();
+      const limit = this.options.reactionTimeoutMs ?? REACTION_TIMEOUT_MS;
+      const t0 = now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // One span per reaction: whichever of success, failure, or the timeout lands first wins,
+      // so a hung reaction does not log a second misleading span when the API abort fires later.
+      let settled = false;
+      const done = (ok: boolean, error?: string) => {
+        if (settled) return;
+        settled = true;
+        log(hop, Math.max(0, now() - t0), ok, error);
+      };
+      const bounded = new Promise<void>((resolve) => {
+        timer = setTimeout(() => { done(false, 'telegram reaction timed out'); resolve(undefined); }, limit);
+      });
+      const attempt = api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })
+        .then(() => done(true), (error) => done(false, error instanceof Error ? error.message : String(error)));
+      return Promise.race([attempt, bounded]).finally(() => clearTimeout(timer));
+    };
     await react('receipt', ack);
+    let readyChoice: string | null = null;
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
-      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null);
-    const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
+      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null).then(value => { readyChoice = value; return value; });
+    const typing = async () => { try { await api.sendChatAction({ chat_id, action: 'typing' }); } catch { /* bounded UX only */ } };
     await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
-    const progressTimer = setTimeout(() => {
-      void time('progress', () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
-    }, this.options.progressAfterMs ?? 8_000);
+    const clearRunTimers = () => { clearInterval(typingTimer); };
+    turn.runScope?.signal.addEventListener('abort', clearRunTimers, { once: true });
+    const draft = this.options.streamReply?.(turn);
+    const stream: ReplyStream | undefined = draft ? createReplyStream(draft) : undefined;
+    // Drafts stop before the reply goes, so none can show after it; the outcome is content-free.
+    let settled = false;
+    const settle = async (delivered: string | null) => {
+      if (!stream || settled) return;
+      settled = true;
+      const outcome: StreamOutcome = await stream.settle(delivered);
+      this.options.log?.({ trace, hop: 'reply_stream', ms: outcome.firstShownMs ?? 0, ok: outcome.outcome !== 'diverged', code: outcome.outcome,
+        detail: `released=${outcome.released} updates=${outcome.updates} withdrawals=${outcome.withdrawals}${outcome.stopped ? ` stopped=${outcome.stopped}` : ''}` });
+    };
     try {
-      const text = (await time('respond', () => this.options.respond(turn, time))).trim();
+      const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
+      const text = (await time('respond', () => Promise.race([this.options.respond(stream ? { ...turn, replyStream: stream } : turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
-      clearTimeout(progressTimer);
-      await time('send', () => api.sendMessage({ chat_id, text }));
+      // The responder has already applied current-turn artifact receipt admission.
+      // Rich formatting is confined to this final reply, never progress/events/errors.
+      const guardedText = redactSecretUrls(text).text;
+      await settle(guardedText);
+      // WhatsApp and iMessage render plain text; Telegram HTML would arrive escaped.
+      const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: plainChatText(guardedText)} : telegramRichReply(guardedText);
+      if (this.options.queueFinal) {
+        const chosen = telegramReaction(readyChoice);
+        const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
+        await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
+        this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        if (this.options.closesTraceOnQueue) this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, detail: 'reply_frozen', text: { input: turn.text, output: text } });
+        return 'queued';
+      }
+      // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
+      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich), ...this.options.replyFields?.(turn) }));
+      if (delivered === undefined) throw new Error('telegram send blocked');
+      if (this.options.deliverAttachments) await time('attachments', () => this.options.deliverAttachments!(trace, turn.runScope));
+      if (this.options.deliverReaction) await time('reaction', () => this.options.deliverReaction!(turn)).catch(() => undefined);
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
-      log('turn', now() - started, true);
+      this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
       return 'answered';
     } catch (error) {
-      clearTimeout(progressTimer);
-      await api.sendMessage({ chat_id, text: this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.' }).catch(() => undefined);
+      await settle(null);
+      const failure = error instanceof TurnTimeout
+        ? 'That took too long, and anything I had started may still finish. Try again, or split it into smaller asks.'
+        : this.options.failureText ?? 'I hit a problem answering that. Try again in a moment.';
+      // WhatsApp's outer admission owns the fixed check-first notice. Do not
+      // turn an uncertain post-effect send into retry wording or a second send.
+      if (turn.runScope || this.options.surface === 'whatsapp') {
+        log('turn',now()-started,false,error instanceof Error?error.message:String(error),turnFailureCode(error));
+        throw error;
+      }
+      await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
-      log('turn', now() - started, false, error instanceof Error ? error.message : String(error));
+      log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
+      turn.runScope?.signal.removeEventListener('abort', clearRunTimers);
+      this.options.clearTurnReceipts?.(trace);
       clearInterval(typingTimer);
     }
   }

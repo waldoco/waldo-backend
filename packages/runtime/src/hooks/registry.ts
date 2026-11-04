@@ -1,4 +1,5 @@
 import type {
+  BrowserTaskCommand,
   CanaryTokens,
   ErrorCode,
   HookEvent,
@@ -11,58 +12,120 @@ import type {
   SanitiseResult,
   SessionState,
   SourceTaint,
+  ToolError,
   ToolName,
   TriggerType,
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
   PRIVILEGED_ACTION_TOOLS,
   buildSessionState,
   callMcpToolArgsSchema,
+  searchMcpToolsArgsSchema,
   canaryTokensSchema,
   createThreadArgsSchema,
   deleteMessageArgsSchema,
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
+  sendEmailArgsSchema,
+  sendAgentMailArgsSchema,
   executeActionArgsSchema,
   executeCodeArgsSchema,
+  createArtifactArgsSchema,
   getCommunicationArgsSchema,
+  readThreadArgsSchema,
+  searchCommunicationArgsSchema,
+  searchContactsArgsSchema,
+  listArtifactsArgsSchema,
+  readArtifactArgsSchema,
+  skillsListArgsSchema, skillsVersionArgsSchema,
+  workspaceListArgsSchema,
+  workspaceReadArgsSchema,
+  workspaceSearchArgsSchema,
+  workspaceWriteArgsSchema,
+  workspaceRenderArgsSchema,
+  reviseArtifactArgsSchema, exportArtifactArgsSchema,
   getContextArgsSchema,
+  queryAvailabilityArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
+  readDriveArgsSchema,
   hookEventSchema,
   hookPayloadSchema,
   hookResultSchema,
   proposeActionArgsSchema,
   proposeScheduleArgsSchema,
+  connectServiceArgsSchema,
+  sendConsoleLinkArgsSchema,
+  connectAppArgsSchema,
+  sendProgressNoteArgsSchema,
+  reactToMessageArgsSchema,
+  attachFileArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
+  readToolOutputArgsSchema,
   readMemoryArgsSchema,
   restoreMessageArgsSchema,
   sanitiseInputSchema,
   sanitiseResultSchema,
   searchEpisodesArgsSchema,
+  searchHistoryArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
+  useMacArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema,
+  browsePageArgsSchema,
+  cancelReminderArgsSchema,
+  cancelStandingOrderArgsSchema,
+  closeLoopArgsSchema,
+  raiseApprovalArgsSchema,
+  approveShownArgsSchema,
+  closeResponsibilityArgsSchema,
+  listResponsibilitiesArgsSchema,
+  trackResponsibilityArgsSchema,
+  updateTodoArgsSchema,
+  listHealthLogsArgsSchema,
+  setSleepNeedArgsSchema,
+  trackMedicationArgsSchema,
+  logMedicationArgsSchema,
+  listMedicationsArgsSchema,
+  stopMedicationArgsSchema,
+  listRemindersArgsSchema,
+  listStandingOrdersArgsSchema,
+  logMealArgsSchema,
+  logWorkoutArgsSchema,
+  openLoopArgsSchema,
+  proposeCalendarChangeArgsSchema,
+  proposeGoogleTaskChangeArgsSchema,
+  setProactivityArgsSchema,
+  setSchedulePreferenceArgsSchema,
+  setReminderArgsSchema,
+  setStandingOrderArgsSchema,
   sessionStateSchema,
   sessionToolAllowed,
   sourceTaintSchema,
+  isExternalSourceTaint,
   taintGateBlocksDirectExecution,
   toolNameSchema,
   triggerTypeSchema,
-  updateMemoryArgsSchema,
+  rememberArgsSchema,
+  forgetMemoryArgsSchema,
   updateTaskArgsSchema,
   updateThreadTopicsArgsSchema,
   webSearchArgsSchema,
   writeSheetCellArgsSchema,
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
+  recordOwnerFindingArgsSchema,
+  listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
-import { EGRESS_TARGET_PATHS, evaluateDeclaredEgress } from './egress-policy';
+import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
+import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
 
@@ -96,9 +159,21 @@ export type HookRuntimeContext = {
   }) => MaybePromise<boolean>;
   sourceTaint: SourceTaint;
   toolArgSourceTaint: SourceTaint;
+  // An owner-approved tainted action (the propose_action card): the dispatcher verifies the call's tool and argument
+  // digest against it before any hook runs, so the autonomy gate may admit exactly that call despite the taint.
+  approvedTaintedAction?: Readonly<{ tool: ToolName; args_digest: string }>;
+  // Set by the dispatcher for one call whose handler declares proposal_only: the call only raises the owner's card.
+  proposalOnlyCall?: ToolName;
+  // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
+  loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
-  medicalGate?: (text: string) => MaybePromise<HookDecision>;
+  // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
+  // provider verifies a stored-output id here before any receipt may promise read_tool_output.
+  // Structural shape avoids a hooks->conversation import; inMemoryToolOutputStore satisfies it.
+  toolOutputStore?: Readonly<{
+    stat(id: string): Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean; call_id?: string }> | null;
+  }>;
 };
 
 const ok = (): HookResult => ({ ok: true });
@@ -111,26 +186,59 @@ const halt = (reason: string, code: ErrorCode): HookResult => ({
 });
 
 export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
+  use_mac: useMacArgsSchema,
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
+  connect_service: connectServiceArgsSchema,
+  send_console_link: sendConsoleLinkArgsSchema,
+  connect_app: connectAppArgsSchema,
+  send_progress_note: sendProgressNoteArgsSchema,
+  attach_file: attachFileArgsSchema,
+  react_to_message: reactToMessageArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
+  search_communication: searchCommunicationArgsSchema,
+  search_contacts: searchContactsArgsSchema,
+  read_thread: readThreadArgsSchema,
+  create_artifact: createArtifactArgsSchema,
+  revise_artifact: reviseArtifactArgsSchema,
+  export_artifact: exportArtifactArgsSchema,
+  list_artifacts: listArtifactsArgsSchema,
+  read_artifact: readArtifactArgsSchema,
+  skills_list: skillsListArgsSchema,
+  skills_install: skillsVersionArgsSchema,
+  skills_disable: skillsVersionArgsSchema,
+  skills_load: skillsVersionArgsSchema,
+  workspace_list: workspaceListArgsSchema,
+  workspace_read: workspaceReadArgsSchema,
+  workspace_search: workspaceSearchArgsSchema,
+  workspace_write: workspaceWriteArgsSchema,
+  workspace_render: workspaceRenderArgsSchema,
   get_tasks: getTasksArgsSchema,
   get_master_metrics: getMasterMetricsArgsSchema,
   get_context: getContextArgsSchema,
+  query_availability: queryAvailabilityArgsSchema,
   read_memory: readMemoryArgsSchema,
-  update_memory: updateMemoryArgsSchema,
+  remember: rememberArgsSchema,
+  forget_memory: forgetMemoryArgsSchema,
   search_episodes: searchEpisodesArgsSchema,
+  search_history: searchHistoryArgsSchema,
   propose_action: proposeActionArgsSchema,
   execute_action: executeActionArgsSchema,
   send_message: sendMessageArgsSchema,
   web_search: webSearchArgsSchema,
   read_document: readDocumentArgsSchema,
+  read_tool_output: readToolOutputArgsSchema,
   call_mcp_tool: callMcpToolArgsSchema,
+  read_mcp_tool: callMcpToolArgsSchema,
+  search_mcp_tools: searchMcpToolsArgsSchema,
+  read_drive: readDriveArgsSchema,
   write_task: writeTaskArgsSchema,
   update_task: updateTaskArgsSchema,
   draft_document: draftDocumentArgsSchema,
   draft_email: draftEmailArgsSchema,
+  send_email: sendEmailArgsSchema,
+  send_agent_mail: sendAgentMailArgsSchema,
   propose_schedule: proposeScheduleArgsSchema,
   write_sheet_cell: writeSheetCellArgsSchema,
   execute_code: executeCodeArgsSchema,
@@ -140,6 +248,41 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   archive_thread: archiveThreadArgsSchema,
   update_thread_topics: updateThreadTopicsArgsSchema,
   search_tools: searchToolsArgsSchema,
+  // Chat tools shipped without these entries died at tool_arg_zod_validate ("tool args schema
+  // unavailable") on every dispatch - silent live breakage the L1 scenario harness caught.
+  set_reminder: setReminderArgsSchema,
+  list_reminders: listRemindersArgsSchema,
+  cancel_reminder: cancelReminderArgsSchema,
+  log_meal: logMealArgsSchema,
+  log_workout: logWorkoutArgsSchema,
+  list_health_logs: listHealthLogsArgsSchema,
+  set_sleep_need: setSleepNeedArgsSchema,
+  track_medication: trackMedicationArgsSchema,
+  log_medication: logMedicationArgsSchema,
+  list_medications: listMedicationsArgsSchema,
+  stop_medication: stopMedicationArgsSchema,
+  set_standing_order: setStandingOrderArgsSchema,
+  list_standing_orders: listStandingOrdersArgsSchema,
+  cancel_standing_order: cancelStandingOrderArgsSchema,
+  propose_calendar_change: proposeCalendarChangeArgsSchema,
+  propose_google_task_change: proposeGoogleTaskChangeArgsSchema,
+  open_loop: openLoopArgsSchema,
+  close_loop: closeLoopArgsSchema,
+  raise_approval: raiseApprovalArgsSchema,
+  approve_shown: approveShownArgsSchema,
+  track_responsibility: trackResponsibilityArgsSchema,
+  update_todo: updateTodoArgsSchema,
+  list_responsibilities: listResponsibilitiesArgsSchema,
+  close_responsibility: closeResponsibilityArgsSchema,
+  set_proactivity: setProactivityArgsSchema,
+  set_schedule_preference: setSchedulePreferenceArgsSchema,
+  browse_page: browsePageArgsSchema,
+  browse_act: browseActArgsSchema,
+  delegate_task: delegateTaskArgsSchema,
+  start_task: startTaskArgsSchema,
+  cancel_task: cancelTaskArgsSchema,
+  record_owner_finding: recordOwnerFindingArgsSchema,
+  list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
 export const jwtValidateHook: HookHandler<HookRuntimeContext> = {
@@ -261,12 +404,34 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
       return halt('tool args schema unavailable', 'invalid_args');
     }
 
-    if (!schema.safeParse(payload.args).success) {
-      return halt('tool args failed schema validation', 'invalid_args');
+    const parsed = schema.safeParse(payload.args);
+    if (!parsed.success) {
+      return halt(invalidArgumentsCause((parsed as { success: false; error: { issues: readonly ArgumentIssue[] } }).error.issues), 'invalid_args');
     }
 
     return ok();
   },
+};
+
+export type ArgumentIssue = Readonly<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+export const MAX_ARGUMENT_ISSUES = 6;
+const MAX_ISSUE_PATH_CHARS = 80;
+const MAX_ISSUE_MESSAGE_CHARS = 200;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+// The model's recovery path when its arguments miss a schema: the failing fields and what the schema expected there.
+// Model-authored args are safe to echo, and zod's messages name types and bounds, not the values sent. A call with many
+// bad fields names the first few and counts the rest, so the cause stays well inside the tool error cap.
+export const invalidArgumentsCause = (issues: readonly ArgumentIssue[]): string => {
+  const named = issues.slice(0, MAX_ARGUMENT_ISSUES)
+    .map((issue) => `${clip(issue.path.map(String).join('.'), MAX_ISSUE_PATH_CHARS) || '(root)'}: ${clip(issue.message, MAX_ISSUE_MESSAGE_CHARS)}`);
+  const more = issues.length > MAX_ARGUMENT_ISSUES ? [`and ${issues.length - MAX_ARGUMENT_ISSUES} more`] : [];
+  // The datetime hint only when a datetime actually failed validation: appended blindly it
+  // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
+  // UTC offset that was never the problem).
+  const datetimeFailed = issues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
+  const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
+  return `invalid tool arguments: ${[...named, ...more].join('; ')}; match the tool schema exactly${hint}`;
 };
 
 export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
@@ -279,16 +444,96 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     if (!tool.parsed) return tool.result;
     const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    const destination = preToolUseDestination(tool.data);
+    // draft_email/send_email/send_agent_mail args are executable: the recipient addresses ARE the call.
+    // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
+    // are checked (hard denies still halt fail-closed) but never rewritten.
+    if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    // The frozen call inside a proposal is executable too: it is checked here and again, at its own tool's
+    // destination, when the approved call replays through this hook.
+    if (tool.data === 'propose_action') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    if (tool.data === 'workspace_write') {
+      // Private writes are executable data, including initial text and full replacements.
+      // Preserve ordinary contact fields exactly; mandatory substitutions still refuse.
+      return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data, new Set(['email','phone','address']));
+    }
     const sanitized = await sanitiseCandidate(
       payload.args,
       ctx,
-      preToolUseDestination(tool.data),
+      destination,
       sourceTaint.data,
     );
     return sanitized.ok
       ? { ok: true, payload: { ...payload, args: sanitized.payload } }
       : sanitized.result;
   },
+};
+
+// Every external-tainted call that needs the owner is pointed at propose_action: the owner's approval replays exactly that
+// call with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
+// tool outside its handler set, a handler bound to the live turn), so no dead card reaches the owner.
+export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
+
+// A tool that takes only what the owner says directly is refused in a turn that has read outside text: it is neither run
+// nor carded, so its arguments never reach the owner's ledger. The model is told to ask the owner instead.
+export const TAINT_REFUSED_REASON = 'external-tainted call to an owner-statement tool';
+export const TAINT_REFUSED_CAUSE = 'This is taken only from what the owner tells you directly, and this turn read an email, web page or other outside content, so nothing was done and no card was made. Ask the owner to tell you it in a message of their own.';
+export const taintedCallRefused = (tool: ToolName, taint: SourceTaint): boolean => {
+  const tainted = TOOL_RECORDS[tool].tainted;
+  return isExternalSourceTaint(taint) && tainted !== undefined && 'refused' in tainted;
+};
+
+// The owner's ruling for a turn that has read outside text: every tool that changes something sends its change to the
+// owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
+// tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
+export const taintedCallNeedsOwnerApproval = async (
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
+  || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
+
+// One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
+// handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
+export const recordNeedsOwnerCard = async (
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+): Promise<boolean> => {
+  const tainted = record.tainted;
+  if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
+  switch (tainted?.exempt) {
+    case 'draft': case 'honest_origin': case 'instructions_only': return false;
+    case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
+    case 'commits_on_card': return !typedBrowserStep(tool, args);
+    default: return true;
+  }
+};
+
+// A loop bound to an observed mail source records that source, its title never enters a prompt as the owner's
+// (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back: it is the owner-enabled mail
+// follow-through. An open names its source in the frozen arguments. A close names only an id, which cannot say whose loop
+// it is, so the owner's loop store answers; unwired, or for an id it does not know, the loop is the owner's. Any other
+// tool marked source_bound has no binding here and is carded.
+const boundToObservedSource = async (tool: ToolName, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>): Promise<boolean> => {
+  const record = typeof args === 'object' && args !== null ? args as { source_ref?: unknown; id?: unknown } : undefined;
+  if (tool === 'open_loop') return typeof record?.source_ref === 'string';
+  if (tool === 'close_loop') return typeof record?.id === 'string' && ctx.loopIsSourceBound !== undefined && await ctx.loopIsSourceBound(record.id);
+  return false;
+};
+
+// The typed browse_act operations that commit nothing: the owner's browser host sends no request but GET or HEAD and holds a
+// native submit for the owner's browser card, so these change only Waldo's own page and session. prepare_submit raises that
+// card; cancel ends Waldo's own session; owner_login hands the page to the owner, who signs in themselves on the console,
+// and resume_owner_login reads the result. Any other operation is carded: a download saves into the owner's workspace, and
+// an operation added later is carded until it is named here. A call with no typed command takes the legacy path, whose stop
+// before a commit is a model's judgment, so it is carded too.
+// What remains: a step can still follow a GET link on an allowed origin, and a link that acts on GET (unsubscribe, confirm,
+// cancel) still acts.
+export const NON_COMMITTING_BROWSER_OPERATIONS: readonly BrowserTaskCommand['operation'][] = [
+  'goto', 'back', 'click', 'type', 'fill', 'select', 'set_checked', 'scroll', 'read', 'wait', 'inspect', 'screenshot', 'verify',
+  'open_tab', 'switch_tab', 'close_tab', 'prepare_submit', 'cancel', 'owner_login', 'resume_owner_login',
+];
+const typedBrowserStep = (tool: ToolName, args: unknown): boolean => {
+  const command = tool === 'browse_act' && typeof args === 'object' && args !== null ? (args as { command?: unknown }).command : undefined;
+  const operation = typeof command === 'object' && command !== null ? (command as { operation?: unknown }).operation : undefined;
+  return (NON_COMMITTING_BROWSER_OPERATIONS as readonly unknown[]).includes(operation);
 };
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
@@ -305,7 +550,7 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return tool.result;
     }
 
-    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) {
+    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data) && TOOL_RECORDS[tool.data].claim === null) {
       return ok();
     }
 
@@ -314,9 +559,22 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
-    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
-      return halt('external-tainted privileged action blocked', 'forbidden');
+    if (taintedCallRefused(tool.data, sourceTaint.data)) return halt(TAINT_REFUSED_REASON, 'forbidden');
+
+    // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
+    // raises the owner's card. Neither executes anything the owner has not seen.
+    if (ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
+      let needsOwner: boolean;
+      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
+      catch { return halt('loop lookup failed', 'transient'); }
+      if (needsOwner) return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
+
+    // A write that is not privileged runs past the taint law on the owner's own turn as any tool does.
+    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) return ok();
+
+    // This admits a request only; native Mac custody authorizes each effect.
+    if (tool.data === 'use_mac') return ok();
 
     if (ctx.hasApproval === undefined) {
       return halt('approval check unavailable', 'forbidden');
@@ -351,6 +609,7 @@ export const egressAllowlistHook: HookHandler<HookRuntimeContext> = {
       payload.args,
       EGRESS_TARGET_PATHS[tool.data] ?? [],
       ctx.egressAllowlist,
+      { openPublic: OPEN_PUBLIC_TOOLS.includes(tool.data) && ctx.egressAllowlist?.includes(OPEN_PUBLIC) === true },
     ).ok
       ? ok()
       : halt('egress destination denied', 'forbidden');
@@ -399,37 +658,10 @@ export const scribeSanitisePostLlmCallHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    return sanitiseHookPayload(payload, ctx, 'send_message');
-  },
-};
-
-export const medicalGateHook: HookHandler<HookRuntimeContext> = {
-  name: 'medical_gate',
-  event: 'PostLLMCall',
-  priority: 200,
-  async handle(payload, ctx) {
-    if (payload.event !== 'PostLLMCall') {
-      return ok();
-    }
-
-    const text = collectText(payload.response).join('\n');
-    if (text.length === 0) {
-      return ok();
-    }
-
-    if (ctx.medicalGate === undefined) {
-      return halt('medical gate unavailable', 'transient');
-    }
-
-    try {
-      return decisionToHookResult(
-        await ctx.medicalGate(text),
-        'medical gate denied output',
-        'forbidden',
-      );
-    } catch {
-      return halt('medical gate failed', 'transient');
-    }
+    // The response TEXT is owner-bound reply prose -> owner_reply destination. Tool calls are
+    // split out inside sanitiseHookPayload and cross tool_arg_sanitise at PreToolUse at each
+    // tool's own destination, so third-party sends stay fully checked.
+    return sanitiseHookPayload(payload, ctx, 'owner_reply');
   },
 };
 
@@ -445,7 +677,6 @@ export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
   scribeSanitisePostToolUseHook,
   canaryLeakCheckHook,
   scribeSanitisePostLlmCallHook,
-  medicalGateHook,
 ]);
 
 export type RunHooksOptions<Ctx> = {
@@ -453,17 +684,40 @@ export type RunHooksOptions<Ctx> = {
   commitContext?: boolean;
 };
 
+// The typed error a halt hands the model. invalid_args echoes the model's own argument detail,
+// which is its recovery path; every other halt maps to a fixed catalogue entry, so an ACL,
+// sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
+const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
+  if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === TAINT_REFUSED_REASON) return toolError('hook_denied', TAINT_REFUSED_CAUSE);
+  if (reason === 'privileged action lacks approval') return toolError('approval_denied');
+  if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
+  if (reason === 'unknown tool') return toolError('unknown_tool');
+  if (hook === 'egress_allowlist_check') return toolError('egress_denied');
+  if (hook === 'acl_check' && code === 'forbidden') return toolError('acl_denied');
+  if (reason.startsWith('scribe:') || reason === 'canary token leaked') return toolError('sanitise_denied');
+  if (code === 'invalid_args') return toolError('invalid_args', reason);
+  if (code === 'auth_failed') return toolError('unauthenticated');
+  if (code === 'rate_limited') return toolError('rate_limited');
+  return toolError(code === 'transient' ? 'hook_failed' : 'hook_denied');
+};
+
 export class HookHaltError extends Error {
-  readonly clientMessage = 'hook halted';
+  readonly toolError: ToolError;
+  readonly clientMessage: string;
   readonly onErrorPayload: HookPayload;
 
   constructor(
     readonly hook: string,
     readonly reason: string,
     readonly code: ErrorCode,
+    // A content-free diagnostic for traces (the scribe's denial stage); never part of the reason.
+    readonly detail?: string,
   ) {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';
+    this.toolError = hookToolError(hook, reason, code);
+    this.clientMessage = this.toolError.cause;
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,
@@ -566,6 +820,11 @@ function commitHookContext<Ctx>(target: Ctx, source: Ctx): void {
 
 function cloneHookValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
   if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  // A copy of a platform AbortSignal keeps its prototype but is not one: workerd rejects it in AbortSignal.any and
+  // fetch, and it never sees the run's abort. Hooks cannot change a signal, so the run's own signal is shared.
+  if (value instanceof AbortSignal) {
     return value;
   }
 
@@ -675,17 +934,46 @@ async function sanitiseHookPayload(
   if (payload.event === 'PostLLMCall') {
     const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
     if (!sourceTaint.success) return halt('model output taint invalid', 'transient');
-    const sanitized = await sanitiseCandidate(
-      payload.response,
-      ctx,
-      destination,
-      sourceTaint.data,
-    );
+    // When the response carries tool_calls, split them out: text is owner-bound prose and
+    // keeps full redaction, while tool calls are executable arguments (a redacted argument
+    // corrupts the call). Every dispatched tool crosses tool_arg_sanitise at PreToolUse at
+    // its own destination, including subagent children, so the per-call check is not repeated
+    // here. Canary detection on the whole response stays with canary_leak_check. Any other
+    // response shape sanitises whole, as before.
+    const response = payload.response;
+    if (response !== null && typeof response === 'object' && !Array.isArray(response)
+        && Array.isArray((response as { tool_calls?: unknown }).tool_calls)) {
+      const { tool_calls: toolCalls, ...textResponse } = response as { tool_calls: unknown[] } & Record<string, unknown>;
+      const sanitized = await sanitiseCandidate(textResponse, ctx, destination, sourceTaint.data);
+      if (!sanitized.ok) return sanitized.result;
+      return { ok: true, payload: { ...payload, response: { ...(sanitized.payload as Record<string, unknown>), tool_calls: toolCalls } } };
+    }
+    const sanitized = await sanitiseCandidate(response, ctx, destination, sourceTaint.data);
     return sanitized.ok
       ? { ok: true, payload: { ...payload, response: sanitized.payload } }
       : sanitized.result;
   }
 
+  return ok();
+}
+
+// Executable values (tool args, tool calls) are checked, never rewritten: redaction exists
+// for text that flows to a person or a log, and substituting into an argument corrupts the
+// action the owner asked for. Rejections still halt fail-closed - this only skips the
+// substitution, so canary/health/injection denies keep their teeth.
+async function checkExecutableArgs(
+  value: unknown,
+  ctx: HookRuntimeContext,
+  destination: SanitiseDestination,
+  sourceTaint: SourceTaint,
+  allowedRedactions?: ReadonlySet<string>,
+): Promise<HookResult> {
+  const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
+  if (!checked.ok) return checked.result;
+  // A value encoded past the decode limit is withheld only in the scribe's copy, and these arguments go on as written,
+  // so it refuses here as the decode check did before anything was withheld.
+  if (checked.redactions.some(redaction => redaction.kind === 'deep_encoding')) return halt('scribe:invalid_payload', sanitiseFailureCode('invalid_payload'));
+  if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
   return ok();
 }
 
@@ -695,7 +983,7 @@ async function sanitiseCandidate(
   destination: SanitiseDestination,
   sourceTaint: SourceTaint,
 ): Promise<
-  | { ok: true; payload: Extract<SanitiseResult, { ok: true }>['payload'] }
+  | { ok: true; payload: Extract<SanitiseResult, { ok: true }>['payload']; redactions: Extract<SanitiseResult, {ok:true}>['redactions'] }
   | { ok: false; result: HookResult }
 > {
   if (ctx.sanitise === undefined) {
@@ -721,7 +1009,7 @@ async function sanitiseCandidate(
     if (result.source_taint !== sourceTaint) {
       return { ok: false, result: halt('scribe sanitiser changed taint', 'transient') };
     }
-    return { ok: true, payload: result.payload };
+    return { ok: true, payload: result.payload, redactions: result.redactions };
   } catch {
     return { ok: false, result: halt('scribe sanitiser failed', 'transient') };
   }
@@ -763,11 +1051,11 @@ function postToolUseDestination(tool: string): SanitiseDestination {
 
 function preToolUseDestination(tool: ToolName): SanitiseDestination {
   switch (tool) {
-    case 'update_memory':
-      return 'memory_block';
     case 'draft_document':
       return 'draft_document';
     case 'draft_email':
+    case 'send_email':
+    case 'send_agent_mail':
       return 'draft_email';
     case 'send_message':
       return 'send_message';

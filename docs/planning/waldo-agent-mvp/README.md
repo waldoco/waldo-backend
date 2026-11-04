@@ -1,5 +1,7 @@
 # Waldo MVP planning packet
 
+> Vocabulary: the owner settled all product words on 2026-09-24. [VOCABULARY_AND_BRAND_2026-09-24.md](VOCABULARY_AND_BRAND_2026-09-24.md) is the source; where this doc uses an older word (Afternoon check-in, update cards, Approve / Change / Skip, Weight as demand, Readiness), read it by that doc. Form / Load / Recovery are the body and day words; Weight is body mass only; Fetch is the sweep and its output is a fetch alert; Handoff is work Waldo offered or took on, tracked as an open loop.
+
 Updated 21 September 2026 · user-selected MVP baseline · documentation publication in PR #138 · implementation and runtime proof remain outstanding
 
 This packet is the target. For what is built today, read [What is built](../../CURRENT_SYSTEM.md).
@@ -52,9 +54,10 @@ No date, budget or exact cohort is fixed. Planning estimates are 3–4 weeks to 
 ## Evidence
 
 - [Source audit](SOURCE_AUDIT.md): production composition gaps, legacy app risks and retained substrate.
-- [Competitor research](COMPETITOR_RESEARCH.md): Instinct, Muse, Grok Bot, Vellum, Poke and Folk; no invented hands-on claims.
+- [Competitor research](COMPETITOR_RESEARCH.md): Instinct, Muse, Dots, Grok Bot, Vellum, Poke and Folk; Dots launch text was owner-supplied and could not be independently fetched, no invented hands-on claims.
 - [Browser/open-agent research](RUNTIME_BROWSER_RESEARCH.md): Cloudflare, Browserbase, Hermes and OpenClaw.
 - [Kennel source map](KENNEL_K0_SOURCE_MAP.md): reusable handoff seams, Codex-first direction and the unproven cloud bridge.
+- [Connectors and wearables](CONNECTORS_AND_WEARABLES_2026-09-24.md): WHOOP terms limits and connector rules; network guardrails required before the invited beta.
 
 The audit used backend main `e91bee0`, PR #138 head `10e48fb`, and app main `7218c18f`. The source audit did not exercise tests or live services. Documentation publication checks are recorded in PR #138 and ledger #116. This packet supplies the selected product/build direction. Start with S0, including the bounded [cross-repository synchronization](ADR_RECONCILIATION.md); do not silently treat older Brain/app release cuts as current or claim an ADR amendment has already landed.
 
@@ -71,7 +74,7 @@ Share this directory link with workers. Read this page, the worker guide, and th
 ## Engineering and repository navigation
 
 - [Repository map](REPOSITORY_MAP.md): where the main agent, app, health, Kennel bridge and canonical decisions live; source paths, fresh-ref checks and verification commands.
-- [Engineering quality](ENGINEERING_QUALITY.md): CI and agent evaluations, dependency lifecycle, bounded coding-agent improvement, cleanup order and the measurable Instinct/Meta Muse experience target.
+- [Engineering quality](ENGINEERING_QUALITY.md): CI and agent evaluations, dependency lifecycle, bounded coding-agent improvement, cleanup order and the measurable Instinct/Meta Muse/Dots experience target (Dots provenance caveat in competitor register).
 
 Build the first CI and behavioral proof alongside S0. Preserve the main plan's A1–A16 acceptance and S0–S4/H/B/C/K0 scope; the companions do not establish shipped capability or add a platform prerequisite.
 

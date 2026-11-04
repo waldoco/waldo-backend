@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
 
-Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY` and `WALDO_OWNER_TELEGRAM_ID`. Proactive signals add `WALDO_SIGNAL_SECRET`, `WALDO_OWNER_TIMEZONE` and `WALDO_MORNING_DEADLINE` ([PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md)).
+Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `WALDO_OWNER_TELEGRAM_ID` and `ANTHROPIC_API_KEY`. `WALDO_MODEL_PROVIDER` (`anthropic`, the default, or `openai`) picks which of the two runs the owner path; the other is its fallback.
 
 Use a separate checkout for this loop, so your other branches and local edits stay untouched.
 
@@ -60,7 +60,7 @@ Staging Worker (`waldo-runtime-staging`):
 
 - From `packages/runtime`, `npx wrangler tail waldo-runtime-staging --format json` streams live logs.
 - Each Telegram turn logs one JSON line per hop, with a shared trace id `tg-<update_id>`. The fields are in [OBSERVABILITY.md](OBSERVABILITY.md).
-- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed.
+- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed. After a deploy, run the [staging gate](STAGING_DEPLOY_GATE.md).
 
 Telegram, webhook or local runner:
 
@@ -96,7 +96,6 @@ Remote access from the Codespace:
 ## 5. Built today
 
 - Telegram owner chat on the staging Worker. Updates arrive by webhook, go to a Durable Object, then to the model. It has the receipt, typing and final reactions, per-hop tracing, and honest replies for unsupported messages.
-- Proactive messages: devices and apps post moments to `POST /signals`, the model decides whether to message, and it can schedule its own check-backs. An optional morning deadline covers days with no wake-up signal. Setup is in [PROACTIVE_SIGNALS.md](PROACTIVE_SIGNALS.md).
 - Staging still uses fixture admission instead of real per-user sign-in. No tools are granted to the model. See [#144](https://github.com/waldoco/waldo-backend/issues/144).
 
 ## 6. Forward map
