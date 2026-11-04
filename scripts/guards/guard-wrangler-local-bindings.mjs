@@ -86,6 +86,19 @@ for (const [name, node] of [['top level', cfg], ...Object.entries(cfg?.env ?? {}
   if (parsed?.protocol !== 'https:' || parsed.origin !== origin) bad.push(`${name} WALDO_PUBLIC_ORIGIN must be empty or a bare https origin`);
 }
 
+// 6. Each vars key sits on its own line. Lanes add switches in parallel; with every key on one line, each pair of
+//    PRs conflicts there, while one key per line lets git merge them.
+const lines = raw.split('\n');
+for (let i = 0; i < lines.length; i += 1) {
+  if (!/"vars"\s*:/.test(lines[i])) continue;
+  if (!/"vars"\s*:\s*\{\s*$/.test(lines[i])) { bad.push(`line ${i + 1}: put each vars key on its own line`); continue; }
+  for (i += 1; i < lines.length && !/^\s*\},?\s*$/.test(lines[i]); i += 1) {
+    if (!/^\s*(\/\/.*|"[^"]+"\s*:\s*("(?:[^"\\]|\\.)*"|true|false|-?\d+(\.\d+)?)\s*,?\s*(\/\/.*)?)?$/.test(lines[i])) {
+      bad.push(`line ${i + 1}: put each vars key on its own line`);
+    }
+  }
+}
+
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
   process.exit(1);
