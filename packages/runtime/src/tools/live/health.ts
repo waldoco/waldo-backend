@@ -176,7 +176,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const timezone = clock.timezone;
     const today = localDayOf(clock.now(), timezone);
     if (daysBetween(args.to, today) < 0) return { ok: false, code: 'invalid_args', error: `to must not be after today (${today}) in the owner's time zone` };
-    const unavailable = (reason: Extract<GetHealthResult, { state: 'unavailable' }>['reason']): ReturnType<typeof result> => result({ state: 'unavailable', reason });
+    const unavailable = (reason: Extract<GetHealthResult, { state: 'unavailable' }>['reason']): ReturnType<typeof result> => result({ state: 'unavailable', reason, next: UNAVAILABLE_NEXT[reason] });
     const consent = await book.consent();
     if (consent.kind !== 'granted') return unavailable(consent.kind);
     const signals = [...new Set(args.signals)];
@@ -229,4 +229,12 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
   },
 });
 
+// What each unavailable reason means for the reply, so the model neither retries a refusal nor guesses a reading.
+const UNAVAILABLE_NEXT: Readonly<Record<Extract<GetHealthResult, { state: 'unavailable' }>['reason'], string>> = {
+  consent_required: 'The owner has not turned on health sharing with Waldo, so nothing was read. Answer without their readings and say so; if they want Waldo to see them, sharing is turned on in the Waldo app.',
+  consent_withdrawn: 'The owner turned health sharing off, so nothing was read. Answer without their readings, and do not ask them to turn it back on unless they bring it up.',
+  not_linked: 'No phone or wearable has sent health data to Waldo for this owner yet, so nothing was read. Answer without readings; they can share health from the Waldo app on their phone.',
+  no_readings: 'Sharing is on, but none of these signals has a reading on these days. Try once with a wider range (up to 31 days ending today) or other signals; if there is still none, say the phone or wearable may not have synced, and never invent a value.',
+  read_failed: 'The health store could not be read just now. Try the same read once more; if it fails again, tell the owner their readings could not be checked right now.',
+};
 const result = (data: GetHealthResult) => ({ ok: true as const, data, source_taint: null });

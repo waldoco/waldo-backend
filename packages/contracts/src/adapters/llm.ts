@@ -29,8 +29,19 @@ export const llmToolSchema = z.strictObject({
 });
 export type LLMTool = z.infer<typeof llmToolSchema>;
 
+// zod writes a format's own regex beside it (a date-time is about 420 characters of leap-year pattern). The format already
+// names the shape to the model, and every call is still validated against the zod schema before it runs, so the regex is
+// left out of the definition: about a seventh of the definition tokens sent every round. A pattern without a format is kept.
+const withoutFormatPatterns = (node: unknown): unknown => {
+  if (Array.isArray(node)) return node.map(withoutFormatPatterns);
+  if (node === null || typeof node !== 'object') return node;
+  const record = node as Record<string, unknown>;
+  const formatted = typeof record.format === 'string';
+  return Object.fromEntries(Object.entries(record).flatMap(([key, value]) => key === 'pattern' && formatted ? [] : [[key, withoutFormatPatterns(value)]]));
+};
+
 export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
-  const json = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  const json = withoutFormatPatterns(z.toJSONSchema(schema, { io: 'input' })) as Record<string, unknown>;
   // zod v4 stamps its output with a non-configurable '~standard' marker so the result can
   // double as a schema; that marker carries function values, which are not JSON. Tool
   // definitions ride the wire to providers and pass through request sanitisation, both of
