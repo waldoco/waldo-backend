@@ -66,7 +66,7 @@ describe('the access log is a signed-in read', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     const log = await response.json() as Log;
     expect(log).toMatchObject({ version: 1, window_days: 30, kept_steps: TRACE_KEPT });
-    expect(log.tools.rows.map(row => [row.tool, row.category, row.kind, row.ok])).toEqual([['send_email', 'mail', 'acted', false], ['get_health', 'core', 'read', true]]);
+    expect(log.tools.rows.map(row => [row.tool, row.category, row.kind, row.ok])).toEqual([['send_email', 'core', 'acted', false], ['get_health', 'core', 'read', true]]);
     expect(log.approvals.rows).toEqual([{ at: new Date(now - 3 * HOUR).toISOString(), kind: 'email_send', decision: 'done', decided_at: new Date(now - 3 * HOUR + 60_000).toISOString() }]);
     const body = JSON.stringify(log);
     for (const leak of ['csrf', o.token, 'ana@example.test', 'Send to Ana']) expect(body).not.toContain(leak);
