@@ -422,6 +422,12 @@ export const healthSleepDebtV1Schema = z.union([
     algorithm_version: algorithmVersion, activation,
   }),
 ]);
+// Health revision 7: what the scores were read against, when that changed them. cycle_phase: with cycle context on (cycle.ts),
+// the owner's signals were read against their own baseline for the same part of their cycle, and that changed the reading.
+// Absent whenever it did not, including every phase the backend cannot place. explanation is the backend's one line for the
+// app to show as written. Shown only to a build that names revision 7, and only on the app.
+export const HEALTH_CYCLE_REVISION_V1 = 7;
+export const healthScoresBasisV1Schema = z.strictObject({ kind: z.literal('cycle_phase'), explanation: z.string().min(1).max(200) });
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -437,6 +443,8 @@ export const healthScoresV1Schema = z.strictObject({
   // Revision 4 and later; absent when the row has none.
   drivers: z.array(healthDriverPhraseV1Schema).max(8).optional(),
   windows: z.array(healthEnergyWindowV1Schema).max(4).optional(),
+  // Revision 7 and later; absent when the row has none.
+  basis: healthScoresBasisV1Schema.optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third

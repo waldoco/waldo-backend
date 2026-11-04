@@ -1,5 +1,6 @@
 import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, standing, type Prior } from './baseline';
 import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
+import { spansCycles, type PhasePrior } from './cycle';
 import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason } from './types';
 
 // Form v2 and Weight v2 leave out days holding an overlapping hour window (Form's hours, Weight's physical load). Form v3
@@ -40,11 +41,17 @@ const baselineOf = (prior: readonly DayRecord[], pick: (day: DayRecord) => numbe
 
 // The first method, in order, that the day has a reading of and that has a mature baseline of its own. RMSSD and SDNN, or a
 // nightly minimum and a daytime estimate, are different measures: a reading is never compared with another method's days.
-const matched = <Method extends string>(order: readonly Method[], today: readonly MethodReading<Method>[], prior: readonly DayRecord[], read: (day: DayRecord) => readonly MethodReading<Method>[]) => {
+// With a phase prior, the method's same-phase days stand in for its ordinary baseline when they are mature and span two cycles.
+const matched = <Method extends string>(
+  order: readonly Method[], today: readonly MethodReading<Method>[], prior: readonly DayRecord[], read: (day: DayRecord) => readonly MethodReading<Method>[], phase: PhasePrior | null,
+) => {
   for (const method of order) {
     const reading = today.find(entry => entry.method === method);
     if (!reading) continue;
-    const baseline = baselineOf(prior, day => read(day).find(entry => entry.method === method)?.value ?? null);
+    const pick = (day: DayRecord) => read(day).find(entry => entry.method === method)?.value ?? null;
+    const phased = phase ? baselineOf(phase.days, pick) : null;
+    if (phase && phased && spansCycles(phase, phased.map(entry => entry.day))) return { reading, baseline: phased };
+    const baseline = baselineOf(prior, pick);
     if (baseline) return { reading, baseline };
   }
   return null;
@@ -56,7 +63,7 @@ export const usualSleepMinutes = (prior: readonly DayRecord[]): number | null =>
   return baseline ? baseline.reduce((sum, entry) => sum + entry.value, 0) / baseline.length : null;
 };
 
-export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null): RecoveryOutcome => {
+export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null, phase: PhasePrior | null = null): RecoveryOutcome => {
   if (!target.sleep) return { reason: 'missing_sleep' };
   const need = sleepNeedMinutes ?? usualSleepMinutes(prior);
   if (need === null || need <= 0) return { reason: 'baseline_immature' };
@@ -67,14 +74,14 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
   const days = new Set<string>([target.day]);
   let hrvMethod: HrvMethod | null = null;
 
-  const hrv = matched(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv);
+  const hrv = matched(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv, phase);
   if (hrv) {
     components.push({ name: 'hrv', score: higherIsBetter(logZScore(hrv.reading.value, hrv.baseline.map(entry => entry.value))), weight: RECOVERY_SHARES.variability });
     signals.push('hrv');
     hrvMethod = hrv.reading.method;
     hrv.baseline.forEach(entry => days.add(entry.day));
   }
-  const resting = matched(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate);
+  const resting = matched(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate, phase);
   if (resting) {
     components.push({ name: 'resting_heart_rate', score: lowerIsBetter(zScore(resting.reading.value, resting.baseline.map(entry => entry.value))), weight: RECOVERY_SHARES.pulse });
     signals.push('resting_heart_rate');
@@ -92,22 +99,27 @@ const RESTING_PRIORS: Readonly<Partial<Record<RestingMethod, Prior>>> = {
 };
 
 // The first method, in order, that the day has a reading of and that has a baseline: a prior, or enough own days. Methods
-// are still never compared with each other's days.
+// are still never compared with each other's days. With a phase prior, the method's same-phase days stand in when they span
+// two cycles and give a standing.
 const matchedStanding = <Method extends string>(
   order: readonly Method[], today: readonly MethodReading<Method>[], prior: readonly DayRecord[], read: (day: DayRecord) => readonly MethodReading<Method>[],
-  priors: Readonly<Partial<Record<Method, Prior>>>, scale: 'linear' | 'ln',
+  priors: Readonly<Partial<Record<Method, Prior>>>, scale: 'linear' | 'ln', phase: PhasePrior | null,
 ) => {
   for (const method of order) {
     const reading = today.find(entry => entry.method === method);
     if (!reading) continue;
-    const earlier = prior.flatMap(day => { const value = read(day).find(entry => entry.method === method)?.value; return value === undefined ? [] : [{ day: day.day, value }]; });
+    const of = (days: readonly DayRecord[]) => days.flatMap(day => { const value = read(day).find(entry => entry.method === method)?.value; return value === undefined ? [] : [{ day: day.day, value }]; });
+    const phased = phase ? of(phase.days) : [];
+    const phasedAt = phase && spansCycles(phase, phased.map(entry => entry.day)) ? standing(reading.value, phased.map(entry => entry.value), priors[method] ?? null, scale) : null;
+    if (phasedAt) return { reading, at: phasedAt, days: phased.map(entry => entry.day) };
+    const earlier = of(prior);
     const at = standing(reading.value, earlier.map(entry => entry.value), priors[method] ?? null, scale);
     if (at) return { reading, at, days: earlier.map(entry => entry.day) };
   }
   return null;
 };
 
-export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null): RecoveryOutcome => {
+export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null, phase: PhasePrior | null = null): RecoveryOutcome => {
   if (!target.sleep) return { reason: 'missing_sleep' };
   const nights = prior.flatMap(day => (day.sleep ? [day.sleep.asleepMinutes] : []));
   const need = sleepNeedMinutes ?? sleepNeed(nights);
@@ -122,7 +134,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   let usedPrior = sleepNeedMinutes === null;
   let hrvMethod: HrvMethod | null = null;
 
-  const hrv = matchedStanding(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv, HRV_PRIORS, 'ln');
+  const hrv = matchedStanding(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv, HRV_PRIORS, 'ln', phase);
   if (hrv) {
     components.push({ name: 'hrv', score: higherIsBetter(hrv.at.z), weight: RECOVERY_SHARES.variability });
     signals.push('hrv');
@@ -131,7 +143,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
     own.push(hrv.at.own);
     usedPrior ||= hrv.at.prior;
   }
-  const resting = matchedStanding(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate, RESTING_PRIORS, 'linear');
+  const resting = matchedStanding(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate, RESTING_PRIORS, 'linear', phase);
   if (resting) {
     components.push({ name: 'resting_heart_rate', score: lowerIsBetter(resting.at.z), weight: RECOVERY_SHARES.pulse });
     signals.push('resting_heart_rate');

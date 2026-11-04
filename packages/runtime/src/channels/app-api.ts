@@ -10,6 +10,8 @@ import { signedRpc } from '../identity/owner-directory';
 import { dailyScoresFor } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
+import { APP_CYCLE_PATH, handleAppCycle } from './app-cycle';
+import { cycleRoutesOpen } from '../health/cycle/phase';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
@@ -32,7 +34,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; CYCLE_CONTEXT?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -252,6 +254,13 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (env.SCREEN_TIME !== '1') return fail(404);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-screen-time:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     return handleAppScreenTime({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
+  }
+  // Cycle context spends its own per-owner budget. Off, the routes are not there; paused, they stay so the owner can still
+  // see and withdraw.
+  if (url.pathname === APP_CYCLE_PATH || url.pathname.startsWith(`${APP_CYCLE_PATH}/`)) {
+    if (!cycleRoutesOpen(env.CYCLE_CONTEXT)) return fail(404);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-cycle:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    return handleAppCycle({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');

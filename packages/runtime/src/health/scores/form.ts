@@ -1,4 +1,5 @@
 import { circularStanding, labelOf, standing } from './baseline';
+import type { PhasePrior } from './cycle';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
@@ -61,9 +62,9 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 const formHours = (day: DayRecord): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult => {
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, phase: PhasePrior | null = null): FormResult => {
   const target = formHours(record), prior = earlier.map(formHours);
-  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes, phase) : recoveryBasis(target, prior, sleepNeedMinutes, phase);
   if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
   if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
   // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is

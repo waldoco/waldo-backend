@@ -1,4 +1,5 @@
 import { BASELINE_DAYS, zScore } from './stats';
+import { spansCycles, type PhasePrior } from './cycle';
 import type { DayRecord, DayVitals, TemperatureMethod } from './types';
 
 // A driver says that one of the owner's signals is outside their own usual range today, which way, and whether far: a
@@ -24,18 +25,24 @@ const READS: readonly (readonly [Subject, readonly Read[]])[] = [
 ];
 
 // Against the owner's own earlier days of the same source and method, with at least fourteen of them. Days that never
-// varied give no usual range to be outside of, so they give no driver.
-const deviation = (target: DayRecord, prior: readonly DayRecord[], read: Read): number | null => {
+// varied give no usual range to be outside of, so they give no driver. Wrist temperature and breathing rate are read against
+// their same-phase days first, when those span two cycles.
+const PHASE_READ: readonly Subject[] = ['breathing rate', 'wrist temperature'];
+const deviation = (target: DayRecord, prior: readonly DayRecord[], read: Read, phase: PhasePrior | null): number | null => {
   const today = target.vitals ? read(target.vitals) : null;
   if (today === null) return null;
-  const past = prior.flatMap(day => { const value = day.vitals ? read(day.vitals) : null; return value === null ? [] : [value]; });
-  return past.length >= BASELINE_DAYS && new Set(past).size > 1 ? zScore(today, past) : null;
+  const pastOf = (days: readonly DayRecord[]) => days.flatMap(day => { const value = day.vitals ? read(day.vitals) : null; return value === null ? [] : [{ day: day.day, value }]; });
+  const usable = (past: readonly { value: number }[]) => past.length >= BASELINE_DAYS && new Set(past.map(entry => entry.value)).size > 1;
+  const phased = phase ? pastOf(phase.days) : [];
+  if (phase && usable(phased) && spansCycles(phase, phased.map(entry => entry.day))) return zScore(today, phased.map(entry => entry.value));
+  const past = pastOf(prior);
+  return usable(past) ? zScore(today, past.map(entry => entry.value)) : null;
 };
 
-export const driversOf = (target: DayRecord, prior: readonly DayRecord[]): string[] =>
+export const driversOf = (target: DayRecord, prior: readonly DayRecord[], phase: PhasePrior | null = null): string[] =>
   READS.flatMap(([subject, reads]) => {
     for (const read of reads) {
-      const z = deviation(target, prior, read);
+      const z = deviation(target, prior, read, PHASE_READ.includes(subject) ? phase : null);
       if (z === null) continue;
       return Math.abs(z) < OUTSIDE ? [] : [{ z, phrase: `${subject}${Math.abs(z) >= FAR ? ' far' : ''} ${z > 0 ? 'above' : 'below'} usual` }];
     }

@@ -687,6 +687,22 @@ describe('app health scores: revision 4', () => {
     expect('body' in consoleView && (consoleView.body as Record<string, unknown>).sleep_debt).toEqual(own);
     expect(JSON.stringify(consoleView)).not.toContain('trend');
   });
+  // The cycle basis is app-only and new at revision 7: no earlier build, and never the console, is shown it.
+  it('serves the cycle basis only to a build that names health revision 7, never to the console', async () => {
+    const basis = { kind: 'cycle_phase', explanation: 'Read against your own usual readings for this part of your cycle.' };
+    const stored = { ...plain, basis };
+    for (const header of [{}, contracts('health=4'), contracts('health=6')]) {
+      const body = await json(stored, header);
+      expect('basis' in body, JSON.stringify(header)).toBe(false);
+      expect(await text(stored, header), JSON.stringify(header)).toEqual(await text(plain, header));
+    }
+    const shown = await json(stored, contracts('health=7'));
+    expect(shown.basis).toEqual(basis);
+    expect(healthScoresV1Schema.safeParse(shown).success).toBe(true);
+    expect('basis' in await json({ ...plain, basis: { kind: 'cycle_phase', explanation: 'x', phase: 'luteal' } }, contracts('health=7'))).toBe(false);
+    const consoleView = healthScoresView({ scores: stored }, null, Date.parse(row.compiled_at as string), 4);
+    expect(JSON.stringify(consoleView)).not.toContain('cycle');
+  });
   // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
   it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {
     const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };

@@ -5,7 +5,7 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
-  healthSettingsV1Schema,
+  healthSettingsV1Schema, HEALTH_CYCLE_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { healthHistoryView, historyWindowOf } from './app-health-history';
 import { rowFreshness } from './health-context';
@@ -124,7 +124,7 @@ const pillarView = (pillar: Pillar, stored: unknown, revision: number): object |
 
 // A stored extra of the scores row that does not read as the contract's is left out, with a tag that holds no value, so it
 // cannot cost the owner their scores.
-const readExtra = <K extends 'drivers' | 'windows'>(stored: Record<string, unknown> | null, key: K): Record<string, unknown> => {
+const readExtra = <K extends 'drivers' | 'windows' | 'basis'>(stored: Record<string, unknown> | null, key: K): Record<string, unknown> => {
   if (!stored || !(key in stored)) return {};
   const parsed = healthScoresV1Schema.shape[key].safeParse(stored[key]);
   if (parsed.success) return { [key]: parsed.data };
@@ -164,6 +164,8 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
     recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision),
     ...(debt?.success ? { sleep_debt: debt.data } : {}),
     ...(revision >= HEALTH_BASELINE_REVISION_V1 ? { ...readExtra(stored, 'drivers'), ...readExtra(stored, 'windows') } : {}),
+    // The cycle basis is the app's alone: a build below revision 7, and the console, never see it.
+    ...(revision >= HEALTH_CYCLE_REVISION_V1 ? readExtra(stored, 'basis') : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return { body: parsed.data };

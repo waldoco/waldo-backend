@@ -79,3 +79,10 @@ describe('SCREEN_TIME in the Worker config', () => {
     expect(parsed.env.staging.vars.SCREEN_TIME).toBe('1');
   });
 });
+
+describe('CYCLE_CONTEXT in the Worker config', () => {
+  it('is off in both blocks until ADR-0085 is accepted and migration 20261104120000 is applied', () => {
+    expect(parsed.vars.CYCLE_CONTEXT).toBe('0');
+    expect(parsed.env.staging.vars.CYCLE_CONTEXT).toBe('0');
+  });
+});

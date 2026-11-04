@@ -1,4 +1,5 @@
 import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
+import type { CycleContext } from './cycle';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -69,6 +70,8 @@ export interface DailyScoresInput {
   readonly asOf: string | null;
   // Off unless true. On, each component reads against the shared baseline from the owner's first day.
   readonly provisional?: boolean;
+  // Present only for an owner with cycle_context granted and the engine on.
+  readonly cycle?: CycleContext;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
@@ -125,4 +128,6 @@ export interface DailyScores {
   readonly weight: WeightResult;
   // Today's energy windows, clock times in the target day's zone. Only on a provisional computation; empty when there are none.
   readonly windows?: readonly { readonly start: string; readonly end: string; readonly kind: 'peak' | 'dip' }[];
+  // Present only when the cycle phase changed the reading. App surfaces only.
+  readonly basis?: { readonly kind: 'cycle_phase'; readonly explanation: string };
 }

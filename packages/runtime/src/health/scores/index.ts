@@ -1,4 +1,5 @@
 import { labelOf } from './baseline';
+import { CYCLE_PHASE_BASIS, phasePriorOf, type PhasePrior } from './cycle';
 import { driversOf } from './drivers';
 import { formScore } from './form';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
@@ -11,6 +12,7 @@ import { weightScore } from './weight';
 import type { DailyScores, DailyScoresInput, DayRecord, RecoveryResult, Unavailable, UnavailableReason } from './types';
 
 export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, UnavailableReason } from './types';
+export type { CycleContext } from './cycle';
 
 const everywhere = (reason: UnavailableReason): DailyScores => {
   const unavailable: Unavailable = { state: 'unavailable', reason };
@@ -25,7 +27,22 @@ const withinLocalDay = (record: DayRecord): DayRecord => {
 };
 
 // One owner, one target day. Pure: no clock, no I/O, same input gives the same output.
+// With cycle context, the day is computed twice: against the ordinary baselines and with the phase prior. Only when the phase
+// changed a score, a zone or a driver is the phase reading returned, marked with its basis; otherwise the ordinary reading is
+// returned as it is, so an unknown phase, or one that changed nothing, is exactly the non-cycle output.
 export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
+  const ordinary = scoresOn(input, null);
+  if (!input.cycle || input.access !== 'granted') return ordinary;
+  const phase = phasePriorOf(input.targetDay, input.cycle.lookback, input.cycle);
+  if (!phase) return ordinary;
+  const phased = scoresOn(input, phase);
+  const reading = (scores: DailyScores) => JSON.stringify([
+    ...[scores.recovery, scores.form].map(pillar => (pillar.state === 'available' ? [pillar.score, pillar.zone] : pillar.reason)), scores.drivers,
+  ]);
+  return reading(phased) === reading(ordinary) ? ordinary : { ...phased, basis: CYCLE_PHASE_BASIS };
+};
+
+const scoresOn = (input: DailyScoresInput, phase: PhasePrior | null): DailyScores => {
   if (input.access !== 'granted') return everywhere(input.access);
   if (input.days.length === 0) return everywhere('no_readings');
 
@@ -42,7 +59,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const prior = priorDays(input.targetDay, byDay);
 
   const provisional = input.provisional === true;
-  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes) : recoveryBasis(target, prior, input.sleepNeedMinutes);
+  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes, phase) : recoveryBasis(target, prior, input.sleepNeedMinutes, phase);
   let recovery: RecoveryResult;
   if ('reason' in basis) recovery = { state: 'unavailable', reason: basis.reason };
   else {
@@ -55,9 +72,9 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);
   return {
     recovery,
-    drivers: driversOf(target, prior),
+    drivers: driversOf(target, prior, phase),
     sleep_debt: debt,
-    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional),
+    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, phase),
     weight: weightScore(target, prior, provisional),
     ...(provisional ? { windows: energyWindows({ targetDay: input.targetDay, days: [...byDay.values()], recoveryZone: recovery.state === 'available' ? recovery.zone : null, sleepTrend: debt.state === 'unavailable' ? 'steady' : debt.trend ?? 'steady' }) } : {}),
   };
