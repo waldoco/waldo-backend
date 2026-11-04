@@ -89,11 +89,31 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'For deeper owner recall, use read_memory', scenarios: ['r1-recall-across-day'] },
 ];
 
+// Version 2 of the behavior prompt (WALDO_PROMPT_V2) keeps every version-1 rule but three, which it moves into its two new
+// sections; each new rule names the scenarios that exercise it, or the hard line it holds.
+const V2_DROPPED = new Set(['Short, with someone there', 'Ask almost nothing']);
+export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
+  ...RULE_COVERAGE.filter((entry) => !V2_DROPPED.has(entry.anchor)),
+  // Writing for where it lands
+  { anchor: 'Chat is their phone', scenarios: VOICE },
+  { anchor: 'A message you start in chat interrupts them', scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },
+  { anchor: 'Mail you write for them is read at a desk', scenarios: ['m01-email-written-as-email', 't07-send-with-approval'] },
+  { anchor: 'A document, note or file you write', scenarios: ['m02-document-written-as-document'] },
+  { anchor: 'In chat, point to the draft or document', scenarios: ['m01-email-written-as-email', 't06-explain-then-draft'] },
+  // Being ahead of them
+  { anchor: 'Know their day before they ask', scenarios: ['p01-plan-the-afternoon', 't20-health-aware-plan'] },
+  { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking'] },
+  { anchor: 'Act without asking only where a tool result', boundary: 'auth: acting without a yes needs a standing permission a tool result shows' },
+];
+
 export type RuleStatus = Readonly<{ rule: PromptRule } & ({ kind: 'boundary'; reason: string } | { kind: 'mapped'; scenarios: readonly string[] } | { kind: 'uncovered' })>;
 
 // The inventory of one system prompt: every rule with its standing. An anchor that names no rule, or more than one, or a
 // scenario that does not exist, is a broken map and throws, so the map cannot drift from the prompt in silence.
-export const ruleInventory = async (system: string, coverage: readonly RuleCoverage[] = RULE_COVERAGE): Promise<readonly RuleStatus[]> => {
+// The map for the version of the behavior prompt this system text carries: only version 2 has the "Being ahead of them" section.
+export const coverageFor = (system: string): readonly RuleCoverage[] => (system.includes('\nBeing ahead of them\n') ? RULE_COVERAGE_V2 : RULE_COVERAGE);
+
+export const ruleInventory = async (system: string, coverage: readonly RuleCoverage[] = coverageFor(system)): Promise<readonly RuleStatus[]> => {
   const rules = await promptRules(system);
   const matched = new Map<string, RuleCoverage>();
   for (const entry of coverage) {
@@ -110,7 +130,7 @@ export const ruleInventory = async (system: string, coverage: readonly RuleCover
 };
 
 // The behaviour prompt a nightly trial sends: the app surface, with the eval world's tools.
-export const evalBehaviourPrompt = (): string => {
+export const evalBehaviourPrompt = (v2 = false): string => {
   const presentation = telegramTurnEnvelope(inboundTurn({ updateId: 0, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords('') }), 'app').presentation;
-  return messagingSystemPrompt(evalWorld({}, START).handlers.map((handler) => handler.name), presentation);
+  return messagingSystemPrompt(evalWorld({}, START).handlers.map((handler) => handler.name), presentation, false, undefined, v2);
 };

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { ablating, ablationLabel, ablationReport, ablationRuns, ablationVerdict, TRIALS, type AblationRun } from '../evals/nightly/ablation';
 import { nightlyConfig } from '../evals/nightly/config';
-import { RULE_COVERAGE, evalBehaviourPrompt, promptRules, ruleInventory, type RuleStatus } from '../evals/nightly/rules';
+import { RULE_COVERAGE, RULE_COVERAGE_V2, evalBehaviourPrompt, promptRules, ruleInventory, type RuleStatus } from '../evals/nightly/rules';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from '../evals/nightly/scorecard';
 import { SCENARIOS } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
@@ -17,6 +17,20 @@ describe('the behaviour rule inventory', () => {
     expect(inventory.filter((status) => status.kind !== 'uncovered')).toHaveLength(RULE_COVERAGE.length);
     expect((await rule('Never give medication, supplement or dose instructions')).kind).toBe('boundary');
     expect((await rule('Every message passes six tests')).kind).toBe('mapped');
+  });
+
+  // Version 2 (WALDO_PROMPT_V2) has its own map: every entry names exactly one of its rules, the hard lines stay boundaries,
+  // and each rule its two new sections add is mapped to scenarios or held as a boundary.
+  it('maps the rules of the behavior prompt version 2', async () => {
+    const system = evalBehaviourPrompt(true);
+    const inventory = await ruleInventory(system);
+    expect(inventory.filter((status) => status.kind !== 'uncovered')).toHaveLength(RULE_COVERAGE_V2.length);
+    const kinds = (section: string) => inventory.filter((status) => status.rule.section === section).map((status) => status.kind);
+    for (const section of ['Writing for where it lands', 'Being ahead of them']) {
+      expect(kinds(section).length).toBeGreaterThan(0);
+      expect(kinds(section)).not.toContain('uncovered');
+    }
+    expect((await ruleInventory(evalBehaviourPrompt())).filter((status) => status.kind !== 'uncovered')).toHaveLength(RULE_COVERAGE.length);
   });
 
   it('refuses a map entry that names no rule or an unknown scenario', async () => {

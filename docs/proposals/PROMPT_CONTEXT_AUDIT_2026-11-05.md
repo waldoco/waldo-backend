@@ -83,7 +83,14 @@ All values are [verified].
    - [inference] A profile changes rarely, so the cost is one cache write per edit.
    - [proposed] If profile churn grows (onboarding lookups), move it to the turn context, as `turn-prompt.ts` already does for the no-directory path.
 
-9. **Health stays in zone words.** Every health path renders words, not numbers (`prompt.ts:185-210`, `trigger.ts:357, 379`, day-card `BODY_RULE`) [verified]. Nothing here changes it.
+9. **When nothing is shared, the health line contradicts its own header** [verified on a recorded trial, `OT:686`]. The turn context says "Shared health today (derived by the app from the owner's own wearable data):" followed by "No derived health context is available for this invocation." That is 136 bytes on turns with no health shared.
+   - [proposed] When no health is admitted, say "No health shared today." alone. The model must still hear the absence, so that it makes no readiness claim (t20, h02). Not changed here.
+
+10. **The production tool menu is the largest block on every call** [verified, §D]. With `WALDO_TOOL_LOADER=off`, a 31-tool owner sends 29.4 KB of definitions (~7.4k tokens) each round. The staging harness sends 16.5 KB.
+    - Owner: tool-engineering and ops.
+    - [proposed] Run the harness loader in production when production exists. Today there is no production.
+
+11. **Health stays in zone words.** Every health path renders words, not numbers (`prompt.ts:185-210`, `trigger.ts:357, 379`, day-card `BODY_RULE`) [verified]. Nothing here changes it.
 
 ## C. What V2 changes (`WALDO_PROMPT_V2`)
 
@@ -91,8 +98,8 @@ All changes are additive constants in `messaging-behavior.ts`. V1 is byte-identi
 
 | Change | Why | Scenario that catches a regression |
 |---|---|---|
-| `IDENTITY`: chat on the app, WhatsApp or iMessage, and mail and documents written for them | Finding 1 | `w01-email-draft-structure`, `w02-document-structure` (new) |
-| New "Writing for where it lands" (chat / email / document) | Finding 1; owner brief | `w01`, `w02`, and the existing voice set `v01`–`v08` (chat brevity) |
+| `IDENTITY`: chat on the app, WhatsApp or iMessage, and mail and documents written for them | Finding 1 | `m01-email-written-as-email`, `m02-document-written-as-document` (new) |
+| New "Writing for where it lands" (chat / email / document) | Finding 1; owner brief | `m01`, `m02`, and the existing voice set `v01`–`v08` (chat brevity) |
 | New "Being ahead of them": plan, propose, ask only the owner's decisions, act within a shown grant with receipt and undo, "Own what's open" | Findings 2–4; owner brief | `p01-plan-the-afternoon` (new), plus `v03`, `e1`, `r2`, `h03` |
 | The steer line moves into Doing for every turn | Finding 4 | owner-turn steer tests (behaviour unchanged) |
 | Voice traced as `voice_version` 5 under V2 | traces must name the voice sent | `owner-turn-stable-prefix` with V2 |
@@ -104,4 +111,49 @@ Kept verbatim in V2:
 
 ## D. Context measurement
 
-See §E (filled from `pnpm --filter @waldo/runtime eval:context`).
+**How it was measured:**
+- `pnpm --filter @waldo/runtime eval:context` (`evals/context-budget.ts`) at this branch.
+- Recorded trials on the eval world: a 31-tool owner on the app surface, with synthetic memory and health.
+- Each captured model call is split into tool definitions, system prompt, earlier messages, the latest message and the turn context it carries.
+- Bytes are UTF-8. Tokens are bytes ÷ 4, the runtime's own estimate, not a provider count.
+
+**What prefix share means:**
+- The share of a call's leading bytes (tools, system, messages, in that order) that the previous call in the same trial already sent.
+- It is the most a provider cache could serve, not a measured hit rate.
+- Recorded replies call no tools, so each turn is one round. A share exists only where a trial makes more than one call.
+
+**Staging menu (harness loader)**, mean bytes per call:
+
+| Turn type (scenario) | Calls | Tools | System v1 → v2 | Latest message | of which turn context | Est. tokens v1 → v2 | Prefix share v1 / v2 |
+|---|---|---|---|---|---|---|---|
+| chat (`v03`) | 1 | 16,464 | 24,409 → 26,424 | 835 | 759 | 10,438 → 10,942 | – |
+| task (`t01`) | 1 | 16,464 | 24,409 → 26,424 | 817 | 759 | 10,433 → 10,937 | – |
+| health chat (`h01`) | 1 | 16,464 | 24,409 → 26,424 | 990 | 938 | 10,478 → 10,981 | – |
+| long chat, 8 turns (`r1`) | 8 | 16,464 | 24,409 → 26,424 | 1,216 | 759 | 10,645 → 11,149 | 0.968 / 0.969 |
+| reminder (`t03`) | 1 | 16,464 | 24,409 → 26,424 | 793 | 759 | 10,427 → 10,931 | – |
+| day card, the Brief (`h20`) | 1 | 9,257 | 23,381 → 25,261 | 3,662 | 911 | 9,106 → 9,576 | – |
+| health trigger (`h1`) | 1 | 0 | 19,467 → 21,347 | 2,954 | 567 | 5,631 → 6,101 | – |
+| outside job (`m13`) | 1 | 9,257 | 23,381 → 25,261 | 7,020 | 4,735 | 9,939 → 10,409 | – |
+
+**Production menu (all tools)**, same turns:
+- Tools are 29,409 B on owner turns and 11,467 B on the card and job turns.
+- System is 22,360 → 24,375 B.
+- An owner turn is about 13.2k → 13.7k estimated tokens.
+- The long chat's prefix share is 0.974 / 0.975.
+
+**What V2 costs** [verified bytes; cost is inference]:
+- **Size:** +2,015 B (~504 tokens) per call, all in the system head, which is byte-stable per owner, surface and tool set.
+- **When it bills in full:** on Anthropic owner chat calls, only on a cache write (1.25×) after a cold start or a head change. On a cache read it bills at 0.1×.
+- **Uncached calls:** aux calls on Claude (cards, jobs, reminders) send no cache marks, so they pay the ~504 tokens in full. That is about 5% of a Brief call.
+- **Prefix stability:** unchanged. The long chat's share is 0.968 → 0.969 on staging and 0.974 → 0.975 on production. The `owner-turn-stable-prefix` and `system-prefix-order` tests pass with V2 on.
+
+**Live cache hit rate: UNAVAILABLE.** No provider keys on this Mac, and the `evals-live` job has had no secrets since 4 Nov. Once it runs, the live number is `cached_share` on the `llm_reply` Langfuse spans (`otlp-turns.ts:84-110`) and `tokens.cached` on the scorecard.
+
+**What the model is missing** [inference, from the measured turn contexts]:
+- Nothing structural for a chat turn: clock, profile, memory, health, loops and connections all arrive.
+- The gaps are in instructions. They are findings 1, 3 and 4, and V2 addresses them.
+
+**What to cut, in order of size:**
+1. The production tool menu (finding 10; not this lane).
+2. Recalled memory and earlier results on long owners. That is Inline & Spill on recall, which is the chain-of-recall lane (#1876). This lane adds no second spill.
+3. The REASONS filler and the health header (findings 7 and 9). Each is small and cached.

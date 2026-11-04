@@ -57,6 +57,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
+  WALDO_PROMPT_V2: mapped("'1' sends the trials the behavior prompt's version 2"),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
@@ -123,6 +124,7 @@ export type StagingProfile = Readonly<{
   model: ModelName;
   toolLoader?: 'harness';
   toolSearch?: true;
+  promptV2: boolean;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
   memorySelection: boolean;
@@ -136,6 +138,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
   return {
     label: 'staging', model: OWNER_MODELS[modelProviderSetting(vars.WALDO_MODEL_PROVIDER)].chat,
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
+    promptV2: vars.WALDO_PROMPT_V2 === '1',
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
     memorySelection: vars.MEMORY_SELECTION === '1',

@@ -236,6 +236,33 @@ describe('the rules that pulled against each other are gone', () => {
   });
 });
 
+// Version 2 (WALDO_PROMPT_V2) is judged by the nightly scenarios its rules map to (evals/nightly/rules.ts), not by its words;
+// these hold only what a prompt must be on every surface: unchanged by the sanitiser, no rule said twice, inside its budget.
+describe('messagingSystemPrompt, version 2', () => {
+  const v2Prompts = (): readonly (readonly [string, string])[] => [
+    ['no surface', messagingSystemPrompt(HOTEL_TURN_TOOLS, undefined, false, undefined, true)],
+    ...SURFACES.map((surface) => [surface.surface, messagingSystemPrompt(HOTEL_TURN_TOOLS, surface, false, undefined, true)] as const),
+  ];
+
+  it('leaves version 1 as it was while the switch is off', () => {
+    for (const [surface, prompt] of prompts()) expect(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), false, undefined, false)).toBe(prompt);
+  });
+
+  it.each(v2Prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {
+    const canary_tokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+    expect(sanitise({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
+  });
+
+  it.each(v2Prompts())('%s: says no rule twice', (_surface, prompt) => {
+    const rules = prompt.split('\n').filter((line) => line.startsWith('- '));
+    expect(rules.length - new Set(rules).size).toBe(0);
+  });
+
+  it('keeps every delivered version 2 text under 22,500 bytes', () => {
+    expect(Math.max(...v2Prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(22_500);
+  });
+});
+
 // The voice is a contract: a change to it is deliberate, versioned and in the changelog, never drift between releases.
 const VOICE_DIGESTS: Readonly<Record<number, string>> = {
   2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',

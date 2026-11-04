@@ -32,6 +32,8 @@ export type NightlyRun = Readonly<{
   toolSearch?: boolean;
   // The harness's own loader (WALDO_TOOL_LOADER=harness): core tools up front, the rest through find_tools and use_tool.
   toolLoader?: 'harness';
+  // The behavior prompt's version 2 (WALDO_PROMPT_V2=1).
+  promptV2?: boolean;
   // Opens the route's second-provider step; the gateway must serve Anthropic requests for it to be taken.
   fallbackKey?: string;
   forgetBarrier?: ForgetBarrierMode;
@@ -87,7 +89,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const missed = run.ablationMisses?.() ?? 0;
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
+      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.promptV2 ? { promptV2: true } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
       metrics.push(record.metrics);
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       // A trial whose rules were not all dropped measured nothing about them.
