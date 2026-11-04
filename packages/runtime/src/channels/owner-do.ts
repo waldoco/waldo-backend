@@ -153,7 +153,8 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
-import { applyDayPlan, applyReplan, heldCardsOn, coalesced, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { mergedSteps, whyJson, withWhy, type TrailStep, type WhyHolder } from '../tools/why-trail';
+import { applyDayPlan, applyReplan, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -216,7 +217,7 @@ import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoti
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
 import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-time';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
@@ -621,6 +622,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
+  // "Why this changed": the steps gathered from the cards a day card's turn raises, while it is written.
+  private readonly whyHolder: WhyHolder = {};
   // The WhatsApp turn running now: the owner's message it answers (its wamid), whether that message was itself a swipe-reply,
   // and the emoji the model chose for it, which goes out after the reply.
   private activeWhatsApp: { scope: RunEffectScope; wamid: string; admittedAt: number; threaded: boolean; reaction?: string } | null = null;
@@ -1753,6 +1756,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'whatsapp_context', run: (texts) => forgetWhatsAppContext(kv, texts).remaining },
       { name: 'whatsapp_inbox', run: (texts) => redactWhatsAppInboxEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
+      { name: 'why_trails', run: (texts) => forgetTrails(storage.sql, texts) + dayPlanBook(storage.sql).forgetWhy(texts) },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
       this.taskJobsForgetStore(),
@@ -1885,6 +1889,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
+            cardsWhy:(date:string)=>dayCardsWhy(dayPlanBook(this.ctx.storage.sql),date),
             days:(date?:string)=>this.appDays(runtime,name,hash,date),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             ownerName:()=>ownerName(claimStore(this.ctx.storage.sql)),
@@ -4661,7 +4666,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}), ...(this.env.MEMORY_SELECTION === '1' ? { memorySelection: { reviewed: () => reviewedThrough(storage.kv.get<number>(NIGHTLY_THROUGH_KEY)) } } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
-    const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
+    // With WHY_TRAIL=1 the proposing tools take the steps behind their card; off, their definitions are as before.
+    const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => {
+      const reachable = refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
+      return this.env.WHY_TRAIL === '1' ? withWhy(reachable, this.whyHolder) : reachable;
+    };
     // The model access the owner's turns and workers share; read before a machine job is written.
     // A provider that refused the key opens one incident, logged once for ops. The owner hears of it from noticeFailures only while a day card waits for the model.
     // Noticing it never fails the call that met it.
@@ -4712,7 +4721,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
       } }), ...loopHandlers(loops, closableIn), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
-        conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
+        conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -5554,16 +5563,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         waiting: waitingSection(waitingApprovals(desk.pending(now))), ...(planning ? { planning } : {}),
       });
       try {
+        // With WHY_TRAIL=1, the steps behind every card this card's turn raises are the card's own "Why this changed".
+        const explains = this.env.WHY_TRAIL === '1';
+        this.whyHolder.collected = explains ? [] : undefined;
         // The planning Brief proposes its changes on the owner's cards, and where its row can carry them, offers answers to tap.
         const asks = planning && replyOfferTools.length > 0;
         if (asks) cardReplies.open(trace);
         if (planning) briefEgress.open(trace);
-        let text: string, replies: readonly string[] = [];
+        let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, planning ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, planning ? proposes : undefined)).trim();
-        } finally { if (asks) replies = cardReplies.take(trace); briefEgress.close(trace); }
+        } finally {
+          raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
+          if (asks) replies = cardReplies.take(trace);
+          briefEgress.close(trace);
+        }
         const skipped = !text || isSkip(text);
+        if (explains) plans.why(day, card.id, skipped ? null : whyJson(mergedSteps(raised)));
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
           // A card already in the outbox for today writes nothing when it fires again, so it does not bound this card.
