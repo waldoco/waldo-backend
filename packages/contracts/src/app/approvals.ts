@@ -5,6 +5,7 @@ import {
   epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, REPLY_TEXT_MAX_CHARS, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
 import { surfaceNameV1Schema } from './surfaces';
+import { appWhyV1Schema } from './why';
 
 // One state per desk ledger status. Approval is not an outcome: an approved effect reads done,
 // not_done or outcome_unknown, and an approval claimed before its effect resolves reads outcome_unknown.
@@ -81,6 +82,8 @@ export const appApprovalV1Schema = z.strictObject({
   // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
   question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
   health: appApprovalHealthV1Schema.optional(), withdrawal: appApprovalWithdrawalV1Schema.optional(),
+  // "Why this changed", approvals revision 8: the steps behind the card, present only when Waldo kept any (./why).
+  why: appWhyV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
   .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' || kind === 'agent_mail_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
     { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
@@ -94,13 +97,17 @@ export const appApprovalV1Schema = z.strictObject({
 export const APP_APPROVALS_AGENT_MAIL_REVISION = 5;
 // A build that predates revision 6 reads a withdrawn card as superseded alone.
 export const APP_APPROVALS_WITHDRAWAL_REVISION = 6;
-export const APP_APPROVALS_CONTRACT_REVISION = 6;
-// An approval as a build reading `revision` parses it: revision 5 is the shape before the withdrawal, revision 3 the shape
+// A build that predates revision 8 is never sent the steps behind a card. Revision 7 is allocated to standing grants.
+export const APP_APPROVALS_WHY_REVISION = 8;
+export const APP_APPROVALS_CONTRACT_REVISION = 8;
+// An approval as a build reading `revision` parses it: revision 7 and below is the shape before the steps behind it, revision 5 the shape before the withdrawal, revision 3 the shape
 // before the health origin, revision 2 the shape before the draft of a send, and revision 1 the shape before the calendar
 // details too. An approval a revision leaves whole is returned as it is.
 export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
-  const { withdrawal, ...withoutWithdrawal } = approval;
-  const current = revision < APP_APPROVALS_WITHDRAWAL_REVISION && withdrawal !== undefined ? withoutWithdrawal : approval;
+  const { why, ...withoutWhy } = approval;
+  const explained = revision < APP_APPROVALS_WHY_REVISION && why !== undefined ? withoutWhy : approval;
+  const { withdrawal, ...withoutWithdrawal } = explained;
+  const current = revision < APP_APPROVALS_WITHDRAWAL_REVISION && withdrawal !== undefined ? withoutWithdrawal : explained;
   const { health, ...withoutHealth } = current;
   const whole = revision < 4 && health !== undefined ? withoutHealth : current;
   const { message, ...withoutMessage } = whole.exact;

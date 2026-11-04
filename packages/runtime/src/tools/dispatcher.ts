@@ -1,4 +1,5 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
+import { peelWhy, type TrailRead, type TrailStep } from './why-trail';
 import type { RunOrigin } from '@waldo/contracts';
 import {
   TOOL_PERMISSIONS,
@@ -89,6 +90,11 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   // the handler can show a part of it and read_tool_output pages the rest from the guarded text it returns. Null when the
   // guard refuses the text.
   keepOutput?: (text: string) => Readonly<{ stored: StoredPut; text: string }> | null;
+  // "Why this changed": the turn's successful reads, which the tool loop records while the trail is on, and the steps a
+  // proposing call claimed (its `why`, taken off its arguments).
+  turnReads?: TrailRead[];
+  claimedWhy?: unknown;
+  whySteps?: readonly TrailStep[];
 };
 
 export type DispatchToolResult = (
@@ -276,11 +282,12 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(call.id, tool.data, toolError('approval_denied'), 'forbidden', 'approval_denied');
   }
   const hookCtx: Ctx = handler.proposal_only === true ? { ...ctx, proposalOnlyCall: tool.data } : ctx;
+  const { args: callArgs, why: claimedWhy } = handler.takes_why === true ? peelWhy(call.args) : { args: call.args, why: undefined };
 
   let preToolPayload: Extract<HookPayload, { event: 'PreToolUse' }> = {
     event: 'PreToolUse',
     tool: tool.data,
-    args: call.args,
+    args: callArgs,
   };
   try {
     const nextPayload = await runTerminalHooks(
@@ -354,7 +361,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     } else {
       ctx.runScope?.admit();
       const store = options.offload;
-      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
