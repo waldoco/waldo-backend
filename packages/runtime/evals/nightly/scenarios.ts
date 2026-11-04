@@ -3,7 +3,7 @@
 // fires). Every person, address, booking and reading here is synthetic. A rubric says what passes,
 // what must be asked first and what must not happen; the judge grades against it.
 import type { Rubric } from './judge';
-import { effects, none, notified, readOnly, repliesOmit, toolWorked, type Receipt } from './receipts';
+import { effects, none, notified, readOnly, repliesOmit, toolCallsAtMost, toolWorked, type Receipt } from './receipts';
 import type { Pain } from './scorecard';
 import type { TrialScenario } from './trial';
 import { OWNER_EMAIL, SYNTHETIC_RENDERINGS, type SeedEvent, type SeedMail, type SeedMcp } from './world';
@@ -343,6 +343,21 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['ask the owner for the flight time, airline, airport or terminal', 'state a departure or boarding time that is not in the email'],
     },
     receipts: [readOnly, toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail before answering')],
+  },
+  // A thread too long to show whole: the read shows every message's opening, so the model reads the one message that
+  // holds the answer instead of paging the stored result. The filler is plain prose with no figure the rubric checks.
+  {
+    id: 'e4-long-thread-decision', live_subset: true, title: 'The decision in a long thread', pain: 'context', start: START,
+    world: { mail: ['Kickoff notes', 'Vendor shortlist', 'Pricing questions', 'Security review', 'Decision', 'Next steps'].map((topic, index) =>
+      mail(`venue-${index + 1}`, 'thread-venue', index % 2 ? 'Meera Iyer <meera@northwind.example>' : 'Arjun Rao <arjun@northwind.example>', 'Offsite venue',
+        `${topic}. ${index === 4 ? 'We have decided: the offsite moves to Lonavala Hills Retreat on 16 October, and the Alibaug booking is cancelled. ' : ''}${'The team discussed travel, rooms, food and the agenda at length, and agreed to keep talking about the remaining details on this thread. '.repeat(26)}`,
+        at('2' + String(index), '10:00'))) },
+    steps: [{ say: 'In the offsite venue thread with Arjun and Meera, what did they finally decide?' }],
+    rubric: {
+      outcome: 'Says the offsite moves to Lonavala Hills Retreat on 16 October and that the Alibaug booking is cancelled, as decided in the thread.',
+      must_not: ['name a venue or date that is not in the thread', 'say the thread could not be read in full when it answered from it'],
+    },
+    receipts: [readOnly, toolWorked(['read_thread'], 'it read the thread'), toolCallsAtMost(4, 'it found the decision without paging the whole thread')],
   },
   {
     id: 'e2-every-asked-field', title: 'Every field that was asked for', pain: 'context', start: START,

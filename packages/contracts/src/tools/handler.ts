@@ -11,6 +11,9 @@ import { TOOL_PERMISSIONS, type ToolName } from './permissions';
 // static type (a generic schema would be a factory, not a value); this factory is the
 // validator run at the dispatch boundary. The optional card is the tool's render surface,
 // owned by ui/card.
+// A failing tool's own next step, in place of its code's generic one: the field, offset or account that would make the
+// call work, or why no retry will. The tool's own words, never provider text.
+export const toolResultFixSchema = z.string().min(1).max(500);
 export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
   z.discriminatedUnion('ok', [
     z.strictObject({
@@ -19,7 +22,7 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       card: waldoCardSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), blocked: rungBlockedOutcomeSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), blocked: rungBlockedOutcomeSchema.optional(), fix: toolResultFixSchema.optional() }),
   ]);
 
 export type ToolResult<T> =
@@ -27,7 +30,8 @@ export type ToolResult<T> =
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
   // blocked: why a page or site stopped the call, when the tool knows it for certain; the refusal's fix names the next rung.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; blocked?: RungBlockedOutcome };
+  // fix: the tool's own recovery step (toolResultFixSchema), shown in place of the code's generic one.
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; blocked?: RungBlockedOutcome; fix?: string };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -81,6 +85,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       source_taint: z.literal('external'),
       connect: connectIntentSchema.optional(),
       blocked: rungBlockedOutcomeSchema.optional(),
+      fix: toolResultFixSchema.optional(),
     }),
   ]);
 
@@ -230,6 +235,10 @@ export interface ToolHandler<Args, Result, Ctx> {
   // turn_bound marks a handler that runs only inside the live turn that called it (its run scope, an open browser session,
   // a selection for that turn). An approval runs after the turn has ended, so such a call is never put on an approval card.
   turn_bound?: true;
+  // spill: the view shown in place of a result too long to show, which is stored behind read_tool_output. It names every
+  // item with its id and a short summary, so the model sees the whole result and reads back only the part it needs.
+  // Absent, the stored result's first characters are shown instead.
+  spill?(data: Result): unknown;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
