@@ -106,6 +106,17 @@ describe('Inline & Spill: the view shown for a result too long to show', () => {
     }
   });
 
+  it('a result too long for the store says how to reach what was cut, and shows no view of it', async () => {
+    const huge = { messages: Array.from({ length: 200 }, (_, i) => ({ id: `m${i}`, body: 'lorem ipsum '.repeat(60) })) };
+    const result = await dispatchTool({ id: 'c1', name: 'search_communication', args: { query: 'sam' } }, ctx, {
+      handlers: [{ ...spilling(() => ({ ids: [] })), handle: async () => ({ ok: true, data: huge, source_taint: 'external' }) as never }], offload: inMemoryToolOutputStore(),
+    });
+    const shown = (result as { data: { truncated: boolean; inline?: unknown; next?: string } }).data;
+    expect(shown.truncated).toBe(true);
+    expect(shown.inline).toBeUndefined();
+    expect(shown.next).toContain('smaller limit');
+  });
+
   it('withholds a secret in the view as the store does', async () => {
     const shown = await run(() => ({ note: `token ${'1111111111111111'}` }));
     expect(JSON.stringify(shown)).not.toContain('1111111111111111');
@@ -136,21 +147,55 @@ describe('the read_thread index on a long thread', () => {
     });
   }
 
-  it('keeps id, sender, time and subject when the headers alone are too long for openings', () => {
+  const at = '2026-11-04T09:00:00.000Z';
+  const spillOf = (messages: readonly Record<string, unknown>[]) =>
+    threadSpill({ thread_id: 't', account: null, cursor: null, messages }) as { messages: Record<string, unknown>[]; next: string };
+
+  it('drops the openings, then the recipients, before the bodies\' positions and flags', () => {
     const wide = Array.from({ length: 5 }, (_, k) => `a-rather-long-mailbox-name-number-${k}@a-long-company-domain.example.test`);
-    const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, from: 'sender@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'x'.repeat(500), to: wide, cc: wide }));
-    const view = threadSpill({ thread_id: 't', account: null, cursor: null, messages }) as { messages: Record<string, unknown>[]; next: string };
+    const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, from: 'sender@example.test', at, subject: 'Notes', body: 'x'.repeat(500), to: wide, cc: wide, recipients_capped: true, body_source: 'snippet', body_next_offset: 500, body_total_chars: 900 }));
+    const view = spillOf(messages);
     expect(view.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
-    expect(Object.keys(view.messages[0]!).sort()).toEqual(['at', 'from', 'id', 'subject']);
+    expect(view.messages[0]).not.toHaveProperty('opening');
+    expect(view.messages[0]).not.toHaveProperty('to');
+    expect(view.messages[0]).toMatchObject({ recipients_capped: true, body_source: 'snippet', body_next_offset: 500, body_chars_here: 500 });
     expect(view.next).toContain('body_message_id');
     expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
   });
 
+  it('keeps every message in view when 20 senders and subjects are each hundreds of characters long', () => {
+    const name = `"${'A Very Long Display Name '.repeat(12)}" <someone@example.test>`;
+    const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, from: name, at, subject: 'Re: '.repeat(80) + 'Notes', body: 'x'.repeat(500) }));
+    const view = spillOf(messages);
+    expect(view.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
+    expect(String(view.messages[0]!.from).startsWith('"A Very Long')).toBe(true);
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('keeps a third page of 20 widely addressed messages whole in the store, so its index names every message', async () => {
+    const crowd = (prefix: string) => Array.from({ length: 50 }, (_, k) => `${prefix}-recipient-${k}@example.test`).join(', ');
+    const client = thread(Array.from({ length: 60 }, (_, i) =>
+      message(`m${i}`, `message ${i} ${'lorem ipsum dolor '.repeat(200)}`, [{ name: 'To', value: crowd(`to${i}`) }, { name: 'Cc', value: crowd(`cc${i}`) }])));
+    const store = inMemoryToolOutputStore();
+    const read = async (cursor?: string) => {
+      const result = await dispatchTool({ id: 'c1', name: 'read_thread', args: { thread_id: 't', limit: 20, ...(cursor ? { cursor } : {}) } }, ctx, { handlers: [handler(client, 'read_thread')], offload: store });
+      return (result as { data: { truncated: boolean; head?: string; inline?: { messages: { id: string }[]; cursor: string | null } } }).data;
+    };
+    const first = await read();
+    const second = await read(first.inline!.cursor!);
+    const third = await read(second.inline!.cursor!);
+    for (const page of [first, second, third]) {
+      expect(page.truncated).toBe(false);
+      expect(page.head).toBeUndefined();
+    }
+    expect(third.inline!.messages.map((m) => m.id)).toEqual(Array.from({ length: 20 }, (_, i) => `m${40 + i}`));
+  });
+
   it('flags a preview-only body and a capped recipient list', () => {
-    const view = threadSpill({ thread_id: 't', account: null, cursor: null, messages: [
-      { id: 'm0', from: 'a@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'preview', body_source: 'snippet', recipients_capped: true },
-      { id: 'm1', from: 'a@example.test', at: '2026-11-04T09:00:00.000Z', subject: 'Notes', body: 'whole', body_source: 'plain' },
-    ] }) as { messages: Record<string, unknown>[] };
+    const view = spillOf([
+      { id: 'm0', from: 'a@example.test', at, subject: 'Notes', body: 'preview', body_source: 'snippet', recipients_capped: true },
+      { id: 'm1', from: 'a@example.test', at, subject: 'Notes', body: 'whole', body_source: 'plain' },
+    ]);
     expect(view.messages[0]).toMatchObject({ body_source: 'snippet', recipients_capped: true });
     expect(view.messages[1]).not.toHaveProperty('body_source');
   });

@@ -992,6 +992,7 @@ const offloadResult = (
     // retrievable - the receipt never claims retrievable output the store did not keep
     data: {
       stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, ...(inline === undefined ? { head: text.slice(0, 4_000) } : { inline }), read_with: 'read_tool_output',
+      ...(stored.truncated ? { next: `Only the first ${stored.stored_chars} characters were kept, so read_tool_output cannot reach the rest. Make the same call asking for less (a smaller limit, a narrower range, or one item) to see what was cut.` } : {}),
       ...(withheld === undefined ? {} : { withheld: { count: withheld, note: `${withheld === 1 ? 'One value was' : `${withheld} values were`} withheld in place as ${DEEP_ENCODING_MARKER}, because the content was encoded too deeply to check. Nothing else in the result was withheld for this.` } }),
     },
   };
