@@ -110,6 +110,9 @@ export const toolNameSchema = z.enum([
   'search_contacts',
   // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
   'send_progress_note',
+  // owner_message_heard: what the running owner turn does with a newer owner message that arrived while it ran: fold it into
+  // this answer, queue it as its own turn, or stop this turn for it.
+  'owner_message_heard',
   // attach_file: queue one of the owner's workspace files to go out with this turn's reply, where the surface carries files.
   'attach_file',
   // start_task/cancel_task: hand long, parallel or untrusted work to a task worker that holds no authority, and stop one.
@@ -242,6 +245,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_console_link',
     'connect_app',
     'send_progress_note',
+    'owner_message_heard',
     'attach_file',
     'react_to_message',
     'get_communication',
