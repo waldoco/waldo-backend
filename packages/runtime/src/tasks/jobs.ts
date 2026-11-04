@@ -3,6 +3,7 @@ import type { TaintedActionOutcome } from '../channels/approvals';
 import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
 import { FORGOTTEN, projectionValueHolds } from '../memory/claims';
 import type { ForgetStore } from '../memory/forget-purge';
+import type { HistoryArchive } from '../history/archive';
 import { md5Hex } from '../channels/md5';
 import { ClosedRunError } from '../channels/run-effect-scope';
 
@@ -143,7 +144,7 @@ const columns = (row: Copies) => [row.brief_json, row.checkpoint_json, row.resul
 type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>;
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
-export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string }>) => {
+export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string; archive?: HistoryArchive }>) => {
   // A table an earlier build created does not admit approval replays or jobs awaiting the owner; it is rebuilt with every column
   // it had, and park_retries at its default, in this synchronous block, which the storage commits as one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
@@ -500,8 +501,8 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return { cancelled, remaining };
     },
     // TTL sweep: a settled row still holding its whole brief (a forget's cancel, a row settled before briefs were dropped)
-    // keeps only what a settled row keeps; the owner's settled rows past the newest TASK_SETTLED_KEPT are dropped, and machine
-    // rows past their own.
+    // keeps only what a settled row keeps; the owner's settled rows past the newest TASK_SETTLED_KEPT leave the table, and
+    // machine rows past their own: into the history archive when it is on, deleted when it is off.
     trim(): number {
       const whole = sql.exec<Pick<JobRow, 'id' | 'kind' | 'brief_json'>>(
         `SELECT id, kind, brief_json FROM task_jobs WHERE ${SETTLED}
@@ -509,14 +510,18 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
              OR (kind = 'approval_replay' AND json_type(brief_json, '$.args') IS NOT NULL))`,
       ).toArray();
       for (const row of whole) sql.exec('UPDATE task_jobs SET brief_json = ? WHERE id = ?', settledBrief(row), row.id);
-      const owner = sql.exec(
-        `DELETE FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW}
-           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`, TASK_SETTLED_KEPT,
-      ).rowsWritten;
-      return owner + sql.exec(
-        `DELETE FROM task_jobs WHERE ${SETTLED} AND ${MACHINE_ROW} AND settled_at < ?
-           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`, deps.now() - MACHINE_SETTLED_KEPT_MS, MACHINE_SETTLED_KEPT,
-      ).rowsWritten;
+      const ownerPast = `${SETTLED} AND NOT ${MACHINE_ROW}
+           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`;
+      const machinePast = `${SETTLED} AND ${MACHINE_ROW} AND settled_at < ?
+           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`;
+      const archive = deps.archive;
+      if (archive === undefined || archive.mode === 'off') {
+        const owner = sql.exec(`DELETE FROM task_jobs WHERE ${ownerPast}`, TASK_SETTLED_KEPT).rowsWritten;
+        return owner + sql.exec(`DELETE FROM task_jobs WHERE ${machinePast}`, deps.now() - MACHINE_SETTLED_KEPT_MS, MACHINE_SETTLED_KEPT).rowsWritten;
+      }
+      const ids = (where: string, ...params: SqlStorageValue[]) => sql.exec<{ id: string }>(`SELECT id FROM task_jobs WHERE ${where}`, ...params).toArray().map(row => row.id);
+      return archive.retire('task_jobs', ids(ownerPast, TASK_SETTLED_KEPT))
+        + archive.retire('task_jobs', ids(machinePast, deps.now() - MACHINE_SETTLED_KEPT_MS, MACHINE_SETTLED_KEPT));
     },
   };
 };
