@@ -142,6 +142,15 @@ export class WhatsAppOwnerInbox {
     return this.merge && !!r && r.state === 'running' && plainOwnerText(r.update) && !!next && next.subject === r.subject && plainOwnerText(next.update);
   }
 
+  /** The running turn's model folded a waiting row into its own answer: it completes without a turn of its own. Only a row still admitted folds. Runs inside the running turn's commit. */
+  fold(id: string): boolean {
+    const r = this.get(id);
+    if (!r || r.state !== 'admitted') return false;
+    this.close(r, 'completed');
+    this.refreshDue();
+    return true;
+  }
+
   /** A running row whose reply was dropped because newer text overtook it waits again, to join that text at the next claim. True when it did. */
   requeue(record: WhatsAppInboxRecord): boolean {
     return this.storage.transactionSync(() => {
