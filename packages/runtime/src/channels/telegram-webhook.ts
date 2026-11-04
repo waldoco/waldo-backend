@@ -64,6 +64,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": the progress watchdog checks running background jobs in the owner's alarm pass and its console read reports enabled.
   WALDO_WATCHDOG?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
+  // Off unless "1".
+  NEXT_DUE_ALARM?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
