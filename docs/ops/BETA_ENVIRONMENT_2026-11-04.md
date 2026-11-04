@@ -14,7 +14,7 @@ Labels:
 - **[inference]**: a conclusion from the above.
 - **[proposed]**: a recommendation that needs the owner's yes.
 
-Alignment: the strategy session ([local_57a8d293](#local_57a8d293-6970-4d22-b4ce-e6006de4b72e)) owns the beta-readiness page on telemetry, crash reporting and per-surface gaps. That page did not exist when this was written; its health-first notes did. This runbook names crash reporting and telemetry as blockers (§8) but does not design them. When the page lands, it governs those two rows.
+Alignment: the strategy session owns the beta-readiness page on telemetry, crash reporting and per-surface gaps. That page did not exist when this was written; its health-first notes did. This runbook names crash reporting and telemetry as blockers (§8) but does not design them. When the page lands, it governs those two rows.
 
 ## 0. The answer
 
@@ -141,7 +141,7 @@ The guard (`scripts/guards/guard-wrangler-local-bindings.mjs`, with adversarial 
 | **App (iOS, Android)** | Bundle id `com.heywaldo.app`, Apple team `6R4AN5XP86`, EAS project and build numbers (`appVersionSource: remote`) | The API origin, which the app compiles in (`EXPO_PUBLIC_WALDO_APP_API_ORIGIN=https://app.heywaldo.in`); the EAS update channel (`beta`); the Android signing key | **On.** This is the cohort's main surface. |
 | **Push (APNs, FCM through Expo)** | The Expo project, and the APNs key and FCM credentials Expo holds. Push credentials belong to the app, not the environment [inference]. | Device rows: a build registers its Expo token with the backend it talks to, so beta tokens live only in beta's `waldo.app_push_devices` [verified: register is per Supabase project]. | On. Whether FCM credentials are uploaded to EAS for Android is [unverified]. Check at B12. |
 | **Console (web)** | none | Origin `https://app.heywaldo.in/console` | On (invite admin path) |
-| **WhatsApp** | nothing usable. One number has one Meta webhook callback, so staging's `919226067544` cannot serve both. | A second number, its own callback to `https://app.heywaldo.in/whatsapp/webhook`, a system user, and four secrets. Or move the existing number to beta and leave staging without WhatsApp (D5). Meta business verification and the restricted-account case are open [recorded: memory of 28 Oct, case 28969487829376096]. | **Off.** `WHATSAPP_WALDO_NUMBER` is empty; the beta gate expects POST 404. |
+| **WhatsApp** | nothing usable. One number has one Meta webhook callback, so staging's `919226067544` cannot serve both. | A second number, its own callback to `https://app.heywaldo.in/whatsapp/webhook`, a system user, and four secrets. Or move the existing number to beta and leave staging without WhatsApp (D5). Meta business verification and the restricted-account case are open [recorded: owner session notes of 28 Oct, not re-read]. | **Off.** `WHATSAPP_WALDO_NUMBER` is empty; the beta gate expects POST 404. |
 | **iMessage** | nothing. `woof@heywaldo.in` and Photon project `0e647a94…` route to staging's Worker. | A host Mac, an Apple Account and number on iMessage, a Photon project, and `IMESSAGE_CREDENTIAL_WRAPPING_KEY` | **Off.** `IMESSAGE_CONNECTOR_ENABLED=0`. |
 | **Agent mail (`mail.heywaldo.in`)** | The zone. Rule names carry the environment (`waldo-<env>-mail:<handle>`), so the sweeps never take each other's rules [verified]. | The handle namespace. Each Supabase project has its own handle directory, so `alex@mail.heywaldo.in` could be claimed in both, giving two literal routing rules for one address that point at different Workers [inference]. Fix by giving one environment its own subdomain (for example staging moves to `mail-staging.heywaldo.in` and beta takes `mail.heywaldo.in`), plus the `SCRIPTS` line in §1. | **Off.** `AGENT_MAIL_INBOUND=0`, `AGENT_MAIL_SEND=0`, no `send_email` binding. |
 | **Telegram** | n/a | n/a | Off by design (internal only) |
@@ -152,7 +152,7 @@ The guard (`scripts/guards/guard-wrangler-local-bindings.mjs`, with adversarial 
 
 Beta takes the switch set the owner approved for staging on 4 Nov. `MEDICATIONS`, `OPEN_SIGNUP`, `PHONE_SMS_VERIFY`, `CONSOLE_GOOGLE_SIGNIN`, `WHATSAPP_DEBUG_LOG` and `WALDO_TOOL_SEARCH` stay off. `HISTORY_ARCHIVE` starts at `dry`. Production (the top level) stays all off under the standing rule.
 
-The block on this branch already carries these values. A switch whose precondition is not met on beta when it is first deployed is set to `0` with `--var` at that deploy, and the reason is recorded in the B7 note.
+The block on this branch already carries these values. A switch whose precondition is a later step fails closed until that step: Google sign-in and MCP reads have no Google client or grant to use before B10, and Apple sign-in and the email code work from B3. If a precondition would fail in a way that is not graceful, the switch is committed at `"0"` in `env.beta` by a reviewed PR, then flipped by another PR when its step lands. A switch is never held with a `--var` override at deploy time, because the next promotion uploads the committed value and would silently turn it back on.
 
 | Switch | Staging (from the 4 Nov bundled deploy) | Beta | Precondition on beta |
 | --- | --- | --- | --- |
@@ -220,13 +220,13 @@ A beta deploy is never batched under a staging yes, and never under a previous b
 - Eval fixtures and test owners use synthetic values.
 - The guard refuses staging identities in the beta block.
 
-**Privacy notice and terms.** Version 1 is published at heywaldo.in/privacy and /terms [recorded: memory of 27 Oct; not re-read here]. Before the first invite, check that the published notice covers:
+**Privacy notice and terms.** Version 1 is published at heywaldo.in/privacy and /terms [recorded: owner session notes of 27 Oct, not re-read]. Before the first invite, check that the published notice covers:
 - the processors beta uses (Anthropic, OpenAI, Supabase, Cloudflare, Expo, Brave, the SMTP provider, Google);
 - that push may name an event (`PREP_PUSH_NAMES`, `UPDATE_PUSH_NAMES` are 1);
 - the owner look-up (`OWNER_LOOKUP`, `ONBOARDING_LOOKUP` are 1);
 - sleep need (`HEALTH_COACHING` is 1).
 
-If any is missing, set that switch to `0` at B7.
+If any is missing, commit that switch at `"0"` in `env.beta` before B7 (§5).
 
 **Deletion.**
 - In-app account deletion exists and runs the path in alpha runbook §3.2 [verified: `channels/dashboard-owner-controls.ts`].
@@ -310,7 +310,7 @@ Each step is its own owner yes. "Blast radius" is what changes. "Reversible" say
 - Reversible: n/a.
 
 **B1. Merge this branch and the app PR.**
-- Owner action: the Mac gate reviews; merge with an independent PASS and green CI.
+- Owner action: the Mac gate reviews; merge with an independent PASS and green CI. Land the backend PR after the current merge queue and the bundled staging deploy. The guard requires `env.beta` to carry every top-level var key, so a var PR that lands after this one must add its key to `env.beta`, and one that lands before it needs this branch rebased.
 - Blast radius: config and scripts only. `deploy-runtime.sh` now refuses any target but staging. Staging deploys pass `--env staging` and are unaffected.
 - Reversible: yes, revert the commits.
 
@@ -360,7 +360,7 @@ Each step is its own owner yes. "Blast radius" is what changes. "Reversible" say
   - Merge a one-line PR that lets `deploy-runtime.sh` accept `--env beta`, then run it from a clean checkout of the tag.
   - Set any switch whose precondition fails to `0` with `--var`, and record it.
   - This creates the Worker `waldo-runtime-beta`, its seven Durable Object namespaces, the cron and the custom domain `app.heywaldo.in`.
-- Check: `beta-gate.mjs`. `healthz` passes. App and console routes answer 401 and 303, and owner routes 503 until B8 (no directory secrets yet).
+- Check: `healthz` answers 200 with the tag's SHA. Before B8 the app routes answer 404, because no directory is configured (`channels/app-api.ts:166`) [verified]. So the full `beta-gate.mjs` run is expected to pass only after B8.
 - Blast radius: a new Worker and a new hostname, with no owners.
 - Reversible: before any owner exists, delete the Worker (which deletes its namespaces) and detach the domain. After that, `beta-rollback.sh` restores code only.
 
