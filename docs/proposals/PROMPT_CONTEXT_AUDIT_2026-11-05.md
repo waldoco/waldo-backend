@@ -55,7 +55,7 @@ All values are [verified].
    - That branch never hears:
      - the steer line ("The owner can send a new message while you work…");
      - that approved changes can be undone. The 10-minute window is real (`approvals.ts:64`, `UNDO_WINDOW_MS`).
-   - The `send_email` signature rule is not missing: the tool description carries it (`rt/tools/live/google.ts:676`).
+   - The `send_email` signature rule is not missing: the tool description carries it (`rt/tools/live/google.ts:676`; line 695 after the merge of #1878 at `fbc04ce8`).
    - Fix in V2: the steer line joins Doing for every turn, and undo is named in "Being ahead of them".
    - The wording duplicated between the two branches (connection links, calendar and email proposals) is a maintenance duplicate, not a prompt duplicate. Left as is.
 
