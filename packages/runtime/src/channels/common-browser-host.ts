@@ -12,6 +12,10 @@ import {generalDigest} from './general-browser-observation';
 import {browserScreenshotToWorkspace} from './browser-screenshot-workspace';
 import {browserDownloadToWorkspace,type BrowserDownloadMetadata,type BrowserDownloadReceipt} from './browser-download-workspace';
 import type { GeneralBrowserAction } from './general-browser-actions';
+import type { BrowserSubmitProposal } from './approvals';
+import type { BrowserSubmitOutcome } from '../tools/live/browser';
+import { FORM_SUBMIT_LIMITS, encodedFormBytes, formBodyMatches } from './general-browser-form';
+import type { GeneralRequestBody } from './general-browser-redirects';
 export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number;keepAliveMs?:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
 export type CommonBrowserConfiguration = Readonly<{
@@ -36,7 +40,13 @@ const OBSERVATION_ELEMENT_LIMIT=64;
 const MODEL_PDF_BYTES=8*1024*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
-type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+// One approval-gated form send. It names the exact document, control and fields the owner's card showed; the browser
+// admits one POST to the form's target carrying those fields, only while the owner's approval is being executed.
+type FormReceipt=Extract<BrowserSubmitOutcome,{status:'verified_with_receipt'}>['receipt'];
+type FormPermit=Readonly<{id:string;state:'proposed'|'sending'|'sent'|'unsent'|'uncertain';revision:string;targetId:string;elementRef:string;url:string;action:string;fields:readonly (readonly [string,string])[];expiresAt:number;receipt?:FormReceipt}>;
+export type CommonBrowserFormSubmit=Readonly<{propose(payload:BrowserSubmitProposal):Promise<string>}>;
+const FORM_APPROVAL_MS=600_000,FORM_SEND_MS=30_000;
+type BrowserRecord={submit?:FormPermit;download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.ownerId===b.session.ownerId&&a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
@@ -60,12 +70,17 @@ const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
 };
 // Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
 const retryable=(error:unknown)=>error instanceof GeneralBrowserError&&error.code==='turn_deadline';
-const failureText=(lead:string,otherwise:string,error:unknown,handle:string|undefined)=>`${lead} ${error instanceof GeneralBrowserError?BROWSER_NEXT_STEP[error.code]:otherwise}${handle?` This browser session's session_handle is ${handle}.`:''}`
+// With approval-gated form sends on, a refused native submit has a way forward: ask the owner through intent send.
+const FORM_SEND_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={...BROWSER_NEXT_STEP,
+ native_submit_requires_card:'This sends a form, which needs the owner\'s approval. Click the form\'s send control (its Submit or Next) with intent "send": the owner gets a card with the answers, and nothing is sent until they approve.'};
+const failureText=(lead:string,otherwise:string,error:unknown,handle:string|undefined,steps:Readonly<Record<GeneralBrowserError['code'],string>>=BROWSER_NEXT_STEP)=>`${lead} ${error instanceof GeneralBrowserError?steps[error.code]:otherwise}${handle?` This browser session's session_handle is ${handle}.`:''}`
  +(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):'');
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;egressAllowlist?:readonly string[];
  files?(assertCurrent:()=>Promise<void>,ownerId:string):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
+ // Present only while approval-gated form sends are switched on for this owner runtime.
+ formSubmit?():CommonBrowserFormSubmit|undefined;
 }>) {
  let modelFiles:LLMAttachment[]=[];
  const attach=(file:LLMAttachment)=>{if(modelFiles.length>=LLM_ATTACHMENTS_MAX)modelFiles.shift();modelFiles.push(file);};
@@ -75,8 +90,11 @@ export function commonBrowserHost(options:Readonly<{
  let handoffSession:BrowserSession|undefined;
  let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
+ // Set only while an owner's approval of a form send executes. It replaces the turn's admission with the owner's
+ // custody and the permit, and admits exactly one write: the approved form's POST.
+ let approved:{permit:FormPermit;grant:CommonBrowserGrant;storageKey:string;deadline:number;used:boolean}|undefined;
  const snapshot=()=>options.source();
- const checked=async()=>{await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
+ const checked=async()=>{if(approved)throw Error('approved form send in progress');await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
  const granted=async()=>{
   const task=await checked();const supplied=await options.config.grant(task,options.ownerId);const grant=Object.freeze({...supplied,allowedOrigins:Object.freeze([...supplied.allowedOrigins])});await checked();
   if(grant.ownerId!==options.ownerId||grant.taskId!==task.taskId||grant.expiresAt<=options.now()||!grant.ref||!Number.isSafeInteger(grant.expiresAt)||!Number.isSafeInteger(grant.lifetimeMs)||grant.lifetimeMs<10000||!Number.isSafeInteger(grant.keepAliveMs??grant.lifetimeMs)||(grant.keepAliveMs??grant.lifetimeMs)<10000||(grant.keepAliveMs??grant.lifetimeMs)>600000||!Number.isSafeInteger(grant.maxScreenshotBytes)||grant.maxScreenshotBytes<1||!grant.allowedOrigins.length||grant.allowedOrigins.some(origin=>{if(origin===PUBLIC_WEB_ORIGIN)return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common browser grant rejected');
@@ -91,10 +109,21 @@ export function commonBrowserHost(options:Readonly<{
  };
  const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
  const readableUrl=(grant:CommonBrowserGrant,url:string,method:string)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}};
- const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
-  admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
+ const approvedCurrent=async(held:NonNullable<typeof approved>)=>{
+  if(approved!==held||held.deadline<=options.now())throw Error('form approval expired');
+  await options.config.assertHandoffCurrent!(held.grant);
+  const row=options.storage.kv.get<BrowserRecord>(held.storageKey);
+  if(approved!==held||!row||row.cleanup||row.handoff||JSON.stringify(row.grant)!==JSON.stringify(held.grant)||row.session.expiresAt<=options.now()||row.submit?.id!==held.permit.id||!['proposed','sending'].includes(row.submit.state))throw Error('form approval custody changed');
+ };
+ const approvedPost=(url:string,method:string,body?:GeneralRequestBody)=>{
+  const held=approved;
+  if(!held||held.used||method!=='POST'||url!==held.permit.action||!formBodyMatches(held.permit.fields,body))return false;
+  held.used=true;return true;
+ };
+ const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:()=>approved?approved.deadline:options.deadline(),cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
+  admit:async()=>{if(approved){await approvedCurrent(approved);return;}await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
-  authorizeRequest:async(url,method)=>readableUrl(grant,url,method)});
+  authorizeRequest:async(url,method,body)=>approved&&!['GET','HEAD'].includes(method)?approvedPost(url,method,body):readableUrl(grant,url,method)});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
@@ -115,15 +144,18 @@ export function commonBrowserHost(options:Readonly<{
   if(!row||row.cleanup||row.session.ownerId!==options.ownerId||row.session.expiresAt<=options.now()||JSON.stringify(row.grant)!==JSON.stringify(grant)||!row.handoff||handoffSession&&(row.session.id!==handoffSession.id||row.session.generation!==handoffSession.generation||row.session.providerSessionId!==handoffSession.providerSessionId))throw Error('owner handoff unavailable');
   return row;
  };
+ // The checkpoint holds what a later action needs: the refs the model is shown and their native targets.
+ // Page text and the accessibility snapshot reach the model only, so a long page never outgrows storage.
+ const checkpointOf=(latest:Record,observed:GeneralSnapshot):Record=>{
+  const {image:_,state,observation:shown,...identity}=observed;
+  const observation={...identity,state:{...state,text:'',elements:state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)},observation:{...shown,text:'',accessibility_snapshot:undefined,elements:shown.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)}};
+  return {...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
+ };
  const publishObservation=async(grant:CommonBrowserGrant,record:Record,observed:GeneralSnapshot,ctx:ToolDispatcherContext)=>{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
   if(!latest||latest.cleanup||!sameSession(latest,record))throw Error('common browser custody changed');
-  // The checkpoint holds what a later action needs: the refs the model is shown and their native targets.
-  // Page text and the accessibility snapshot reach the model only, so a long page never outgrows storage.
-  const {image:_,state,observation:shown,...identity}=observed;
-  const observation={...identity,state:{...state,text:'',elements:state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)},observation:{...shown,text:'',accessibility_snapshot:undefined,elements:shown.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)}};
-  const checkpoint={...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
+  const checkpoint=checkpointOf(latest,observed);
   if(encodedCheckpointBytes(checkpoint)>COMMON_BROWSER_CHECKPOINT_BYTES-1024){
    // Do not truncate native refs/state or leave an older observation actionable.
    // The retained exact session remains available for explicit cleanup.
@@ -162,6 +194,25 @@ export function commonBrowserHost(options:Readonly<{
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
    }catch(error){sessionEnded=ended(error);return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
   }};
+ const formTarget=(grant:CommonBrowserGrant,url:string)=>{try{const target=new URL(url);return ['https:','http:'].includes(target.protocol)&&!target.username&&!target.password&&isPublicWebUrl(`${target.origin}/`,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(target.origin));}catch{return false;}};
+ const formRefusal=(reason:string)=>({ok:false as const,code:'rejected' as const,error:`${reason} Nothing was sent and no approval card was made.`,source_taint:'external' as const});
+ // The card is built from the host's own reading of the form, never from model text: the owner approves what the page holds.
+ const proposeForm=async(proposer:CommonBrowserFormSubmit,grant:CommonBrowserGrant,record:Record,before:GeneralActionSnapshot,elementRef:string,ctx:ToolDispatcherContext,storageKey:string)=>{
+  const form=await executionDriver(grant,ctx).formSubmission(record.session,before,elementRef);
+  await checked();await ctx.assertTaskSourceCurrent?.();
+  if(!form)return formRefusal('That control is not part of a form, so there is nothing to send. Click it without intent send if it only changes the page.');
+  if(form.method!=='post')return formRefusal('This form sends with GET, which is an ordinary navigation: click its control without intent send.');
+  if(form.secret)return formRefusal('This form asks for a password or a one-time code, which Waldo never sends; offer the owner owner_login instead.');
+  if(form.file)return formRefusal('This form attaches a file, which this browser cannot send.');
+  if(form.enctype!=='application/x-www-form-urlencoded'||!formTarget(grant,form.action))return formRefusal('This form sends in a way this browser cannot approve: another encoding, or a target outside the open public web.');
+  if(form.fields.length>FORM_SUBMIT_LIMITS.fields||encodedFormBytes(form.fields)>FORM_SUBMIT_LIMITS.bodyBytes||form.answers.length>FORM_SUBMIT_LIMITS.answers)return formRefusal('This form is too large to show the owner in one approval card.');
+  const permit:FormPermit={id:crypto.randomUUID(),state:'proposed',revision:before.observation.revision,targetId:before.targetId,elementRef,url:before.observation.url,action:form.action,fields:form.fields,expiresAt:Math.min(record.session.expiresAt,options.now()+FORM_APPROVAL_MS)};
+  options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey);if(!latest||latest.cleanup||!sameSession(latest,record)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser form custody changed');save({...latest,submit:permit},storageKey);});
+  const binding:{[label:string]:string}={};
+  for(const answer of form.answers){let label=answer.label,n=2;while(Object.hasOwn(binding,label))label=`${answer.label} (${n++})`;binding[label]=answer.value;}
+  const proposalId=await proposer.propose({url:permit.url,action:{selector:elementRef,description:'Send this form',method:'click'},binding,steps:[],request:{url:form.action,method:'POST',fields:[...new Set(form.fields.map(([name])=>name))]},approvalExpiresAt:permit.expiresAt,form:{taskId:grant.taskId,sessionId:record.session.id,permitId:permit.id}});
+  return {ok:true as const,data:{session_handle:record.session.id,stopped:'approval_pending',proposal_id:proposalId,answers:form.answers,notice:'Nothing was sent yet. The owner has an approval card with these answers and the form\'s address; end this turn and tell them. Approving sends this form once, from this same page; read the page afterwards to see the result. Any change to the page before they approve makes the card send nothing, so do not act on this page meanwhile.'},source_taint:'external' as const};
+ };
  const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, back, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;sessionEnded=false;
    try{
@@ -262,7 +313,11 @@ export function commonBrowserHost(options:Readonly<{
     }
     else {
      if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
-     if('intent' in command&&command.intent==='send')throw Error('browser approval required');
+     if('intent' in command&&command.intent==='send'){
+      const proposer=options.formSubmit?.();
+      if(command.operation!=='click'||!proposer)throw Error('browser approval required');
+      return await proposeForm(proposer,grant,record,before,command.element_ref,ctx,storageKey);
+     }
      const prepare=async(prepared:string)=>{
        await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
        options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser effect custody changed');save({...latest,action:{digest:prepared,state:'prepared'}},storageKey!);digest=prepared;});
@@ -292,10 +347,57 @@ export function commonBrowserHost(options:Readonly<{
    }catch(error){
     if(!digest&&['read','inspect','back'].includes(args.command?.operation??''))sessionEnded=ended(error);
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
-    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText(error instanceof GeneralBrowserError&&error.code==='native_submit_requires_card'?'The browser refused this form submission before sending anything.':'The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
+    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText(error instanceof GeneralBrowserError&&error.code==='native_submit_requires_card'?'The browser refused this form submission before sending anything.':'The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle(),options.formSubmit?.()?FORM_SEND_NEXT_STEP:BROWSER_NEXT_STEP),source_taint:'external'};
    }
   }};
- const api={handler,actionHandler,
+ const notSent=(message:string):BrowserSubmitOutcome=>({status:'rejected',message:`${message} Nothing was sent.`});
+ const settleForm=(storageKey:string,permit:FormPermit,state:FormPermit['state'],action:Readonly<{digest:string;state:'observed'|'uncertain'}>|undefined,observed?:GeneralSnapshot,receipt?:FormReceipt)=>options.storage.transactionSync(()=>{
+  const latest=options.storage.kv.get<Record>(storageKey);if(!latest||latest.submit?.id!==permit.id)return;
+  let next:Record={...latest,submit:{...latest.submit,state,...(receipt?{receipt}:{})},...(action&&latest.action?.digest===action.digest?{action}:{})};
+  if(observed){const withPage=checkpointOf(next,observed);next=encodedCheckpointBytes(withPage)>COMMON_BROWSER_CHECKPOINT_BYTES-1024?{...next,observation:undefined,tabs:[]}:withPage;}
+  save(next,storageKey);
+ });
+ // Runs after the owner approves the card, outside any model turn, on the same live document the form was filled in. A
+ // closed page, a changed page or form, an expired session or a changed owner sends nothing; the page's POST is admitted
+ // once and only with the approved fields, so a mismatch is refused in the browser before it leaves.
+ const submitApprovedForm=async(payload:BrowserSubmitProposal):Promise<BrowserSubmitOutcome>=>{
+  const reference=payload.form;if(!reference)return notSent('This approval is not for a form in Waldo\'s browser.');
+  const storageKey=key(reference.taskId),record=options.storage.kv.get<Record>(storageKey),permit=record?.submit,now=options.now();
+  if(!record||record.cleanup||record.handoff||record.session.id!==reference.sessionId||!permit||permit.id!==reference.permitId||permit.state!=='proposed'||payload.request?.url!==permit.action)return notSent('The form this approval was for is no longer waiting.');
+  if(permit.expiresAt<=now||record.session.expiresAt<=now)return notSent('The browser session that filled this form has ended. Ask Waldo to fill it again.');
+  if(record.action?.state==='prepared'||record.action?.state==='uncertain'||!record.observation||record.observation.observation.revision!==permit.revision||record.observation.targetId!==permit.targetId)return notSent('The page changed after you were asked. Ask Waldo to look at it again.');
+  if(approved||!options.config.assertHandoffCurrent||!execution||execution.grant!==JSON.stringify(record.grant)||!execution.driver.hasRetainedConnection())return notSent('The browser page holding this form was closed. Ask Waldo to fill it again.');
+  const driver=execution.driver,before=record.observation,held={permit,grant:record.grant,storageKey,deadline:Math.min(record.session.expiresAt,now+FORM_SEND_MS),used:false};
+  approved=held;
+  let digest:string|undefined;
+  try{
+   try{await approvedCurrent(held);}catch{return notSent('Your approval could not be confirmed for this browser session.');}
+   const current=await driver.formSubmission(record.session,before,permit.elementRef).catch(()=>null);
+   if(!current||current.action!==permit.action||JSON.stringify(current.fields)!==JSON.stringify(permit.fields)){settleForm(storageKey,permit,'unsent',undefined);return notSent('The form changed after you were asked. Ask Waldo to look at it again.');}
+   let observed:GeneralSnapshot;
+   try{
+    observed=await driver.act(record.session,before,{operation:'click',element_ref:permit.elementRef},async prepared=>{
+     await approvedCurrent(held);
+     options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey);if(!latest||latest.cleanup||!sameSession(latest,record)||latest.observation?.observation.revision!==permit.revision||latest.submit?.id!==permit.id||latest.submit.state!=='proposed'||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser form custody changed');save({...latest,action:{digest:prepared,state:'prepared'},submit:{...latest.submit,state:'sending'}},storageKey);digest=prepared;});
+    });
+   }catch{
+    // Every other write stays blocked while the send runs, so an approval that never released its POST sent nothing.
+    settleForm(storageKey,permit,held.used?'uncertain':'unsent',digest?{digest,state:held.used?'uncertain':'observed'}:undefined);
+    return held.used?{status:'uncertain',message:'The form was sent, but its result could not be read. Do not send it again before checking the page.'}:notSent('The page did not send the form; it may be showing a missing or invalid answer. Ask Waldo to look at it again.');
+   }
+   if(!held.used||!digest){settleForm(storageKey,permit,'unsent',digest?{digest,state:'observed'}:undefined,observed);return notSent('The page did not send the form; it may be showing a missing or invalid answer. Ask Waldo to look at it again.');}
+   // The receipt is this host's own evidence: the one admitted POST carried the approved fields, the site answered it
+   // without an error and its result page loaded in this session. What the page says stays for Waldo to read.
+   const receipt:FormReceipt={id:permit.id,observed_at:new Date(options.now()).toISOString(),source:'provider',action_digest:digest,binding_digest:await generalDigest(JSON.stringify(permit.fields))};
+   settleForm(storageKey,permit,'sent',{digest,state:'observed'},observed,receipt);
+   const shown=(observed.observation.title||observed.observation.text).replace(/\s+/g,' ').trim().slice(0,160);
+   return {status:'verified_with_receipt',message:`The site accepted the form${shown?` and showed "${shown}"`:''}.`,receipt};
+  }finally{if(approved===held)approved=undefined;}
+ };
+ const api={handler,actionHandler,submitApprovedForm,
+ formReceiptVerified(payload:BrowserSubmitProposal,receipt:FormReceipt){const reference=payload.form,row=reference?options.storage.kv.get<Record>(key(reference.taskId)):undefined;return !!reference&&row?.submit?.id===reference.permitId&&row.submit.state==='sent'&&!!row.submit.receipt&&JSON.stringify(row.submit.receipt)===JSON.stringify(receipt);},
+ // A declined or withdrawn card closes its permit, so a later approval of it sends nothing.
+ withdrawForm(payload:BrowserSubmitProposal){const reference=payload.form;if(!reference)return;const storageKey=key(reference.taskId);options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey);if(latest?.submit?.id===reference.permitId&&latest.submit.state==='proposed')save({...latest,submit:{...latest.submit,state:'unsent'}},storageKey);});},
  async handoffStatus(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff)return undefined;if(!human||row.handoff.state!=='pending')throw Error('owner login transition');const held=human,origin=await held.controller.origin();const fresh=await handoffCurrent(row.grant);if(human!==held||fresh.handoff!.state!=='pending')throw Error('owner login transition');return {state:fresh.handoff!.state,origin,reason:fresh.handoff!.reason,expiresAt:fresh.session.expiresAt};},
  async openHandoff(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff||!human){if(row?.handoff)await api.cancel();throw Error('owner login unavailable');}await handoffCurrent(row.grant);const url=await human.controller.open();await handoffCurrent(row.grant);return url;},
  async maintainHandoff(){

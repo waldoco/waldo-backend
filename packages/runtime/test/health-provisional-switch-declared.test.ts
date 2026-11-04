@@ -73,6 +73,13 @@ describe('MEDICATIONS in the Worker config', () => {
   });
 });
 
+describe('BROWSER_FORM_SUBMIT in the Worker config', () => {
+  it('is off in both blocks until the owner turns it on for the staging Google Forms run', () => {
+    expect(parsed.vars.BROWSER_FORM_SUBMIT).toBe('0');
+    expect(parsed.env.staging.vars.BROWSER_FORM_SUBMIT).toBe('0');
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is off in both blocks until the gate turns it on at a named deploy with migration 20261103120000', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');
