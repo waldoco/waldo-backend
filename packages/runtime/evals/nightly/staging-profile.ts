@@ -51,6 +51,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it off'),
+  WHY_TRAIL: gap('no trial reads the steps behind a card; staging has it off'),
   AUTONOMY_OWN_CALENDAR: gap('no trial holds a standing grant, and this build creates none; staging has it off'),
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),

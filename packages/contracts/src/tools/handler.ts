@@ -227,6 +227,9 @@ export interface ToolHandler<Args, Result, Ctx> {
   // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
   // from the handler it routes to, so a tool name alone never earns it.
   proposal_only?: true;
+  // takes_why marks a proposing handler offered the optional `why` argument ("Why this changed"). The dispatcher takes it off
+  // the call before the arguments are checked and hands it on as claimedWhy, so it is never part of what the owner approves.
+  takes_why?: true;
   // turn_bound marks a handler that runs only inside the live turn that called it (its run scope, an open browser session,
   // a selection for that turn). An approval runs after the turn has ended, so such a call is never put on an approval card.
   turn_bound?: true;
