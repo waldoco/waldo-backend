@@ -9,8 +9,8 @@ export const BRAIN_NAMESPACES = {
   calendar: 'Calendar changes and Google Tasks: free and busy time across all calendars, propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
   mail: "Mail beyond search: read a whole message, send_email to propose an email from the owner's Gmail that they approve on a card, approve_shown, where it is offered, when the owner tells you to go ahead with any card they were shown in this conversation (a send, or a calendar or task change), send_agent_mail to propose one Waldo sends as itself from the owner's Waldo address, draft_email for a Gmail draft they edit themselves, and contacts.",
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
-  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, search_history for past runs, tasks and decided cards, read_tool_output for stored tool output, and chat threads.',
-  health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
+  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, search_history for past runs, tasks and decided cards, read_tool_output for stored tool output, chat threads, and owner_message_heard for a newer message the owner sent during this turn.',
+  health: "Health logs, scores and screen time: log a meal or workout, list what was logged, the owner's derived scores.",
   medicines: "The owner's medicines: track_medication for reminder times and the count on hand, log_medication when they say taken or skipped, list_medications, and stop_medication.",
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
@@ -87,6 +87,7 @@ const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim null: a note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
   send_progress_note: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again') },
+  owner_message_heard: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: { replay: 'provider_idempotent', basis: 'keyed by the message id: the inbox folds only a message still admitted, so a re-run is refused as not_waiting and changes nothing', evidence: { file: 'channels/second-message.ts', needle: "reason: 'not_waiting'" } } },
   // claim null: queued is not sent; the file leaves after the reply is written, so no done-claim can rest on this receipt.
   // core: offered only on an iMessage owner turn whose host verified tapbacks, where a tapback is a reply the model makes in
   // passing, so it is never behind a search. claim null: queued is not sent; it leaves with the reply.
@@ -98,6 +99,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   use_mac: { brain: 'actions', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'mac_action_requested', replay: { replay: 'provider_idempotent', basis: 'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.', evidence: { file: 'tools/live/use-mac.ts', needle: 'request_id' } } },
   get_crs: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_health: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_screen_time: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
@@ -238,14 +240,14 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.
   read_mcp_tool: 'working', search_mcp_tools: 'working', call_mcp_tool: 'working', search_connector: 'working',
   read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files',
-  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health', set_sleep_need: 'health',
+  get_health: 'health', get_screen_time: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health', set_sleep_need: 'health',
   track_medication: 'health', log_medication: 'health', list_medications: 'health', stop_medication: 'health',
   read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory', search_history: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.

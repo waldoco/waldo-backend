@@ -98,6 +98,43 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
 
+// The owner's screen time as their phone sent it: one summary per device and local day, at most 31 days ending no later than
+// today in the owner's zone. Stored summaries, not a live read of the phone: received_at says how fresh each one is.
+export const SCREEN_TIME_TOOL_MAX_DAYS = 31;
+export const getScreenTimeArgsSchema = z
+  .strictObject({ from: healthReadDaySchema, to: healthReadDaySchema })
+  .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
+  .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < SCREEN_TIME_TOOL_MAX_DAYS, { error: `at most ${SCREEN_TIME_TOOL_MAX_DAYS} days`, path: ['to'] });
+export type GetScreenTimeArgs = z.infer<typeof getScreenTimeArgsSchema>;
+const screenTimeMinutes = z.int().min(0).max(1440);
+const screenTimeClock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/);
+// device numbers the owner's phones 1, 2, ... in the order they first sent, so two phones are never added up.
+export const screenTimeToolDaySchema = z.strictObject({
+  day: healthReadDaySchema,
+  device: z.int().min(1).max(8),
+  coverage: z.enum(['complete', 'partial', 'none']),
+  received_at: z.iso.datetime(),
+  screen_on_minutes: screenTimeMinutes.optional(),
+  pickups: z.int().min(0).max(10_000).optional(),
+  unlocks: z.int().min(0).max(10_000).optional(),
+  late_night_minutes: screenTimeMinutes.optional(),
+  late_night_window: z.string().min(1).max(11),
+  first_use_at: screenTimeClock.optional(),
+  last_use_at: screenTimeClock.optional(),
+  categories: z.array(z.strictObject({ category: z.string().min(1).max(32), minutes: screenTimeMinutes })).max(10).optional(),
+});
+export const getScreenTimeResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    // Oldest first.
+    days: z.array(screenTimeToolDaySchema).max(SCREEN_TIME_TOOL_MAX_DAYS * 8),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_data', 'read_failed']) }),
+]);
+export type GetScreenTimeResult = z.infer<typeof getScreenTimeResultSchema>;
+
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   account: z.email().optional(),
