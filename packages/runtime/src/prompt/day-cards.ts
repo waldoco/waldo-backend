@@ -7,15 +7,16 @@ import { updatesSection } from './update-cards';
 // (morning / afternoon / evening brief) and the vocabulary's Brief and Close.
 // Times are planned each day from the owner's routine; defaultTime is the fallback.
 export type CardId = 'card:brief' | 'card:midday' | 'card:close';
-// body: plan lets the owner's shared health shape the day's plan; line keeps it to one line.
-export type DayCard = Readonly<{ id: CardId; name: string; defaultTime: string; calendar: 'today' | 'rest_of_today' | 'tomorrow'; body: 'plan' | 'line'; instruction: string }>;
+// body: plan lets the owner's shared health shape the day's plan; line keeps it to one line. schedule: the card ends with a
+// time-blocked plan of the rest of the day after its spoken paragraph.
+export type DayCard = Readonly<{ id: CardId; name: string; defaultTime: string; calendar: 'today' | 'rest_of_today' | 'tomorrow'; body: 'plan' | 'line'; schedule?: true; instruction: string }>;
 
 export const SKIP_CARD = 'SKIP';
 
 // post-mvp-cleanup: fallback times until onboarding seeds the routine.
 export const DAY_CARDS: readonly DayCard[] = [
   {
-    id: 'card:brief', name: 'The Brief', defaultTime: '08:00', calendar: 'today', body: 'plan',
+    id: 'card:brief', name: 'The Brief', defaultTime: '08:00', calendar: 'today', body: 'plan', schedule: true,
     instruction: [
       'It is morning. Send the owner The Brief: how today looks and what to protect.',
       'Open with a one-line read of the day. Then walk them through it in order: events with times and what each is for, and any reminder due today or anything waiting on them, said in the sentence where it matters.',
@@ -54,6 +55,17 @@ const BODY_RULE: Readonly<Record<DayCard['body'], string>> = {
 // still named ("Reminders: None listed. Waiting on you: Nothing open."), read like a form, not like Waldo.
 export const PROSE_RULE = 'Plain sentences only: no headings, labels, bullet points or numbered lists. Leave out whatever has nothing in it; never name an empty category ("Reminders: none", "Waiting on you: nothing open").';
 
+// The owner asked (4 November 2026) for the morning Brief to lay out their day, not just describe it: the spoken paragraph
+// stays prose, and a time-blocked plan follows it. Which work goes where is the model's judgment; the calendar's own events
+// keep their times. The plan is a suggestion in the card, so it never claims a calendar change.
+export const SCHEDULE_HEADING = 'Your day';
+export const SCHEDULE_RULE = [
+  `After the paragraph, lay out the rest of their day as a time-blocked plan: a blank line, a line reading "${SCHEDULE_HEADING}", then one line per block in time order, written "HH:MM–HH:MM what it is for", starting from now and ending when their day usually ends.`,
+  'Keep every event from the calendar at its own time, exactly as the calendar has it. Fill the open time around them with what matters most today, drawn from their goals, open loops, tasks and anything waiting on them: the hardest thinking in their best energy window when their shared health names one, calls, email and admin in the lower stretches, a real break and a meal, and travel or buffer time before anything that needs it.',
+  'When their shared health shows a dip, plan a lighter day and pair it in the paragraph with the one easy step that helps or what still looks good, never a bare warning. Without shared health, plan from the calendar and what you know of their routine.',
+  'Leave time free when nothing needs it. Never invent an event, task or deadline you were not given. The plan is your suggestion, not a calendar change: never say a block is booked or on their calendar. If the day is already full, say so and list only the calendar.',
+].join(' ');
+
 const STATE_WORDS: Readonly<Record<ApprovalItem['state'], string>> = {
   open: 'needs their decision', review_only: 'too long to approve on its card', unconfirmed: 'its review card is not confirmed delivered', done: 'decided',
 };
@@ -77,6 +89,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
   BODY_RULE[card.body],
   `Format it as a compact card for chat: a first line naming "${card.name}", then a few short sentences, the way a person would say it. ${PROSE_RULE} Keep it tight enough to read in 20 seconds.`,
+  ...(card.schedule ? [SCHEDULE_RULE] : []),
 ].join('\n\n');
 
 export const DAY_PLAN_INSTRUCTION = [
