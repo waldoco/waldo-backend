@@ -2226,7 +2226,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // pass re-arms after a later one itself, and one that re-armed to hold its schedule keeps that hold. It reads before it writes and
   // writes nothing but that row: an object without the heartbeat's tables, or without the row, is left as it is. A row
   // retrying, paused or unreadable, a zone that is not valid or not yet confirmed on the app, or a due time that cannot be
-  // read leaves the row on its slot, as with the switch off.
+  // read puts the row on its grid slot, as with the switch off.
   private async alignHeartbeat(later: boolean): Promise<void> {
     if (this.env.NEXT_DUE_ALARM !== '1') return this.restoreHeartbeat();
     if (this.ctx.storage.kv.get(LINK_MODE)) return;
@@ -2236,29 +2236,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!['schedule', 'loops', 'loop_mail_sources', 'heartbeat_notified'].every(has)
         || !sql.exec('SELECT 1 FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray().length) return;
       // While a delivery record is open the heartbeat keeps its grid, so its pass reaches that record as often as with the switch off.
-      if ((this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) || this.outboxOpen()) return;
+      if ((this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) || this.outboxOpen()) return this.restoreHeartbeat();
       const scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
       const found = scheduler.lookup(HEARTBEAT_ID);
       if (found.state !== 'entry') return;
       const { entry } = found, recurrence = entry.recurrence;
       if (entry.status !== 'armed' || entry.attempts !== 0 || recurrence?.type !== 'interval') return;
       const timezone = kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
-      if (!validZone(timezone)) return;
+      if (!validZone(timezone)) return this.restoreHeartbeat();
       const now = Date.now();
       // A held card counts whatever the owner's brief setting: a tick that then releases nothing is only a wake.
       const wake = heartbeatWake({ sql, proactivity: has('proactivity') ? storedProactivity(sql) : DEFAULT_PROACTIVITY,
         heldCards: day => has('day_plan') ? heldCardsOn(sql, day) : [], timezone, now,
         lastTick: entry.last_fired_at ?? entry.created_at, every_ms: recurrence.every_ms, phase_ms: recurrence.phase_ms });
-      if (wake === null || (wake <= now && entry.due_at <= now)) return;
+      if (wake === null) return this.restoreHeartbeat();
+      if (wake <= now && entry.due_at <= now) return;
       const at = wake <= now ? nextOccurrence(recurrence, now - 1) : wake;
       if (!(later ? at !== entry.due_at : at < entry.due_at) || !scheduler.retime(HEARTBEAT_ID, at)) return;
       if (at > nextOccurrence(recurrence, now)) kv.put(HEARTBEAT_MOVED, true); else kv.delete(HEARTBEAT_MOVED);
       if (at < entry.due_at) await scheduler.rearm();
-    } catch { console.error(JSON.stringify({ hop: 'heartbeat_wake', ok: false, code: 'kept_slot' })); }
+    } catch { console.error(JSON.stringify({ hop: 'heartbeat_wake', ok: false, code: 'kept_slot' })); await this.restoreHeartbeat(); }
   }
-  // With the switch off, a heartbeat the switch moved past its next grid slot goes back to that slot and the alarm re-arms, so
-  // a rollback ticks on the grid at once: a card held through quiet hours goes out when they end, not at the parked tick. Only
-  // an armed row with no attempts moves; one the switch never moved costs one key read.
+  // With the switch off, or on a pass that cannot compute the bound, a heartbeat the switch moved past its next grid slot goes back to that slot and the alarm re-arms, so
+  // a rollback or a fallback ticks on the grid at once: a card held through quiet hours goes out when they end, and an open
+  // delivery record is reached every slot, not at the parked tick. Only an armed row with no attempts moves; one the switch
+  // never moved costs one key read.
   private async restoreHeartbeat(): Promise<void> {
     const kv = this.ctx.storage.kv;
     if (kv.get<boolean>(HEARTBEAT_MOVED) !== true) return;

@@ -345,11 +345,40 @@ describe('turning the switch back off', () => {
       clock(Z('2027-03-12T05:20:00Z'));
       dayPlanBook(state.storage.sql);
       state.storage.sql.exec("INSERT INTO day_plan (day, card, time, reason, sent) VALUES ('2027-03-12', 'brief', '06:30', 'default time', 2)");
-      expect(await alarm()).toBeLessThanOrEqual(Z('2027-03-12T05:30:00Z'));
+      let armed = await alarm();
+      expect(armed).toBeLessThanOrEqual(Z('2027-03-12T05:30:00Z'));
       expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-12T05:30:00Z'));
       expect(state.storage.kv.get('owner_heartbeat_moved_v1')).toBeUndefined();
+      // The ticks through quiet hours hold the card; the one at their end releases it to fire at once.
+      for (let wakes = 0; armed !== null && armed <= Z('2027-03-12T07:00:00Z') && wakes < 20; wakes++) { clock(armed); armed = await alarm(); }
+      expect(state.storage.sql.exec<{ occurrence_at: number }>("SELECT occurrence_at FROM schedule WHERE id = 'brief'").one().occurrence_at).toBe(Z('2027-03-12T07:00:00Z'));
     });
   });
+
+  // With the switch on, a pass that cannot compute the bound leaves the heartbeat where it is. A row an earlier pass moved
+  // goes back to its grid slot, or the fallback would wait out that move.
+  const parked = (name: string, fallback: (state: DurableObjectState) => void) =>
+    withOwner(name, 'app', '1', '2027-03-12T05:10:00Z', async ({ state, scheduler, alarm, clock, request }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-12T05:30:00Z'));
+      await alarm();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-13T05:30:00Z'));
+      clock(Z('2027-03-12T05:20:00Z'));
+      fallback(state);
+      await request();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-12T05:30:00Z'));
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Z('2027-03-12T05:30:00Z'));
+    });
+  it('puts a moved heartbeat back on its grid when a delivery record opens', () => parked('next-due-parked-record', state => {
+    const held = Date.now() + 30 * 24 * 3_600_000;
+    state.storage.kv.put('telegram_final_outbox_v1', [{ id: 'reminder:held', trace: 'held', status: 'pending', reason: 'window_refused', dueAt: held, createdAt: Date.now(), attempts: 1, payload: { chat_id: 7, text: 'Time to stretch.' } }]);
+    state.storage.kv.put('telegram_final_outbox_due_v1', held);
+  }));
+  it('puts a moved heartbeat back on its grid for a loop due time it cannot read', () => parked('next-due-parked-unreadable', state => loop(state, 'loop-1', 'next week')));
+  it('puts a moved heartbeat back on its grid with more open loops than its scan reads', () => parked('next-due-parked-many', state => {
+    for (let i = 0; i < 201; i++) loop(state, `loop-${i}`, '2027-04-01T09:00');
+  }));
+  it('puts a moved heartbeat back on its grid when the zone stops being valid', () => parked('next-due-parked-zone', state => state.storage.kv.put('timezone', 'Not/AZone')));
 
   it('leaves a heartbeat on its grid alone, and with the switch off reads nothing when the switch never moved it', async () => {
     await withOwner('next-due-off-untouched', 'app', '0', '2027-03-12T05:10:00Z', async ({ state, scheduler, alarm }) => {
