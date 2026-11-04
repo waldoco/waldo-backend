@@ -161,6 +161,8 @@ import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
 import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
+import { searchHistoryHandler } from '../tools/live/search-history';
+import { archiveMode, historyArchive, historyArchiveForgetStore, sweepScheduleRuns, type ArchiveDeps, type HistoryArchive } from '../history/archive';
 import { memoryHandlers } from '../tools/live/memory';
 import { LIFE_AREAS, toolNameSchema } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
@@ -210,10 +212,10 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, ledgerSummary, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
-import { approvalHandlers } from '../tools/live/raise-approval';
+import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
@@ -611,7 +613,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeScope: RunEffectScope | undefined;
   // The WhatsApp turn running now: the owner's message it answers (its wamid), whether that message was itself a swipe-reply,
   // and the emoji the model chose for it, which goes out after the reply.
-  private activeWhatsApp: { scope: RunEffectScope; wamid: string; threaded: boolean; reaction?: string } | null = null;
+  private activeWhatsApp: { scope: RunEffectScope; wamid: string; admittedAt: number; threaded: boolean; reaction?: string } | null = null;
   private activeAbort: AbortController | undefined;
   // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
   private compactionAbort: AbortController | undefined;
@@ -619,8 +621,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Background task jobs (task_jobs): this object writes every row and is their only retry owner. The book is built per
   // use, so an owner storage erase leaves no handle to a dropped table.
   private jobs(): JobBook {
-    return jobBook(this.ctx.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID() });
+    return jobBook(this.ctx.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID(), archive: this.historyArchive() });
   }
+  // Retention moves past-cap history rows into history_archive, never deletes them, while HISTORY_ARCHIVE is "1".
+  private archiveDeps(): ArchiveDeps {
+    const storage = this.ctx.storage;
+    return { sql: storage.sql, transaction: work => storage.transactionSync(work), mode: archiveMode(this.env.HISTORY_ARCHIVE), now: Date.now, log: event => console.log(JSON.stringify(event)) };
+  }
+  private historyArchive(): HistoryArchive { return historyArchive(this.archiveDeps()); }
   // The brain's side of each worker call. One host per object, so a cancel reaches the scope of an attempt in flight.
   private readonly tasks: TaskHost = (() => {
     const self = this;
@@ -1691,6 +1699,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
       this.taskJobsForgetStore(),
+      historyArchiveForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work) }),
       // An owner who has not had a turn yet has no episodes table.
       { name: 'episodes', run: (texts) => {
         if (storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
@@ -2205,7 +2214,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       kv.get<string>('whatsapp_subject') === record.subject && kv.get<boolean>('whatsapp_unlinked') !== true && kv.get<string>('do_name') === doName);
     const update = record.update!;
     this.activeScope = scope; this.activeAbort = abort;
-    const active = this.activeWhatsApp = { scope, wamid: record.wamid, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
+    const active = this.activeWhatsApp = { scope, wamid: record.wamid, admittedAt: record.admittedAt, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const expired = new Promise<never>((_, reject) => {
@@ -2876,6 +2885,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Before any surface is chosen: mail that cannot run for want of one still expires.
     await lane('mail', async () => this.expireAgentMail());
     await lane('mail', () => this.reconcileAgentMailRules());
+    // Once a day; a failed sweep is retried on the next wake and never holds the pass.
+    try { sweepScheduleRuns({ ...this.archiveDeps(), kv: this.ctx.storage.kv }); }
+    catch { console.error(JSON.stringify({ hop: 'history_archive_sweep', ok: false, code: 'sweep_failed' })); }
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
     const entered = await this.serialWithin(alarmEnd, async () => {
@@ -4107,6 +4119,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants,
+      approvesInChat: () => this.env.APPROVE_IN_CHAT === '1', conversationRef: () => this.activeApp?.conversationRef,
+      ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       // A card closed in a turn that read outside text: the desk's own words reach the owner's main chat once, through the outbox.
       notice: (key, text) => finalOutbox.enqueue({ id: key, trace: key, payload: { chat_id: owner, text }, ownerSubject: String(owner),
@@ -4198,7 +4212,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const exportTool = this.env.ARTIFACTS ? [exportArtifactHandler(
       artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => crypto.randomUUID()),  // full uuid: the export id is part of the link
       async id => exportDownloadUrl(await storage.get<string>('origin') ?? null, id))] : [];
-    const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
+    const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8), this.historyArchive());
     startDayHistory(storage.kv, Date.now());
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
@@ -4474,7 +4488,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -4483,7 +4497,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects, () => ownerName(memory)), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), ...memoryHandlers({
+      }, effects, () => ownerName(memory)), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), searchHistoryHandler(storage.sql, id => ledgerSummary(storage.sql, id)), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget

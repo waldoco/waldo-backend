@@ -5,6 +5,7 @@ import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
 import { jobsCarry } from '../../tasks/jobs';
+import { archiveCarries } from '../../history/archive';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
@@ -175,8 +176,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const current = new Set(turn ? [turn.current.text, ...ownerParts(turn.current)] : []);
         const inHistory = selected.size === 0 && deps.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n > 0
           && deps.sql.exec<{ text: string }>('SELECT text FROM episodes').toArray().some(row => !current.has(row.text) && purged.some(text => carriesTopic(row.text, text)));
-        // A background task that carries it counts too: the purge job cancels the task and redacts its row.
-        const inTasks = selected.size === 0 && jobsCarry(deps.sql, purged);
+        // A background task that carries it counts too: the purge job cancels the task and redacts its row. So does archived
+        // history, which the purge job redacts.
+        const inTasks = selected.size === 0 && (jobsCarry(deps.sql, purged) || archiveCarries(deps.sql, purged));
         await ready(ctx);
         let touched = false; let deletedWith: readonly number[] = [];
         // Custody before destruction: the purge records the texts in custody, then deletes the claims and cleans the claims
