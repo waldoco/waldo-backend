@@ -28,10 +28,10 @@ try {
   const config = parseJsonc(source);
   // Inspect actual environments, not textual occurrence counts: adding an isolated
   // preview must not make the production/staging privacy regression stop running.
-  for (const target of ['production', 'staging']) {
+  for (const target of ['production', 'staging', 'beta']) {
     for (const setting of ['invocation_logs', 'traces', 'redact_query_string']) {
       const changed = structuredClone(config);
-      const env = target === 'production' ? changed : changed.env.staging;
+      const env = target === 'production' ? changed : changed.env[target];
       if (setting === 'invocation_logs') env.observability.logs.invocation_logs = true;
       else if (setting === 'traces') env.observability.traces.enabled = true;
       else env.observability.redact_query_string = false;

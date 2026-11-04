@@ -20,10 +20,11 @@ for (const key of ['"ai"', '"vectorize"']) {
 // comment/trailing-comma-tolerant parse for the structural checks
 const cfg = parseJsonc(raw);
 const staging = cfg?.env?.staging;
+const beta = cfg?.env?.beta;
 // Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
 // code/state. Automatic traces also include url.full/url.path. Until #205 removes those
 // credentials from URLs and proves query redaction, retain only structured custom logs.
-for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
+for (const [name, node] of [['top level', cfg], ['env.staging', staging], ['env.beta', beta]]) {
   const observability = node?.observability;
   if (observability?.enabled !== true || observability.logs?.enabled !== true) {
     bad.push(`${name} must retain structured Workers logs`);
@@ -59,6 +60,39 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   if (!('WALDO_RELEASE' in topVars) || !('WALDO_RELEASE' in stagingVars)) bad.push('WALDO_RELEASE must exist at top level and in env.staging (deploy wrapper restamps it)');
   if (!staging.ai) bad.push('env.staging missing ai binding');
   if (!staging.vectorize) bad.push('env.staging missing vectorize binding');
+}
+
+// 2b. env.beta is real testers' stack beside staging, possibly on the same account, where a bucket name or rate-limit
+//     namespace id names the same resource. It mirrors the top level's Durable Objects and var keys like staging, but
+//     must not reuse staging's bucket, limiter, owner namespace or channel identities, and never captures text.
+if (!beta || beta.name !== 'waldo-runtime-beta') {
+  bad.push('env.beta missing or name != waldo-runtime-beta');
+} else {
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const key of ['assets', 'durable_objects', 'migrations']) {
+    if (!eq(cfg[key], beta[key])) bad.push(`env.beta does not mirror top-level "${key}"`);
+  }
+  const topVars = cfg.vars ?? {};
+  const betaVars = beta.vars ?? {};
+  const stagingVars = staging?.vars ?? {};
+  for (const k of Object.keys(topVars)) if (!(k in betaVars)) bad.push(`env.beta missing var "${k}"`);
+  for (const k of Object.keys(betaVars)) if (!(k in topVars)) bad.push(`top level missing var "${k}" present in env.beta`);
+  if (betaVars.WALDO_ENVIRONMENT !== 'beta') bad.push('env.beta WALDO_ENVIRONMENT must be "beta"');
+  if (betaVars.LANGFUSE_CAPTURE_TEXT !== 'false' || betaVars.WHATSAPP_DEBUG_LOG !== 'false') bad.push('env.beta must keep LANGFUSE_CAPTURE_TEXT and WHATSAPP_DEBUG_LOG "false"');
+  for (const k of ['WALDO_OWNER_DO_NAMESPACE', 'WALDO_OWNER_TELEGRAM_ID', 'WHATSAPP_WALDO_NUMBER', 'IMESSAGE_WALDO_ADDRESS', 'PHOTON_PROJECT_ID', 'GMAIL_PUSH_PROJECT']) {
+    if (betaVars[k] && betaVars[k] === stagingVars[k]) bad.push(`env.beta must not reuse staging's ${k}`);
+  }
+  const buckets = (node) => new Map((node?.r2_buckets ?? []).map((b) => [b?.binding, b?.bucket_name]));
+  const [topBuckets, stagingBuckets, betaBuckets] = [cfg, staging, beta].map(buckets);
+  for (const [binding, bucket] of topBuckets) {
+    if (!betaBuckets.has(binding)) bad.push(`env.beta missing r2 binding ${binding}`);
+    else if (!betaBuckets.get(binding) || betaBuckets.get(binding) === bucket || betaBuckets.get(binding) === stagingBuckets.get(binding)) bad.push(`env.beta r2 binding ${binding} must name its own bucket`);
+  }
+  const limiterId = (node) => (node?.ratelimits ?? []).find((b) => b?.name === 'RESPONSIBILITY_RATE_LIMITER')?.namespace_id;
+  const betaLimiter = limiterId(beta);
+  if (!betaLimiter || [limiterId(cfg), limiterId(staging), limiterId(cfg.previews)].includes(betaLimiter)) bad.push('env.beta RESPONSIBILITY_RATE_LIMITER must use its own namespace_id');
+  if (beta.browser !== undefined) bad.push('env.beta must not bind a browser');
+  if (beta.vectorize !== undefined) bad.push('env.beta must not bind vectorize');
 }
 
 // 3. The public console signup FAILS CLOSED when RESPONSIBILITY_RATE_LIMITER is absent

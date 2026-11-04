@@ -60,3 +60,17 @@ test('the staging entry statically imports only the startup modules', { timeout:
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the beta entry is the production entry, statically imports only the startup modules and needs no Node compatibility', { timeout: 120000 }, () => {
+  const runtime = resolve('packages/runtime');
+  const config = parseJsonc(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8'));
+  assert.equal(config.env.beta.main, config.main);
+  assert.equal(config.env.beta.compatibility_flags, undefined);
+  const dir = mkdtempSync(resolve(tmpdir(), 'waldo-bundle-startup-beta-'));
+  try {
+    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--env', 'beta', '--dry-run', '--outdir', dir, '--metafile', resolve(dir, 'meta.json')], { cwd: runtime, encoding: 'utf8', timeout: 60000 });
+    assert.deepEqual(staticClosure(resolve(dir, 'meta.json'), config.env.beta.main), STARTUP_MODULES);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

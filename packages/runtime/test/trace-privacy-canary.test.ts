@@ -273,6 +273,8 @@ describe('staging release gate: production can never export text', () => {
     expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'development' })).toBe(true);
     // production: the switch is inert - a misconfigured prod deploy fails safe, types/counts only
     expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'production' })).toBe(false);
+    // the beta cohort's Worker holds real testers too, so it is treated like production
+    expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'beta' })).toBe(false);
     // capture off anywhere: never
     expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'false', WALDO_ENVIRONMENT: 'staging' })).toBe(false);
     expect(resolveCaptureText({})).toBe(false);
