@@ -26,6 +26,8 @@ import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 export const HEARTBEAT_ID = 'heartbeat-tick';
 export const HEARTBEAT_EVERY_MS = 30 * 60_000;
 const DUE_SCAN_LIMIT = 20;
+// The open loops heartbeatWake reads on every request and pass.
+const WAKE_SCAN_LIMIT = 200;
 // Cross-tick flood control: a loop is re-notified only after this cooldown, and only while it is
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
 // fresh occurrence that notifies again immediately. A check that found nothing to say holds it too.
@@ -62,10 +64,12 @@ export const heartbeatWake = (deps: Readonly<{ sql: Sql; proactivity: Proactivit
   if (daily <= now) return now;
   let at = deps.heldCards(localNow.slice(0, 10)).length ? now : Infinity;
   if (settings.volume !== 'low') {
+    // More open loops than the scan reads keeps the grid slot: the bound fails toward waking.
     const open = sql.exec<{ due: string; told: number | null }>(
       `SELECT l.due, (SELECT MAX(n.notified_at) FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due) AS told
          FROM loops l WHERE l.status = 'open' AND l.due IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)`).toArray();
+          AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id) LIMIT ?`, WAKE_SCAN_LIMIT + 1).toArray();
+    if (open.length > WAKE_SCAN_LIMIT) return null;
     for (const { due, told } of open) {
       if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(due)) return null;
       const cooled = told === null ? -Infinity : told + RENOTIFY_COOLDOWN_MS + 1;

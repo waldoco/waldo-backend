@@ -28,15 +28,16 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const AUTHORITY = new Set(['owner_runtime_authority', 'common_owner_authority', 'assert_channel_presence']);
 
 // Every request the owner object makes: the directory's authority calls by name, anything else by host.
-const wire = { asked: [] as string[], fetches: 0, revoked: false };
+const wire = { asked: [] as string[], fetches: 0, revoked: false, blips: 0 };
 beforeEach(() => {
-  wire.asked = []; wire.fetches = 0; wire.revoked = false;
+  wire.asked = []; wire.fetches = 0; wire.revoked = false; wire.blips = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     wire.fetches += 1;
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn) wire.asked.push(fn);
     if (fn === 'owner_runtime_authority') {
+      if (wire.blips > 0) { wire.blips -= 1; return new Response('unavailable', { status: 503 }); }
       if (wire.revoked) return Response.json(null);
       const asked = JSON.parse(String(init?.body)) as { p_do_name: string };
       return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
@@ -57,7 +58,7 @@ const authorityCalls = () => wire.asked.filter(fn => AUTHORITY.has(fn));
 
 // One owner object under a fixed clock. `alarm` stands in for the platform's invocation, which consumes the alarm that fired.
 const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at: string,
-  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void; request: () => Promise<unknown> }>) => Promise<T>) => {
+  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void; request: () => Promise<unknown>; restart: (flag: '0' | '1') => void }>) => Promise<T>) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(Date.parse(at));
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -67,12 +68,15 @@ const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at:
     state.storage.kv.put('owner_alarm_full_release_v1', env.WALDO_RELEASE ?? 'unknown');
     if (surface === 'app') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     else state.storage.kv.put('telegram_subject', '7');
-    const owner = new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: flag, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const make = (switched: '0' | '1') => new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: switched, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    let owner = make(flag);
+    // A deploy that sets the switch the other way: the same storage under a new object.
+    const restart = (switched: '0' | '1') => { owner = make(switched); };
     const alarm = async () => { await state.storage.deleteAlarm(); await owner.alarm(); return state.storage.getAlarm(); };
     const clock = (to: string | number) => vi.setSystemTime(typeof to === 'number' ? to : Date.parse(to));
     // Any request the object answers; the heartbeat's pull-forward runs after each one.
     const request = () => owner.fetch(new Request('https://telegram-owner/app/v1/chat/main'));
-    try { return await work({ state, scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), alarm, clock, request }); }
+    try { return await work({ state, scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), alarm, clock, request, restart }); }
     finally { await state.storage.deleteAlarm(); }
   });
 };
@@ -292,6 +296,16 @@ describe('the heartbeat under the switch runs at its next tick worth running, on
     });
   });
 
+  it('keeps the grid slot with more open loops than its scan reads', async () => {
+    await withOwner('next-due-fallback-many', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-10T09:30:00Z'));
+      for (let i = 0; i < 201; i++) loop(state, `loop-${i}`, '2027-04-01T09:00');
+      expect(await alarm()).toBe(Z('2027-03-10T10:30:00Z'));
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-10T10:30:00Z'));
+    });
+  });
+
   it('keeps the grid slot on a time zone it cannot read', async () => {
     await withOwner('next-due-fallback-zone', 'app', '1', '2027-03-10T10:10:00Z', async ({ state, scheduler, alarm }) => {
       confirmZone(state, 'Not/AZone');
@@ -316,6 +330,70 @@ describe('the heartbeat under the switch runs at its next tick worth running, on
         expect(authorityCalls()).toEqual([]);
       });
     } finally { drain.mockRestore(); }
+  });
+});
+
+describe('turning the switch back off', () => {
+  it('puts a heartbeat the switch moved back on its grid, so a card held through quiet hours goes out at their end', async () => {
+    await withOwner('next-due-rollback', 'app', '1', '2027-03-12T05:10:00Z', async ({ state, scheduler, alarm, clock, restart }) => {
+      confirmZone(state, 'UTC');
+      loopBook(state.storage.sql, { newId: () => 'unused', now: Date.now }).setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
+      await armHeartbeat(scheduler, Z('2027-03-12T05:30:00Z'));
+      await alarm();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-13T05:30:00Z'));
+      restart('0');
+      clock(Z('2027-03-12T05:20:00Z'));
+      dayPlanBook(state.storage.sql);
+      state.storage.sql.exec("INSERT INTO day_plan (day, card, time, reason, sent) VALUES ('2027-03-12', 'brief', '06:30', 'default time', 2)");
+      expect(await alarm()).toBeLessThanOrEqual(Z('2027-03-12T05:30:00Z'));
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(Z('2027-03-12T05:30:00Z'));
+      expect(state.storage.kv.get('owner_heartbeat_moved_v1')).toBeUndefined();
+    });
+  });
+
+  it('leaves a heartbeat on its grid alone, and with the switch off reads nothing when the switch never moved it', async () => {
+    await withOwner('next-due-off-untouched', 'app', '0', '2027-03-12T05:10:00Z', async ({ state, scheduler, alarm }) => {
+      confirmZone(state, 'UTC');
+      await armHeartbeat(scheduler, Z('2027-03-12T05:30:00Z'));
+      const armed = dueOf(state, HEARTBEAT_ID);
+      await alarm();
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(armed);
+      expect(state.storage.kv.get('owner_heartbeat_moved_v1')).toBeUndefined();
+    });
+  });
+});
+
+describe('a directory that cannot answer on the first wake after a release', () => {
+  it('runs the retry wake in full, and marks the release only once boot work ran', async () => {
+    await withOwner('next-due-release-retry', 'app', '1', '2027-03-10T10:00:00Z', async ({ state, scheduler, alarm, clock }) => {
+      await armHeartbeat(scheduler, Date.now() - 10 * 60_000);
+      state.storage.kv.put('owner_alarm_full_release_v1', 'an-earlier-release');
+      wire.blips = 1;
+      const retry = await alarm();
+      expect(authorityCalls()).toEqual(['owner_runtime_authority']);
+      expect(state.storage.kv.get('owner_alarm_full_release_v1')).toBe('an-earlier-release');
+      expect(retry).toBeLessThanOrEqual(Date.now() + 60_000);
+      clock(retry!);
+      wire.asked = [];
+      await alarm();
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+      expect(state.storage.kv.get('owner_alarm_full_release_v1')).toBe(env.WALDO_RELEASE ?? 'unknown');
+    });
+  });
+
+  it('keeps a cut-off pass open across a directory retry, so the retry wake still runs in full', async () => {
+    await withOwner('next-due-resumed-retry', 'app', '1', '2027-03-10T10:00:00Z', async ({ state, scheduler, alarm, clock }) => {
+      await armHeartbeat(scheduler, Date.now() - 10 * 60_000);
+      state.storage.kv.put('owner_alarm_pass_open_v1', true);
+      wire.blips = 1;
+      const retry = await alarm();
+      expect(state.storage.kv.get('owner_alarm_pass_open_v1')).toBe(true);
+      clock(retry!);
+      wire.asked = [];
+      await alarm();
+      expect(authorityCalls()).toContain('owner_runtime_authority');
+      expect(state.storage.kv.get('owner_alarm_pass_open_v1')).toBeUndefined();
+    });
   });
 });
 
