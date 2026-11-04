@@ -15,6 +15,8 @@ import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
+import { toContextHealthMaterial } from '../src/channels/health-context';
+import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -65,9 +67,13 @@ const STARTUP = { id: 'ev-startup', title: 'Startup time', start: `${DAY}T15:00:
 const BLOCK = { action: 'create', title: 'Deck', start: `${DAY}T09:30:00Z`, end: `${DAY}T12:30:00Z`, block: 'deep_work', reason: 'Hold the morning for the deck' };
 const ANSWERS = ['Finish the deck', 'Gym first', 'Something else'];
 // The owner's shared health for one test; every other test shares none. Distinct words, so their absence from storage is a real check.
-const health = vi.hoisted(() => ({ shared: false }));
+const health = vi.hoisted(() => ({ shared: false, unreadable: false }));
 const HEALTH_WORDS = ['Form zone:', 'slept 52 minutes under baseline', 'Recovery: low'];
 const NO_HEALTH = 'No derived health context is available for this invocation.';
+const HEALTH_ROW = { context: { id: 'planning-health', day: DAY, form: { score: 41, zone: 'low' }, recovery: { score: 38, zone: 'low' },
+  weight: { score: 70, zone: 'high' }, drivers: ['slept 52 minutes under baseline'], confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(AT - 3_600_000).toISOString() }, previous: null };
+// The form zone word the Brief's prompt shows for that row.
+const SHOWN_ZONE = /Form zone: ([a-z]+)\./.exec(renderHealth(toContextHealthMaterial(HEALTH_ROW as never, { now: () => new Date(AT), timezone: 'UTC' })))![1]!;
 // Staging loads non-core tools through find_tools and use_tool in an owner's own turn; the default loader offers them directly.
 const via = (harness: boolean, name: string, args: Record<string, unknown>): Round[] => harness
   ? [{ calls: [{ name: 'find_tools', arguments: { names: [name] } }] }, { calls: [{ name: 'use_tool', arguments: { name, arguments: args } }] }]
@@ -80,7 +86,7 @@ const storedText = (state: DurableObjectState) => {
 };
 
 beforeEach(() => {
-  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false;
+  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
   calendar.events = [STARTUP]; calendar.created = []; calendar.moved = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -88,8 +94,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_log_recent') return Response.json([]);
-    if (fn === 'health_context_read') return Response.json(health.shared ? { context: { id: 'planning-health', day: DAY, form: { score: 41, zone: 'low' }, recovery: { score: 38, zone: 'low' },
-      weight: { score: 70, zone: 'high' }, drivers: ['slept 52 minutes under baseline'], confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(AT - 3_600_000).toISOString() }, previous: null } : { context: null, previous: null });
+    if (fn === 'health_context_read') return health.unreadable ? new Response('unavailable', { status: 503 }) : Response.json(health.shared ? HEALTH_ROW : { context: null, previous: null });
     if (fn === 'assert_channel_presence') return Response.json(false);
     if (fn === 'console_session_inventory') {
       const created = new Date(AT - 3_600_000).toISOString();
@@ -251,6 +256,51 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
       const stored = storedText(state);
       expect(stored).toContain('Keep it light');
       for (const word of HEALTH_WORDS) expect(stored).not.toContain(word);
+    });
+  });
+
+  // ADR-0081 §3: what the Brief proposes for the calendar reaches Google, where guests read it. A health word in a title,
+  // notes, place or guest list refuses that proposal in code, as on the health trigger's path; the model is left to word it again.
+  it.each([
+    ['a title naming the zone the Brief was shown', { title: `${SHOWN_ZONE[0]!.toUpperCase()}${SHOWN_ZONE.slice(1)} day buffer` }],
+    ['notes naming a health subject', { title: 'Buffer', description: 'Recovery is down, keep it light' }],
+    ['a guest address carrying a health word', { title: 'Buffer', attendees: ['sleep-coach@example.test'], send_updates: 'none' }],
+  ])('with health shared, refuses a calendar proposal with %s, and raises the clean one', async (_case, fields) => {
+    health.shared = true;
+    const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour before Startup time' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, ...fields } }] },
+      { calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Buffer' } }] }, { text: 'The Brief\nI put a buffer before Startup time on a card for your yes.' }];
+    await owned(`planning-brief-egress-${fields.title.length}-${Object.keys(fields).length}`, { PLANNING_BRIEF: '1' }, async ({ brief, approvals, hops }) => {
+      await brief();
+      expect(model.briefRequests[0]).toContain(`Form zone: ${SHOWN_ZONE}.`);
+      expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
+      const cards = await approvals();
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ kind: 'calendar_change', exact: { changes: { action: 'create', title: 'Buffer' } } });
+      expect(JSON.stringify(cards).toLowerCase()).not.toMatch(new RegExp(`sleep-coach|recovery is down|${SHOWN_ZONE} day`));
+      expect(calendar.created).toEqual([]);
+      expect(hops().filter(hop => hop === 'tool_propose_calendar_change')).toHaveLength(2);
+    });
+  });
+
+  it('without health shared, still keeps the general health words off the calendar', async () => {
+    const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Sleep in' } }] }, { text: 'The Brief\nNo change today.' }];
+    await owned('planning-brief-egress-unshared', { PLANNING_BRIEF: '1' }, async ({ brief, approvals }) => {
+      await brief();
+      expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
+      expect(await approvals()).toEqual([]);
+    });
+  });
+
+  it('refuses its calendar proposal when the health context cannot be read to check it', async () => {
+    health.unreadable = true;
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...BLOCK, title: 'Deck' } }] }, { text: 'The Brief\nNo change today.' }];
+    await owned('planning-brief-egress-unreadable', { PLANNING_BRIEF: '1' }, async ({ brief, approvals }) => {
+      await brief();
+      expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
+      expect(await approvals()).toEqual([]);
+      expect(calendar.created).toEqual([]);
     });
   });
 

@@ -37,7 +37,7 @@ import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from 
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
 import { invokeHealth } from './app-health';
-import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
+import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -178,7 +178,7 @@ import { browserPublicReadConfiguration } from './browser-public-read-configurat
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler, webSearchOffered } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } from './health-log';
-import { healthContextBook } from './health-context';
+import { healthContextBook, healthZoneWords, toContextHealthMaterial, type HealthContextRow } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
@@ -4328,6 +4328,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const planningBrief = this.env.PLANNING_BRIEF === '1';
     const cardReplies = cardReplyBook();
     const replyOfferTools = planningBrief && SURFACE_CAPABILITIES_V1[channel].quick_replies === 'chips' ? [offerRepliesHandler(cardReplies.port)] : [];
+    // ADR-0081: a planning Brief's calendar proposals carry no word from the owner's health view to Google.
+    const briefEgress = calendarEgressRuns(async () => {
+      const rpc = signedRpc(this.env), doName = identity.get<string>('do_name');
+      const row = rpc && doName ? await rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null;
+      const shown = row !== null && typeof row === 'object' ? toContextHealthMaterial(row as HealthContextRow, clock) : null;
+      return [...healthWordsOf(healthTriggerView(row, Date.now(), clock.timezone)), ...healthZoneWords(shown)];
+    });
     // One skill book for every surface of this owner: the reviewed catalog, its lifecycle
     // commands and the workspace receipts reach an app, iMessage or WhatsApp turn exactly as they reach a Telegram turn. The custody key is the
     // one the owner's rows were seeded under, so a founder who linked Telegram first keeps the same skills in the app.
@@ -4502,7 +4509,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects, () => ownerName(memory)), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...attachTools, ...tapbackTools, ...replyOfferTools, searchEpisodesHandler(episodes), searchHistoryHandler(storage.sql, id => ledgerSummary(storage.sql, id)), ...memoryHandlers({
+      }, effects, () => ownerName(memory), briefEgress.screen), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...attachTools, ...tapbackTools, ...replyOfferTools, searchEpisodesHandler(episodes), searchHistoryHandler(storage.sql, id => ledgerSummary(storage.sql, id)), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
@@ -5379,11 +5386,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The planning Brief proposes its changes on the owner's cards, and where its row can carry them, offers answers to tap.
         const asks = planning && replyOfferTools.length > 0;
         if (asks) cardReplies.open(trace);
+        if (planning) briefEgress.open(trace);
         let text: string, replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, planning ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, planning ? proposes : undefined)).trim();
-        } finally { if (asks) replies = cardReplies.take(trace); }
+        } finally { if (asks) replies = cardReplies.take(trace); briefEgress.close(trace); }
         const skipped = !text || isSkip(text);
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
