@@ -91,21 +91,33 @@ describe('get_health', () => {
   it('reads nothing when a consent is withdrawn, and says so', async () => {
     const { calls, handler } = fake({ consent: consent('granted', 'withdrawn') });
     const result = await handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
-    expect(result).toEqual({ ok: true, data: { state: 'unavailable', reason: 'consent_withdrawn' }, source_taint: null });
+    expect(result).toMatchObject({ ok: true, data: { state: 'unavailable', reason: 'consent_withdrawn' }, source_taint: null });
     expect(calls.map((call) => call.fn)).toEqual(['health_consent_list']);
   });
 
   it('names the other reasons: consent not granted, not linked, no readings, a failed read', async () => {
     const asked = { signals: ['sleep' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
     const reason = async (answers: Parameters<typeof fake>[0]) => { const result = await fake(answers).handler.handle(asked, ctx); return result.ok ? result.data : result; };
-    expect(await reason({ consent: consent('not_granted', 'granted') })).toEqual({ state: 'unavailable', reason: 'consent_required' });
-    expect(await reason({ consent: { consents: [] } })).toEqual({ state: 'unavailable', reason: 'consent_required' });
-    expect(await reason({ consent: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
-    expect(await reason({ series: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
-    expect(await reason({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } })).toEqual({ state: 'unavailable', reason: 'no_readings' });
-    expect(await reason({ series: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
-    expect(await reason({ consent: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
-    expect(await reason({ series: { access: 'granted' } })).toEqual({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ consent: consent('not_granted', 'granted') })).toMatchObject({ state: 'unavailable', reason: 'consent_required' });
+    expect(await reason({ consent: { consents: [] } })).toMatchObject({ state: 'unavailable', reason: 'consent_required' });
+    expect(await reason({ consent: { error: 'not_linked' } })).toMatchObject({ state: 'unavailable', reason: 'not_linked' });
+    expect(await reason({ series: { error: 'not_linked' } })).toMatchObject({ state: 'unavailable', reason: 'not_linked' });
+    expect(await reason({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } })).toMatchObject({ state: 'unavailable', reason: 'no_readings' });
+    expect(await reason({ series: new Error('router down') })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ consent: new Error('router down') })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ series: { access: 'granted' } })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+  });
+
+  // Each reason needs a different reply (retry once, try a wider range, or answer without readings), so each says its own.
+  it('gives each unavailable reason its own next step', async () => {
+    const asked = { signals: ['sleep' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
+    const next = async (answers: Parameters<typeof fake>[0]) => { const result = await fake(answers).handler.handle(asked, ctx); return result.ok && result.data.state === 'unavailable' ? result.data.next : undefined; };
+    const steps = await Promise.all([
+      next({ consent: consent('not_granted', 'granted') }), next({ consent: consent('granted', 'withdrawn') }), next({ consent: { error: 'not_linked' } }),
+      next({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } }), next({ series: new Error('router down') }),
+    ]);
+    expect(steps.every((step) => typeof step === 'string' && step.length > 0)).toBe(true);
+    expect(new Set(steps).size).toBe(5);
   });
 
   it('reads only the sources whose own purposes are both granted, whatever their epochs say', async () => {
@@ -119,7 +131,7 @@ describe('get_health', () => {
     expect(live.ok && live.data.state === 'available' && live.data.signals[0]?.source).toBe('samsung');
     // Storage granted but model use never asked on the only source: not withdrawn, not granted.
     const asked = await fake({ consent: consent('granted', 'not_granted') }).handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
-    expect(asked).toEqual({ ok: true, data: { state: 'unavailable', reason: 'consent_required' }, source_taint: null });
+    expect(asked).toMatchObject({ ok: true, data: { state: 'unavailable', reason: 'consent_required' }, source_taint: null });
   });
 
   it('summarises a signal with no reading in the range as nulls, never as zeros', async () => {

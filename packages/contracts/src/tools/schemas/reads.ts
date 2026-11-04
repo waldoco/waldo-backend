@@ -94,7 +94,8 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     // Daily reads that ask for workouts: each session, oldest first, at most the newest HEALTH_READ_MAX_SESSIONS.
     sessions: z.array(healthWorkoutSessionSchema).max(HEALTH_READ_MAX_SESSIONS).optional(),
   }),
-  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema }),
+  // next: what is true and what can be done, in words; it never carries a reading.
+  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),
 ]);
 export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
 
