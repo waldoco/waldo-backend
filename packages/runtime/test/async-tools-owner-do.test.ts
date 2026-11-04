@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { appHistoryResultV1Schema, appMessageReceiptV1Schema } from '../../contracts/src/app/core';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { appSubjectFor } from '../src/channels/app-api';
@@ -49,8 +50,11 @@ const seen = vi.hoisted(() => {
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = seen.gateway; return original.createTelegramResponder(...args); } };
+  // The owner's browser host may hand the responder a gateway of its own (a browser registration is selected); it is kept, so
+  // its run checks hold, and its model adapter is the scripted one below.
+  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] ??= seen.gateway; return original.createTelegramResponder(...args); } };
 });
+vi.mock('../src/llm/openai', async load => ({ ...await load<typeof import('../src/llm/openai')>(), OpenAIResponsesAdapter: class { complete(request: LLMGatewayRequest) { return seen.gateway.complete(request); } } }));
 vi.mock('../src/identity/owner-runtime-authority', async load => ({ ...await load<typeof import('../src/identity/owner-runtime-authority')>(),
   ownerRuntimeAuthority: () => ({ resolve: async ({ doName }: { doName: string }) => ({ ownerId: OWNER, authenticatedUserId: OWNER, doName, stateVersion: 1, admissionRevision: '5' }) }) }));
 vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async () => ({ directoryOwnerId: OWNER, custodyDigest: 'd'.repeat(64) }) }) }));
@@ -190,19 +194,19 @@ it('with WALDO_LIGHT_CHAT on, the owner\'s reply runs on the auxiliary model and
   await withOwner({ WALDO_ASYNC_TOOLS: '1', WALDO_LIGHT_CHAT: '1' }, async (owner, state, name) => {
     await send(owner, name, 'light-a-0001', 'Find me three hotels near the venue with prices');
     await completed(owner, name, 'light-a-0001');
-    expect(new Set(seen.state.models)).toEqual(new Set(['gpt-6-luna']));
+    expect(new Set(seen.state.models)).toEqual(new Set([OPENAI_GPT_6_LUNA_MODEL]));
     const [job] = jobs(state.storage.sql);
     expect(JSON.parse(job!.brief_json)).toMatchObject({ effort: 'standard' });
     seen.state.release();
     expect(await worker(owner, attemptOf(state, job!.id), { openaiApiKey: 'synthetic-fixture', primary: 'openai' }, true)).toBe('reported');
-    expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toEqual(['worker_model:gpt-6.1-terra', 'worker_model:gpt-6.1-terra']);
+    expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toEqual([`worker_model:${OPENAI_GPT_6_1_TERRA_MODEL}`, `worker_model:${OPENAI_GPT_6_1_TERRA_MODEL}`]);
   });
   // Off, the owner's reply runs on the chat model.
   await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, _state, name) => {
     seen.state.models.length = 0;
     await send(owner, name, 'light-b-0001', 'What time is it?');
     await completed(owner, name, 'light-b-0001');
-    expect(new Set(seen.state.models)).toEqual(new Set(['gpt-6.1-terra']));
+    expect(new Set(seen.state.models)).toEqual(new Set([OPENAI_GPT_6_1_TERRA_MODEL]));
   });
 }, 60_000);
 
@@ -244,3 +248,19 @@ it('time to first reply, simulated: long work as a task answers sooner, and a ne
   expect(report.asks_async_1!.p95).toBeLessThan(report.asks_async_0!.p95);
   expect(report.second_message_async_1!.p50).toBeLessThan(report.second_message_async_0!.p50);
 }, 120_000);
+
+// With a browser registration selected, every model call of the owner's turns goes through the browser host's gateway, which
+// checks the call's run against the one the host serves. A task's browser step on the browser lane is not the owner's run,
+// so the gateway checks the owner's chain instead: the owner's turn answers while the step holds the browser.
+it('while a task\'s browser step holds the browser lane, the owner\'s turn answers through the browser host\'s gateway', async () => {
+  await withOwner({ WALDO_ASYNC_TOOLS: '1', COMMON_BROWSER_REGISTRATION: '{' }, async (owner, _state, name) => {
+    const abort = new AbortController();
+    const task = { runId: 'task:lane-hold', attempt: '1', deadline: Date.now() + 60_000, signal: abort.signal, admit: () => {}, commit: <T,>(work: () => T) => work() };
+    const lane = (owner as unknown as { browserSerial(scope: typeof task, work: () => Promise<void>): Promise<void> }).browserSerial(task, () => seen.state.hold);
+    await send(owner, name, 'lane-a-0001', 'What time is it?');
+    await completed(owner, name, 'lane-a-0001');
+    expect(await history(owner, name)).toContain('It is a quarter past ten.');
+    seen.state.release();
+    await lane;
+  });
+}, 60_000);

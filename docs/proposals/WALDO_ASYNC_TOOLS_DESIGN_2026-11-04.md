@@ -34,7 +34,7 @@ This is a capability decision about tools, not routing by content: nothing inspe
 
 **Judgment boundary.** Mail, calendar, contacts, memory, `web_search` and MCP reads stay inline: they are bounded API calls of about a second. A "long mail" job (a backlog, many threads) is something the model hands to `start_task` because it judges it long; no size rule decides it. The provider-hosted web search inside the reply's model call also stays: it adds seconds, not tens of seconds. [inference] The gate may move `web_search` into the long set if staging traces show otherwise.
 
-**Prompt.** The task section of the behaviour prompt names `browse_page` and `browse_act` in its ladder. When the menu has `start_task` but no `browse_page`, that section says instead: reading pages, Drive files and research run as background tasks; call `start_task` with a brief that carries what the worker needs, tell the owner in this reply what you started, and the result arrives as its own message. The section is derived from the tool names, as `web_search` already is (`prompt/messaging-behavior.ts:144`), so switch-off is byte-identical.
+**Prompt.** The task section of the behaviour prompt names `browse_page` and `browse_act` in its ladder, its "Looking things up" lines and its video line. With the switch on and `start_task` on the menu, the ladder climbs to "a background task" instead, those lines say a background task reads the page, and a short "Background work" block says: reading pages, Drive files and research run as background tasks; call `start_task` with a brief that carries what the worker needs, say in this reply what you started, and the result reaches the owner as its own message. The switch reaches the prompt as an explicit argument, not by inferring it from a missing `browse_page` (production has no browser binding, so that would turn the block on with the switch off). Switch off is byte-identical: `test/async-tools.test.ts`.
 
 **Trade-off, stated.** With the switch on there is no same-reply research: "what does this page say" gets "I've started reading it" now and the answer as a second message, roughly a worker round later. The first reply is much faster; the full answer is a little slower (worker model calls plus the apply turn). That is the Super-agent trade by design.
 
@@ -77,6 +77,8 @@ Every reply still says what was started and what was done. The receipt line alre
 
 ## Tests
 
+All in `test/async-tools-owner-do.test.ts` (owner object, real app chain, tool loop, task host, worker loop and jobs lane; scripted model and browser vendor) and `test/async-tools.test.ts`.
+
 - **Trace assertion** (owner object, real tool loop, scripted gateway): the owner's turn calls `start_task` and returns its reply, which names the task, while the worker's browse is held open; the worker then finishes and the apply turn delivers the report. The trace order is asserted.
 - **Concurrent message:** with a worker's `browse_page` held open, a second owner message gets its reply before the browse resolves.
 - **Menu:** switch on, the owner turn's menu has no `long` tool and no `delegate_task`, through the harness loader too; machine turns and workers keep theirs. Switch off, menu and prompt are byte-identical to the baseline.
@@ -84,10 +86,31 @@ Every reply still says what was started and what was done. The receipt line alre
 
 ## Measurement
 
-Time to first reply = owner message admitted → first reply delivered (not a model call's `ttft_ms`).
+Time to first reply = owner app message admitted → its reply in the chat (the receipt reads `completed`). This is not a model call's `ttft_ms`.
 
-- **Simulated** [inference for real latency]: the scripted-gateway world with fixed delays, 6 s per model call (10 Oct median), 15 s per browse, before and after, p50 and p95 over a fixed set of asks. Reported in the PR.
-- **Staging / Langfuse p50 and p95:** NOT RUN here (no credentials). After the bundled deploy, the gate or the eval lane reads it from `llm_reply` and delivery hops.
+**Simulated, on the real owner pipeline** [verified as a measurement of this harness; inference for real latency]:
+- **Harness:** `test/async-tools-owner-do.test.ts`, "time to first reply". The model and the page load are the only fakes.
+- **Scale:** 1:100. A model call is 60 ms (the 10 Oct median, 6 s). A page is 150 ms (about 15 s), and the page held for the second-message case is 600 ms.
+- **Before (off):** the owner's turn does the page itself (inline `delegate_task`, whose call takes a page's time).
+- **After (on):** the turn starts a task.
+- Three runs, in ms:
+
+| Metric | Switch off | Switch on |
+|---|---|---|
+| 8 asks (4 need a page), p50 | 107–111 | 111–117 |
+| 8 asks, p95 | 458–460 | 196–217 |
+| Second message while a page loads, p50 | 1510–1514 | 120–158 |
+| Second message while a page loads, p95 | 1516–1571 | 187–202 |
+
+**Reading:**
+- An ask that needs a page now gets its first reply after two model calls, not two model calls plus the page.
+- A newer message no longer waits for the page. With the switch off, the app chain holds it behind the whole running turn.
+- p50 barely moves, because half the asks need no page.
+- Harness overhead (tens of ms) does not scale with the model, so multiplying by 100 overstates both columns. Read the ratios, not ×100.
+
+**Not measured:**
+- `WALDO_LIGHT_CHAT` latency: a fake model has no speed difference.
+- Staging and Langfuse p50/p95: NOT RUN, because there are no credentials here. After the bundled deploy, read them from the `llm_reply` and app receipt hops, together with the delegation rate (owner turns that call `start_task`).
 
 ## Rollback
 

@@ -457,7 +457,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // later rating scores naming different trace ids.
     if (langfuseOtlpConfig(env)) ownerTraceSalt(ctx.storage.kv);
     this.browserTrial = browserTrial;
-    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.browserScope ?? this.activeScope, typedHost: () => this.typedBrowserHost });
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.browserScope ?? this.activeScope, chainScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => (this.typedBrowserHost = config?.enabled === true, browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.OWNER_DO && env.OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
