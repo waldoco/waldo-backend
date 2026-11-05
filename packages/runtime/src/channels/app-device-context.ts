@@ -1,5 +1,6 @@
 import {
-  DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1, deviceContextApiErrorV1Schema, deviceContextConsentChangeV1Schema, deviceContextConsentGrantV1Schema,
+  DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1, deviceContextApiErrorV1Schema, deviceContextConsentBatchV1Schema, deviceContextConsentChangeV1Schema,
+  deviceContextConsentGrantBatchV1Schema, deviceContextConsentGrantV1Schema,
   deviceContextConsentListV1Schema, deviceContextConsentWithdrawV1Schema, devicePlaceIngestReceiptV1Schema, devicePlaceIngestV1Schema,
   devicePlaceStoredV1Schema, devicePlacesV1Schema,
 } from '../../../contracts/src/app/device-context';
@@ -60,6 +61,7 @@ const readJson = async <T>(request: Request, schema: ZodType<T>, readBody: AppDe
 
 const WRITES: Readonly<Record<string, Readonly<{ operation: string; schema: ZodType; response: ZodType }>>> = {
   '/consents': { operation: 'consent_grant', schema: deviceContextConsentGrantV1Schema, response: deviceContextConsentChangeV1Schema },
+  '/consents/batch': { operation: 'consent_grant_batch', schema: deviceContextConsentGrantBatchV1Schema, response: deviceContextConsentBatchV1Schema },
   '/consents/withdraw': { operation: 'consent_withdraw', schema: deviceContextConsentWithdrawV1Schema, response: deviceContextConsentChangeV1Schema },
   '/place': { operation: 'place_ingest', schema: devicePlaceIngestV1Schema, response: devicePlaceIngestReceiptV1Schema },
 };

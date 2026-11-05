@@ -8,11 +8,19 @@
 -- - waldo.device_place_latest holds one row per owner and device, overwritten: the time zone the phone sends on every wake, and
 --   the 5-character geohash cell with the OS place names when the app is open with location allowed. Each part keeps its own
 --   observation time, so a zone-only upload leaves the last cell in place and an older reading never overwrites a newer one.
---   No coordinate, no history.
--- - Retention: a row not refreshed in 30 days, upload receipts older than 7 days (zone uploads come on every wake) and consent
---   receipts older than 90 days go with the health retention sweep (re-created below with lines added). Account deletion removes
---   everything through the owners cascade.
+--   No coordinate, no history, and a place name may not carry a position either.
+-- - Nothing older than 30 days is kept or shown. Ingest refuses a reading observed earlier than that; the read hides a cell or a
+--   zone observed earlier; the health retention sweep (re-created below with lines added) clears such a cell, keeping the zone,
+--   and removes a row whose zone is that old. Zone uploads come on every wake and keep the row alive, which is why the cell ages
+--   by its own time. Upload receipts go after 7 days and consent receipts after 90. Account deletion removes everything through
+--   the owners cascade.
 -- - Every call is a signed router call that resolves the owner from the private locator; no role touches the tables.
+
+-- A place name is the phone's OS's name for the cell, never a way to carry a position: no decimal number, no degree sign and at
+-- most four digits ("Sector 128" fits, "12.97,77.59" does not). The contract checks the same.
+create function waldo.device_place_name_ok(p_name text) returns boolean
+language sql immutable set search_path = '' as $$
+  select p_name is null or (p_name !~ '[0-9][.,][0-9]' and strpos(p_name, '°') = 0 and length(regexp_replace(p_name, '[^0-9]', '', 'g')) <= 4) $$;
 
 create table waldo.device_context_consents (
   id uuid primary key default gen_random_uuid(),
@@ -41,7 +49,8 @@ create table waldo.device_place_latest (
   platform text not null check (platform in ('ios', 'android')),
   timezone text not null check (length(timezone) between 1 and 64),
   timezone_observed_at timestamptz not null,
-  place jsonb check (place is null or (jsonb_typeof(place) = 'object' and place->>'cell' ~ '^[0-9b-hjkmnp-z]{5}$')),
+  place jsonb check (place is null or (jsonb_typeof(place) = 'object' and place->>'cell' ~ '^[0-9b-hjkmnp-z]{5}$'
+    and waldo.device_place_name_ok(place->>'locality') and waldo.device_place_name_ok(place->>'region'))),
   place_observed_at timestamptz check ((place is null) = (place_observed_at is null)),
   created_at timestamptz not null default now(),
   received_at timestamptz not null default now(),
@@ -52,7 +61,7 @@ create table waldo.device_place_latest (
 create table waldo.device_context_requests (
   owner_id uuid not null references waldo.owners (id) on delete cascade,
   request_id text not null,
-  operation text not null check (operation in ('consent_grant', 'consent_withdraw', 'place_ingest')),
+  operation text not null check (operation in ('consent_grant', 'consent_grant_batch', 'consent_withdraw', 'place_ingest')),
   payload_digest text not null,
   response jsonb not null,
   created_at timestamptz not null default now(),
@@ -115,6 +124,24 @@ begin
     waldo.device_context_consent_view(v_owner, 'place', 'model_processing'), waldo.device_context_consent_view(v_owner, 'place', 'provider_lookup')));
 end $$;
 
+-- Grants one purpose of a signal at the epoch the app last read for it: null when granted, otherwise the refusal.
+create function waldo.device_context_grant(p_owner uuid, p_signal text, p_purpose text, p_expected integer) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_scope waldo.device_context_scopes; v_consent uuid;
+begin
+  select * into v_scope from waldo.device_context_scopes where owner_id = p_owner and signal = p_signal and purpose = p_purpose for update;
+  if p_expected <> coalesce(v_scope.epoch, 0) then return '{"error":"epoch_conflict"}'; end if;
+  -- Model use and provider lookup sit on top of storage.
+  if p_purpose <> 'storage_compute' and waldo.device_context_refusal(p_owner, p_signal, array['storage_compute']) is not null then return '{"error":"consent_required"}'; end if;
+  if exists (select 1 from waldo.device_context_consents where owner_id = p_owner and signal = p_signal and purpose = p_purpose and withdrawn_at is null) then
+    return '{"error":"epoch_conflict"}';
+  end if;
+  insert into waldo.device_context_consents (owner_id, signal, purpose, version) values (p_owner, p_signal, p_purpose, 1) returning id into v_consent;
+  insert into waldo.device_context_scopes (owner_id, signal, purpose, epoch, consent_id) values (p_owner, p_signal, p_purpose, 1, v_consent)
+    on conflict (owner_id, signal, purpose) do update set epoch = waldo.device_context_scopes.epoch + 1, consent_id = excluded.consent_id;
+  return null;
+end $$;
+
 -- The two consent changes share their checks: a closed body, a replayed request answered from its receipt, and the epoch the
 -- app last read. p_grant picks the change.
 create function waldo.device_context_consent_change(p_grant boolean, p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
@@ -123,7 +150,7 @@ declare
   v_op text := case when p_grant then 'consent_grant' else 'consent_withdraw' end;
   v_owner uuid := waldo.device_context_owner(v_op, p_do_name, p_payload, p_at, p_sig);
   v_body jsonb; v_id text; v_signal text; v_purpose text; v_prior waldo.device_context_requests; v_scope waldo.device_context_scopes;
-  v_consent uuid; v_routed boolean := false; v_result jsonb;
+  v_refusal jsonb; v_routed boolean := false; v_result jsonb;
 begin
   if v_owner is null then return '{"error":"not_linked"}'; end if;
   perform 1 from waldo.owners where id = v_owner for update;
@@ -142,19 +169,12 @@ begin
     if v_prior.operation <> v_op or v_prior.payload_digest <> md5(p_payload) then return '{"error":"idempotency_conflict"}'; end if;
     return jsonb_set(v_prior.response, '{replayed}', 'true');
   end if;
-  select * into v_scope from waldo.device_context_scopes where owner_id = v_owner and signal = v_signal and purpose = v_purpose for update;
-  if (v_body->>'expected_epoch')::integer <> coalesce(v_scope.epoch, 0) then return '{"error":"epoch_conflict"}'; end if;
-
   if p_grant then
-    -- Model use and provider lookup sit on top of storage.
-    if v_purpose <> 'storage_compute' and waldo.device_context_refusal(v_owner, v_signal, array['storage_compute']) is not null then return '{"error":"consent_required"}'; end if;
-    if exists (select 1 from waldo.device_context_consents where owner_id = v_owner and signal = v_signal and purpose = v_purpose and withdrawn_at is null) then
-      return '{"error":"epoch_conflict"}';
-    end if;
-    insert into waldo.device_context_consents (owner_id, signal, purpose, version) values (v_owner, v_signal, v_purpose, 1) returning id into v_consent;
-    insert into waldo.device_context_scopes (owner_id, signal, purpose, epoch, consent_id) values (v_owner, v_signal, v_purpose, 1, v_consent)
-      on conflict (owner_id, signal, purpose) do update set epoch = waldo.device_context_scopes.epoch + 1, consent_id = excluded.consent_id;
+    v_refusal := waldo.device_context_grant(v_owner, v_signal, v_purpose, (v_body->>'expected_epoch')::integer);
+    if v_refusal is not null then return v_refusal; end if;
   else
+    select * into v_scope from waldo.device_context_scopes where owner_id = v_owner and signal = v_signal and purpose = v_purpose for update;
+    if (v_body->>'expected_epoch')::integer <> coalesce(v_scope.epoch, 0) then return '{"error":"epoch_conflict"}'; end if;
     if v_scope.owner_id is null then return '{"error":"consent_required"}'; end if;
     -- Withdrawing storage withdraws the other purposes too and deletes what was kept; an upload queued before it carries the old
     -- epoch and is refused. Consent receipts stay so a replayed request still gets its answer.
@@ -179,9 +199,56 @@ language sql security definer set search_path = '' as $$ select waldo.device_con
 create function waldo.device_context_consent_withdraw(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language sql security definer set search_path = '' as $$ select waldo.device_context_consent_change(false, p_do_name, p_payload, p_at, p_sig) $$;
 
+-- The one consent screen in one call: several purposes of one signal, each at the epoch the app last read for it, granted storage
+-- first and all or none. Withdrawals stay one purpose at a time.
+create function waldo.device_context_consent_grant_batch(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_owner uuid := waldo.device_context_owner('consent_grant_batch', p_do_name, p_payload, p_at, p_sig);
+  v_order text[] := array['storage_compute', 'model_processing', 'provider_lookup'];
+  v_body jsonb; v_id text; v_signal text; v_prior waldo.device_context_requests; v_item jsonb; v_refusal jsonb; v_result jsonb;
+begin
+  if v_owner is null then return '{"error":"not_linked"}'; end if;
+  perform 1 from waldo.owners where id = v_owner for update;
+  if octet_length(p_payload) > 4096 then return '{"error":"invalid_request"}'; end if;
+  begin v_body := p_payload::jsonb; exception when others then return '{"error":"invalid_request"}'; end;
+  if jsonb_typeof(v_body) is distinct from 'object'
+    or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('request_id', 'signal', 'version', 'purposes'))
+    or v_body->'version' is distinct from '1'::jsonb or jsonb_typeof(v_body->'purposes') is distinct from 'array' then return '{"error":"invalid_request"}'; end if;
+  v_id := v_body->>'request_id'; v_signal := v_body->>'signal';
+  if jsonb_typeof(v_body->'request_id') is distinct from 'string' or v_id !~ '^[A-Za-z0-9_-]{8,96}$'
+    or v_signal is null or v_signal not in ('place')
+    or jsonb_array_length(v_body->'purposes') not between 1 and 3
+    or exists (select 1 from jsonb_array_elements(v_body->'purposes') e where jsonb_typeof(e) is distinct from 'object'
+      or exists (select 1 from jsonb_object_keys(e) k where k not in ('purpose', 'expected_epoch'))
+      or e->>'purpose' is null or e->>'purpose' <> all (v_order)
+      or jsonb_typeof(e->'expected_epoch') is distinct from 'number' or (e->>'expected_epoch') !~ '^[0-9]{1,9}$')
+    or (select count(distinct e->>'purpose') from jsonb_array_elements(v_body->'purposes') e) <> jsonb_array_length(v_body->'purposes') then
+    return '{"error":"invalid_request"}';
+  end if;
+  select * into v_prior from waldo.device_context_requests where owner_id = v_owner and request_id = v_id;
+  if found then
+    if v_prior.operation <> 'consent_grant_batch' or v_prior.payload_digest <> md5(p_payload) then return '{"error":"idempotency_conflict"}'; end if;
+    return jsonb_set(v_prior.response, '{replayed}', 'true');
+  end if;
+  -- A refusal part way through undoes the grants before it.
+  begin
+    for v_item in select e from jsonb_array_elements(v_body->'purposes') e order by array_position(v_order, e->>'purpose') loop
+      v_refusal := waldo.device_context_grant(v_owner, v_signal, v_item->>'purpose', (v_item->>'expected_epoch')::integer);
+      if v_refusal is not null then raise exception using errcode = 'WDC01', message = v_refusal::text; end if;
+    end loop;
+  exception when sqlstate 'WDC01' then return sqlerrm::jsonb;
+  end;
+  v_result := jsonb_build_object('consents', (select jsonb_agg(waldo.device_context_consent_view(v_owner, v_signal, e->>'purpose')
+    order by array_position(v_order, e->>'purpose')) from jsonb_array_elements(v_body->'purposes') e), 'replayed', false);
+  insert into waldo.device_context_requests (owner_id, request_id, operation, payload_digest, response) values (v_owner, v_id, 'consent_grant_batch', md5(p_payload), v_result);
+  return v_result;
+end $$;
+
 -- One reading from one device: always its time zone, and a cell when the app was open with location allowed. The reading's own
 -- shape is the contract's, checked by the Worker; here its keys are closed, the cell is coarse, names come only with a cell and
--- the zone and time are real. A reading more than 10 minutes in the future is refused. The zone and the cell each replace the
+-- carry no position, and the zone and time are real. A reading more than 10 minutes in the future or more than 30 days old is
+-- refused. The zone and the cell each replace the
 -- stored ones only if they were observed no earlier; a reading that changes neither is answered superseded.
 create function waldo.device_context_place_ingest(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -205,11 +272,12 @@ begin
     or (v_reading ? 'cell' and (jsonb_typeof(v_reading->'cell') is distinct from 'string' or (v_reading->>'cell') !~ '^[0-9b-hjkmnp-z]{5}$'))
     or (not v_reading ? 'cell' and (v_reading ?| array['locality', 'region', 'country']))
     or exists (select 1 from jsonb_each(v_reading - array['cell', 'timezone', 'platform', 'observed_at']) e where jsonb_typeof(e.value) is distinct from 'string')
+    or not waldo.device_place_name_ok(v_reading->>'locality') or not waldo.device_place_name_ok(v_reading->>'region')
     or jsonb_typeof(v_reading->'timezone') is distinct from 'string' or not exists (select 1 from pg_timezone_names where name = v_reading->>'timezone')
     or v_reading->>'platform' is null or v_reading->>'platform' not in ('ios', 'android')
     or jsonb_typeof(v_reading->'observed_at') is distinct from 'string' then return '{"error":"invalid_request"}'; end if;
   begin v_observed := (v_reading->>'observed_at')::timestamptz; exception when others then return '{"error":"invalid_request"}'; end;
-  if v_observed > now() + interval '10 minutes' then return '{"error":"invalid_request"}'; end if;
+  if v_observed > now() + interval '10 minutes' or v_observed < now() - interval '30 days' then return '{"error":"invalid_request"}'; end if;
   select * into v_prior from waldo.device_context_requests where owner_id = v_owner and request_id = v_id;
   if found then
     if v_prior.operation <> 'place_ingest' or v_prior.payload_digest <> md5(p_payload) then return '{"error":"idempotency_conflict"}'; end if;
@@ -241,7 +309,8 @@ begin
   return v_result;
 end $$;
 
--- The latest zone and place per device, most recently heard from first. purpose owner is the owner's own view and needs storage consent; purpose model is the
+-- The latest zone and place per device, most recently heard from first, leaving out a zone or a cell observed more than 30 days
+-- ago even before the sweep reaches it. purpose owner is the owner's own view and needs storage consent; purpose model is the
 -- agent's read and needs storage and model use.
 create function waldo.device_context_place_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -257,24 +326,27 @@ begin
   return jsonb_build_object('places', coalesce((select jsonb_agg(jsonb_build_object('device_id', p.device_id,
       'received_at', to_char(p.received_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'platform', p.platform, 'timezone', p.timezone,
       'timezone_observed_at', to_char(p.timezone_observed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-      'place', case when p.place is null then null else p.place || jsonb_build_object('observed_at',
+      'place', case when p.place is null or p.place_observed_at < now() - interval '30 days' then null else p.place || jsonb_build_object('observed_at',
         to_char(p.place_observed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) end)
       order by p.timezone_observed_at desc, p.device_id)
-    from waldo.device_place_latest p where p.owner_id = v_owner), '[]'::jsonb));
+    from waldo.device_place_latest p where p.owner_id = v_owner and p.timezone_observed_at >= now() - interval '30 days'), '[]'::jsonb));
 end $$;
 
-revoke all on function waldo.device_context_consent_view(uuid, text, text), waldo.device_context_refusal(uuid, text, text[]),
-  waldo.device_context_owner(text, text, text, bigint, text), waldo.device_context_consent_change(boolean, text, text, bigint, text)
+revoke all on function waldo.device_place_name_ok(text), waldo.device_context_consent_view(uuid, text, text), waldo.device_context_refusal(uuid, text, text[]),
+  waldo.device_context_owner(text, text, text, bigint, text), waldo.device_context_grant(uuid, text, text, integer),
+  waldo.device_context_consent_change(boolean, text, text, bigint, text)
   from public, anon, authenticated, service_role;
 revoke all on function waldo.device_context_consent_list(text, text, bigint, text), waldo.device_context_consent_grant(text, text, bigint, text),
-  waldo.device_context_consent_withdraw(text, text, bigint, text), waldo.device_context_place_ingest(text, text, bigint, text),
+  waldo.device_context_consent_grant_batch(text, text, bigint, text), waldo.device_context_consent_withdraw(text, text, bigint, text), waldo.device_context_place_ingest(text, text, bigint, text),
   waldo.device_context_place_read(text, text, bigint, text) from public, anon, authenticated, service_role;
 grant execute on function waldo.device_context_consent_list(text, text, bigint, text), waldo.device_context_consent_grant(text, text, bigint, text),
-  waldo.device_context_consent_withdraw(text, text, bigint, text), waldo.device_context_place_ingest(text, text, bigint, text),
+  waldo.device_context_consent_grant_batch(text, text, bigint, text), waldo.device_context_consent_withdraw(text, text, bigint, text), waldo.device_context_place_ingest(text, text, bigint, text),
   waldo.device_context_place_read(text, text, bigint, text) to anon;
 
--- Retention (20261103120000): the per-owner call and the sweep also age out rows not refreshed in 30 days, upload receipts older
--- than 7 days and consent receipts older than 90 days, and the sweep finds an owner whose only expired rows are those. The result keeps its keys.
+-- Retention (20261103120000): the per-owner call and the sweep also clear a cell observed more than 30 days ago (keeping the
+-- zone), remove a row whose zone is that old, and age out upload receipts after 7 days and consent receipts after 90; the sweep
+-- finds an owner whose only expired rows are those. A zone is never older than the cell beside it, since every reading carries
+-- one. The result keeps its keys.
 create or replace function waldo.health_retention_apply(p_owner uuid, p_auth uuid) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_raw integer; v_requests integer; v_context integer; v_cut date := (now() at time zone 'UTC')::date - 733;
@@ -291,7 +363,8 @@ begin
   delete from waldo.health_medication_doses where owner_id = p_owner and due_at < now() - interval '90 days';
   delete from waldo.screen_time_days where owner_id = p_owner and day < (now() at time zone 'UTC')::date - 90;
   delete from waldo.screen_time_requests where owner_id = p_owner and created_at < now() - interval '90 days';
-  delete from waldo.device_place_latest where owner_id = p_owner and received_at < now() - interval '30 days';
+  delete from waldo.device_place_latest where owner_id = p_owner and timezone_observed_at < now() - interval '30 days';
+  update waldo.device_place_latest set place = null, place_observed_at = null where owner_id = p_owner and place_observed_at < now() - interval '30 days';
   delete from waldo.device_context_requests where owner_id = p_owner
     and created_at < now() - case when operation = 'place_ingest' then interval '7 days' else interval '90 days' end;
   return jsonb_build_object('raw_deleted', v_raw, 'requests_deleted', v_requests, 'context_deleted', v_context);
@@ -321,7 +394,8 @@ begin
       or exists (select 1 from waldo.health_medication_doses m where m.owner_id = o.id and m.due_at < now() - interval '90 days')
       or exists (select 1 from waldo.screen_time_days t where t.owner_id = o.id and t.day < (now() at time zone 'UTC')::date - 90)
       or exists (select 1 from waldo.screen_time_requests q where q.owner_id = o.id and q.created_at < now() - interval '90 days')
-      or exists (select 1 from waldo.device_place_latest p where p.owner_id = o.id and p.received_at < now() - interval '30 days')
+      or exists (select 1 from waldo.device_place_latest p where p.owner_id = o.id and p.place_observed_at < now() - interval '30 days')
+      or exists (select 1 from waldo.device_place_latest p where p.owner_id = o.id and p.timezone_observed_at < now() - interval '30 days')
       or exists (select 1 from waldo.device_context_requests c where c.owner_id = o.id
         and c.created_at < now() - case when c.operation = 'place_ingest' then interval '7 days' else interval '90 days' end)
     order by o.id limit v_limit + 1 for update of o skip locked

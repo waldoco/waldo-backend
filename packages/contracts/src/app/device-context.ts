@@ -12,8 +12,9 @@ import { z } from 'zod';
 // - Coarse is a schema rule: the phone rounds to a 5-character geohash cell (about 4.9 km square) before sending. There is no
 //   latitude or longitude field, so the server never holds anything finer.
 // - The phone sends its time zone on every wake, with or without a cell; an upload with no cell leaves the last cell in place.
-// - What is kept: the latest zone and place per device, overwritten, never a history. A row not refreshed in 30 days is removed by
-//   the health retention sweep. Account deletion removes it with the owner.
+// - What is kept: the latest zone and place per device, overwritten, never a history. Nothing observed more than 30 days ago is
+//   accepted, read back or kept: the cell ages by its own time even while daily zone uploads keep the row. Account deletion
+//   removes it with the owner.
 // - Egress: the cell never reaches the model or a log; the place name and time zone reach the owner's model context in the turn
 //   that asked, and the owner's own read-back.
 
@@ -49,17 +50,33 @@ export const deviceContextConsentWithdrawV1Schema = z.strictObject({
 });
 // deletion_routed: what the signal kept was deleted by this withdrawal.
 export const deviceContextConsentChangeV1Schema = z.strictObject({ consent: deviceContextConsentV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
+// The one consent screen in one call: each purpose at the epoch the app last read for it, granted storage first and all or none.
+// The answer lists the purposes in that order. Withdrawals stay one purpose at a time.
+export const deviceContextConsentGrantBatchV1Schema = z.strictObject({
+  request_id: requestId, signal: deviceContextSignalV1Schema, version: z.literal(DEVICE_CONTEXT_CONSENT_VERSION_V1),
+  purposes: z.array(z.strictObject({ purpose: deviceContextPurposeV1Schema, expected_epoch: epoch }))
+    .min(1).max(deviceContextPurposeV1Schema.options.length)
+    .refine(items => new Set(items.map(item => item.purpose)).size === items.length, { error: 'each purpose once' }),
+});
+export const deviceContextConsentBatchV1Schema = z.strictObject({
+  consents: z.array(deviceContextConsentV1Schema).min(1).max(deviceContextPurposeV1Schema.options.length),
+  replayed: z.boolean(),
+});
 
 // A geohash cell of exactly 5 characters in the geohash alphabet (no a, i, l or o).
 export const placeCellV1Schema = z.string().regex(/^[0-9b-hjkmnp-z]{5}$/);
 const timezone = z.string().min(1).max(64);
+// The OS's name for the cell, never a way to carry a position: no decimal number, no degree sign and at most four digits
+// ("Sector 128" fits, "12.97,77.59" does not). The database checks the same.
+const placeName = line(80).refine(name => !/[0-9][.,][0-9]|°/.test(name) && name.replace(/[^0-9]/g, '').length <= 4,
+  { error: 'a place name carries no position' });
 const platform = z.enum(['ios', 'android']);
 // One reading from the phone: always its time zone, and the cell when the app is open with location allowed. The names are the
 // phone's own OS's for that cell, so they come only with it; a phone that cannot name the place still sends the cell.
 export const devicePlaceV1Schema = z.strictObject({
   cell: placeCellV1Schema.optional(),
-  locality: line(80).optional(),
-  region: line(80).optional(),
+  locality: placeName.optional(),
+  region: placeName.optional(),
   country: z.string().regex(/^[A-Z]{2}$/).optional(),
   timezone,
   platform,
@@ -70,7 +87,8 @@ export const devicePlaceV1Schema = z.strictObject({
 // The zone, and the cell when sent, replace the earlier ones from the same device, each unless the earlier one was observed later;
 // an upload that changes neither is answered superseded.
 // expected_epoch is the storage_compute epoch the phone read with consent; an upload from before a withdrawal is refused, so it
-// cannot repopulate what was deleted. device_id is the app installation id the push registration uses.
+// cannot repopulate what was deleted. device_id is the app installation id the push registration uses. A reading observed more
+// than 30 days ago is refused.
 export const devicePlaceIngestV1Schema = z.strictObject({
   request_id: requestId,
   expected_epoch: epoch,
@@ -83,7 +101,8 @@ export const devicePlaceIngestReceiptV1Schema = z.strictObject({
   status: z.enum(['accepted', 'superseded']),
 });
 
-// What Waldo kept, for the owner's own view. Needs storage consent only. place is null until the phone has sent a cell.
+// What Waldo kept, for the owner's own view. Needs storage consent only. place is null until the phone has sent a cell, and again
+// once that cell is more than 30 days old; a phone whose zone is that old is left out.
 export const devicePlaceStoredV1Schema = z.strictObject({
   device_id: z.uuid(),
   received_at: instant,
@@ -92,8 +111,8 @@ export const devicePlaceStoredV1Schema = z.strictObject({
   timezone_observed_at: instant,
   place: z.strictObject({
     cell: placeCellV1Schema,
-    locality: line(80).optional(),
-    region: line(80).optional(),
+    locality: placeName.optional(),
+    region: placeName.optional(),
     country: z.string().regex(/^[A-Z]{2}$/).optional(),
     observed_at: instant,
   }).nullable(),
@@ -110,6 +129,7 @@ export const deviceContextApiErrorV1Schema = z.strictObject({
 export const appDeviceContextRoutesV1 = [
   { method: 'GET', path: '/app/v1/device-context/consents', response: deviceContextConsentListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/device-context/consents', request: deviceContextConsentGrantV1Schema, response: deviceContextConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/device-context/consents/batch', request: deviceContextConsentGrantBatchV1Schema, response: deviceContextConsentBatchV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/device-context/consents/withdraw', request: deviceContextConsentWithdrawV1Schema, response: deviceContextConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/device-context/place', request: devicePlaceIngestV1Schema, response: devicePlaceIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/device-context/place', response: devicePlacesV1Schema, authenticated: true, success_status: 200 },

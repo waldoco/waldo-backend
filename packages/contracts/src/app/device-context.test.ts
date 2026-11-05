@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appDeviceContextRoutesV1, deviceContextConsentGrantV1Schema, deviceContextConsentListV1Schema, deviceContextConsentWithdrawV1Schema,
+  appDeviceContextRoutesV1, deviceContextConsentBatchV1Schema, deviceContextConsentGrantBatchV1Schema, deviceContextConsentGrantV1Schema,
+  deviceContextConsentListV1Schema, deviceContextConsentWithdrawV1Schema,
   devicePlaceIngestReceiptV1Schema, devicePlaceIngestV1Schema, devicePlaceV1Schema, devicePlacesV1Schema,
 } from './device-context';
 
@@ -39,6 +40,12 @@ describe('device place', () => {
       { ...place, timezone: '' },
     ]) expect(devicePlaceV1Schema.safeParse(bad).success).toBe(false);
   });
+
+  it('a place name may hold a short number but never a position', () => {
+    expect(devicePlaceV1Schema.safeParse({ ...place, locality: 'Sector 128', region: '5th Block' }).success).toBe(true);
+    for (const name of ['12.971599,77.594566', '12,97 77,59', '12°58′N 77°35′E', '1297 7759', 'Near 1.3'])
+      for (const field of ['locality', 'region']) expect(devicePlaceV1Schema.safeParse({ ...place, [field]: name }).success).toBe(false);
+  });
 });
 
 describe('device context routes', () => {
@@ -67,6 +74,23 @@ describe('device context routes', () => {
     expect(deviceContextConsentListV1Schema.safeParse({ consents: [row('storage_compute'), row('model_processing'), row('provider_lookup'), row('storage_compute')] }).success).toBe(false);
   });
 
+  it('the consent screen grants several purposes in one call, each purpose once with its own epoch', () => {
+    const batch = { request_id: 'dc-batch-0001', signal: 'place', version: 1, purposes: [
+      { purpose: 'storage_compute', expected_epoch: 0 }, { purpose: 'model_processing', expected_epoch: 2 }, { purpose: 'provider_lookup', expected_epoch: 0 }] };
+    expect(deviceContextConsentGrantBatchV1Schema.safeParse(batch).success).toBe(true);
+    for (const bad of [
+      { ...batch, purposes: [] },
+      { ...batch, purposes: [batch.purposes[0], batch.purposes[0]] },
+      { ...batch, purposes: [{ purpose: 'precise_place', expected_epoch: 0 }] },
+      { ...batch, purposes: [{ purpose: 'storage_compute' }] },
+      { ...batch, purposes: [{ ...batch.purposes[0], granted: true }] },
+      { ...batch, version: 2 },
+    ]) expect(deviceContextConsentGrantBatchV1Schema.safeParse(bad).success).toBe(false);
+    const row = { signal: 'place', purpose: 'storage_compute', version: 1, status: 'granted', epoch: 1, granted_at: '2026-11-05T08:00:00.000Z', withdrawn_at: null };
+    expect(deviceContextConsentBatchV1Schema.safeParse({ consents: [row], replayed: false }).success).toBe(true);
+    expect(deviceContextConsentBatchV1Schema.safeParse({ consents: [], replayed: false }).success).toBe(false);
+  });
+
   it('the read-back gives each phone\'s zone and, once sent, its place, each with its own time, for at most eight phones', () => {
     const stored = {
       device_id: ingest.device_id, received_at: '2026-11-05T08:00:01Z', platform: 'android', timezone: 'Asia/Dubai', timezone_observed_at: '2026-11-05T09:00:00Z',
@@ -81,7 +105,8 @@ describe('device context routes', () => {
 
   it('declares its routes', () => {
     expect(appDeviceContextRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
-      'GET /app/v1/device-context/consents', 'POST /app/v1/device-context/consents', 'POST /app/v1/device-context/consents/withdraw',
+      'GET /app/v1/device-context/consents', 'POST /app/v1/device-context/consents', 'POST /app/v1/device-context/consents/batch',
+      'POST /app/v1/device-context/consents/withdraw',
       'POST /app/v1/device-context/place', 'GET /app/v1/device-context/place',
     ]);
   });

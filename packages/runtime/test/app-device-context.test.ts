@@ -84,6 +84,7 @@ describe('app device-context routes', () => {
       { ...upload, place: { ...place, cell: 'tdr1wx' } },
       { ...upload, place: { ...place, latitude: 12.97, longitude: 77.59 } },
       { ...upload, place: { ...place, accuracy_m: 3000 } },
+      { ...upload, place: { ...place, locality: '12.971599,77.594566' } },
       { ...upload, place: { locality: 'Testville', timezone: 'Asia/Kolkata', platform: 'android', observed_at: '2026-11-05T08:00:00Z' } },
       'not json',
     ]) expect((await post('/app/v1/device-context/place', bad)).status).toBe(400);
@@ -111,6 +112,13 @@ describe('app device-context routes', () => {
     rpcResult = { consent: consent('provider_lookup'), replayed: false, deletion_routed: false };
     const granted = await post('/app/v1/device-context/consents', { request_id: 'dc-grant-0001', signal: 'place', purpose: 'provider_lookup', version: 1, expected_epoch: 0 });
     expect([granted.status, rpcs.at(-1)!.fn]).toEqual([200, 'device_context_consent_grant']);
+    rpcResult = { consents: [consent('storage_compute'), consent('provider_lookup')], replayed: false };
+    const batch = { request_id: 'dc-batch-0001', signal: 'place', version: 1, purposes: [{ purpose: 'storage_compute', expected_epoch: 0 }, { purpose: 'provider_lookup', expected_epoch: 0 }] };
+    const both = await post('/app/v1/device-context/consents/batch', batch);
+    expect([both.status, (await both.json() as { consents: unknown[] }).consents.length, rpcs.at(-1)!.fn]).toEqual([200, 2, 'device_context_consent_grant_batch']);
+    const calls = rpcs.length;
+    expect((await post('/app/v1/device-context/consents/batch', { ...batch, purposes: [batch.purposes[0], batch.purposes[0]] })).status).toBe(400);
+    expect(rpcs.length).toBe(calls);
     rpcResult = { consent: consent('storage_compute', 'withdrawn'), replayed: false, deletion_routed: true };
     const withdrawn = await post('/app/v1/device-context/consents/withdraw', { request_id: 'dc-withdraw-0001', signal: 'place', purpose: 'storage_compute', expected_epoch: 1 });
     expect([withdrawn.status, (await withdrawn.json() as { deletion_routed: boolean }).deletion_routed, rpcs.at(-1)!.fn]).toEqual([200, true, 'device_context_consent_withdraw']);
