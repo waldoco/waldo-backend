@@ -242,7 +242,8 @@ export interface ToolHandler<Args, Result, Ctx> {
   // spill: the view shown in place of a result too long to show, which is stored behind read_tool_output. It names every
   // item with its id and a short summary, so the model sees the whole result and reads back only the part it needs.
   // A view longer than TOOL_SPILL_VIEW_MAX_CHARS as JSON is no summary, and the stored result's first characters are shown
-  // instead, as when spill is absent.
+  // instead, as when spill is absent. The view is built from the whole result, so it is shown even when the store kept only
+  // the start of it; the result then says what read_tool_output cannot reach.
   spill?(data: Result): unknown;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;

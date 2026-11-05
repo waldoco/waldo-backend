@@ -357,7 +357,7 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
 const SPILL_OPENING_MAX = 300;
 const SPILL_RECIPIENTS = 5;
 const SPILL_HEADER_MAX = 120;
-const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads the full result in order.';
+const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads what was stored, in order.';
 type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; recipients_capped?: true; body_source?: ThreadMessage['body_source']; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
 const recipients = (list: readonly string[] | undefined) => list === undefined ? {} : { addresses: list.slice(0, SPILL_RECIPIENTS), ...(list.length > SPILL_RECIPIENTS ? { more: list.length - SPILL_RECIPIENTS } : {}) };
 const fitsSpill = (view: unknown) => JSON.stringify(view).length <= TOOL_SPILL_VIEW_MAX_CHARS;
@@ -375,22 +375,15 @@ export const threadSpill = (data: unknown) => {
   const detail = (message: ShownMessage, opening: number | null, withRecipients: boolean) => ({
     id: message.id, from: message.from, at: message.at, subject: message.subject,
     ...(withRecipients && message.to ? { to: recipients(message.to) } : {}), ...(withRecipients && message.cc ? { cc: recipients(message.cc) } : {}),
-    ...(opening === null ? {} : { opening: message.body.slice(0, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
+    ...(opening === null ? {} : { opening: escapedCut(message.body, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
     ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
     ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
   });
   const withOpenings = (opening: number) => view('its opening', (message) => detail(message, opening, true));
   const bare = withOpenings(0);
-  if (fitsSpill(bare)) {
-    let opening = Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length)));
-    // JSON escapes can make an opening longer than its characters, so the measured view decides.
-    for (;;) {
-      const shown = withOpenings(opening);
-      if (opening === 0 || fitsSpill(shown)) return shown;
-      opening = Math.floor(opening * 0.8);
-    }
-  }
+  // Each opening is cut to its share as JSON writes it, so together they fill at most the room the bare view leaves.
+  if (fitsSpill(bare)) return withOpenings(Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length))));
   const steps = [
     () => view('its recipients and how much body it holds, without an opening', (message) => detail(message, null, true)),
     () => view('how much body it holds, without recipients or an opening', (message) => detail(message, null, false)),
@@ -399,18 +392,21 @@ export const threadSpill = (data: unknown) => {
     const shown = step();
     if (fitsSpill(shown)) return shown;
   }
-  // The sender and subject share what is left, each at most SPILL_HEADER_MAX characters as JSON writes them.
+  // Senders and subjects share what is left as JSON writes them: each keeps the same cut, at most SPILL_HEADER_MAX,
+  // and what a shorter field leaves goes to the longer ones.
   const headersOnly = (chars: number) => view('its id, sender, time and subject only', (message) => ({
     id: message.id, from: escapedCut(message.from, chars), at: message.at, subject: escapedCut(message.subject, chars), ...bodyFlags(message),
     ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
   }));
-  let chars = Math.min(SPILL_HEADER_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(headersOnly(0)).length) / Math.max(1, 2 * messages.length)));
-  for (;;) {
-    const shown = headersOnly(Math.max(0, chars));
-    if (chars <= 0 || fitsSpill(shown)) return shown;
-    chars = Math.floor(chars * 0.8);
+  const fields = messages.flatMap((message) => [message.from, message.subject]).map((text) => JSON.stringify(text).length - 2).sort((a, b) => a - b);
+  let room = TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(headersOnly(0)).length;
+  for (const [i, length] of fields.entries()) {
+    const share = Math.floor(room / (fields.length - i));
+    if (length > share) return headersOnly(Math.max(0, Math.min(SPILL_HEADER_MAX, share)));
+    room -= length;
   }
+  return headersOnly(SPILL_HEADER_MAX);
 };
 // The longest start of text whose JSON-escaped form is at most max characters, cut between code points.
 const escapedCut = (text: string, max: number) => {

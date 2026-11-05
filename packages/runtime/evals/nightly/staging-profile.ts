@@ -34,7 +34,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_OWNER_FIRST: gap('owner messages take the chain before queued machine turns; the trial runs one owner turn at a time with no machine work queued'),
   WALDO_SECOND_MESSAGE: gap('a running owner turn is offered newer owner messages; the trial sends each step after the last one answered'),
   WALDO_ASYNC_TOOLS: gap('the owner turn holds no long tool and hands that work to start_task; the trial runs no task worker or report turn, so it keeps the long tools inline'),
-  WALDO_LIGHT_CHAT: gap("the owner's reply runs on the auxiliary model and task workers on the chat model; the trial's turns stay on the chat model"),
+  WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
@@ -64,8 +64,12 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it off'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
+  WALDO_PROMPT_V2: mapped("'1' sends the trials the behavior prompt's version 2"),
+  WALDO_WATCHDOG: inert('the progress watchdog checks running background jobs; the trial runs no background jobs'),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it off'),
+  WALDO_RECALL_CHAIN: gap('the trial\'s search_episodes runs without the recall chain, and its world keeps no runs, tasks or cards to link; test/recall-chain.test.ts measures it; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
+  BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it off'),
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it off'),
@@ -130,6 +134,7 @@ export type StagingProfile = Readonly<{
   model: ModelName;
   toolLoader?: 'harness';
   toolSearch?: true;
+  promptV2: boolean;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
   memorySelection: boolean;
@@ -143,6 +148,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
   return {
     label: 'staging', model: OWNER_MODELS[modelProviderSetting(vars.WALDO_MODEL_PROVIDER)].chat,
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
+    promptV2: vars.WALDO_PROMPT_V2 === '1',
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
     memorySelection: vars.MEMORY_SELECTION === '1',
