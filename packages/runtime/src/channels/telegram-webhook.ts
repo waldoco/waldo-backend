@@ -85,6 +85,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
   WALDO_RECALL_CHAIN?: string;
+  // '1': every owner upload is kept in the workspace, and extract_archive is offered.
+  WALDO_FILE_TOOLS?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

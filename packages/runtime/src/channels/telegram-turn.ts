@@ -36,7 +36,8 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
   const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {
     turn.runScope?.admit();
-    const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
+    const keep = turn.runScope && readers?.keeper ? readers.keeper(turn.runScope) : undefined;
+    const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, { ...readers, ...(keep ? { keep } : {}) })) : undefined;
     turn.runScope?.admit();
     return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}),
       ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }, time);

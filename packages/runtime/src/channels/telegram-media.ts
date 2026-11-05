@@ -1,6 +1,7 @@
 import type { LLMAttachment } from '@waldo/contracts';
 import type { InboundPart } from './owner-inbound-turn';
 import type { TelegramMedia } from './telegram-polling';
+import type { RunEffectScope } from './run-effect-scope';
 import { keptNote, type UploadKeeper } from './upload-keeper';
 
 // Telegram bots can download files up to 20 MB.
@@ -19,7 +20,8 @@ export type TelegramFileDownloader = (fileId: string) => Promise<Uint8Array>;
 export type Transcriber = (audio: Uint8Array, filename: string, mimeType: string) => Promise<string>;
 // keep: present with WALDO_FILE_TOOLS on. Every photo and document is then downloaded and kept in the owner's workspace,
 // whatever its type; the model still gets the readable ones attached.
-export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber; keep?: UploadKeeper }>;
+// keeper: the host's factory for it, bound to the running turn's scope.
+export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber; keep?: UploadKeeper; keeper?: (scope: RunEffectScope) => UploadKeeper }>;
 
 export type LoadedMedia = Readonly<{ parts: readonly InboundPart[]; attachment?: LLMAttachment }>;
 const noted = (text: string): readonly InboundPart[] => [{ authorship: 'media_note', text }];
