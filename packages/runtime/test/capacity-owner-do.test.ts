@@ -12,7 +12,7 @@ import { setHealthMemory } from '../src/channels/health-memory';
 import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore } from '../src/memory/claims';
+import { barrierPrompt, claimStore } from '../src/memory/claims';
 import { CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
 import { PROSE_RULE } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -70,7 +70,7 @@ const HEALTH_ROW = { context: { id: 'capacity-health', day: DAY, form: { score: 
 
 beforeEach(() => {
   model.capacity = []; model.cards = []; model.card = []; health.shared = false;
-  model.capacityReply = JSON.stringify({ note: NOTE, evidence: 'the past week of calendar shape' });
+  model.capacityReply = JSON.stringify({ note: NOTE, touches_forgotten: false });
   calendar.events = [MEETING]; calendar.created = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -172,6 +172,18 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
       expect(codes('capacity')).toEqual(['health_notes_off']);
     });
     expect(model.capacity).toEqual([]);
+  });
+
+  it('the model reads what the owner asked to forget, and a note it marks as touching it is not kept', async () => {
+    model.capacityReply = JSON.stringify({ note: 'Since the burnout, owner sustains one focus block a day.', touches_forgotten: true });
+    await owned('capacity-nightly-forgotten', { CAPACITY_PLAN: '1' }, async ({ state, nightly, codes }) => {
+      store(state).barrier('my burnout', '2030-03-04T09:00:00Z');
+      await nightly();
+      // As in every memory pass: the barrier list, whose topics are kept only as fingerprints.
+      expect(model.capacity[0]!.input).toContain(JSON.stringify(barrierPrompt(store(state))).slice(1, -1));
+      expect(codes('capacity')).toEqual(['held']);
+      expect(capacityNote(store(state), state.storage.kv)).toBeNull();
+    });
   });
 
   it('a model failure is logged and the night goes on', async () => {

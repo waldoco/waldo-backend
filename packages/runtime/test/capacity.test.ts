@@ -1,10 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { CAPACITY_BODY_KEY, CAPACITY_NOTE_KEY, calendarShape, capacityDays, capacityNote, cardCapacityNote, keepCapacityNote, runCapacityPass, type CapacityPassDeps } from '../src/channels/capacity';
+import { CAPACITY_BODY_KEY, CAPACITY_EVIDENCE, CAPACITY_NOTE_KEY, CAPACITY_SET_ASIDE_KEY, calendarShape, capacityDays, capacityNote, cardCapacityNote, keepCapacityNote, runCapacityPass, type CapacityPassDeps } from '../src/channels/capacity';
 import type { CalendarItem, GoogleClient } from '../src/connectors/google';
 import { claimStore } from '../src/memory/claims';
-import { BODY_WITHDRAWN, CAPACITY_LINES, NO_CALENDAR, NO_SHARED_HEALTH } from '../src/prompt/capacity';
+import { BODY_WITHDRAWN, CAPACITY_LINES, capacityContext, NO_CALENDAR, NO_SHARED_HEALTH } from '../src/prompt/capacity';
+import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 import { DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
 
 // CAPACITY_PLAN: the capacity note is the model's; these check what reaches it and what is kept, never its words. Every
@@ -13,7 +14,7 @@ let sequence = 0;
 const inObject = (fn: (state: DurableObjectState) => Promise<void> | void) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`capacity-${sequence++}`)), (_instance, state) => fn(state));
 const event = (id: string, title: string, start: string, end: string, extra: Partial<CalendarItem> = {}): CalendarItem => ({ id, title, start, end, all_day: false, ...extra });
-const reply = (note: string | null) => JSON.stringify({ note, evidence: 'the past week of calendar shape' });
+const reply = (note: string | null, touches_forgotten = false) => JSON.stringify({ note, touches_forgotten });
 const NOTE = 'Owner does their best focused work before lunch and holds about one long block a day; afternoons after back-to-back meetings run flat.';
 
 describe('the calendar shape the pass reads', () => {
@@ -92,6 +93,25 @@ describe('the capacity note in memory', () => {
     store.setStatus(capacityNote(store, state.storage.kv)!.id, 'dismissed');
     expect(capacityNote(store, state.storage.kv)).toBeNull();
     expect(state.storage.kv.get(CAPACITY_NOTE_KEY)).toBeUndefined();
+    expect(state.storage.kv.get(CAPACITY_SET_ASIDE_KEY)).toBe(true);
+  }));
+
+  it('keeps fixed evidence, never what the model reasoned from', () => inObject(state => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const scripted = JSON.stringify({ note: NOTE, touches_forgotten: false, evidence: 'Recovery zone low on Tue and Wed; Form zone low on Thu' });
+    expect(keepCapacityNote(store, state.storage.kv, scripted, '2026-11-05T02:00:00Z', true)).toBe('kept');
+    const kept = store.claims().find(claim => claim.id === capacityNote(store, state.storage.kv)!.id)!;
+    expect(kept.evidence).toBe(CAPACITY_EVIDENCE);
+    expect(JSON.stringify(store.claims())).not.toContain('Recovery zone');
+  }));
+
+  it('holds a note the model marks as touching a forgotten topic, and one that does not say', () => inObject(state => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    store.barrier('my burnout', '2026-11-04T09:00:00Z');
+    expect(keepCapacityNote(store, state.storage.kv, reply('Since the burnout, owner sustains one focus block a day.', true), '2026-11-05T02:00:00Z', false)).toBe('held');
+    expect(keepCapacityNote(store, state.storage.kv, JSON.stringify({ note: 'Owner sustains one focus block a day.' }), '2026-11-05T02:00:00Z', false)).toBe('held');
+    expect(capacityNote(store, state.storage.kv)).toBeNull();
+    expect(store.claims().some(claim => claim.text.includes('focus block'))).toBe(false);
   }));
 });
 
@@ -151,6 +171,52 @@ describe('the nightly capacity pass', () => {
     expect(state.storage.kv.get(CAPACITY_BODY_KEY)).toBe(false);
   }));
 
+  it('once the owner dismisses or forgets the note, writes no new one', () => inObject(async state => {
+    const asked: string[] = [];
+    await runCapacityPass(deps(state, { asked }));
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    store.purge([capacityNote(store, state.storage.kv)!.id], '2026-11-05T09:00:00Z', []);
+    asked.length = 0;
+    expect(await runCapacityPass(deps(state, { asked }))).toBe('set_aside');
+    expect(await runCapacityPass(deps(state, { asked }))).toBe('set_aside');
+    expect(asked).toEqual([]);
+    expect(capacityNote(store, state.storage.kv)).toBeNull();
+  }));
+
+  it('a topic the owner forgets takes the note that names it, and the next night writes none', () => inObject(async state => {
+    const asked: string[] = [];
+    await runCapacityPass(deps(state, { asked, ask: async input => { asked.push(input); return reply('Since the burnout, owner sustains one focus block a day.'); } }));
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    expect(capacityNote(store, state.storage.kv)).not.toBeNull();
+    store.purge([], '2026-11-05T09:00:00Z', ['burnout']);
+    asked.length = 0;
+    expect(await runCapacityPass(deps(state, { asked }))).toBe('set_aside');
+    expect(asked).toEqual([]);
+    expect(store.claims().some(claim => claim.text.includes('burnout'))).toBe(false);
+  }));
+
+  it('a failed health read keeps the note as it is and asks nothing; the card still reads it', () => inObject(async state => {
+    const asked: string[] = [];
+    await runCapacityPass(deps(state, { asked, health: async () => 'Recovery zone: good.' }));
+    asked.length = 0;
+    expect(await runCapacityPass(deps(state, { asked, health: async () => 'unknown' }))).toBe('health_unknown');
+    expect(asked).toEqual([]);
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    expect(cardCapacityNote(store, state.storage.kv, true, 'unknown')).toBe(NOTE);
+    expect(cardCapacityNote(store, state.storage.kv, true, false)).toBeNull();
+  }));
+
+  it('an owner correction made while the model answers wins', () => inObject(async state => {
+    const asked: string[] = [];
+    await runCapacityPass(deps(state, { asked }));
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const OWNED = 'I focus best after the kids are asleep.';
+    const correct = () => store.correct(capacityNote(store, state.storage.kv)!.id, { kind: 'health', text: OWNED, source: 'stated', evidence: `"${OWNED}"`, origin: 'owner', source_ref: 'app:message-4' }, '2026-11-05T09:00:00Z');
+    expect(await runCapacityPass(deps(state, { asked, ask: async () => { correct(); return reply('Owner focuses best in the early morning.'); } }))).toBe('owner_held');
+    expect(capacityNote(store, state.storage.kv)).toMatchObject({ text: OWNED, owner: true });
+    expect(store.claims().some(claim => claim.text === 'Owner focuses best in the early morning.')).toBe(false);
+  }));
+
   it('asks nothing when the owner turned health notes off, or wrote the note themselves', () => inObject(async state => {
     const asked: string[] = [];
     expect(await runCapacityPass(deps(state, { asked, healthNotes: false }))).toBe('health_notes_off');
@@ -175,6 +241,16 @@ describe('the note a day card reads', () => {
     store.correct(capacityNote(store, state.storage.kv)!.id, { kind: 'health', text: OWNED, source: 'stated', evidence: `"${OWNED}"`, origin: 'owner', source_ref: 'app:message-3' }, '2026-11-05T09:00:00Z');
     expect(cardCapacityNote(store, state.storage.kv, true, false)).toBe(OWNED);
   }));
+});
+
+describe('the note in a trace', () => {
+  it('is withheld whole by the health scrub when text capture is on', () => {
+    const input = JSON.stringify([{ role: 'user', content: `[Scheduled card "The Close"]\n\nTurn context:\n\n${capacityContext(`${NOTE}\n\nA second paragraph about recovery.`, '- none')}` }]);
+    const scrubbed = JSON.stringify(scrubTraceHealth({ trace: 'card:close:1', hop: 'llm_reply', ms: 1, ok: true, text: { input, output: '' } }).text);
+    expect(scrubbed).not.toContain('best focused work');
+    expect(scrubbed).not.toContain('second paragraph');
+    expect(scrubbed).toContain('Scheduled card');
+  });
 });
 
 describe('the day cards with CAPACITY_PLAN', () => {
