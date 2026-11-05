@@ -321,7 +321,7 @@ Every PR is a draft, and the gate merges. Hot files are named with the lane to t
   - mark creates with a private extended property;
   - read the mark back before a move or remove;
   - allow remove under the grant.
-- B3 then adds the way to create a grant.
+- B3 then adds the way to create a grant: the `standing_grant` card (approvals revision 7), `GET /app/v1/autonomy` and `POST /app/v1/autonomy/changes`, and the `propose_standing_grant`, `revoke_standing_grant` and `pause_autonomy` tools. Receipts and undo stay 404 until B6.
 - Folding `act_and_report` standing orders under the grant ledger is the next build PR.
 
 **Model per PR:** B2 and B5 are design-heavy and security-relevant, so they run on Opus or with an Opus reviewer. The rest run on Sonnet.

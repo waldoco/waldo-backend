@@ -10,9 +10,11 @@ import {
   appApprovalV1Schema,
   APP_APPROVALS_AGENT_MAIL_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
+  APP_APPROVALS_STANDING_GRANT_REVISION,
   APP_APPROVALS_WITHDRAWAL_REVISION,
   type AppApprovalV1,
 } from './approvals';
+import autonomy from './fixtures/autonomy.v1.json';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
 import { payloadDigestV1Schema, replyApprovalPartV1Schema } from './parts';
 
@@ -363,6 +365,34 @@ describe('a send as Waldo, approvals revision 5', () => {
     ['a sender that is not an address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, address: 'waldo' } } }],
     ['a sender with more than its name and address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, reply_to: 'x@example.com' } } }],
     ['a draft without its subject', { ...asWaldo, exact: { ...asWaldo.exact, message: { subject: null, body: 'See you at 4.' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+});
+
+describe('a card that asks to create a standing grant, approvals revision 7', () => {
+  const card = autonomy.standing_grant_card;
+  const terms = card.exact.grant;
+
+  it('accepts a card that shows exactly the grant terms the autonomy settings confirm', () => {
+    expect([APP_APPROVALS_STANDING_GRANT_REVISION, APP_APPROVALS_CONTRACT_REVISION]).toEqual([7, 8]);
+    expect(appApprovalV1Schema.safeParse(card).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [card, email] }).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse({ type: 'approval', approval_id: card.approval_id, kind: card.kind, review: card.review, payload_digest: card.payload_digest,
+      actions: ['approve', 'skip'], expires_at: card.expires_at, fallback_text: 'Waldo asks to move its own focus blocks without asking.' }).success).toBe(true);
+    // A done card reads done, with no undo: ending a grant is a revoke.
+    const { labels: _labels, ...decided } = card;
+    expect(appApprovalV1Schema.safeParse({ ...decided, state: 'done', actions: [] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no grant', { ...card, exact: {} }],
+    ['grant terms beside another change', { ...card, exact: { grant: terms, scope: 'calendar' } }],
+    ['grant terms on another kind', { ...calendar, exact: { ...calendar.exact, grant: terms } }],
+    ['a grant past 90 days', { ...card, exact: { grant: { ...terms, expires_at: terms.valid_from + 91 * 86_400_000 } } }],
+    ['a daily cap past 20', { ...card, exact: { grant: { ...terms, limits: { ...terms.limits, max_per_day: 21 } } } }],
+    ['a class that is not one of the five', { ...card, exact: { grant: { ...terms, scope: { ...terms.scope, class: 'calendar.anything' } } } }],
+    ['a grant with more than its terms', { ...card, exact: { grant: { ...terms, autonomy: 'auto' } } }],
   ] as const)('rejects %s', (_shape, approval) => {
     expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
   });
