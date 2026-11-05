@@ -33,11 +33,13 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
   const logs: Record<string, unknown>[] = [];
   // The version each event is at after Waldo's own writes, so an undo reads back the version it wrote.
   const versions = new Map<string, string>();
+  // Creates Waldo asked for, and the ones a readback finds on the calendar after the create's answer was lost.
+  const created = new Map<string, Record<string, unknown>>(), landed = new Set<string>();
   const client = {
     account: { connection_id: `local:${ACCOUNT}`, email: ACCOUNT },
-    event: async (id: string, calendarId?: string) => ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: versions.get(id) ?? (id === 'e1' || id === 'r1' || id === 'u1' ? 'v1' : 'v2'), calendar: calendarId,
+    event: async (id: string, calendarId?: string) => landed.has(id) ? { id, title: created.get(id)!.title, start: created.get(id)!.start, end: created.get(id)!.end, all_day: false, etag: 'v2', status: 'confirmed', operation_marker: created.get(id)!.operationMarker } : ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: versions.get(id) ?? (id === 'e1' || id === 'r1' || id === 'u1' ? 'v1' : 'v2'), calendar: calendarId,
       ...(id === 'r1' ? { recurring_event_id: 'series' } : {}), ...(MARKED.has(id) ? { waldo_made: true } : {}), ...(id === 'x1' ? { attendees: 1 } : {}) }),
-    createEvent: async (input: Record<string, unknown>) => { writes.push(['create', input]); if (options.createThrows) throw new Error('socket closed'); return { id: String(input.id), title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
+    createEvent: async (input: Record<string, unknown>) => { writes.push(['create', input]); created.set(String(input.id), input); if (options.createThrows) throw new Error('socket closed'); return { id: String(input.id), title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
     moveEvent: async (...args: unknown[]) => { writes.push(['move', ...args]); return { id: 'e1', title: 'Focus', start: '', end: '', all_day: false, etag: 'v3' }; },
     cancelEvent: async (...args: unknown[]) => { writes.push(['cancel', ...args]); versions.set(String(args[0]), 'v4'); return { id: String(args[0]), title: 'Focus', start: '', end: '', all_day: false, etag: 'v4', status: 'cancelled' }; },
     restoreEvent: async (...args: unknown[]) => { writes.push(['restore', ...args]); return { id: String(args[0]), title: 'Focus', start: '', end: '', all_day: false, etag: 'v5' }; },
@@ -52,7 +54,7 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
   const propose = (p: ReturnType<typeof focus>, ...origin: [RunOrigin | undefined] | []) => desk.propose(p, 'turn-1', `tool:${n + 1}`, { origin: origin.length ? origin[0] : 'owner' });
-  return { desk, client, grants: real, writes, cards, logs, status, propose, effects, clock: { set: (ms: number) => { now = ms; } } };
+  return { desk, client, grants: real, writes, cards, logs, status, propose, effects, land: (id: string) => landed.add(id), clock: { set: (ms: number) => { now = ms; } } };
 };
 const inDo = (name: string, run: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => run(state));
@@ -197,6 +199,81 @@ describe('calendar.move_own_block: Waldo places, moves and removes its own block
     expect(w.writes).toHaveLength(1);
     expect(w.cards).toEqual([]);
   }));
+
+  describe('a granted change whose outcome is unknown settles from its effect record when the owner next looks, and never runs again', () => {
+    const row = (state: DurableObjectState) => state.storage.sql.exec<{ id: string; status: string; undo_json: string | null }>('SELECT id, status, undo_json FROM ledger').one();
+    // An object stopped once at the given point of its first granted effect, as an eviction would stop it.
+    const stoppedOnce = (at: 'after_reserve' | 'after_done') => (real: OwnerEffectLedger): OwnerEffectLedger => {
+      let stopped = false;
+      return { ...real, execute: async (intent, adapter, ...rest) => {
+        if (stopped) return real.execute(intent, adapter, ...rest);
+        stopped = true;
+        if (at === 'after_reserve') real.reserve(intent, rest[0], rest[1], adapter.authorize);
+        else await real.execute(intent, adapter, ...rest);
+        throw new Error('evicted');
+      } };
+    };
+
+    it('approving it again settles it in plain words, never an internal error, and runs nothing', () => inDo('settle-decide', async state => {
+      const w = world(state, { effects: stoppedOnce('after_reserve') });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      const out = await w.desk.decide(id, 'a', 'retap');
+      expect(out).toMatchObject({ toast: 'Not done', message: expect.stringContaining('nothing changed') });
+      expect(out.message).not.toMatch(/identity|conflict|effect/i);
+      expect([w.status(id), w.writes.length]).toEqual(['failed', 0]);
+    }));
+
+    it('approving one still unknown answers outcome unknown and writes nothing again', () => inDo('settle-decide-unknown', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      expect((await w.desk.decide(id, 'a', 'retap')).toast).toBe('Outcome unknown');
+      expect([w.status(id), w.writes.length]).toEqual(['uncertain', 1]);
+    }));
+
+    it('once the readback finds the block, the list read settles it done, with no undo a readback cannot make safe, and it leaves the list', () => inDo('settle-landed', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      expect((await w.desk.approvals(NOW)).map(item => item.state)).toEqual(['outcome_unknown']);
+      w.land(String((w.writes[0]![1] as { id: string }).id));
+      expect(await w.desk.approvals(NOW)).toEqual([]);
+      expect(row(state)).toMatchObject({ id, status: 'done', undo_json: null });
+      expect(w.desk.grantOutcome(id)).toMatchObject({ state: 'done' });
+      expect(w.writes).toHaveLength(1);
+    }));
+
+    it('an intent reserved but never sent is refused, not resumed: the row reads not done and nothing is written', () => inDo('settle-reserved', async state => {
+      const w = world(state, { effects: stoppedOnce('after_reserve') });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      expect([w.status(id), w.effects.get('tool:1:apply')?.state]).toEqual(['uncertain', 'reserved']);
+      expect(await w.desk.approvals(NOW)).toEqual([]);
+      expect([w.status(id), w.effects.get('tool:1:apply')?.state]).toEqual(['failed', 'rejected']);
+      expect(w.desk.grantOutcome(id)).toMatchObject({ state: 'not_done' });
+      expect(w.writes).toEqual([]);
+    }));
+
+    it('an effect recorded done whose row was left unknown settles done from the record, with no second write', () => inDo('settle-recorded', async state => {
+      const w = world(state, { effects: stoppedOnce('after_done') });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      expect([w.status(id), w.effects.get('tool:1:apply')?.state]).toEqual(['uncertain', 'done']);
+      expect(await w.desk.approvals(NOW)).toEqual([]);
+      expect(row(state)).toMatchObject({ status: 'done', undo_json: expect.stringContaining('"op":"cancel"') });
+      expect(w.writes).toHaveLength(1);
+    }));
+
+    it('a row claimed with no effect record never reached Google, so it settles not done', () => inDo('settle-no-record', async state => {
+      const w = world(state);
+      const id = await w.propose(focus());
+      state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', grant_json = ? WHERE id = ?", JSON.stringify({ class: 'calendar.move_own_block', grant_id: 'g1', revision: 1 }), id);
+      expect(await w.desk.approvals(NOW)).toEqual([]);
+      expect(w.status(id)).toBe('failed');
+      expect(w.writes).toEqual([]);
+    }));
+  });
 
   const cardsAsToday: readonly [string, ReturnType<typeof focus>, RunOrigin | undefined][] = [
     ['an outside-text run', focus(), 'external'],

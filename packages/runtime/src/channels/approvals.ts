@@ -1,4 +1,4 @@
-import { EffectNotAppliedError, EffectQuotaError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
@@ -1069,8 +1069,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
 
   // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change reaches
-  // here unclaimed and is claimed in its reserve; an owner's approval claims nothing and keeps the row open.
-  const applyCalendar = async (id: string, proposal: Stored, operationRef: string, client: GoogleClient, trace: string, recovering: boolean, grant?: GrantUse): Promise<ApprovalDecision> => {
+  // here unclaimed and is claimed in its reserve; an owner's approval claims nothing and keeps the row open. The client is
+  // null only for a settle whose effect is already decided, which reaches neither the dispatch nor the readback.
+  const applyCalendar = async (id: string, proposal: Stored, operationRef: string, client: GoogleClient | null, trace: string, recovering: boolean, grant?: GrantUse): Promise<ApprovalDecision> => {
     let out: ApprovalDecision;
       const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
       const marker = await sha256Hex(`${operationRef}:apply`);
@@ -1078,11 +1079,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // from here, so a later read sees it on record and leaves the request open.
       if (!recovering && row(id)?.status !== (grant ? 'card_unconfirmed' : 'open')) return noLongerOpen(id);
       const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
-        const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
+        const undo = await apply(client!, proposal, deps.effects ? eventId : undefined, marker);
         return { provider_id: eventId, result: undo };
       }, async () => {
         try {
-          const current = await client.event(eventId, proposal.calendar_id);
+          const current = await client!.event(eventId, proposal.calendar_id);
           if (current.operation_marker !== marker) return {status:'unknown'};
           if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && (!proposal.rename_to || current.title === proposal.rename_to) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
             && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
@@ -1148,6 +1149,37 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: status === 'done', code: status === 'done' ? 'done' : status === 'uncertain' ? 'unknown' : 'not_done' });
     return true;
   };
+  const GRANT_UNKNOWN: ApprovalDecision = { toast: 'Outcome unknown', message: 'Whether that change under your standing grant landed is still unknown. Nothing was run again; check your calendar.' };
+  // A granted change whose outcome is unknown settles from its effect record and never runs again: a recorded outcome is
+  // applied, one in flight is read back, and an intent that never reached Google is refused rather than resumed, since the
+  // grant's full recheck (the run's origin, the lead) cannot be rebuilt here. The intent carries the quota it was reserved
+  // with, so it is the same intent.
+  const settleGranted = async (id: string, trace: string): Promise<ApprovalDecision | null> => {
+    const entry = row(id);
+    if (!entry?.grant_json || entry.status !== 'uncertain' || entry.kind !== 'calendar_change' || !deps.effects) return null;
+    const operationRef = operationRefOf(entry), record = deps.effects.get(`${operationRef}:apply`);
+    if (deps.effects.isActive(`${operationRef}:apply`)) return GRANT_UNKNOWN;
+    const proposal = JSON.parse(entry.payload_json) as Stored;
+    const notDone = (): ApprovalDecision => { setStatus(id, 'failed'); return { toast: 'Not done', message: `Not done under your standing grant; nothing changed: ${describe(proposal)}.` }; };
+    // The intent is written before Google is called, so a row with none never reached it.
+    if (!record?.quota) return notDone();
+    const made = JSON.parse(entry.grant_json) as Pick<GrantUse, 'class' | 'grant_id' | 'revision'>;
+    const reading = record.state === 'attempting' || record.state === 'unknown';
+    const client = reading ? await deps.google({ id: `approval:${id}:apply`, requireRoute: proposal.action !== 'create' }, 'calendar', proposal.account) : null;
+    if (reading && (client === null || (proposal.account && client.account?.email?.toLowerCase() !== proposal.account.toLowerCase()))) return GRANT_UNKNOWN;
+    try {
+      const out = await applyCalendar(id, proposal, operationRef, client, trace, true, { ...made, quota: record.quota, authorize: () => false });
+      deps.log({ trace, hop: 'grant_settle', ms: 0, ok: true, code: row(id)?.status ?? 'missing' });
+      return out;
+    } catch (error) {
+      if (error instanceof EffectRefusedError || error instanceof EffectNotAppliedError) {
+        deps.log({ trace, hop: 'grant_settle', ms: 0, ok: true, code: 'not_done' });
+        return notDone();
+      }
+      deps.log({ trace, hop: 'grant_settle', ms: 0, ok: false, code: error instanceof EffectUnknownError ? 'unknown' : 'failed' });
+      return GRANT_UNKNOWN;
+    }
+  };
   const CHANGED_SINCE_SHOWN: ApprovalDecision = { toast: 'Card changed', message: 'That card changed after you saw it, so nothing was done.' };
   const replayAccepted = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'Approved', message: `Approved: ${describeAny(entry)}. It runs in the background, and I'll tell you how it went.` });
@@ -1157,6 +1189,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const entry = row(id);
     if (entry?.status === 'expired' && action !== 'u') return expiredReply(entry);
     if (entry?.status === 'withdrawn') return withdrawnReply(entry);
+    // A change a grant made was never a card to approve; approving it again only settles it.
+    if (action === 'a' && entry?.grant_json && entry.status === 'uncertain') return await settleGranted(id, trace) ?? { toast: 'Already handled.', message: 'Already handled.' };
     const operationRef = entry ? operationRefOf(entry) : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
@@ -2069,7 +2103,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // that moves the row ends the deferral.
       const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
       // A change a standing grant made was never the owner's approval, so the list leaves it out, its receipt being its record;
-      // one whose outcome is unknown stays in it until it settles, so the owner is told.
+      // one whose outcome is unknown is settled here first, and stays in the list while it is still unknown.
+      const unsettled = sql.exec<{ id: string }>("SELECT id FROM ledger WHERE grant_json IS NOT NULL AND status = 'uncertain' ORDER BY created_at LIMIT 10").toArray();
+      for (const { id } of unsettled) await settleGranted(id, id).catch(() => deps.log({ trace: id, hop: 'grant_settle', ms: 0, ok: false, code: 'failed' }));
       const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ["(grant_json IS NULL OR status = 'uncertain')"]), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
