@@ -6,14 +6,15 @@ import { localIso } from './reminders';
 // only these limits (consent, quiet hours, one question waiting, the day's budget, the gap between two interruptions);
 // whether something is worth an interruption, whether it asks a question and whether it is urgent are the model's call.
 // The model may call something urgent to go past the budget and the gap, from a small daily allowance, never past consent,
-// quiet hours or a question still waiting on the owner. One owner-local day's spend and the open question live in the
+// quiet hours, the end of the owner's day or a question still waiting on the owner. An owner who sets no unasked messages
+// gets none, urgent included. One owner-local day's spend and the open question live in the
 // owner's own KV: an id, a day and times, never text.
 export const INTERRUPTS_KEY = 'proactive_interrupts_v1';
 export const QUESTION_KEY = 'proactive_question_v1';
 
 export type InterruptLimits = Readonly<{ perDay: number; urgentPerDay: number; gapMs: number }>;
 // Closed, for traces and evals: never a title, a time or an id.
-export type InterruptHold = 'consent' | 'quiet' | 'question' | 'budget' | 'cooldown';
+export type InterruptHold = 'consent' | 'quiet' | 'closed' | 'question' | 'budget' | 'cooldown';
 export type InterruptSpend = 'counted' | 'urgent';
 export type InterruptState = Readonly<{ day: string; count: number; urgent: number; last: number | null }>;
 export type OpenQuestion = Readonly<{ ref: string; at: number; day: string }>;
@@ -23,30 +24,36 @@ const count = (raw: string | undefined, fallback: number): number => {
   const parsed = Number(raw);
   return raw !== undefined && raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 };
-// The deployment's defaults, which the owner's own number (set_proactivity) replaces.
+// The deployment's defaults, which the owner's own number (set_proactivity) replaces. Their 0 means no unasked message at
+// all, so it leaves no urgent allowance either.
 export const interruptLimits = (env: InterruptEnv, proactivity: Proactivity): InterruptLimits => ({
   perDay: proactivity.interruptions_per_day ?? count(env.PROACTIVE_INTERRUPTS_PER_DAY, 2),
-  urgentPerDay: count(env.PROACTIVE_URGENT_PER_DAY, 1),
+  urgentPerDay: proactivity.interruptions_per_day === 0 ? 0 : count(env.PROACTIVE_URGENT_PER_DAY, 1),
   gapMs: count(env.PROACTIVE_GAP_MIN, 60) * 60_000,
 });
 
 export type HoldInput = Readonly<{
-  consent: boolean; quiet: boolean; asks: boolean; urgent: boolean;
+  // closed: outside the owner's day (the caller's window, from the day plan); like quiet hours, urgent never passes it.
+  consent: boolean; quiet: boolean; closed?: boolean; asks: boolean; urgent: boolean;
   open: OpenQuestion | null; spent: InterruptState; limits: InterruptLimits; now: number;
 }>;
 // What holds one more interruption now, first failing first; null when it may go.
 export const interruptHold = (input: HoldInput): InterruptHold | null => {
   if (!input.consent) return 'consent';
   if (input.quiet) return 'quiet';
+  if (input.closed) return 'closed';
   if (input.asks && input.open) return 'question';
   const urgentLeft = input.urgent && input.spent.urgent < input.limits.urgentPerDay;
   if (input.spent.count >= input.limits.perDay) return urgentLeft ? null : 'budget';
   const gap = input.spent.last !== null && input.now - input.spent.last < input.limits.gapMs;
   return gap && !urgentLeft ? 'cooldown' : null;
 };
-// What an interruption that went is charged as: the budget while it lasts and the gap has passed, the urgent allowance after.
-export const spendOf = (spent: InterruptState, limits: InterruptLimits, now: number): InterruptSpend =>
-  spent.count < limits.perDay && (spent.last === null || now - spent.last >= limits.gapMs) ? 'counted' : 'urgent';
+// What an interruption that went is charged as: the budget while it lasts and the gap has passed; past them, the urgent
+// allowance only when the model called it urgent and some is left. Anything else is counted, over the budget if need be,
+// so the record says what went.
+export const spendOf = (spent: InterruptState, limits: InterruptLimits, now: number, urgent: boolean): InterruptSpend =>
+  spent.count < limits.perDay && (spent.last === null || now - spent.last >= limits.gapMs) ? 'counted'
+    : urgent && spent.urgent < limits.urgentPerDay ? 'urgent' : 'counted';
 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): boolean }>;
 export const interruptBook = (kv: Kv, deps: Readonly<{
@@ -70,8 +77,8 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
       interruptHold({ ...input, open: question(), spent: spent(), now: deps.now() }),
     // Charges one interruption that went; run it in the transaction that records the delivery. ref names what went (a job,
     // a card), so the open question can be traced to it.
-    spend(limits: InterruptLimits, asks: boolean, ref: string): InterruptSpend {
-      const now = deps.now(), state = spent(), kind = spendOf(state, limits, now);
+    spend(limits: InterruptLimits, asks: boolean, ref: string, urgent: boolean): InterruptSpend {
+      const now = deps.now(), state = spent(), kind = spendOf(state, limits, now, urgent);
       kv.put(INTERRUPTS_KEY, { ...state, count: state.count + (kind === 'counted' ? 1 : 0), urgent: state.urgent + (kind === 'urgent' ? 1 : 0), last: now });
       if (asks) kv.put(QUESTION_KEY, { ref, at: now, day: state.day });
       return kind;
@@ -102,5 +109,5 @@ export const drawingOn = (inner: Readonly<{ admit(id: string): HealthCardAdmissi
     if (held === 'cooldown') return { verdict: 'wait', until: book.spent().last! + now.gapMs };
     return inner.admit(id);
   },
-  charge: (id: string): void => { inner.charge(id); book.spend(limits(), false, id); },
+  charge: (id: string): void => { inner.charge(id); book.spend(limits(), false, id, false); },
 });
