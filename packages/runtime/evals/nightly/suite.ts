@@ -64,6 +64,7 @@ const sumMetrics = (trials: readonly TrialMetrics[]): TrialMetrics & Readonly<{ 
   const sum = (key: Exclude<keyof TrialMetrics, 'peak_result_chars'>) => trials.reduce((total, metrics) => total + metrics[key], 0);
   return {
     trials: trials.length, calls: sum('calls'), rounds: sum('rounds'), failed_calls: sum('failed_calls'), fallback_calls: sum('fallback_calls'),
+    light_steps: sum('light_steps'), light_handovers: sum('light_handovers'),
     find_tools: sum('find_tools'), use_tool: sum('use_tool'), groups_loaded: sum('groups_loaded'), peak_result_chars: Math.max(...trials.map((metrics) => metrics.peak_result_chars)),
     input_tokens: sum('input_tokens'), cached_tokens: sum('cached_tokens'), cache_write_tokens: sum('cache_write_tokens'), output_tokens: sum('output_tokens'),
     usd: sum('usd'), unpriced_calls: sum('unpriced_calls'),

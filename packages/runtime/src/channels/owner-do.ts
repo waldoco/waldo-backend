@@ -77,7 +77,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_B
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
-import { asyncToolsEnabled, lightChatEnabled } from './async-tools';
+import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
@@ -276,6 +276,8 @@ import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
+import { runWatchdog, watchdogJudge, watchdogStore } from '../tasks/watchdog';
+import { consoleWatchdog, DASHBOARD_WATCHDOG_PATH } from './dashboard-watchdog';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
 import { modelProviderSetting, ownerModels, type OwnerModelAccess } from '../llm/owner-routes';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -684,6 +686,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       askCurrent: (row, approvalId, argsDigest) => self.setup(row.surface as ChannelKind).desk.replayCurrent(approvalId, argsDigest),
       settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
+      nudge: (jobId, seq) => self.env.WALDO_WATCHDOG === '1' ? watchdogStore(self.ctx.storage.sql).nudgeFor(jobId, seq) : null,
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
@@ -2682,6 +2685,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
     if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
+    if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), enabled: this.env.WALDO_WATCHDOG === '1', limited: () => this.consoleRateLimited('read') });
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request), renews);if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';
@@ -3436,8 +3440,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // proactive work, and leaves its next due time on the wake. The wake is cleared first, so a worker that reports while the
   // lane runs keeps the wake it sets.
   private async drainJobs(channel: ChannelKind, alarmEnd?: number): Promise<void> {
-    const storage = this.ctx.storage, due = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
-    if (due === undefined || due === null || due > Date.now()) return;
+    const storage = this.ctx.storage, due = await storage.get<number | null>(TASK_JOBS_DUE_KEY), started = Date.now();
+    if (due === undefined || due === null || due > started) return;
     await storage.put(TASK_JOBS_DUE_KEY, null);
     let runtime = this.setup(channel);
     let surface: ChannelKind = channel;
@@ -3483,11 +3487,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         askedCard: id => this.asks.card(runtime.desk, id),
       });
       next = ran;
+      if (this.env.WALDO_WATCHDOG === '1') {
+        const parked = await this.watchProgress(jobs, runtime, started - due, alarmEnd);
+        if (parked !== null) next = next === null ? parked : Math.min(next, parked);
+      }
     } finally {
       this.scheduledAppDelivery = previous;
       const armed = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
       const wake = [armed, next].filter((value): value is number => typeof value === 'number');
       await storage.put(TASK_JOBS_DUE_KEY, wake.length ? Math.min(...wake) : null);
+    }
+  }
+  // The progress watchdog, after the lane in the same admitted pass (tasks/watchdog.ts). It never fails the lane: a throw is
+  // logged and the next pass checks again.
+  private async watchProgress(book: JobBook, runtime: OwnerRuntime, lateMs: number, alarmEnd?: number): Promise<number | null> {
+    const access: OwnerModelAccess = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth };
+    try {
+      return await runWatchdog({
+        book, store: watchdogStore(this.ctx.storage.sql), now: Date.now, judge: watchdogJudge(access, { ownerRef: runtime.taskContext().authenticatedUserId, log: runtime.log }),
+        room: () => this.machineRoom(alarmEnd), fence: id => this.tasks.fence(id), log: runtime.log, lateMs,
+      });
+    } catch {
+      console.error(JSON.stringify({ hop: 'watchdog', ok: false, code: 'watchdog_failed' }));
+      return null;
     }
   }
   private async deliverMacRow(rowId: string, delivery: MacDelivery, current: () => Promise<void>, runtime: OwnerRuntime, inbox: ReturnType<typeof macInbox>, channel: ChannelKind): Promise<void> {
@@ -4748,8 +4770,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const profileView = this.env.OWNER_PROFILE === '1';
     // The owner's newer messages on the running turn's chat, offered to that turn at each round; nothing while the switch is off.
     const newerOwnerMessages = () => this.secondMessages.round();
-    // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may run on the lighter model.
-    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env) };
+    // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may start on the light role.
+    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env) };
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's lower ceiling.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : MONTHLY_SPEND_CEILING_USD }) : undefined;

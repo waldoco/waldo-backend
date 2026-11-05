@@ -41,6 +41,7 @@ export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   uncertain_effect: 'it was interrupted in the middle of a step that cannot safely be repeated',
   deadline: 'it ran out of time',
   brief_changed: 'its instructions changed after it started',
+  no_progress: "it wasn't getting anywhere",
 };
 
 // How these lines name a task. A title written in a turn that read someone else's words could say anything in Waldo's voice,

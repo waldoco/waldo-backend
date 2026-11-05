@@ -64,6 +64,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;
+  // "1": the progress watchdog checks running background jobs in the owner's alarm pass and its console read reports enabled.
+  WALDO_WATCHDOG?: string;
   AUTONOMY_OWN_CALENDAR?: string;
   // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
   // Off unless "1".
@@ -129,8 +131,14 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_SECOND_MESSAGE?: string;
   // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
   WALDO_ASYNC_TOOLS?: string;
-  // "1": the owner's own reply runs on the provider's auxiliary model and every task worker on its chat model (async-tools.ts).
+  // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
+  // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
+  // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
+  WALDO_LIGHT_ROLE_MODEL?: string;
+  WALDO_STRONG_ROLE_MODEL?: string;
+  WALDO_STRONG_ROLE_FALLBACK_MODEL?: string;
+  WALDO_LIGHT_ROLE_MAX_TOKENS?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
