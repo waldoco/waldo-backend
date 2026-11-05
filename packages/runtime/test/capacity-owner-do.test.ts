@@ -13,7 +13,7 @@ import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
-import { CAPACITY_LINES, NO_SHARED_HEALTH } from '../src/prompt/capacity';
+import { CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
 import { PROSE_RULE } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -227,11 +227,26 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
     });
   });
 
+  it('a note drawn from the body is not shown once the owner stops sharing health', async () => {
+    health.shared = true;
+    model.card = [{ text: 'The Close\nA good day.' }, { text: 'The Close\nA good day.' }];
+    await owned('capacity-close-revoked', { CAPACITY_PLAN: '1' }, async ({ nightly, card }) => {
+      await nightly();
+      await card('card:close');
+      expect(model.cards[0]!.request).toContain(NOTE);
+      health.shared = false;
+      await card('card:close');
+      const after = model.cards.at(-1)!.request;
+      expect(after).not.toContain(NOTE);
+      expect(after).toContain(NO_NOTE);
+    });
+  });
+
   it('without a note yet, the Brief is told so and no capacity is guessed', async () => {
     model.card = [{ text: 'The Brief\nBoard review at three.' }];
     await owned('capacity-brief-no-note', { CAPACITY_PLAN: '1' }, async ({ card }) => {
       await card('card:brief');
-      expect(model.cards[0]!.request).toContain('no capacity note');
+      expect(model.cards[0]!.request).toContain(NO_NOTE);
       expect(model.cards[0]!.request).toContain(JSON.stringify(CAPACITY_LINES.brief).slice(1, -1));
     });
   });

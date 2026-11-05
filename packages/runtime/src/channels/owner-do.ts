@@ -236,7 +236,7 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
 import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memory';
-import { capacityNote, recentBlocks, runCapacityPass } from './capacity';
+import { cardCapacityNote, recentBlocks, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
 import { chooseProactiveSurface, linkingAppRows, proactiveReads, proactiveSurface, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
@@ -5264,7 +5264,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const keepCapacity = async (trace: string) => {
       const started = Date.now();
       try {
-        const code = await runCapacityPass({ store: memory, kv: storage.kv, timezone: clock.timezone, now: Date.now, healthNotes: healthMemoryOn(identity),
+        const code = await runCapacityPass({ store: memory, kv: storage.kv, timezone: clock.timezone, now: Date.now, transaction: work => storage.transactionSync(work), healthNotes: healthMemoryOn(identity),
           health: async () => { const shown = await healthContext.latest(trace); return shown ? renderHealth(shown) : null; },
           google: () => google.client(), ask: input => responder.capacity!(trace, input) });
         log({ trace, hop: 'capacity', ms: Date.now() - started, ok: true, code, detail: code });
@@ -5848,7 +5848,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity,
-            capacity ? capacityContext(capacityNote(memory, storage.kv)?.text ?? null, recentBlocks(storage.sql, now, clock.timezone)) : undefined)).trim();
+            capacity ? capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.latest(trace) !== null), recentBlocks(storage.sql, now, clock.timezone)) : undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);

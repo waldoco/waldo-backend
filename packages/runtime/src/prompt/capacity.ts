@@ -1,5 +1,5 @@
 import { fence } from '../memory/claims';
-import { PASS_HEALTH_MEMORY_RULES } from '../memory/health-rules';
+import { MEDICATION_MEMORY_RULE, SLEEP_NEED_MEMORY_RULE } from '../memory/health-rules';
 
 // CAPACITY_PLAN: Waldo learns how much real work the owner can do in a day and keep doing, and when they think best, and keeps
 // it as one plain note in memory. The note shapes their deep work and their weekly reset. The judgment is the model's: code
@@ -13,7 +13,8 @@ export const CAPACITY_INSTRUCTION = [
   "Never a number about the body: no heart rate, sleep hours, score or reading. Times of day and hours of work are fine. Never a meeting's title, a person's name or a place: the calendar reaches you as shape only.",
   "Write it as two to four plain sentences about the owner, the way a memory note reads. In evidence, say in one short line what it rests on (which days, what they said, the body's zone words), with no titles or numbers about the body.",
   "When the days showed nothing new, return note null and the note stays as it is.",
-  ...PASS_HEALTH_MEMORY_RULES,
+  SLEEP_NEED_MEMORY_RULE,
+  MEDICATION_MEMORY_RULE,
   'Reply with JSON only.',
 ].join('\n');
 
@@ -23,18 +24,23 @@ export const CAPACITY_SCHEMA = {
 };
 
 export const NO_SHARED_HEALTH = 'The owner shares no health with Waldo now: write from their calendar and their own words.';
+export const BODY_WITHDRAWN = 'The current note was written while the owner shared their health, and they share none now: rewrite it from their calendar and their own words, leaving out everything it drew from their body. Do not return null.';
+export const NO_CALENDAR = 'Their calendar is not connected.';
+export const NO_NOTE = 'Waldo has no capacity note for the owner yet.';
 
 // The pass's own message; the owner's memory and the forget barrier are added by the responder, as for every memory pass.
-export const capacityInput = (input: Readonly<{ note: string | null; health: string | null; calendar: string }>): string => [
+export const capacityInput = (input: Readonly<{ now: string; note: string | null; health: string | null; withdrawn: boolean; calendar: string }>): string => [
+  `Now: ${input.now} in the owner's local time.`,
   input.note === null ? 'There is no capacity note yet.' : `The current capacity note:\n<capacity_note>\n${fence(input.note)}\n</capacity_note>`,
+  ...(input.withdrawn ? [BODY_WITHDRAWN] : []),
   `Their body today:\n${input.health ?? NO_SHARED_HEALTH}`,
-  `The shape of their calendar, one line per day in their local time:\n<calendar_shape>\n${input.calendar}\n</calendar_shape>`,
+  `The shape of their calendar, one line per day in their local time, each marked lived, under way or ahead:\n<calendar_shape>\n${input.calendar}\n</calendar_shape>`,
 ].join('\n\n');
 
 // What the day cards read with CAPACITY_PLAN on. The note and the blocks travel as the job's context, never in the card's
 // own text, which the day_card trace keeps.
 export const capacityContext = (note: string | null, blocks: string): string => [
-  note === null ? 'Waldo has no capacity note for the owner yet.' : `What Waldo has learned about the owner's capacity, from memory:\n<capacity_note>\n${fence(note)}\n</capacity_note>`,
+  note === null ? NO_NOTE : `What Waldo has learned about the owner's capacity, from memory:\n<capacity_note>\n${fence(note)}\n</capacity_note>`,
   `Protected blocks Waldo proposed in the last two weeks, and what became of each:\n${blocks || '- none'}`,
 ].join('\n\n');
 
@@ -47,5 +53,5 @@ export const CAPACITY_LINES = {
     `${DEEP_WORK} When a free stretch fits and nothing holds it yet, propose the block with propose_calendar_change and block deep_work.`,
     `${RESET} Propose it with propose_calendar_change and block rest.`,
   ].join('\n'),
-  close: "Close with the shape of tomorrow's deep work in a sentence: when and how much, from their capacity note when this request carries one, tomorrow's calendar and their body today when shared, and why for them. It is a plan for the morning, nothing that needs an answer tonight.",
+  close: "Include the shape of tomorrow's deep work in a sentence: when and how much, from their capacity note when this request carries one, tomorrow's calendar and their body today when shared, and why for them. It is a plan for the morning, nothing that needs an answer tonight.",
 } as const;
