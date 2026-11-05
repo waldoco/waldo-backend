@@ -1,5 +1,5 @@
 import type {ConsoleView,ConsoleAction} from './console';
-import {PROFILE_KINDS,awaitsOwnerConfirm} from '../memory/claims';
+import {PROFILE_KINDS,awaitsOwnerConfirm,type Claim} from '../memory/claims';
 import {nodeConfirmation,nodeSources,nodeSupports,supportIds} from '../memory/node-sources';
 // A separate owner-session control read. The Memory graph remains read-only and
 // local IDs alone do not authorize a change; every target is resolved in this DO.
@@ -22,3 +22,15 @@ export function resolveMemoryAction(view:ConsoleView,scope:string,action:Console
 
 export const MEMORY_CONTROL_PATH='/console/dashboard/api/v1/memory-controls';
 export function projectMemoryControl(view:ConsoleView,scope:string,id:string){const data=memoryControl(view,scope,id);return data?{version:1 as const,view:'memory' as const,state:'available' as const,csrf:view.csrf,data}:null;}
+
+// Whether the owner said a claim or Waldo thinks it: a claim the owner stated or confirmed is theirs; one Waldo inferred or
+// read from content outside their words stays "Waldo thinks" until they confirm it. A claim from before provenance existed
+// counts as theirs only when it was stated.
+export const claimHeldAs=(claim:Pick<Claim,'source'|'origin'>):'owner_said'|'waldo_thinks'=>
+ !awaitsOwnerConfirm(claim)&&(claim.origin==='owner'||(claim.origin==null&&claim.source==='stated'))?'owner_said':'waldo_thinks';
+// What the app may send for one live claim now, by the app's own action names.
+export const appClaimActions=(claim:Pick<Claim,'kind'|'source'|'status'|'pinned'|'bring_up_less_at'>):string[]=>[
+ ...(claim.status==='active'&&awaitsOwnerConfirm(claim)?['claim.confirm']:[]),
+ ...(claim.pinned?['claim.unpin']:PROFILE_KINDS.includes(claim.kind)?['claim.pin']:[]),
+ ...(claim.status==='active'?['claim.edit','claim.dismiss']:[]),
+ claim.bring_up_less_at?'claim.unquiet':'claim.quiet','claim.forget'];
