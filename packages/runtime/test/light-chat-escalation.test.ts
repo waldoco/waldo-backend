@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { OPENAI_PROVIDER, OWNER_MODELS, type ErrorCode, type ModelName } from '@waldo/contracts';
-import { lightChatRoles, type LightChatRoles } from '../src/channels/async-tools';
+import { LIGHT_ROLE_MAX_TOKENS, lightChatRoles, type LightChatRoles } from '../src/channels/async-tools';
+import { toContextHealthMaterial } from '../src/channels/health-context';
 import { createOwnerResponder, type OwnerContextIntegration } from '../src/channels/owner-turn';
 import { secondMessages } from '../src/channels/second-message';
 import { STOPPED_REPLY } from '../src/channels/turn-control';
@@ -71,14 +72,15 @@ const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const turn = (traceId: string, text: string, extra: Record<string, unknown> = {}) => ownerTyped({ traceId, conversationRef: 'app-main', surface: 'app', text, memoryWrites: false, ...extra });
 const routes = (hops: readonly TurnLogEntry[]) => hops.filter((entry) => entry.hop === 'light_route').map((entry) => entry.detail);
 
-it('quick chat stays on the light role: one call, with the escalate tool offered, no stream and no web search', async () => {
+it('quick chat stays on the light role: one call, offered only escalate, capped output, no stream and no web search', async () => {
   const { gateway, requests, models, tools } = fake({ [LIGHT_ROLE]: LIGHT_SCRIPT, [STRONG_ROLE]: CHAT_SCRIPT });
   const hops: TurnLogEntry[] = [];
   const { stream } = drafts();
   const reply = await responder(gateway, { log: (entry) => hops.push(entry) }).respond(turn('light-simple', 'Thanks, that is all.', { replyStream: stream }), time);
   expect(reply).toBe(LIGHT_REPLY);
   expect(models()).toEqual([LIGHT_ROLE]);
-  expect(tools(0)).toEqual(expect.arrayContaining(['escalate', 'get_context']));
+  expect(tools(0)).toEqual(['escalate']);
+  expect(requests[0]!.request.max_tokens).toBe(LIGHT_ROLE_MAX_TOKENS);
   expect('stream' in requests[0]!).toBe(false);
   expect(requests[0]!.request.web_search).toBeUndefined();
   expect(routes(hops)).toEqual(['answered']);
@@ -94,11 +96,13 @@ it.each(HANDED_OVER)('%s is handed to the strong role in the same turn: one repl
   const outcome = await stream.settle(reply);
   expect(reply).toBe(CHAT_REPLY);
   expect(models()).toEqual([LIGHT_ROLE, STRONG_ROLE]);
-  expect(tools(0)).toContain('escalate');
+  expect(tools(0)).toEqual(['escalate']);
+  expect(tools(1)).toContain('get_context');
   expect(tools(1)).not.toContain('escalate');
-  // The chat model takes the very step the light model was given: the same instructions and messages.
+  // The strong role takes the step with the same instructions and conversation, and the turn context the light step went without.
   expect(requests[1]!.request.system).toBe(requests[0]!.request.system);
-  expect(requests[1]!.request.messages).toEqual(requests[0]!.request.messages);
+  expect(requests[1]!.request.messages.slice(0, -1)).toEqual(requests[0]!.request.messages.slice(0, -1));
+  expect(String(requests[1]!.request.messages.at(-1)!.content).length).toBeGreaterThan(String(requests[0]!.request.messages.at(-1)!.content).length);
   expect('stream' in requests[0]!).toBe(false);
   expect('stream' in requests[1]!).toBe(true);
   for (const text of shown) expect(text).not.toContain('light');
@@ -107,7 +111,7 @@ it.each(HANDED_OVER)('%s is handed to the strong role in the same turn: one repl
   expect(routes(hops)).toEqual(['escalated']);
 });
 
-it('any other tool call from the light step hands over unrun: only the strong role\'s call reaches the tool', async () => {
+it('a tool call the light step was not offered hands over unrun: only the strong role\'s call reaches the tool', async () => {
   const { gateway, requests, models } = fake({
     [LIGHT_ROLE]: () => ({ tool: 'get_context' }),
     [STRONG_ROLE]: (request: LLMGatewayRequest) => request.request.tool_turns?.length ? { text: CHAT_REPLY } : { tool: 'get_context' },
@@ -186,6 +190,43 @@ it('a newer owner message waiting on the chat is folded by the strong role, not 
   expect(String(requests[1]!.request.messages.at(-1)?.content)).toContain('msg-2');
 });
 
+// Synthetic health, distinctive so a leak is found by its words: the energy window line and the driver.
+const HEALTH_MARKERS = ['Energy windows today', 'wrist temperature above usual'] as const;
+const sharedHealth = async () => toContextHealthMaterial({ context: {
+  id: 'ctx-light', day: '2026-10-20', form: { score: 41.37, zone: 'moderate', algorithm_version: 'form.v9', activation: 'accepted', confidence: 0.617, baseline: { state: 'provisional', personal_days: 3, needed: 14, prior: 'adults' } },
+  recovery: { score: 73.58, zone: 'good', algorithm_version: 'recovery.v5', activation: 'accepted', confidence: 0.617, baseline: { state: 'provisional', personal_days: 3, needed: 14, prior: 'adults' } },
+  windows: [{ start: '09:30', end: '11:30', kind: 'peak' }], drivers: ['wrist temperature above usual'], confidence: 0.617, freshness: 'fresh', tags: [], compiled_at: '2026-10-20T07:20:00Z',
+}, previous: null } as never, clock);
+const DAY_PLAN = 'The Brief went out at 08:00: protect the design review at 11:00.';
+
+it('the light step reads no admitted health, day plan or tool: a health question with health shared ends on the strong role', async () => {
+  expect(await sharedHealth()).not.toBeNull();
+  // The light role here would answer anything it could; with nothing to answer from, it hands over.
+  const lightAnswersIfItCan: Script = (request) => HEALTH_MARKERS.some((marker) => JSON.stringify(request.request).includes(marker)) ? { text: 'Your energy peaks mid-morning.' } : { tool: 'escalate' };
+  const { gateway, requests, models, tools } = fake({ [LIGHT_ROLE]: lightAnswersIfItCan, [STRONG_ROLE]: CHAT_SCRIPT });
+  const args: Parameters<typeof createOwnerResponder> = [ACCESS];
+  args[4] = clock; args[5] = [getContextHandler(clock)]; args[10] = gateway; args[17] = sharedHealth; args[18] = ['👌'];
+  args[21] = { lightChat: true, dayCards: () => DAY_PLAN };
+  const reply = await createOwnerResponder(...args).respond(turn('light-health', 'How is my energy today?'), time);
+  expect(reply).toBe(CHAT_REPLY);
+  expect(models()).toEqual([LIGHT_ROLE, STRONG_ROLE]);
+  const light = JSON.stringify(requests[0]!.request), strong = JSON.stringify(requests[1]!.request);
+  for (const marker of [...HEALTH_MARKERS, DAY_PLAN]) {
+    expect(light).not.toContain(marker);
+    expect(strong).toContain(marker);
+  }
+  expect(tools(0)).toEqual(['escalate']);
+});
+
+it('a turn that carries an attachment takes no light step', async () => {
+  const { gateway, models } = fake({ [LIGHT_ROLE]: LIGHT_SCRIPT, [STRONG_ROLE]: CHAT_SCRIPT });
+  const hops: TurnLogEntry[] = [];
+  const image = { kind: 'image' as const, filename: 'label.png', mime_type: 'image/png', data_base64: 'AQ==' };
+  expect(await responder(gateway, { log: (entry) => hops.push(entry) }).respond(turn('light-file', 'Thanks, what is this?', { attachments: [image] }), time)).toBe(CHAT_REPLY);
+  expect(models()).toEqual([STRONG_ROLE]);
+  expect(routes(hops)).toEqual([]);
+});
+
 // Guards, which hold on the code before this change too: off, and on machine turns, no light step is taken.
 it('with the switch off, or on a machine turn, the reply runs on the strong role as before, with no light step', async () => {
   for (const owner of [{}, { lightChat: false }] as const) {
@@ -213,6 +254,7 @@ it('roles come from the environment: the light step, the strong role and its fal
   const hops: TurnLogEntry[] = [];
   expect(await responder(handed.gateway, { log: (entry) => hops.push(entry), owner: { lightChat: true, lightRoles: roles } }).respond(turn('light-roles', HANDED_OVER[0][1]), time)).toBe(CHAT_REPLY);
   expect(handed.models()).toEqual([OTHER_LIGHT, OTHER_STRONG]);
+  expect(handed.requests[0]!.request.max_tokens).toBe(LIGHT_ROLE_MAX_TOKENS);
   expect(routes(hops)).toEqual(['escalated']);
   // The configured strong role down: its configured fallback answers, and the provider default's light model never does.
   const down = fake({ [OTHER_LIGHT]: LIGHT_SCRIPT, [OTHER_STRONG]: () => ({ fail: 'transient' }), [STRONG_ROLE]: CHAT_SCRIPT });
@@ -221,7 +263,7 @@ it('roles come from the environment: the light step, the strong role and its fal
   expect(down.models()).not.toContain(LIGHT_ROLE);
 });
 
-it('a role set to something that is not an owner-path roster model keeps its default, and says so once by variable name', () => {
+it('a role set to something it may not run on keeps its default, and says so once by variable name', () => {
   const warned: string[] = [];
   const original = console.warn;
   console.warn = (line: string) => { warned.push(line); };
@@ -229,8 +271,16 @@ it('a role set to something that is not an owner-path roster model keeps its def
     expect(lightChatRoles({})).toEqual({});
     expect(lightChatRoles({ WALDO_LIGHT_ROLE_MODEL: 'not-a-model', WALDO_STRONG_ROLE_MODEL: '' })).toEqual({});
     expect(lightChatRoles({ WALDO_LIGHT_ROLE_MODEL: 'not-a-model' })).toEqual({});
+    // A strong role never runs on an auxiliary model, this provider's or the other's; a strong model from the other provider is taken.
+    expect(lightChatRoles({ WALDO_STRONG_ROLE_MODEL: OTHER_LIGHT, WALDO_STRONG_ROLE_FALLBACK_MODEL: LIGHT_ROLE })).toEqual({});
+    expect(lightChatRoles({ WALDO_STRONG_ROLE_MODEL: OTHER_STRONG })).toEqual({ strong: OTHER_STRONG });
+    expect(lightChatRoles({ WALDO_LIGHT_ROLE_MAX_TOKENS: '1024' })).toEqual({ lightMaxTokens: 1024 });
+    expect(lightChatRoles({ WALDO_LIGHT_ROLE_MAX_TOKENS: '99999' })).toEqual({});
   } finally { console.warn = original; }
-  expect(warned).toHaveLength(1);
+  expect(warned).toHaveLength(4);
+  expect(warned[1]).toContain('WALDO_STRONG_ROLE_MODEL is an auxiliary model');
+  expect(warned[2]).toContain('WALDO_STRONG_ROLE_FALLBACK_MODEL is an auxiliary model');
+  expect(warned[3]).toContain('WALDO_LIGHT_ROLE_MAX_TOKENS');
   expect(JSON.parse(warned[0]!)).toMatchObject({ hop: 'light_chat_role_refused', ok: false });
   expect(warned[0]).toContain('WALDO_LIGHT_ROLE_MODEL');
   expect(warned[0]).not.toContain('not-a-model');

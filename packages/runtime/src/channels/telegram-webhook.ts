@@ -125,10 +125,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
-  // The light chat roles' models, roster ids; unset, each is the deploy provider's own (async-tools.ts lightChatRoles).
+  // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
   WALDO_LIGHT_ROLE_MODEL?: string;
   WALDO_STRONG_ROLE_MODEL?: string;
   WALDO_STRONG_ROLE_FALLBACK_MODEL?: string;
+  WALDO_LIGHT_ROLE_MAX_TOKENS?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;

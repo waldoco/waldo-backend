@@ -60,7 +60,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { SecondMessageRound } from './second-message';
-import { LIGHT_ESCALATE, OWNER_TURN_LONG_TOOLS, type LightChatRoles } from './async-tools';
+import { LIGHT_ESCALATE, LIGHT_ROLE_MAX_TOKENS, OWNER_TURN_LONG_TOOLS, type LightChatRoles } from './async-tools';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
@@ -334,10 +334,10 @@ export const createOwnerResponder = (
         const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
         return {
           cache_key: cacheKey,
-          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: light ? lightRoles.lightMaxTokens ?? LIGHT_ROLE_MAX_TOKENS : outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? brainTools(light ? [...tools, LIGHT_ESCALATE] : tools, providerSearch && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools ? brainTools(tools, providerSearch && purpose === 'reply' && !light) : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
           ...(tools && ownerTurnActive && purpose === 'reply' && !light ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
@@ -726,18 +726,23 @@ export const createOwnerResponder = (
           const turnPrompt = built.prompt;
           const entries = cut.history;
           const current = entries[entries.length - 1]!;
-          entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
+          const ownTail = current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added;
+          entries[entries.length - 1] = { ...current, content: ownTail + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };
           const files = attachments.length ? attachments : undefined;
-          // WALDO_LIGHT_CHAT: the turn's first step runs on the light model, with this step's request and the escalate tool. It
-          // is the reply only as plain, whole text; anything else (escalate, any other tool call, a cut-off reply, a failure) is
-          // dropped unseen and the chat model takes this same step. A stop or steer that came meanwhile runs the step again.
-          if (lightFirst && tools) {
-            lightFirst = false;
+          // WALDO_LIGHT_CHAT: the turn's first step runs on the light role. It reads the system prompt, the conversation and the
+          // clock, and nothing this turn admitted: no health, day plan, memory, recall or tool results, no attachment, and no tool
+          // but escalate. Its plain, whole text is the reply; anything else (escalate, a cut-off reply, a failure) is dropped
+          // unseen and the strong role takes this step with everything. A stop or steer that came meanwhile runs the step again.
+          const lightNow = lightFirst && !files;
+          lightFirst = false;
+          if (lightNow) {
             const started = Date.now();
-            const light = await complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, undefined, undefined, true)
+            const lightContext = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }).turnContext;
+            const lightEntries = [...entries.slice(0, -1), { ...current, content: `${ownTail}\n\n${lightContext}` }];
+            const light = await complete(trace, 'reply', system, lightEntries, undefined, undefined, [LIGHT_ESCALATE], undefined, undefined, undefined, true)
               .catch((error: unknown) => { if (error instanceof LightStepFailed) return undefined; throw error; });
             const route = light === undefined ? 'failed' : light.tool_calls?.length ? (light.tool_calls.some((call) => call.name === LIGHT_ESCALATE.name) ? 'escalated' : 'tool')
               : light.truncated ? 'truncated' : 'answered';
