@@ -20,6 +20,7 @@ export const setProactivityArgsSchema = z.strictObject({
   quiet_end: z.string().regex(/^\d{2}:\d{2}$/).nullable().describe('Local HH:MM when quiet hours end, or null for none.'),
   volume: z.enum(['low', 'normal', 'high']).describe('low: only the main day cards. normal: plus updates that change the day. high: plus smaller useful updates.'),
   followups: z.boolean().optional().describe('Source-grounded follow-ups from mail and calendar (deadlines, prep); on by default. Set false only when the owner asks to turn them off, true to turn them back on; omit to keep the current value.'),
+  interruptions_per_day: z.int().min(0).max(12).optional().describe('How many times a day Waldo may reach out unasked beyond the day cards (an update, a clash, something it noticed). 0 means none at all, urgent ones included. Set only when the owner names a number or asks for more or fewer; omit to keep the current value.'),
 });
 export type SetProactivityArgs = z.infer<typeof setProactivityArgsSchema>;
 

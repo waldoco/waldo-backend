@@ -14,6 +14,8 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
+import { interruptBook } from '../src/channels/interruptions';
+import { ownerSpokeSince } from '../src/channels/episodes';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
@@ -330,5 +332,29 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
         expect(model.ownerTools.at(-1)).not.toContain('offer_replies');
       });
     }
+  });
+});
+
+// PROACTIVE_GATE: the Brief's answers to tap are the day's one question in flight, until the owner says anything.
+describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 }, () => {
+  it('opens the question when it offers answers, and the owner\'s next message, on the real index, closes it', async () => {
+    model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
+    model.owner = [{ text: 'On it.' }];
+    await owned('planning-brief-question-gate', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, brief, say }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      await brief();
+      expect(book.question()).toMatchObject({ ref: `card:brief:${DAY}` });
+      expect(book.spent().count).toBe(0);
+      await say(ANSWERS[0]!);
+      expect(book.question()).toBeNull();
+    });
+  });
+
+  it('with the switch off the Brief opens no question', async () => {
+    model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
+    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
+      await brief();
+      expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
+    });
   });
 });
