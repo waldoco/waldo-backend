@@ -114,6 +114,7 @@ const expectedMigrations = [
   '20261103120000_screen_time.sql',
   '20261105180000_device_place.sql',
   '20261105210000_device_place_names.sql',
+  '20261105233000_device_weather.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

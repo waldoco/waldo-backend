@@ -16,6 +16,8 @@ import {
   getScreenTimeResultSchema,
   getDeviceContextArgsSchema,
   getDeviceContextResultSchema,
+  getWeatherArgsSchema,
+  getWeatherResultSchema,
   healthReadSignalSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
@@ -665,5 +667,33 @@ describe('Calendar discovery', () => {
   });
   it('lets a connect intent name the calendar-list feature', () => {
     expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'calendar_list' }).success).toBe(true);
+  });
+});
+
+describe('get_weather', () => {
+  // Synthetic values: a made-up city and forecast.
+  const day = { date: '2026-11-05', condition: 'PartlyCloudy', high_c: 31.5, low_c: 22.1, precipitation_chance: 0.2, precipitation_mm: 1.4, uv_max: 9, sunrise: '2026-11-05T00:50:00Z', sunset: '2026-11-05T12:30:00Z' };
+  const place = { locality: 'Testville', country: 'IN', timezone: 'Asia/Kolkata', observed_at: '2026-11-05T07:00:00.000Z', age_minutes: 90 };
+  const forecast = { state: 'available', source: 'Apple Weather', place, now: { temperature_c: 28, condition: 'Clear', uv_index: 7 }, days: [day, { ...day, date: '2026-11-06' }], read_at: '2026-11-05T08:00:00Z' };
+
+  it('takes no arguments', () => {
+    expect(getWeatherArgsSchema.safeParse({}).success).toBe(true);
+    expect(getWeatherArgsSchema.safeParse({ city: 'Testville' }).success).toBe(false);
+  });
+
+  it('answers today and tomorrow for a named place with its age and source, never a cell or coordinate', () => {
+    expect(getWeatherResultSchema.safeParse(forecast).success).toBe(true);
+    expect(getWeatherResultSchema.safeParse({ ...forecast, now: undefined, days: [{ date: day.date, condition: day.condition, high_c: 30, low_c: 20, uv_max: 3 }] }).success).toBe(true);
+    for (const bad of [
+      { ...forecast, place: { ...place, cell: 'tdr1v' } },
+      { ...forecast, place: { ...place, latitude: 12.97 } },
+      { ...forecast, days: [day, day, day] },
+      { ...forecast, days: [] },
+      { ...forecast, days: [{ ...day, precipitation_chance: 20 }] },
+      { ...forecast, source: 'Somewhere else' },
+      { ...forecast, days: [{ ...day, uv_max: 2.5 }] },
+    ]) expect(getWeatherResultSchema.safeParse(bad).success).toBe(false);
+    expect(getWeatherResultSchema.safeParse({ state: 'unavailable', reason: 'provider_unavailable' }).success).toBe(true);
+    expect(getWeatherResultSchema.safeParse({ state: 'unavailable', reason: 'raining' }).success).toBe(false);
   });
 });
