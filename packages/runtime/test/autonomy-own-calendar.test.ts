@@ -308,6 +308,27 @@ describe('calendar.move_own_block: Waldo places, moves and removes its own block
       expect(w.reads()).toBe(at + 3);
     }));
 
+    it('approving one again respects the same wait: repeated approvals read Google once per wait', () => inDo('settle-decide-backoff', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      const at = w.reads();
+      for (let tap = 0; tap < 5; tap += 1) expect((await w.desk.decide(id, 'a', `retap-${tap}`)).toast).toBe('Outcome unknown');
+      expect(w.reads()).toBe(at + 1);
+      w.clock.set(NOW + 6 * MIN);
+      await w.desk.decide(id, 'a', 'retap-later');
+      expect(w.reads()).toBe(at + 2);
+    }));
+
+    it('settling the due rows on their own, as the heartbeat does, settles one the owner never looks at', () => inDo('settle-due', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      w.land(String((w.writes[0]![1] as { id: string }).id));
+      await w.desk.settleUnknownGrants();
+      expect([w.status(id), w.writes.length]).toEqual(['done', 1]);
+    }));
+
     it('a record that is not a grant\'s (no quota) is never settled as not done, and is logged as such', () => inDo('settle-no-quota', async state => {
       const w = world(state);
       const id = await w.propose(focus());
