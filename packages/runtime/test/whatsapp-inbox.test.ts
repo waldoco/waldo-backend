@@ -14,10 +14,10 @@ const withInbox = (work: (inbox: WhatsAppOwnerInbox, storage: DurableObjectStora
 const admit = (inbox: WhatsAppOwnerInbox, storage: DurableObjectStorage, rows: readonly { wamid: string; body: string }[]) =>
   storage.transactionSync(() => inbox.admit(rows.map((row, index) => ({ update: text(inbox.seq() + 1 + index, row.body), wamid: row.wamid })), SUBJECT));
 
-// Rows that must stay separate turns (recovery, revoking, claim order): plain texts in a row would join, so each message after
-// the first is a forward.
+// Rows that must stay separate turns (recovery, revoking, claim order): messages in a row would join, so each message after
+// the first is a quoted reply, which names its own target and never joins.
 const admitApart = (inbox: WhatsAppOwnerInbox, storage: DurableObjectStorage, rows: readonly { wamid: string; body: string }[]) =>
-  storage.transactionSync(() => inbox.admit(rows.map((row, index) => ({ update: text(inbox.seq() + 1 + index, row.body, index ? { forward_origin: { type: 'hidden_user', date: 0 } } : {}), wamid: row.wamid })), SUBJECT));
+  storage.transactionSync(() => inbox.admit(rows.map((row, index) => ({ update: text(inbox.seq() + 1 + index, row.body, index ? { reply_to_message: { text: 'An earlier reply' } } : {}), wamid: row.wamid })), SUBJECT));
 
 it('admits one durable row per message in order, keeps the update id and wa_seq, and wakes the drain at once', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.A', body: 'Find me flights to Goa.' }, { wamid: 'wamid.B', body: 'Is it raining in Pune?' }]);
@@ -168,17 +168,44 @@ it('claims plain texts in a row as one turn under the newest message; the joined
   expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.card', 'running'], ['wamid.card', 'completed']]);
 }));
 
-it('never joins a command, an approval reply, a forward, a quoted reply or media', () => withInbox((inbox, storage, clock) => {
-  const forwarded = (seq: number) => text(seq, 'Meeting moved to 4pm', { forward_origin: { type: 'hidden_user', date: 0 } });
-  const quoted = (seq: number) => text(seq, 'that one', { reply_to_message: { text: 'An earlier reply' } });
-  const photo = (seq: number) => ({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: Number(SUBJECT), is_bot: false }, chat: { id: Number(SUBJECT), type: 'private' }, photo: [{ file_id: 'm1' }] } });
+const forwarded = (body: string) => (seq: number) => text(seq, body, { forward_origin: { type: 'hidden_user', date: 0 } });
+const fileFrom = (name: string, extra: object = {}) => (seq: number) => ({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: Number(SUBJECT), is_bot: false }, chat: { id: Number(SUBJECT), type: 'private' }, document: { file_id: `m${seq}`, file_name: name }, ...extra } });
+const earlierOf = (record: WhatsAppInboxRecord | null) => (record?.earlier ?? []).map(update => (update as { update_id: number }).update_id - WA_UPDATE_BASE);
+
+it('claims a burst of forwards, files and text as one turn: the newest message runs, the others ride with it in order', () => withInbox((inbox, storage, clock) => {
   admitUpdates(inbox, storage, [
-    { wamid: 'w1', update: seq => text(seq, 'one') }, { wamid: 'w2', update: seq => text(seq, '/stop') }, { wamid: 'w3', update: forwarded },
-    { wamid: 'w4', update: quoted }, { wamid: 'w5', update: photo }, { wamid: 'w6', update: seq => text(seq, 'two') },
+    { wamid: 'w1', update: forwarded('Found both saved workout references') }, { wamid: 'w2', update: fileFrom('workout-info.md', { forward_origin: { type: 'hidden_user', date: 0 } }) },
+    { wamid: 'w3', update: fileFrom('5k-plan.txt') }, { wamid: 'w4', update: seq => text(seq, 'I had asked Instinct to save these') },
   ]);
-  const claimed: (string | undefined)[] = [];
-  for (let record = inbox.claimNext(clock.now + 1); record; record = inbox.claimNext(clock.now + 1)) { claimed.push(record.wamid); inbox.settle(record, true); }
-  expect(claimed).toEqual(['w1', 'w2', 'w3', 'w4', 'w5', 'w6']);
+  const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(record.wamid).toBe('w4');
+  expect(textOf(record)).toBe('I had asked Instinct to save these');
+  expect(earlierOf(record)).toEqual([1, 2, 3]);
+  expect(inbox.next()).toBeNull();
+  expect(inbox.records().map(row => row.state)).toEqual(['running', 'completed', 'completed', 'completed']);
+  inbox.settle(record, true);
+  expect(inbox.get(record.id)?.earlier).toBeUndefined();
+}));
+
+it('never joins a command, an approval reply or a quoted reply, and each one ends the burst before it', () => withInbox((inbox, storage, clock) => {
+  const quoted = (seq: number) => text(seq, 'that one', { reply_to_message: { text: 'An earlier reply' } });
+  const approval = (seq: number) => ({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: 'cb', from: { id: Number(SUBJECT), is_bot: false }, data: 'a:p1', message: { message_id: 0, chat: { id: Number(SUBJECT) } } } });
+  admitUpdates(inbox, storage, [
+    { wamid: 'w1', update: seq => text(seq, 'one') }, { wamid: 'w2', update: seq => text(seq, '/stop') }, { wamid: 'w3', update: forwarded('Meeting moved to 4pm') },
+    { wamid: 'w4', update: quoted }, { wamid: 'w5', update: fileFrom('notes.md') }, { wamid: 'w6', update: approval }, { wamid: 'w7', update: seq => text(seq, 'two') },
+  ]);
+  const claimed: string[] = [];
+  for (let record = inbox.claimNext(clock.now + 1); record; record = inbox.claimNext(clock.now + 1)) { claimed.push(`${record.wamid}:${earlierOf(record).length}`); inbox.settle(record, true); }
+  expect(claimed).toEqual(['w1:0', 'w2:0', 'w3:0', 'w4:0', 'w5:0', 'w6:0', 'w7:0']);
+}));
+
+it('forget redacts the words and file names of the messages riding with a running burst', () => withInbox((inbox, storage, clock) => {
+  admitUpdates(inbox, storage, [{ wamid: 'w1', update: forwarded('my secret plan') }, { wamid: 'w2', update: fileFrom('secret plan.md') }, { wamid: 'w3', update: seq => text(seq, 'thoughts?') }]);
+  const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(earlierOf(record)).toEqual([1, 2]);
+  const result = inbox.forget(value => value.replaceAll('secret plan', '[forgotten]'), value => value.includes('secret plan'));
+  expect(result).toEqual({ rewritten: 1, remaining: 0 });
+  expect(JSON.stringify(inbox.get(record.id)?.earlier)).not.toContain('secret plan');
 }));
 
 it('waits for the owner to go quiet before claiming text, never past the cap after the first message', () => withQuiet(3_000, (inbox, storage, clock) => {
@@ -199,11 +226,11 @@ it('a stream of texts is claimed at the cap after the first, even while more kee
   expect(textOf(inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS))).toBe('part 0\npart 1\npart 2\npart 3\npart 4');
 }));
 
-it('a running text that newer text overtook goes back to wait, and the next claim answers both', () => withInbox((inbox, storage, clock) => {
+it('a running burst member that a newer one overtook goes back to wait, and the next claim answers both', () => withInbox((inbox, storage, clock) => {
   admit(inbox, storage, [{ wamid: 'wamid.hey', body: 'Hey Waldo' }]);
   const running = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
   expect(inbox.overtaken(running.id)).toBe(false);
-  admitUpdates(inbox, storage, [{ wamid: 'wamid.fwd', update: seq => text(seq, 'forwarded', { forward_origin: { type: 'hidden_user', date: 0 } }) }]);
+  admitUpdates(inbox, storage, [{ wamid: 'wamid.cmd', update: seq => text(seq, '/stop') }]);
   expect(inbox.overtaken(running.id)).toBe(false);
   inbox.settle(inbox.claimNext(clock.now + 1)!, true);
   admit(inbox, storage, [{ wamid: 'wamid.card', body: 'I have lost my card' }]);
@@ -223,3 +250,25 @@ it('with merging off, plain texts in a row are separate turns, claimed at once, 
   inbox.settle(first, true);
   expect(textOf(inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS))).toBe('I have lost my card');
 }, false));
+
+it('a running forward is overtaken by a newer file, and the next claim carries the forward with it', () => withInbox((inbox, storage, clock) => {
+  admitUpdates(inbox, storage, [{ wamid: 'w1', update: forwarded('Found both saved workout references') }]);
+  const running = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  admitUpdates(inbox, storage, [{ wamid: 'w2', update: fileFrom('workout-info.md') }]);
+  expect(inbox.overtaken(running.id)).toBe(true);
+  expect(inbox.requeue(running)).toBe(true);
+  const merged = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(merged.wamid).toBe('w2');
+  expect(earlierOf(merged)).toEqual([1]);
+}));
+
+it('a burst carries at most as many files as the model takes; the next file starts the next turn', () => withInbox((inbox, storage, clock) => {
+  admitUpdates(inbox, storage, [1, 2, 3, 4, 5].map(n => ({ wamid: `w${n}`, update: fileFrom(`part-${n}.md`) })));
+  const first = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect([first.wamid, earlierOf(first)]).toEqual(['w4', [1, 2, 3]]);
+  // The fifth file could not ride with these four, so the running turn is not overtaken by it and keeps its reply.
+  expect(inbox.overtaken(first.id)).toBe(false);
+  inbox.settle(first, true);
+  const second = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect([second.wamid, earlierOf(second)]).toEqual(['w5', []]);
+}));
