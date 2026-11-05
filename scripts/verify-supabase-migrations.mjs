@@ -113,6 +113,7 @@ const expectedMigrations = [
   '20261103090000_console_session_touch_throttle.sql',
   '20261103120000_screen_time.sql',
   '20261105180000_device_place.sql',
+  '20261105210000_device_place_names.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

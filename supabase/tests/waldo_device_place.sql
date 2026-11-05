@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(59);
+select plan(61);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -50,7 +50,8 @@ select is(array(select r from unnest(array['anon','authenticated','service_role'
   where has_function_privilege(r,'waldo.device_context_consent_change(boolean,text,text,bigint,text)','execute')
      or has_function_privilege(r,'waldo.device_context_owner(text,text,text,bigint,text)','execute')
      or has_function_privilege(r,'waldo.device_context_grant(uuid,text,text,integer)','execute')
-     or has_function_privilege(r,'waldo.device_place_name_ok(text)','execute')),'{}'::text[],'no role calls the inner functions');
+     or has_function_privilege(r,'waldo.device_place_names_ok(text,text)','execute')
+     or has_function_privilege(r,'waldo.device_place_digits(text)','execute')),'{}'::text[],'no role calls the inner functions');
 select is(array(select r||'.'||t from unnest(array['anon','authenticated','service_role']) r,
   unnest(array['waldo.device_context_consents','waldo.device_context_scopes','waldo.device_place_latest','waldo.device_context_requests']) t
   where has_table_privilege(r,t,'select') or has_table_privilege(r,t,'insert') or has_table_privilege(r,t,'update') or has_table_privilege(r,t,'delete')),'{}'::text[],'no role reads or writes the tables directly');
@@ -114,10 +115,13 @@ select is((select count(*)::int from unnest(array[
   pg_temp.place('tdr1w') || '{"locality":"12.971599,77.594566"}',
   pg_temp.place('tdr1w') || '{"region":"12°58′N 77°35′E"}',
   pg_temp.place('tdr1w') || '{"locality":"1297 7759"}',
+  pg_temp.place('tdr1w') || '{"locality":"१२.९७१५९९,७७.५९४५६६"}',
+  pg_temp.place('tdr1w') || '{"locality":"１２９７　７７５９"}',
+  pg_temp.place('tdr1w') || '{"locality":"Sector 128","region":"Block 45"}',
   pg_temp.place('tdr1w',-60),
   pg_temp.place('tdr1w',40 * 24 * 60)]) p
-  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),13,
-  'a finer or malformed cell, coordinates in a field or a name, an unknown zone or platform, a name without a cell or not text, and a time an hour ahead or 40 days back are all refused');
+  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),16,
+  'a finer or malformed cell, coordinates in a field or a name in any script or split across names, an unknown zone or platform, a name without a cell or not text, and a time an hour ahead or 40 days back are all refused');
 select is(pg_temp.ingest('dc-owner-a','place-name-1',1,'5e910000-0000-0000-0000-000000000003',pg_temp.place('tdr1w',4) || '{"locality":"Sector 128"}')->>'status','accepted',
   'a place name with a short number in it is kept');
 delete from waldo.device_place_latest where device_id = '5e910000-0000-0000-0000-000000000003';
@@ -169,6 +173,10 @@ select is((select jsonb_agg(jsonb_build_array(c->>'purpose',c->>'status',c->'epo
 select is(pg_temp.batch('dc-owner-c','batch-c-2',
   '[{"purpose":"provider_lookup","expected_epoch":0},{"purpose":"model_processing","expected_epoch":0},{"purpose":"storage_compute","expected_epoch":0}]')->'replayed',
   'true'::jsonb,'and the same request again is answered from its receipt');
+select is((select jsonb_agg(jsonb_build_array(c->>'status',c->'epoch')) from jsonb_array_elements(pg_temp.batch('dc-owner-c','batch-c-3',
+  '[{"purpose":"storage_compute","expected_epoch":1},{"purpose":"provider_lookup","expected_epoch":1}]')->'consents') c),
+  '[["granted",1],["granted",1]]'::jsonb,'a new request for what is already granted, at the epochs just read, answers it as it stands');
+select is(pg_temp.grant_('dc-owner-c','grant-c-again','model_processing',0),'{"error":"epoch_conflict"}'::jsonb,'but at a stale epoch is still refused');
 
 -- Age: nothing observed more than 30 days ago is shown or kept. A phone that wakes every day keeps its zone fresh while its last
 -- cell ages: the read hides that cell at once, and the sweep clears it and keeps the zone. A row whose zone is that old is hidden
