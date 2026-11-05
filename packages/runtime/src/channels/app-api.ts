@@ -14,6 +14,7 @@ import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { APP_DEVICE_CONTEXT_PATH, handleAppDeviceContext } from './app-device-context';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
+import { APP_TODAY_PATH, appToday } from './app-today';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
@@ -326,6 +327,17 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { credential = await auth.renewAppCredential(who.doName, sessionId); } catch { return fail(503); }
     if (!credential) return fail(401);
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
+  }
+
+  // One read for the surfaces outside the app: the owner's own calendar day, approvals and day view, each asked of the Durable
+  // Object as this session and build would ask it, on the one app-read charge above.
+  if (url.pathname === APP_TODAY_PATH) {
+    if (request.method !== 'GET') return fail(405);
+    if (url.search) return Response.json({ error: 'invalid_request' }, { status: 400, headers: { 'cache-control': 'no-store' } });
+    const contract = request.headers.get(APP_CONTRACT_HEADER), owner = owners.get(owners.idFromName(who.doName));
+    const headers = { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': publicOrigin(env, url),
+      ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) };
+    return appToday(path => owner.fetch(new Request(`https://telegram-owner${path}`, { headers })));
   }
 
   if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
