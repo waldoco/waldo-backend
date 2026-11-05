@@ -9,16 +9,17 @@ import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
 import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState,type GeneralPageSignal } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
+import { generalFormSubmission, parseGeneralFormSubmission } from './general-browser-form';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
-import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute } from './general-browser-redirects';
+import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute, type GeneralRequestBody } from './general-browser-redirects';
 
 export class GeneralBrowserError extends Error {
   release_failed?: true;
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'turn_deadline' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain' | 'native_submit_requires_card', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string, body?: GeneralRequestBody): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 const PROVIDER_REQUEST_MS = 10000;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
@@ -97,10 +98,10 @@ export function cloudflareGeneralBrowser(options: Options) {
     return { ms: Math.min(10000, remaining), turn: deadline <= session.expiresAt && remaining <= 10000 };
   };
   const actionTimeout = (session: BrowserSession) => actionBound(session).ms;
-  const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
+  const allowed = async (session: BrowserSession, url: string, method = 'GET', body?: GeneralRequestBody) => {
     await admit(session);
     const target = new URL(url);
-    if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password || !await options.authorizeRequest(url, method)) throw new GeneralBrowserError('rejected');
+    if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password || !await options.authorizeRequest(url, method, body)) throw new GeneralBrowserError('rejected');
     await admit(session);
   };
   const tabRef = (session: BrowserSession, target: string) => generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target])).then(value => `tab:${value.slice(0, 24)}`);
@@ -222,7 +223,7 @@ export function cloudflareGeneralBrowser(options: Options) {
             }else if(request.isNavigationRequest()&&!request.frame().parentFrame())humanRedirects.delete(page);
             return;
           }
-          await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
+          await guardGeneralBrowserRoute(route, { authorize: (url, method, body) => allowed(session, url, method, body), timeout: () => actionTimeout(session), admit: () => admit(session),
             redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); },
             challenge: page => { challengedDocuments.add(page); }, document: page => { challengedDocuments.delete(page); } });
           await admit(session);
@@ -512,6 +513,18 @@ export function cloudflareGeneralBrowser(options: Options) {
         return await observe(session, context, page);
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
+    }),
+    // Reads, never acts: the form the observed element belongs to, on the exact document that was observed.
+    formSubmission: (session: BrowserSession, snapshot: GeneralActionSnapshot, elementRef: string) => attached(session, async (_, context) => {
+      if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
+      const page = await select(session, context, snapshot.observation.tab_ref);
+      const element = snapshot.state.elements[snapshot.observation.elements.findIndex(row => row.ref === elementRef)];
+      if (!element) throw new GeneralBrowserError('stale_observation');
+      const current = await observe(session, context, page);
+      if (current.targetId !== snapshot.targetId || current.digest !== snapshot.digest) throw new GeneralBrowserError('stale_observation');
+      const form = parseGeneralFormSubmission(await page.locator(element.selector).evaluate(generalFormSubmission, undefined, { timeout: actionTimeout(session) }));
+      await admit(session);
+      return form;
     }),
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {

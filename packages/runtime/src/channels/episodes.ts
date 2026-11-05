@@ -1,4 +1,4 @@
-import { literalTextRedactor, type ConversationEntry } from '@waldo/contracts';
+import { literalTextRedactor, type ConversationEntry, type RecallLink } from '@waldo/contracts';
 import type { ConversationStore } from './conversation-store';
 import type { RunEffectScope } from './run-effect-scope';
 import { localIso, localToEpoch, nextAfter } from './reminders';
@@ -20,7 +20,8 @@ export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number;
 const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => (speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true } : { ...row, speaker });
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
-export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string }>;
+// surface and links are set only with the recall chain on (history/recall-chain.ts).
+export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string; surface?: string | null; links?: readonly RecallLink[] }>;
 
 export type EpisodeIndex = Readonly<{
   add(entryId: string, speaker: StoredSpeaker, text: string, at: number): void;
@@ -28,7 +29,8 @@ export type EpisodeIndex = Readonly<{
   remove(entryIds: readonly string[]): void;
   count(): number;
   get(ref: string): Episode | null;
-  search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
+  // prefix keeps the search to rows whose entry id starts with it (one surface's turns).
+  search(query: string, limit: number, from?: number, to?: number, prefix?: string): readonly EpisodeHit[];
   since(at: number, maxChars: number): readonly Episode[];
   after(at: number, maxChars: number): readonly Episode[];
   // The rows stored for these entries, oldest first; the newest are the ones left out past maxChars.
@@ -50,6 +52,11 @@ export const ftsQuery = (text: string): string | null => {
   return terms.length ? terms.map((term) => `"${term}"`).join(' OR ') : null;
 };
 
+// Whether the owner said anything, on any surface, after `at`: their next message answers or skips a question Waldo asked.
+// An owner message is stored whole ('owner') or split into their own words and what they quoted; any of its rows counts.
+export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
+  sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, at).toArray().length > 0;
+
 export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   sql.exec("CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5(entry_id UNINDEXED, speaker UNINDEXED, at UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')");
   return {
@@ -64,14 +71,14 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
       const found = sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE rowid = ?', row).toArray()[0];
       return found ? episodeOf(found) : null;
     },
-    search(query, limit, from, to) {
+    search(query, limit, from, to, prefix) {
       const match = ftsQuery(query);
       if (match === null) return [];
       return sql.exec<{ ref: number; entry_id: string; speaker: StoredSpeaker; at: number; snippet: string }>(
         `SELECT rowid AS ref, entry_id, speaker, at, snippet(episodes, 3, '[', ']', '...', 16) AS snippet FROM episodes
-         WHERE episodes MATCH ? AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?)
+         WHERE episodes MATCH ? AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?)${prefix === undefined ? '' : ' AND substr(entry_id, 1, ?) = ?'}
          ORDER BY bm25(episodes) LIMIT ?`,
-        match, from ?? null, from ?? null, to ?? null, to ?? null, limit,
+        match, from ?? null, from ?? null, to ?? null, to ?? null, ...(prefix === undefined ? [] : [prefix.length, prefix]), limit,
       ).toArray().map((row) => ({ ref: String(row.ref), entry_id: row.entry_id, speaker: row.speaker === OWNER_SAID ? 'owner' : row.speaker, at: row.at > 0 ? new Date(row.at).toISOString() : null, snippet: row.snippet }));
     },
     since(at, maxChars) {

@@ -48,6 +48,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
+  // owner's next day, in the chat role. Anything else keeps the decision as it was.
+  HEALTH_ACTIONS?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
@@ -55,7 +58,21 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
   // the connector-proxy function must be deployed with restoreEvent first.
   CALENDAR_UNDO_CANCEL?: string;
+  // "1" lets a proposing tool take the steps behind its card ("Why this changed"), kept beside the card and the day card that
+  // raised it and shown to an app reading approvals=8 or controls=14. Off unless "1".
+  WHY_TRAIL?: string;
+  // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
+  // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
+  PLANNING_BRIEF?: string;
+  // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
+  // stay ahead of the owner's day. Off unless "1".
+  WALDO_PROMPT_V2?: string;
+  // "1": the progress watchdog checks running background jobs in the owner's alarm pass and its console read reports enabled.
+  WALDO_WATCHDOG?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
+  // Off unless "1".
+  NEXT_DUE_ALARM?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
@@ -64,9 +81,13 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
+  // Off unless "1".
+  BROWSER_FORM_SUBMIT?: string;
   // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
+  WALDO_RECALL_CHAIN?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -111,6 +132,16 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
   WALDO_SECOND_MESSAGE?: string;
+  // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
+  WALDO_ASYNC_TOOLS?: string;
+  // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
+  // worker runs on the chat model (async-tools.ts).
+  WALDO_LIGHT_CHAT?: string;
+  // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
+  WALDO_LIGHT_ROLE_MODEL?: string;
+  WALDO_STRONG_ROLE_MODEL?: string;
+  WALDO_STRONG_ROLE_FALLBACK_MODEL?: string;
+  WALDO_LIGHT_ROLE_MAX_TOKENS?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
@@ -149,6 +180,24 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
   // revise a delivered day card or push. Anything else keeps the update card as it was.
   WALDO_DAY_STATE?: string;
+  // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
+  // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
+  GOOGLE_REALTIME_TRIAGE?: string;
+  // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
+  // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
+  // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
+  PROACTIVE_GATE?: string;
+  PROACTIVE_INTERRUPTS_PER_DAY?: string;
+  PROACTIVE_URGENT_PER_DAY?: string;
+  PROACTIVE_GAP_MIN?: string;
+  // '1' has Waldo act ahead: the update sweep's worker prepares the move (a drafted reply, a calendar change) and triage offers
+  // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
+  // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
+  PROACTIVE_ACT_AHEAD?: string;
+  // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
+  // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
+  PROACTIVE_INTERVENTIONS?: string;
+  PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

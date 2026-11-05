@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
-import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
+import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveReads, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
   waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -113,6 +113,15 @@ describe('where proactive work goes', () => {
   it('never lets iMessage take the work first, whatever list asks for it', () => {
     expect(proactiveTargets(['imessage', 'app'], { app: true, imessage: true })).toEqual(['app']);
     expect(proactiveTargets(['imessage'], { app: false, whatsapp: false, imessage: true })).toEqual([]);
+  });
+});
+
+describe('how the owner reads proactive work', () => {
+  it('by the surface that takes it first: beside the cards in the app, alone in a chat', () => {
+    const kv = memoryKv();
+    expect(proactiveReads(kv)).toBe('cards');
+    const reads = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv); };
+    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'cards', 'cards']);
   });
 });
 

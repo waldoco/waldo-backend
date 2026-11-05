@@ -107,12 +107,12 @@ describe('nightly eval with the tool search menu', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the two health cases, the look-up, the background task and the late answer, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(31);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(31);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the two health cases, the look-ups, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(32);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(32);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
-    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(4);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(2);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));

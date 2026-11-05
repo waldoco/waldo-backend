@@ -7,6 +7,7 @@ import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+import { surfaceOfTrace } from '../src/channels/owner-turn-envelope';
 
 const model = vi.hoisted(() => ({ requests: [] as string[], all: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -64,6 +65,10 @@ it('a WhatsApp turn that asks for the console link sends it as its own message n
       expect(kvRows.some(([, value]) => JSON.stringify(value).includes('Sent it here as its own message.'))).toBe(true);
       expect(kvRows.filter(([, value]) => JSON.stringify(value).includes('console?t=')).map(([key]) => key)).toEqual([]);
       expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM episodes').toArray())).toContain('Sent it here as its own message.');
+      // The recall chain reads a stored turn's surface back from its id, as the WhatsApp path wrote it.
+      const entryIds = state.storage.sql.exec<{ entry_id: string }>('SELECT entry_id FROM episodes').toArray().map(row => row.entry_id);
+      expect(entryIds.length).toBeGreaterThan(0);
+      expect(entryIds.map(surfaceOfTrace)).toEqual(entryIds.map(() => 'whatsapp'));
       const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'").toArray().map(row => row.name);
       for (const table of tables) {
         let rows: unknown[];

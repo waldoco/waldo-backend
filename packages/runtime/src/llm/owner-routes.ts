@@ -36,6 +36,8 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // held: true while the owner may not spend on models (an open owner before their agreements); each owner-path model call asks
 // it first. A task worker builds its own access, so its owner fences the claim instead.
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
+  // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
+  promptV2?: boolean;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
@@ -92,6 +94,27 @@ export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, acces
       fallback: validModelCredential(keyOf(access, second)) ? [ownerStep(chat ? OWNER_MODELS[second].chat : OWNER_MODELS[second].auxiliary, chat)] : [],
       floor: 'template',
     }],
+    escalation: [],
+    template_fallback: true,
+  });
+};
+
+// The light model's first step of the owner's reply (WALDO_LIGHT_CHAT): one attempt, with the reply's cache, output capped at
+// maxTokens (thinking included), and no fallback of its own. A light step that fails hands the turn to the chat route, whose fallback is the other
+// provider's chat model, so an outage never answers the owner on a second light model.
+export const lightRoutePolicy = (light: ModelName, maxTokens: number): RoutingPolicy => routingPolicySchema.parse({
+  routes: [{ trigger: 'user_message', primary: { ...ownerStep(light, true), max_tokens: maxTokens }, fallback: [], floor: 'template' }],
+  escalation: [],
+  template_fallback: true,
+});
+
+// The strong role's route on a light-chat turn: its model, then its fallback (by default the other provider's chat model)
+// when that provider's key is deployed, then the floor. With neither set it is the chat route ownerRoutePolicy builds.
+export const strongRoutePolicy = (strong: ModelName, fallback: ModelName | undefined, access: OwnerModelAccess): RoutingPolicy => {
+  const second = fallback ?? OWNER_MODELS[otherProvider(PROVIDER_OF[strong] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER)].chat;
+  const provider = PROVIDER_OF[second] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER;
+  return routingPolicySchema.parse({
+    routes: [{ trigger: 'user_message', primary: ownerStep(strong, true), fallback: second !== strong && validModelCredential(keyOf(access, provider)) ? [ownerStep(second, true)] : [], floor: 'template' }],
     escalation: [],
     template_fallback: true,
   });

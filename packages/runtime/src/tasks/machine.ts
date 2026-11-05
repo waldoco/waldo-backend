@@ -5,7 +5,7 @@ import { md5Hex } from '../channels/md5';
 import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { PARK_WORDS } from '../prompt/fixed-lines';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
 import { applyInterrupted, carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
 
@@ -19,7 +19,7 @@ export type MachineItem = Readonly<{ ref: string; detail: string }>;
 // A brief persists with its job, and the owner's health values are never stored: an item that carries one keeps its ref,
 // so the worker can still look it up, and drops its words.
 export const HEALTH_DETAIL_DROPPED = '(detail not kept: it carries health values; read it by its ref if you need it)';
-const keptItem = (item: MachineItem): MachineItem => numericHealthIn(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
+const keptItem = (item: MachineItem): MachineItem => numericHealthInJsonText(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
 
 export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;
@@ -100,7 +100,7 @@ export const APPLY_RETRY_MS = 60 * 60_000;
 export type MachineNote = (key: string, text: string, settle: () => void) => Promise<void>;
 const MACHINE_WORK: Readonly<Record<MachineJob, string>> = {
   heartbeat: 'check-back on your open loops', update_sweep: 'scan of your mail and calendar for updates',
-  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile',
+  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile', intervention: 'look across your day',
 };
 export const machineStoppedNote = (job: MachineJob, why: string): string => `My background ${MACHINE_WORK[job]} stopped before it finished, because ${why}. I'll try it again on its next run.`;
 const DAY_MS = 24 * 60 * 60_000;
@@ -153,7 +153,8 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
   };
   // A job that stopped tells the owner when this deploy says so; otherwise it settles silently, as one that found nothing.
   const stopped = async (name: string, fields: Partial<TurnLogEntry>, why: string) => {
-    if (!deps.note) return quietly(name, fields);
+    // Waldo's own look is unasked by nature: a stopped one is not worth a message outside the owner's limits.
+    if (!deps.note || job === 'intervention') return quietly(name, fields);
     try { await deps.note(`machine:${job}:stopped:${Math.floor(deps.now() / DAY_MS)}`, machineStoppedNote(job, why), settle); }
     catch (error) { if (error instanceof ClosedRunError) return; throw error; }
     done(name, { ...fields, detail: 'noted' });

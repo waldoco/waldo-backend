@@ -10,7 +10,7 @@ import type { ReminderTiming } from './owner-turn-envelope';
 // it has read outside text, closing a loop the owner made is the owner's call, so it can put that close on their card.
 export const CHECK_BACK_TOOLS: readonly ToolName[] = CHILD_READ_TOOLS;
 // Turns that start on outside text hold no egress reads (tasks/profiles EGRESS_READ_TOOLS).
-const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
+export const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
 export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action'];
 // A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.

@@ -94,7 +94,8 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     // Daily reads that ask for workouts: each session, oldest first, at most the newest HEALTH_READ_MAX_SESSIONS.
     sessions: z.array(healthWorkoutSessionSchema).max(HEALTH_READ_MAX_SESSIONS).optional(),
   }),
-  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema }),
+  // next: what is true and what can be done, in words; it never carries a reading.
+  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),
 ]);
 export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
 
@@ -321,22 +322,30 @@ export type ReadMemoryResult = z.infer<typeof readMemoryResultSchema>;
 // takes `ref`, a value copied from a prior search hit, and returns that stored turn in
 // full. The two never mix: a request names exactly one, and date_range is search-only.
 // (limit carries a schema default, so it is inert in exact-source mode, not rejected.)
-export const searchEpisodesArgsSchema = z
-  .strictObject({
-    query: z.string().min(1).max(500).optional(),
-    ref: z.string().min(1).max(200).optional(),
-    limit: z.int().min(1).max(20).default(5),
-    date_range: dateRangeSchema.optional(),
-  })
+const searchEpisodesFields = {
+  query: z.string().min(1).max(500).optional(),
+  ref: z.string().min(1).max(200).optional(),
+  limit: z.int().min(1).max(20).default(5),
+  date_range: dateRangeSchema.optional(),
+};
+const oneEpisodeMode = (args: Readonly<{ query?: string; ref?: string; date_range?: unknown }>, ctx: z.RefinementCtx) => {
+  if ((args.query === undefined) === (args.ref === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'provide exactly one of query or ref', path: ['query'] });
+  }
+  if (args.ref !== undefined && args.date_range !== undefined) {
+    ctx.addIssue({ code: 'custom', message: 'date_range applies to query searches only', path: ['date_range'] });
+  }
+};
+export const searchEpisodesArgsSchema = z.strictObject(searchEpisodesFields).superRefine(oneEpisodeMode);
+// With the recall chain on, a search can keep to one surface the owner talked on (whatsapp, imessage, app, telegram).
+export const searchEpisodesChainArgsSchema = z
+  .strictObject({ ...searchEpisodesFields, surface: z.string().regex(/^[a-z]{1,16}$/).optional().describe('Only messages on this surface: whatsapp, imessage, app or telegram.') })
   .superRefine((args, ctx) => {
-    if ((args.query === undefined) === (args.ref === undefined)) {
-      ctx.addIssue({ code: 'custom', message: 'provide exactly one of query or ref', path: ['query'] });
-    }
-    if (args.ref !== undefined && args.date_range !== undefined) {
-      ctx.addIssue({ code: 'custom', message: 'date_range applies to query searches only', path: ['date_range'] });
-    }
+    oneEpisodeMode(args, ctx);
+    if (args.ref !== undefined && args.surface !== undefined) ctx.addIssue({ code: 'custom', message: 'surface applies to query searches only', path: ['surface'] });
   });
 export type SearchEpisodesArgs = z.infer<typeof searchEpisodesArgsSchema>;
+export type SearchEpisodesChainArgs = z.infer<typeof searchEpisodesChainArgsSchema>;
 
 // execute_action runs only a previously proposed-and-confirmed action: the confirmation
 // token is the user's approval artifact from the ADR-0018 autonomy gate, never

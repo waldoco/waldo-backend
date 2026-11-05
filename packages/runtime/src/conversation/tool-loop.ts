@@ -2,12 +2,13 @@ import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
+import { recordRead, withWhyParameter } from '../tools/why-trail';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
@@ -41,7 +42,7 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
   handlers.map((handler) => ({
     name: handler.name,
     description: handler.description,
-    parameters: toolParameters(handler.schema),
+    parameters: handler.takes_why ? withWhyParameter(toolParameters(handler.schema)) : toolParameters(handler.schema),
   }));
 
 // The model judges progress within hard round/shared budgets and run-scope fences. It hears about the budget only near
@@ -335,7 +336,7 @@ export async function runToolLoop(input: Readonly<{
       }
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
-      const cached = seen.get(key) ?? (unkeptSteps.has(call.name) && numericHealthIn(call.arguments) ? { ok: true } : undefined);
+      const cached = seen.get(key) ?? (unkeptSteps.has(call.name) && numericHealthInJsonText(call.arguments) ? { ok: true } : undefined);
       // Only a completed host action in this exact retained session opens another
       // identical read. Reads and unrelated mutation successes are not action proof.
       const anchor = browserReads.get(key);
@@ -365,6 +366,7 @@ export async function runToolLoop(input: Readonly<{
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
         if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
+        if (result.ok) recordRead(input.ctx.turnReads, call.name, call.arguments, result.data, started);
       }
       // A call whose arguments missed the schema gets the definition back when its function list lacks it (a call through
       // use_tool, or a deferred tool called by name), so its next call can be right.

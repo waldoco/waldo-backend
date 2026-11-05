@@ -61,10 +61,12 @@ export const toolCatalogue = (names: readonly string[]): string => {
   }).join('\n');
 };
 
-export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
+// direct: tools this turn offers in its function list whatever their group, because the turn exists to use them (a planning
+// card's proposals); the catalogue leaves them out.
+export function harnessToolLoader(tools: readonly LLMTool[], direct: ReadonlySet<string> = new Set()): ToolLoader {
   const byName = new Map(tools.map((tool) => [tool.name, tool] as const));
-  const groups = deferredGroups(tools.map((tool) => tool.name));
-  const core = tools.filter((tool) => placement(tool.name) === 'core').sort(byToolName);
+  const groups = deferredGroups(tools.map((tool) => tool.name).filter((name) => !direct.has(name)));
+  const core = tools.filter((tool) => direct.has(tool.name) || placement(tool.name) === 'core').sort(byToolName);
   if (groups.size === 0) return { offered: core, route: (call) => ({ call }), definition: (name) => byName.get(name) };
   const offered: LLMTool[] = [
     ...core,

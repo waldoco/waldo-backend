@@ -34,6 +34,7 @@ import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '.
 import { evalConversation, type ConversationSeed } from './conversation-world';
 import { approvalDesk } from '../../src/channels/approvals';
 import { approvalHandlers } from '../../src/tools/live/raise-approval';
+import { proposeActionHandler, replayHost } from '../../src/tools/live/propose-action';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -77,6 +78,8 @@ export type WorldSeed = Readonly<{
   mcp?: SeedMcp;
   // Email cards Waldo already raised that wait on the owner in the app, each at its own time, on the owner object's own desk.
   approvals?: readonly SeedApproval[];
+  // propose_action is offered, as in a job that read outside text: each card it raises is recorded, never run.
+  actions?: true;
 }> & ConversationSeed;
 export type SeedApproval = Readonly<{ at: string; to: readonly string[]; cc?: readonly string[]; subject: string; body: string }>;
 
@@ -344,7 +347,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     if (connected.kind !== 'connected') throw new Error('the seeded MCP server did not connect');
     for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
   })();
-  const handlers = [
+  const offered = [
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
@@ -357,6 +360,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
     ...(cards ? approvalHandlers(cards) : []),
   ];
+  const handlers = seed.actions
+    ? [...offered, proposeActionHandler({ proposeTaintedAction: async (proposal) => { effect('action.proposed', proposal); return nextId('action'); } }, replayHost(() => offered))] : offered;
 
   // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
   // its score, as the producer writes a day's first row.
@@ -421,6 +426,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     due() { const local = localIso(now(), TIMEZONE); return reminders.filter((reminder) => !reminder.fired && reminder.at <= local); },
     markFired(id: string) { const reminder = reminders.find((entry) => entry.id === id); if (reminder) reminder.fired = true; },
     effects: (): readonly Effect[] => effects.map((entry) => structuredClone(entry)),
+    // A step's own outcome, recorded beside the tools' effects for receipts (the triage decision).
+    note: (kind: string, payload: unknown) => effect(kind, payload),
+    // The owner's goals as their memory holds them, as the owner object hands them to the triage turn.
+    goals: () => (memory?.claims() ?? []).filter((claim) => claim.kind === 'goal').map((claim) => `- ${claim.text}`).join('\n'),
     finalState: () => ({
       ...chat.state(),
       calendar: events.map(({ owner_id: _owner, ...event }) => event),

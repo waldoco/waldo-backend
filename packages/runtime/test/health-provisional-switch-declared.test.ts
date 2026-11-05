@@ -46,23 +46,30 @@ describe('HEALTH_COACHING in the Worker config', () => {
 });
 
 describe('HEALTH_EASE_WORKOUT in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+  it('is off in production and on in staging, which runs the redeployed connector-proxy function', () => {
     expect(parsed.vars.HEALTH_EASE_WORKOUT).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('1');
   });
 });
 
 describe('CALENDAR_UNDO_CANCEL in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy, after the connector-proxy function is redeployed', () => {
+  it('is off in production and on in staging, which runs the redeployed connector-proxy function', () => {
     expect(parsed.vars.CALENDAR_UNDO_CANCEL).toBe('0');
-    expect(parsed.env.staging.vars.CALENDAR_UNDO_CANCEL).toBe('0');
+    expect(parsed.env.staging.vars.CALENDAR_UNDO_CANCEL).toBe('1');
+  });
+});
+
+describe('WHY_TRAIL in the Worker config', () => {
+  it('is off in production and on in staging', () => {
+    expect(parsed.vars.WHY_TRAIL).toBe('0');
+    expect(parsed.env.staging.vars.WHY_TRAIL).toBe('1');
   });
 });
 
 describe('HISTORY_ARCHIVE in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+  it('is off in production and counts only (dry) in staging', () => {
     expect(parsed.vars.HISTORY_ARCHIVE).toBe('0');
-    expect(parsed.env.staging.vars.HISTORY_ARCHIVE).toBe('0');
+    expect(parsed.env.staging.vars.HISTORY_ARCHIVE).toBe('dry');
   });
 });
 
@@ -70,6 +77,27 @@ describe('MEDICATIONS in the Worker config', () => {
   it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
     expect(parsed.vars.MEDICATIONS).toBe('0');
     expect(parsed.env.staging.vars.MEDICATIONS).toBe('0');
+  });
+});
+
+describe('BROWSER_FORM_SUBMIT in the Worker config', () => {
+  it('is on in staging for the Google Forms run, and off in production', () => {
+    expect(parsed.vars.BROWSER_FORM_SUBMIT).toBe('0');
+    expect(parsed.env.staging.vars.BROWSER_FORM_SUBMIT).toBe('1');
+  });
+});
+
+describe('WALDO_RECALL_CHAIN in the Worker config', () => {
+  it('is off in production and on in staging', () => {
+    expect(parsed.vars.WALDO_RECALL_CHAIN).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_RECALL_CHAIN).toBe('1');
+  });
+});
+
+describe('PLANNING_BRIEF in the Worker config', () => {
+  it('is off in production until a judged planning Brief passes, and on in staging', () => {
+    expect(parsed.vars.PLANNING_BRIEF).toBe('0');
+    expect(parsed.env.staging.vars.PLANNING_BRIEF).toBe('1');
   });
 });
 
