@@ -868,6 +868,10 @@ describe('the health-protocols skill', () => {
       expect(off.load('health-protocols', skill!.version, turn).ok).toBe(false);
       const on = new CuratedOwnerSkills(sql as SqlStorage, 'o-1', undefined, 'o-1', curatedSkills(true));
       expect(on.load('health-protocols', skill!.version, turn).ok).toBe(true);
+      // Switched back off, the row the switch left in the book stays dormant.
+      const later = new CuratedOwnerSkills(sql as SqlStorage, 'o-1');
+      expect(later.list().map(entry => entry.name)).not.toContain('health-protocols');
+      expect(later.load('health-protocols', skill!.version, { ...turn, turnId: 't-2' }).ok).toBe(false);
     });
   });
 
