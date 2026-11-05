@@ -85,6 +85,9 @@ import {
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   cancelStandingOrderArgsSchema,
+  proposeStandingGrantArgsSchema,
+  revokeStandingGrantArgsSchema,
+  pauseAutonomyArgsSchema,
   closeLoopArgsSchema,
   raiseApprovalArgsSchema,
   approveShownArgsSchema,
@@ -271,6 +274,9 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   set_standing_order: setStandingOrderArgsSchema,
   list_standing_orders: listStandingOrdersArgsSchema,
   cancel_standing_order: cancelStandingOrderArgsSchema,
+  propose_standing_grant: proposeStandingGrantArgsSchema,
+  revoke_standing_grant: revokeStandingGrantArgsSchema,
+  pause_autonomy: pauseAutonomyArgsSchema,
   propose_calendar_change: proposeCalendarChangeArgsSchema,
   propose_calendar_plan: proposeCalendarPlanArgsSchema,
   propose_google_task_change: proposeGoogleTaskChangeArgsSchema,
@@ -507,7 +513,7 @@ export const recordNeedsOwnerCard = async (
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
   switch (tainted?.exempt) {
-    case 'draft': case 'honest_origin': case 'instructions_only': return false;
+    case 'draft': case 'honest_origin': case 'instructions_only': case 'narrows': return false;
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
     default: return true;

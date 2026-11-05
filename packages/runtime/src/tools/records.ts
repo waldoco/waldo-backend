@@ -77,10 +77,12 @@ export type ToolRecord = Readonly<{
 //  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
 //                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
 //                 Any other operation, or a call with no typed command, is carded.
-// owner_statement  the tool takes only what the owner says to Waldo directly, and its arguments are a figure no card may hold
-//                 (the owner's stated sleep need, a health value): a turn that has read outside text is refused the call.
+// owner_statement  the tool takes only what the owner says to Waldo directly: a figure no card may hold (the owner's stated
+//                 sleep need, a health value), or a request to widen Waldo's own authority. A turn that has read outside text is
+//                 refused the call.
+//  narrows        it only ends or stops authority the owner gave, so outside text can at worst make Waldo ask more often.
 export type TaintedWriteRefusal = Readonly<{ refused: 'owner_statement'; reason: string }>;
-export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only'; reason: string }>;
+export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only' | 'narrows'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
 const unknown = (basis: string): ToolReplayRow => ({ replay: 'non_replayable_uncertain', basis });
@@ -182,6 +184,9 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   stop_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'medication_stopped', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
+  propose_standing_grant: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'standing_grant_proposed', tainted: { refused: 'owner_statement', reason: "it asks the owner to widen Waldo's own authority, which only the owner's own words may start; outside text never raises that card" }, replay: unknown('raises one card with no key; a re-run raises a second card, and only an approved card writes a grant') },
+  revoke_standing_grant: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'standing_grant_revoked', tainted: { exempt: 'narrows', reason: 'it only ends authority the owner gave; it can never widen what Waldo may do' }, replay: { replay: 'provider_idempotent', basis: 'ending grants that already ended changes nothing', evidence: { file: 'channels/standing-grants.ts', needle: 'grant.ended === null' } } },
+  pause_autonomy: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'autonomy_paused', tainted: { exempt: 'narrows', reason: 'it only stops Waldo acting on its own; resuming is the owner\'s, in the app' }, replay: { replay: 'provider_idempotent', basis: 'a second pause keeps the first', evidence: { file: 'channels/standing-grants.ts', needle: 'if (!paused())' } } },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
   call_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; a tool that sends as the owner and that they allowed runs at once in their own untainted request under a host-derived intent the edge runs at most once (tools/live/mcp.ts); remote effect unknown') },
   // reminders, beside cancel_task: the core tool budget has no room for it, so the namespace line names it for the search.
@@ -254,7 +259,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory', search_history: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
-  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings', connect_app: 'settings',
+  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', propose_standing_grant: 'calendar', revoke_standing_grant: 'settings', pause_autonomy: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
   send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',

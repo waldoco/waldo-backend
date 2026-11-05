@@ -27,7 +27,8 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
     if ([...url.searchParams.keys()].some(key => key !== 'state' || url.searchParams.getAll(key).length !== 1)) return reply({ error: 'invalid_query' }, 400);
     const query = appApprovalListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams)); if (!query.success) return reply({ error: 'invalid_query' }, 400);
     const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'approvals');
-    // A kind with no shape an older build can parse is left out of its list; its chat carries the card's words instead.
+    // A kind with no shape an older build can parse (a send as Waldo, a standing grant, a day plan) is left out of its list;
+    // its chat carries the card's words instead.
     const shown = (await listed(query.data)).filter(item => appApprovalKindShownAt(item.kind, revision));
     const parsed = appApprovalListV1Schema.safeParse({ approvals: shown.map(item => appApprovalAtRevision(item, revision)) });
     await host.assertCurrent(); return parsed.success ? reply(parsed.data) : reply({ error: 'projection_unavailable' }, 503);

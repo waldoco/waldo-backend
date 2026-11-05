@@ -1,5 +1,5 @@
-import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
-import type { GrantUse, StandingGrants } from './standing-grants';
+import { EffectNotAppliedError, EffectQuotaError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
@@ -21,6 +21,7 @@ import { addPlan, planReview, undoPlan, type PlanUndo, type StoredPlan } from '.
 import { appApprovalStepUp } from './approval-step-up';
 import { appWhy, storedWhy, whyJson, type TrailStep } from '../tools/why-trail';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
+import { appAutonomyGrantTermsV1Schema, type AppAutonomyGrantTermsV1 } from '../../../contracts/src/app/autonomy';
 import { AGENT_MAIL_REFUSED, agentMailIntact, agentMailRefusal, agentMailSendCode, type AgentMailDeskDep, type AgentMailSendCode, type AgentMailSendProposal } from './agent-mail/send';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
@@ -171,7 +172,7 @@ export type ApprovalReview =
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'agent_mail_send'; from: Readonly<{ name: string; address: string }>; to: readonly string[]; cc: readonly string[]; subject: string; body: string }>
   // A tool or action approval: the same frozen review its card and the app show (tool, masked arguments, what approving runs).
-  | Readonly<{ kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }>
+  | Readonly<{ kind: 'mcp_call' | 'tainted_action' | 'browser_submit' | 'standing_grant'; text: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
       calendar_id?: string; attendees?: readonly string[]; send_updates?: 'all' | 'none'; location?: string; description?: string; add_meet_link?: boolean }>;
@@ -272,6 +273,9 @@ export type ApprovalDesk = Readonly<{
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   // runRef: the run the card belongs to when it is not the turn running now (a task worker's step: task:<job id>).
   proposeTaintedAction(payload: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'> & Readonly<{ runRef?: string }>): Promise<string>;
+  // A card asking the owner to let Waldo do one class of thing without asking; approving it is the only way the chat creates
+  // a grant. Raised only on the owner's own turn, by the caller's check.
+  proposeStandingGrant(terms: AppAutonomyGrantTermsV1, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
@@ -316,6 +320,7 @@ const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; 
   agent_mail_send: { title: 'Send this email as Waldo?', approve: 'Send it', modify: true },
   browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
   tainted_action: { title: 'Run this action?', approve: 'Do it', modify: false },
+  standing_grant: { title: 'Let Waldo do this on its own?', approve: 'Allow', modify: false },
 };
 const PROPOSAL_KINDS = Object.keys(CARDS);
 // Telegram's buttons. Not now puts the approval off and is offered once; Don't do this skips it.
@@ -408,9 +413,27 @@ export const ledgerSummary = (sql: Pick<SqlStorage, 'exec'>, id: string): string
   const entry = sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   return entry ? summaryOf(entry) : null;
 };
+// A standing grant's card is written by the host from the terms alone, so the owner reads exactly what approving allows.
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const grantDays = (days: readonly number[]) => days.length === 7 ? 'every day'
+  : [...days].sort().join() === '1,2,3,4,5' ? 'weekdays' : [...days].sort().map(day => DAY_NAMES[day]).join(', ');
+const grantUntil = (terms: AppAutonomyGrantTermsV1) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: terms.limits.timezone, day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(terms.expires_at));
+export const describeStandingGrant = (terms: AppAutonomyGrantTermsV1) => terms.scope.class === 'calendar.move_own_block'
+  ? `Let Waldo place, move and remove its own focus blocks on ${terms.scope.account}'s primary calendar without asking, at most ${terms.limits.max_per_day} a day, until ${grantUntil(terms)}`
+  : `Let Waldo do ${terms.scope.class} without asking, at most ${terms.limits.max_per_day} a day, until ${grantUntil(terms)}`;
+const reviewStandingGrant = (terms: AppAutonomyGrantTermsV1) => {
+  const { scope, limits } = terms;
+  if (scope.class !== 'calendar.move_own_block') return `${describeStandingGrant(terms)}?`;
+  return [`Let Waldo place, move and remove its own focus blocks on ${scope.account}'s primary calendar, without asking each time?`,
+    `When: ${grantDays(scope.weekdays)}, ${scope.window.from} to ${scope.window.to} (${limits.timezone}), at least ${scope.min_lead_minutes} minutes ahead`,
+    `At most ${limits.max_per_day} a day, until ${grantUntil(terms)}`,
+    'Only blocks Waldo made, with no guests. Undo each one until it starts; revoke or pause any time.'].join('\n');
+};
 // The full review a card shows for each kind, rebuilt from the frozen payload.
 const reviewText = (entry: LedgerRow, signed = true): string => {
   const p = JSON.parse(entry.payload_json);
+  if (entry.kind === 'standing_grant') return reviewStandingGrant(appAutonomyGrantTermsV1Schema.parse(p.terms));
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p, signed)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p, signed)}`;
@@ -441,6 +464,7 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
   if (entry.kind === 'tainted_action') return { scope: `${p.tool} from external content` };
   if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) };
+  if (entry.kind === 'standing_grant') return { grant: appAutonomyGrantTermsV1Schema.parse(p.terms) };
   if (entry.kind === 'calendar_plan') return { plan: { day: p.day, blocks: p.blocks, time_zone: p.time_zone, ...(p.account ? { account: p.account } : {}) } };
   const guestCount = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
   const first = { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null };
@@ -648,8 +672,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   renames?: boolean;
   // Whether a cancel can be undone, by putting the event back on the version the cancel left.
   undoCancels?: boolean;
-  // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger.
-  grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'>;
+  // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger. grant writes
+  // the one the owner approved on a standing_grant card; without it such a card is never approvable here.
+  grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'> & Partial<Pick<StandingGrants, 'grant'>>;
   // Whether the owner can approve a card shown here by telling Waldo to go ahead (APPROVE_IN_CHAT).
   approvesInChat?: () => boolean;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
@@ -1049,15 +1074,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
-  // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change is
-  // claimed (uncertain) before it gets here, as an owner's approval claims nothing and keeps the row open.
+  // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change reaches
+  // here unclaimed and is claimed in its reserve; an owner's approval claims nothing and keeps the row open.
   const applyCalendar = async (id: string, proposal: Stored, operationRef: string, client: GoogleClient, trace: string, recovering: boolean, grant?: GrantUse): Promise<ApprovalDecision> => {
     let out: ApprovalDecision;
       const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
       const marker = await sha256Hex(`${operationRef}:apply`);
       // A read may have closed the request during the awaits above. The effect is reserved synchronously
       // from here, so a later read sees it on record and leaves the request open.
-      if (!recovering && row(id)?.status !== (grant ? 'uncertain' : 'open')) return noLongerOpen(id);
+      if (!recovering && row(id)?.status !== (grant ? 'card_unconfirmed' : 'open')) return noLongerOpen(id);
       const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
         const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
         return { provider_id: eventId, result: undo };
@@ -1103,15 +1128,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'use' in decision ? 'granted' : decision.refused });
     if (!('use' in decision)) return false;
     const use = decision.use;
-    sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ?, grant_json = ? WHERE id = ? AND status = 'card_unconfirmed'", deps.now(), JSON.stringify({ class: use.class, grant_id: use.grant_id, revision: use.revision }), id);
+    // The row is claimed inside the reserve, in the same commit as the effect's intent, so it is never marked as running
+    // under a grant without that intent on record. Stopped before it, the row is still the card it was raised as.
+    const claim: GrantUse = { ...use, authorize: () => {
+      if (!use.authorize()) return false;
+      sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ?, grant_json = ? WHERE id = ? AND status = 'card_unconfirmed'",
+        deps.now(), JSON.stringify({ class: use.class, grant_id: use.grant_id, revision: use.revision }), id);
+      return sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed === 1;
+    } };
     const started = deps.now();
     try {
-      await applyCalendar(id, stored, operationRefOf(row(id)!), client, id, false, use);
+      await applyCalendar(id, stored, operationRefOf(row(id)!), client, id, false, claim);
     } catch (error) {
-      if (error instanceof EffectRefusedError || error instanceof EffectQuotaError) {
-        sql.exec("UPDATE ledger SET status = 'card_unconfirmed', decided_at = NULL, grant_json = NULL WHERE id = ? AND status = 'uncertain'", id);
+      if (row(id)?.grant_json == null) {
         deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: false, code: error instanceof EffectQuotaError ? 'budget' : 'refused' });
-        return false;
+        // A card withdrawn or expired meanwhile is not raised again.
+        return row(id)?.status !== 'card_unconfirmed';
       }
       const known = error instanceof EffectNotAppliedError;
       setStatus(id, known ? 'failed' : 'uncertain');
@@ -1216,6 +1248,36 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       } else if (entry.kind === 'task_sources') {
         setStatus(id, 'skipped');
         out = { toast: 'Expired', message: 'That request has expired; just ask again.' };
+      } else if (entry.kind === 'standing_grant') {
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'A standing grant ends with a revoke, not an undo: ask me to stop, or end it in Settings > Autonomy. Nothing was changed.' };
+        } else {
+          const terms = appAutonomyGrantTermsV1Schema.parse(JSON.parse(entry.payload_json).terms);
+          const write = deps.grants?.grant;
+          if (!entry.proposal_digest || await sha256Hex(stableJson(terms)) !== entry.proposal_digest) { setStatus(id, 'failed'); throw new Error('standing grant terms changed'); }
+          // Rechecked at the tap, not only when it was raised: the switch, and terms still running.
+          if (!write || !deps.grants!.enabled() || !AVAILABLE_CLASSES.includes(terms.scope.class)) { setStatus(id, 'rejected'); out = { toast: 'Not available', message: 'Waldo cannot act on its own here yet, so no grant was made. Nothing changed.' }; }
+          else if (!(deps.now() < terms.expires_at)) { setStatus(id, 'rejected'); out = { toast: 'Expired', message: 'Those terms have already ended, so no grant was made. Ask me again for fresh ones.' }; }
+          else {
+            // The claim and the grant land in one commit, with no I/O, so two taps never make two grants.
+            let made;
+            try {
+              made = commit(() => {
+                const lost = claimOpen(id);
+                if (lost) return lost;
+                const grant = write(terms, via.surface);
+                setStatus(id, 'done');
+                return grant;
+              });
+            } catch (error) {
+              if (!(error instanceof GrantLimitError)) throw error;
+              return { toast: 'Too many grants', message: `${error.message}, so no grant was made. Revoke one in Settings > Autonomy first.` };
+            }
+            if ('toast' in made) return made;
+            deps.log({ trace, hop: 'grant_made', ms: deps.now() - started, ok: true, detail: made.terms.scope.class });
+            out = { toast: 'Allowed', message: `Done: ${describeStandingGrant(made.terms)}. Each one is reported, and you can revoke this or pause everything any time.` };
+          }
+        }
       } else if (entry.kind === 'google_task_change') {
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A Google Tasks change cannot be undone from here. Nothing was reversed.' };
@@ -1916,6 +1978,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await present(id);
       return id;
     },
+    async proposeStandingGrant(terms, options = {}) {
+      const parsed = appAutonomyGrantTermsV1Schema.parse(terms);
+      if (!AVAILABLE_CLASSES.includes(parsed.scope.class)) throw new Error('that class cannot be granted yet');
+      const originRunRef = deps.currentRunRef?.();
+      const id = `p${deps.newId()}`;
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'standing_grant', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)",
+        id, describeStandingGrant(parsed), JSON.stringify({ terms: parsed }), deps.now(), await sha256Hex(stableJson(parsed)));
+      bindOrigin(id, originRunRef);
+      bindWhy(id, options.why);
+      await present(id);
+      return id;
+    },
     waitingTaintedActions(tool) {
       expireDue();
       return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'tainted_action' AND json_extract(payload_json, '$.tool') = ? AND status IN ('open', 'review_only', 'card_unconfirmed') ORDER BY created_at", tool).toArray()
@@ -2002,7 +2076,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             if (typeof p.from?.name !== 'string' || typeof p.from.address !== 'string' || !strings(p.to) || !p.to.length || !strings(p.cc) || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
             return { kind: 'agent_mail_send', from: { name: p.from.name, address: p.from.address }, to: p.to, cc: p.cc, subject: p.subject, body: p.body };
           }
-          if (r.kind === 'mcp_call' || r.kind === 'tainted_action' || r.kind === 'browser_submit') return { kind: r.kind, text: appReview(r).text };
+          if (r.kind === 'mcp_call' || r.kind === 'tainted_action' || r.kind === 'browser_submit' || r.kind === 'standing_grant') return { kind: r.kind, text: appReview(r).text };
           if (r.kind === 'google_task_change') {
             const proposal = googleTaskProposalSchema.parse(JSON.parse(r.payload_json));
             return r.proposal_digest ? { kind: 'google_task_change', account: proposal.account.email, proposal, proposal_digest: r.proposal_digest } : null;
@@ -2056,8 +2130,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
       // that moves the row ends the deferral.
       const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
-      // A change a standing grant made was never the owner's approval, so the list leaves it out; its receipt is its record.
-      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ['grant_json IS NULL']), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
+      // A change a standing grant made was never the owner's approval, so the list leaves it out, its receipt being its record;
+      // one whose outcome is unknown stays in it until it settles, so the owner is told.
+      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ["(grant_json IS NULL OR status = 'uncertain')"]), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
         deps.log({ trace: entry.id, hop: 'approval_projection', ms: 0, ok: false, code: 'dropped' });

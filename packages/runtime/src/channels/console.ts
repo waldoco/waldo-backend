@@ -358,7 +358,7 @@ export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send', agent_mail_send: 'Email as Waldo',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change', standing_grant: 'Standing grant',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;

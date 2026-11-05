@@ -95,6 +95,10 @@ export const toolNameSchema = z.enum([
   'set_standing_order',
   'list_standing_orders',
   'cancel_standing_order',
+  // The owner's standing grants: ask for one (a card the owner approves), end one, or pause them all. Owner turns only.
+  'propose_standing_grant',
+  'revoke_standing_grant',
+  'pause_autonomy',
   // workspace 50-52 (files slice): owner-private file store, owner-initiated (user_message) only; list/read stamped external.
   'workspace_list',
   'workspace_read',
@@ -322,6 +326,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',
+    'propose_standing_grant',
+    'revoke_standing_grant',
+    'pause_autonomy',
     'workspace_list',
     'workspace_read',
     'workspace_search',
