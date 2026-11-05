@@ -29,6 +29,8 @@ export const APP_THREADS_PATH = `${APP_PATH}/threads`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
 export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
+export const APP_AUTONOMY_PATH = `${APP_PATH}/autonomy`;
+export const APP_AUTONOMY_CHANGES_PATH = `${APP_AUTONOMY_PATH}/changes`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
@@ -259,7 +261,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -317,9 +319,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
+    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST' || request.method === 'PUT';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
@@ -384,7 +386,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
-    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
+    // A card this build cannot read is told in words, after the reply's own words and before its receipt line.
+    const told = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    const text = link ? `${told.trim() ? `${told}\n\n` : ''}${link}${tail}` : told === body ? stored : `${told}${tail}`;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];

@@ -192,7 +192,9 @@ import { healthContextBook, healthZoneWords, toContextHealthMaterial, type Healt
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
-import { standingGrants } from './standing-grants';
+import { standingGrants, type StandingGrants } from './standing-grants';
+import { appAutonomyRequest } from './app-autonomy';
+import { autonomyHandlers } from './autonomy-tools';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
@@ -232,7 +234,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
-import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
+import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
@@ -275,7 +277,7 @@ import { gmailWatchesBook } from './gmail-watches';
 import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpkeep, WATCH_UPKEEP_ID } from './watch-upkeep';
 import { gmailPush, stopChannel } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
-import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
+import type { LLMToolCall, LLMToolTurn, StandingGrantRecord, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskAsks } from '../tasks/asks';
@@ -322,6 +324,8 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
+  // The owner's standing grants, and a grant's uses today as the effect ledger counts them.
+  autonomy: Readonly<{ grants: StandingGrants; usesToday(grant: StandingGrantRecord): Promise<number> }>;
   ledger(): Promise<string>;
   updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
@@ -1867,7 +1871,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
-      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId));}catch{return fail(503);}
+      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')));}catch{return fail(503);}
     }
     // Main's receipt and Stop read only main's chain; a thread's message answers through its thread's routes.
     const mainRef=ownerChainRef('app',principal);
@@ -1915,7 +1919,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }catch(error){logAppReadFailure('app_onboarding',path,error);return fail(503);}
       });
     }
-    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'){
+    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'||path===APP_AUTONOMY_PATH||path.startsWith(APP_AUTONOMY_PATH+'/')){
       return this.serial(async()=>{
         const auth=consoleAuth(this.env)!;
         const current=async()=>{await this.appAuthority(name,hash);};
@@ -1923,7 +1927,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{
           const rows=await auth.listSessions(name),row=rows.find(row=>row.session===hash);
           if(!row)return fail();
-          step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
+          step=path.startsWith('/app/v1/approvals')?'approvals':path.startsWith(APP_AUTONOMY_PATH)?'autonomy':'controls';
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
@@ -1945,6 +1949,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
               :runtime.act(action,current),
           };
+          if(path.startsWith(APP_AUTONOMY_PATH))return await appAutonomyRequest(request,{...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,sessions:host.sessions,grants:runtime.autonomy.grants,usesToday:runtime.autonomy.usesToday,now:Date.now});
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
@@ -1957,20 +1962,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.recoverApp();
       const at={step:'context'},url=new URL(request.url);
       const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
   }
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false) {
+  // approvals: the approvals revision the reading build declares, so a card kind it predates comes as words.
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
     // Only main chat has a rating route, so only main rows are read against the ratings, and only for a build that names them.
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
@@ -1998,7 +2004,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
-  private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
+  private threadsHost(name: string, hash: string, ownerId: string, approvals = 1): AppThreadsHost {
     const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
@@ -2016,7 +2022,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.appInbox.receipt(name,clientId,ref);
       },
       history:async(thread,cursor,limit)=>{
-        try{return await this.appChatPage(name,hash,thread,cursor,limit,at);}
+        try{return await this.appChatPage(name,hash,thread,cursor,limit,at,false,approvals);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
       // The newest shown text, cut at read time.
@@ -4428,7 +4434,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const approvalCallers: Partial<Record<ChannelKind, typeof routedCall>> = {
       imessage: iMessageApprovalCaller(storage, () => this.activeIMessage && this.activeScope ? { record: this.activeIMessage, scope: this.activeScope } : null),
     };
-    // Off unless AUTONOMY_OWN_CALENDAR is 1, and inert until a grant exists: nothing in this build creates one.
+    // Off unless AUTONOMY_OWN_CALENDAR is 1. A grant exists only once the owner approves its card or sets it in the app.
     const grants = standingGrants(storage, { now: () => deps.now(), newId: () => `g${deps.newRunId().replaceAll('-', '').slice(0, 24)}`,
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
@@ -4847,7 +4853,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...standingOrderHandlers(orders), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
+        account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -6013,7 +6020,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // settled without it read the findings.
     const lookupApply = { decidesOnEmpty: true, apply: async (_row: unknown, _result: unknown, io: { settle(): void }) => { io.settle(); return 'skipped' as const; },
       ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

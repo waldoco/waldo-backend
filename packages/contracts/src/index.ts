@@ -52,6 +52,7 @@ export * from './tools/schemas/medications';
 export * from './tools/schemas/history';
 export * from './tools/schemas/responsibilities';
 export * from './tools/schemas/standing-orders';
+export * from './tools/schemas/autonomy';
 export * from './tools/schemas/loops';
 export * from './tools/schemas/approvals';
 export * from './tools/schemas/calendar';
