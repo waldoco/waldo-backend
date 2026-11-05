@@ -4,7 +4,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic, holdsIn } from '../memory/forget-guard';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText, numericHealthInValue } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
 import { argumentDigest, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -15,6 +15,7 @@ import type { ReplayCardStatus } from '../channels/approvals';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, retryBrief, taskBrief, type AskedStep, type JobBook, type JobRow, type ReplayBrief, type ReplayOutcome, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, FINISH_TASK, jobTools, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import type { NudgeCode } from './watchdog';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
 // checks the attempt's ticket against the job book first, so a fenced attempt can neither read nor write. The jobs lane,
@@ -65,6 +66,8 @@ export type TaskHostDeps = Readonly<{
   // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
   // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
   providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
+  // The progress watchdog's waiting nudge for a job, taken once by the claim at the round it reached (WALDO_WATCHDOG).
+  nudge?(jobId: string, seq: number): NudgeCode | null;
 }>;
 
 // After a provider outage a task waits before its next attempt: 2, 5, 10, then every 20 minutes until its deadline.
@@ -77,13 +80,13 @@ const REPLAY_TURN_OUTCOME = { done: 'completed', rejected: 'blocked', failed: 'f
 const failedResult = (code: string): TaskResult => ({ status: 'failed', summary: `The worker stopped with an error (${code}).`, findings: [], proposals: [], left: [] });
 // The worker is asked to put readings in words before it finishes; a result that still carries one (a plain closing reply)
 // is not stored.
-const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.stringify(result))
+const storableResult = (result: TaskResult): TaskResult => numericHealthInValue(result)
   ? { status: result.status === 'done' ? 'partial' : result.status, summary: 'The worker\'s result named health readings with their numbers, which a task never stores, so it was not kept.', findings: [], proposals: [], left: ['The findings themselves: the owner can ask again, and Waldo can read their mail or files directly.'] }
   : result;
 
 // A checkpoint persists in the owner object's storage, where health readings are not stored. What an owner-connected MCP
 // server returns is not known to be free of them (a wearable's server, say), so its output is left out, and so is any other
-// call or output the shared health floor (numericHealthIn) finds a reading in. A reading that check does not recognise (many
+// call or output the shared health floor (numericHealthIn, over each string as written) finds a reading in. A reading that check does not recognise (many
 // lab values) stays in the checkpoint until the job settles or is cancelled. A resumed
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
@@ -94,9 +97,9 @@ export { UNKEPT_EFFECT };
 // emptied when any of them carries a reading: both adapters rebuild that round from its kept records, and an empty list
 // still marks where the round starts.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
-  const readingInCall = numericHealthIn(turn.call.arguments);
-  const readingInItems = turn.prior_items !== undefined && numericHealthIn(JSON.stringify(turn.prior_items));
-  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthIn(turn.output);
+  const readingInCall = numericHealthInJsonText(turn.call.arguments);
+  const readingInItems = turn.prior_items !== undefined && numericHealthInValue(turn.prior_items);
+  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthInJsonText(turn.output);
   if (!unkeptOutput && !readingInItems) return turn;
   return {
     ...turn, call: readingInCall ? { ...turn.call, arguments: '{}' } : turn.call,
@@ -406,6 +409,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const handlers = await profileHandlers(resumed, attemptFor(ticket, resumed).outputs);
       const spend = ownerSpend();
       const { conversation_ref: _replyChain, ...brief } = taskBrief(resumed);
+      const nudge = deps.nudge?.(row.id, resumed.checkpoint_seq) ?? null;
       return {
         jobId: row.id, profile: row.profile, brief, tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
@@ -413,6 +417,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         ownerRef: deps.context(row.surface).authenticatedUserId,
         ...(spend ? { spend } : {}),
         ...(deps.providerHealth ? { providerHealth: deps.providerHealth.snapshot() } : {}),
+        ...(nudge ? { nudge } : {}),
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted

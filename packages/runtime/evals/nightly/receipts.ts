@@ -5,7 +5,7 @@
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs'>>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs' | 'light_routes'>>;
 // memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 

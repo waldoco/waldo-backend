@@ -563,6 +563,75 @@ describe('the task brain host', () => {
     });
   });
 
+  // Each check reads every string as it was written, as well as the JSON: inside JSON a quote or a tab before a reading is an
+  // escape (\" or \t) the check did not see past, so such a reading was stored.
+  const QUOTED = 'Why HRV "47 ms" dropped', TABBED = 'recovery\t34% this morning';
+  it.each([['a quoted reading', QUOTED], ['a tab before a reading', TABBED]])('a result with %s that reaches the brain is not stored', async (_name, text) => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      expect(await host.report(t, { kind: 'result', result: { status: 'done', summary: 'Done.', findings: [{ text }], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      const row = book.get(t.jobId)!;
+      expect(row.result_json).not.toMatch(/47|34%/);
+      expect(JSON.parse(row.result_json!)).toMatchObject({ status: 'partial', findings: [] });
+    });
+  });
+
+  it.each([['a quoted reading', QUOTED], ['a tab before a reading', TABBED]])('a checkpoint keeps neither a call\'s arguments nor an output with %s', async (_name, text) => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      const turns = [
+        { call: { call_id: 'a1', name: 'search_communication', arguments: JSON.stringify({ query: text }) }, output: '{"ok":true,"data":{"hits":0}}' },
+        { call: { call_id: 'a2', name: 'search_communication', arguments: '{"query":"recovery"}' }, output: JSON.stringify({ ok: true, data: { text } }) },
+      ];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      const kept = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { call: { arguments: string }; output: string }[];
+      expect(book.get(t.jobId)!.checkpoint_json).not.toMatch(/47|34%/);
+      expect(kept[0]!.call.arguments).toBe('{}');
+      expect(kept[1]!.output).toBe(UNKEPT_OUTPUT);
+    });
+  });
+
+  it.each([['a quoted reading', QUOTED], ['a tab before a reading', TABBED]])('a resumed errand step whose arguments were not kept (%s) is not run again', async (_name, text) => {
+    const withReading = { url: 'https://example.com/clinic', task: `Book the follow-up. ${text}`, command: { operation: 'click', element_ref: 'e1', intent: 'read' } };
+    const plain = { url: 'https://example.com/clinic', task: 'Add the owner\'s phone number to the booking.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } };
+    await withHost(async ({ host, ticket, ran, book }) => {
+      const t = ticket('errand');
+      let n = 0;
+      const script = [withReading, withReading, plain];
+      const model = (steps: readonly unknown[]): TaskModel => async () => {
+        const step = steps[n];
+        n += 1;
+        const call = step === undefined ? { name: FINISH_TASK, arguments: JSON.stringify({ status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] }) } : { name: 'browse_act', arguments: JSON.stringify(step) };
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}`, ...call }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: 0 })).toBe('continue');
+      expect(JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns[0]).toMatchObject({ call: { arguments: '{}' }, output: UNKEPT_EFFECT });
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(2);
+    });
+  });
+
+  it.each([['a quoted reading', QUOTED], ['a tab before a reading', TABBED]])('the worker refuses a finish_task with %s; the result in words is the one stored', async (_name, text) => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      const outputs = [] as string[];
+      const words = { status: 'done', summary: 'Recovery dipped this week.', findings: [{ text: 'Recovery was lower than usual this morning.' }], proposals: [], left: [] };
+      const script = [{ status: 'done', summary: 'Recovery dipped this week.', findings: [{ text }], proposals: [], left: [] }, words];
+      let n = 0;
+      const model: TaskModel = async ({ turns }) => {
+        outputs.push(...turns.map(turn => turn.output));
+        const args = script[Math.min(n, script.length - 1)]!;
+        n += 1;
+        return { response: { text: '', tool_calls: [{ call_id: `f${n}`, name: FINISH_TASK, arguments: JSON.stringify(args) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(outputs.some(output => output.includes('health readings'))).toBe(true);
+      expect(JSON.parse(book.get(t.jobId)!.result_json!)).toEqual(words);
+    });
+  });
+
   it('a stale ticket from a lapsed attempt rejoining leaves the live attempt\'s call alone', async () => {
     await withHost(async ({ host, ticket, book, clock, hold, ran, log }) => {
       const t1 = ticket('errand');

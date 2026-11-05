@@ -17,7 +17,8 @@ export type JobKind = 'task' | 'retry_turn' | 'approval_replay';
 // checkpoint names the step and its card, and it waits for the decision or its deadline.
 export type JobStatus = 'queued' | 'running' | 'awaiting_owner' | 'reported' | 'applied' | 'cancelled' | 'parked';
 export type JobOutcome = TaskResult['status'];
-export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect' | 'deadline' | 'brief_changed';
+// no_progress: the progress watchdog (watchdog.ts) found the worker kept on without getting closer to its brief after a nudge.
+export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect' | 'deadline' | 'brief_changed' | 'no_progress';
 export type CancelReason = 'owner' | 'forgotten';
 
 // Reader jobs the brain starts on its own schedule, not because the owner asked. Their origin names the job.
@@ -146,10 +147,11 @@ type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; 
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string; archive?: HistoryArchive }>) => {
-  // A table an earlier build created does not admit approval replays or jobs awaiting the owner; it is rebuilt with every column
-  // it had, and park_retries at its default, in this synchronous block, which the storage commits as one transaction.
+  // A table an earlier build created does not admit approval replays, jobs awaiting the owner or the no_progress park; it is
+  // rebuilt with every column it had, and park_retries at its default, in this synchronous block, which the storage commits as
+  // one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
-  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'"))) {
+  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'") || !made.includes("'no_progress'"))) {
     sql.exec('DROP INDEX IF EXISTS task_jobs_open');
     sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_ask');
     for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
