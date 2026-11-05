@@ -89,6 +89,9 @@ export type MachineHandler = Readonly<{
   // The job parked before its worker reported: a job whose worker's own writes are its news (the look-up's findings) still
   // tells the owner what it got done. It calls `settle` as `apply` does. Without it a parked job settles silently.
   parked?(row: JobRow, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>): Promise<MachineApplied>;
+  // The apply's gate held the card (quiet hours, volume, follow-ups off): the job waits for the gate instead of dropping the
+  // news, and does not settle on a hold; the lane settles it once the news is too old, HELD_WINDOW_MS after the report.
+  deferHeld?: boolean;
   // The job left the lane, however it ended (applied, parked, dropped): for work waiting on it, never for a message.
   ended?(row: JobRow): void;
 }>;
@@ -96,6 +99,9 @@ export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler
 
 // A report that no model could apply is retried for an hour.
 export const APPLY_RETRY_MS = 60 * 60_000;
+// A card held by its gate is asked again every half hour, for a day and a half after the report.
+export const HELD_RETRY_MS = 30 * 60_000;
+export const HELD_WINDOW_MS = 36 * 60 * 60_000;
 
 // With WALDO_TASK_NOTES=1, a machine job that stopped (parked, or its worker failed or was blocked with nothing to show)
 // tells the owner once a day per job, outside quiet hours, so background work never drops out of sight. `note` queues the
@@ -190,5 +196,9 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
   const parked = row.park_reason ? { code: row.park_reason } : {};
   if (outcome === 'delivered') done('machine_applied', parked);
   else if (outcome === 'skipped') done('machine_skipped', parked);
-  else done('machine_held', { code: outcome.held });
+  else if (handler?.deferHeld) {
+    if (deps.now() - row.updated_at < HELD_WINDOW_MS && book.postpone(row.id, deps.now() + HELD_RETRY_MS)) return deps.hop(row, 'machine_apply_deferred', { ok: true, code: outcome.held });
+    try { settle(); } catch (error) { if (error instanceof ClosedRunError) return; throw error; }
+    done('machine_held', { code: outcome.held });
+  } else done('machine_held', { code: outcome.held });
 };

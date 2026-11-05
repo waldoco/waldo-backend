@@ -376,6 +376,21 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both' });
   });
 
+  it('the look-up\'s end card, once delivered to the app, gets one WhatsApp copy under its own id, as the other owner records do', async () => {
+    await withOwner('surface-both-lookup-card', async (owner, state, ctx) => {
+      const LOOKUP_TEXT = 'I finished looking you up on the public web and found one thing that looks like you, from example.org.';
+      const inside = owner as unknown as { setup(surface: string): { owner: unknown }; copiedFollowups(settle: (record: unknown) => Promise<void>, copies: readonly string[]): (record: unknown) => Promise<void> };
+      const settled = inside.copiedFollowups(async () => undefined, ['whatsapp']);
+      const record = { id: 'lookup:job-1', trace: 'task:job-1:apply', status: 'delivered', payload: { chat_id: inside.setup('app').owner, text: LOOKUP_TEXT }, createdAt: AT, deliveredAt: AT };
+      await settled(record);
+      await settled(record);
+      expect(copies(state).map(entry => entry.id)).toEqual([`${WHATSAPP_COPY_PREFIX}lookup:job-1`]);
+      expect(copies(state)[0]!.payload.text).toBe(LOOKUP_TEXT);
+      await settled({ ...record, id: 'welcome:job-1' });
+      expect(copies(state)).toHaveLength(1);
+    }, { surface: 'both' });
+  });
+
   it('a check-back the app could not write gets no WhatsApp copy', async () => {
     await withOwner('surface-both-check-back-failed', async (owner, state, ctx) => {
       await dueCheckBack(state);
