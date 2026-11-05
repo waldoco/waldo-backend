@@ -35,7 +35,7 @@ import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModel
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
+import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, toolActivity, toolsWhere } from '../tools/records';
 import { FIND_TOOLS, harnessToolLoader } from '../tools/loader';
@@ -228,6 +228,7 @@ export const createOwnerResponder = (
   const access = ownerModelAccess(modelAccess);
   const harnessLoader = access.toolLoader === 'harness';
   const providerSearch = access.toolSearch === true && !harnessLoader;
+  const promptV2 = access.promptV2 === true;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
   // WALDO_LIGHT_CHAT: the light step's route and the strong role's, which is the chat route unless the environment sets it.
@@ -351,7 +352,7 @@ export const createOwnerResponder = (
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       // These calls run on the voice block, so a shift in behaviour or cache share can be traced to a voice bump.
-      ...(purpose === 'reply' || purpose === 'background_decision' ? { voice_version: VOICE_VERSION } : {}),
+      ...(purpose === 'reply' || purpose === 'background_decision' ? { voice_version: voiceVersion(promptV2) } : {}),
       context: {
         tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
@@ -691,7 +692,10 @@ export const createOwnerResponder = (
             turns: { kind: 'turns', turns },
           }, held, forgetBarrierMode);
           const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, harnessLoader ? 'harness' : providerSearch, backgroundDirect, asyncTools() && turnHandlers.some((handler) => handler.name === 'start_task')),
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, {
+              toolSearch: harnessLoader ? 'harness' : providerSearch, direct: backgroundDirect,
+              background: asyncTools() && turnHandlers.some((handler) => handler.name === 'start_task'), v2: promptV2,
+            }),
             skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
@@ -1097,7 +1101,7 @@ export const createOwnerResponder = (
           const eligible = (claim: import('../memory/claims').Claim) => claim.origin === 'owner' && claim.kind !== 'health';
           // The decision gets the stable behaviour text as its system prompt and, like an owner turn, its clock and memory as a
           // turn context after the job's text, so the system prompt's turn-context rule holds here too.
-          const system = messagingSystemPrompt([]);
+          const system = messagingSystemPrompt([], undefined, { v2: promptV2 });
           const clockLine = ownerClockLine(clock);
           // Memory rides the decision's message, so it gets what the message budget leaves after the job's text.
           const room = messageChars - [said, TURN_CONTEXT_HEADER, clockLine].join('\n\n').length - 2_048;

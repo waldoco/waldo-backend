@@ -36,6 +36,8 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // held: true while the owner may not spend on models (an open owner before their agreements); each owner-path model call asks
 // it first. A task worker builds its own access, so its owner fences the claim instead.
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
+  // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
+  promptV2?: boolean;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>

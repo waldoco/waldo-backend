@@ -21,8 +21,8 @@ const shuffled = (names: readonly string[], seed: number): string[] => {
 // The system prompt leads the provider's cache prefix: the same admitted set must give the same bytes whatever order the
 // host assembled its handlers in.
 describe('tool catalogue in the system prompt', () => {
-  it('is byte-identical for the same admitted set in any order', () => {
-    const prompts = new Set(Array.from({ length: 20 }, (_, seed) => messagingSystemPrompt(shuffled(NAMES, seed + 1), presentation, 'harness')));
+  it.each([false, true])('is byte-identical for the same admitted set in any order (prompt v2 %s)', (v2) => {
+    const prompts = new Set(Array.from({ length: 20 }, (_, seed) => messagingSystemPrompt(shuffled(NAMES, seed + 1), presentation, { toolSearch: 'harness', v2 })));
     expect(prompts.size).toBe(1);
   });
 
@@ -38,8 +38,8 @@ describe('tool catalogue in the system prompt', () => {
 
   it('changes only when the admitted set changes', () => {
     const without = NAMES.filter((name) => name !== 'browse_act');
-    expect(messagingSystemPrompt(shuffled(without, 3), presentation, 'harness')).toBe(messagingSystemPrompt(shuffled(without, 4), presentation, 'harness'));
-    expect(messagingSystemPrompt(without, presentation, 'harness')).not.toBe(messagingSystemPrompt(NAMES, presentation, 'harness'));
+    expect(messagingSystemPrompt(shuffled(without, 3), presentation, { toolSearch: 'harness' })).toBe(messagingSystemPrompt(shuffled(without, 4), presentation, { toolSearch: 'harness' }));
+    expect(messagingSystemPrompt(without, presentation, { toolSearch: 'harness' })).not.toBe(messagingSystemPrompt(NAMES, presentation, { toolSearch: 'harness' }));
   });
 });
 

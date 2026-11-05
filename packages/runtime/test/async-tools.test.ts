@@ -28,12 +28,12 @@ const FULL = [...ROUTER, 'browse_page', 'browse_act', 'read_drive'];
 // The file snapshot was written by beta-mvp's prompt (b06146cc), before the background block existed, so switch-off is
 // held to those bytes, not to itself. A deliberate prompt change rewrites it with -u.
 it('off, the prompt is the bytes it was before the switch existed', async () => {
-  await expect(messagingSystemPrompt(FULL, undefined, 'harness', undefined, false)).toMatchFileSnapshot('__snapshots__/async-tools-off-harness.txt');
-  await expect(messagingSystemPrompt(ROUTER, undefined, false, undefined, false)).toMatchFileSnapshot('__snapshots__/async-tools-off-router.txt');
+  await expect(messagingSystemPrompt(FULL, undefined, { toolSearch: 'harness' })).toMatchFileSnapshot('__snapshots__/async-tools-off-harness.txt');
+  await expect(messagingSystemPrompt(ROUTER)).toMatchFileSnapshot('__snapshots__/async-tools-off-router.txt');
 });
 
 it('on, the ladder climbs to a background task and says what to tell the owner', () => {
-  const router = messagingSystemPrompt(ROUTER, undefined, false, undefined, true);
+  const router = messagingSystemPrompt(ROUTER, undefined, { background: true });
   expect(router).toContain('mail, web_search, a background task, their Mac last.');
   expect(router).toContain('call start_task with a brief that holds everything its worker needs');
   expect(router).toContain('say in this reply what you started');

@@ -9,17 +9,21 @@ import { surfaceChatRef } from '../context-composer/owner-turn';
 // Compatibility exports keep the durable object and existing callers stable.
 // Only this adapter knows Telegram's numeric update/chat IDs and media formats.
 export const telegramOwnerApproval = ownerToolApproval;
-export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'telegram'): OwnerTurnEnvelope => ({
-  traceId: ownerTurnTrace(surface, turn.updateId),
-  conversationRef: surfaceChatRef(surface, turn.chatId),
-  surface,
-  presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: turn.canAttach === true && turn.runScope !== undefined } },
-  text: turn.text,
-  parts: turn.parts,
-  ...(turn.runScope ? { runScope: turn.runScope } : {}),
-  ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
-  ...(turn.replyStream ? { replyStream: turn.replyStream } : {}),
-});
+// Telegram's own inbox claims a message sent mid-turn as a steer of the running turn and reacts on its own.
+export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'telegram'): OwnerTurnEnvelope => {
+  const telegram = surface === 'telegram';
+  return {
+    traceId: ownerTurnTrace(surface, turn.updateId),
+    conversationRef: surfaceChatRef(surface, turn.chatId),
+    surface,
+    presentation: { surface, delivery: { text: true, approval: telegram || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: telegram, attachments: turn.canAttach === true && turn.runScope !== undefined, ...(telegram ? { steer: true } : {}) } },
+    text: turn.text,
+    parts: turn.parts,
+    ...(turn.runScope ? { runScope: turn.runScope } : {}),
+    ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
+    ...(turn.replyStream ? { replyStream: turn.replyStream } : {}),
+  };
+};
 type CoreArgs = Parameters<typeof createOwnerResponder>;
 type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?, unknown?, unknown?] ? Public : never : never];
 export const createTelegramResponder = (...args: [...AdapterArgs, surface?: string, privateSkillHost?: OwnerSkillHost, contextIntegration?: OwnerContextIntegration]) => {
