@@ -50,6 +50,13 @@ describe('every owner upload is kept (WALDO_FILE_TOOLS on)', () => {
     expect(loaded.parts[0]!.text).toMatch(/^\[Owner sent a file "Plan\.pdf", attached\. Saved in their workspace as uploads\/[0-9a-f]{8}\/Plan\.pdf \(file_id .+, revision 1\)\.\]$/);
   });
 
+  it('keeps files from one batch of messages loaded together, one save at a time', async () => {
+    const w = await setup();
+    const loaded = await Promise.all(['a', 'b', 'c'].map(n => loadTelegramMedia({ ...zipDoc, fileId: `tg-${n}`, fileName: `${n}.zip` }, { download: async () => bytes, keep: w.keep })));
+    expect(w.state().files.map(file => file.path.split('/').at(-1)).sort()).toEqual(['a.zip', 'b.zip', 'c.zip']);
+    expect(loaded.every(one => one.parts[0]!.text.includes('Saved in their workspace'))).toBe(true);
+  });
+
   it('a redelivered message is the same saved file, not a second one', async () => {
     const w = await setup();
     const first = await loadTelegramMedia(zipDoc, { download: async () => bytes, keep: w.keep });

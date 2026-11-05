@@ -39,7 +39,18 @@ const segment = (filename: string): string => {
 export const uploadPath = async (key: string, filename: string, root = 'uploads'): Promise<string> =>
   `${root}/${(await workspaceOperationId([key], 'upload_folder')).slice(0, 8)}/${segment(filename)}`;
 
-export const uploadKeeper = (open: () => Promise<WorkspaceStore>, ownerRef: string, provenance: Provenance = 'owner_upload', root = 'uploads'): UploadKeeper => async file => {
+// Saves run one at a time: the workspace holds one pending write, so files from one batch of messages, loaded together,
+// would otherwise refuse each other as pending.
+export const uploadKeeper = (open: () => Promise<WorkspaceStore>, ownerRef: string, provenance: Provenance = 'owner_upload', root = 'uploads'): UploadKeeper => {
+  let queue: Promise<unknown> = Promise.resolve();
+  return file => {
+    const saved = queue.then(() => keepOne(open, ownerRef, provenance, root, file));
+    queue = saved.catch(() => undefined);
+    return saved;
+  };
+};
+
+const keepOne = async (open: () => Promise<WorkspaceStore>, ownerRef: string, provenance: Provenance, root: string, file: KeepFile): Promise<KeptUpload> => {
   if (file.bytes.byteLength > LIMITS.fileBytes) return { status: 'too_large' };
   const mime = file.mime && MIME.test(file.mime) && file.mime !== 'application/octet-stream' ? file.mime : mimeForName(file.filename);
   try {
