@@ -33,6 +33,7 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Read
   IMESSAGE_WALDO_ADDRESS?: string;
   /** "1": photos and files on Photon are fetched for the model. Otherwise each gets one reply that it was not opened. */
   IMESSAGE_MEDIA?: string;
+  WALDO_FILE_TOOLS?: string;
 }> & PhotonMediaEnv;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
