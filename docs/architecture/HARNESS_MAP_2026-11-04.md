@@ -121,7 +121,7 @@ messages = history … + last owner message
 |---|---|---|---|---|
 | Card desk | `rt/channels/approvals.ts:64-88, 161, 308-315` | `DeskAction` a / s / e / u / d | `APPROVE_IN_CHAT` 0/0, `CALENDAR_UNDO_CANCEL` 0/0 | **Card kinds.** Modifiable: calendar, Google task, email, message and agent-mail sends. Not modifiable: browser submit, MCP call, tainted action. **Windows:** `UNDO_WINDOW_MS` 10 min; proposals live 12 h [verified] |
 | Effect ledger | `rt/channels/owner-effect-ledger.ts:7-49` | `EffectIntent` / `EffectRecord`: reserved → attempting → done / rejected / unknown | – | DO KV under `owner:effect:`; authority is rechecked in the reserve transaction [verified] |
-| Standing grants | `rt/channels/standing-grants.ts:19-41` | `standingGrants(storage)` | `AUTONOMY_OWN_CALENDAR` 0/0 | No code path creates a grant yet, so autonomy is inert [verified] |
+| Standing grants | `rt/channels/standing-grants.ts:19-41` | `standingGrants(storage)` | `AUTONOMY_OWN_CALENDAR` 0/0 | The owner creates a grant by approving a `standing_grant` card or in the app's autonomy settings (B3) |
 | Hooks | `rt/hooks/registry.ts:481-674` | PreToolUse autonomy gate, egress allowlist, taint, canary, sanitiser | `WALDO_EGRESS_ALLOWLIST` | [verified] |
 
 ## 6. Delivery
