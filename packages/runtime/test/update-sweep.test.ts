@@ -712,8 +712,9 @@ describe('the triage turn', () => {
 // small allowance, never past quiet hours or a question still waiting; a message that asks sets the one question in flight.
 describe('the triage turn under the owner\'s interruption limits', () => {
   const limits: InterruptLimits = { perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 };
-  const owned = (h: Harness, spoke = { at: null as number | null }) => ({
-    spoke, book: interruptBook(h.storage.kv, { now: () => h.clock.at, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at }), limits: () => limits,
+  const owned = (h: Harness, spoke = { at: null as number | null }, day = { closed: false }) => ({
+    spoke, day, book: interruptBook(h.storage.kv, { now: () => h.clock.at, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at }), limits: () => limits,
+    closed: () => day.closed,
   });
   const TELL = { decision: 'tell', say: 'Your sync with Krati moved to 17:00.' };
 
@@ -730,7 +731,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
   it('budget spent: a tell waits unless the turn calls it urgent; urgent goes once from the allowance, then waits too', async () => {
     await withSweep(async (h) => {
       const own = owned(h);
-      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier', false));
       h.clock.at += 2 * 3_600_000;
       const held = await triaged(h, TELL, undefined, own);
       expect([held.effects, held.chose]).toEqual([[], ['held_budget']]);
@@ -739,7 +740,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     });
     await withSweep(async (h) => {
       const own = owned(h);
-      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier', false));
       h.clock.at += 2 * 3_600_000;
       const urgent = await triaged(h, { ...TELL, urgent: true }, undefined, own);
       expect([urgent.effects.length, urgent.chose]).toEqual([1, ['tell+urgent']]);
@@ -747,7 +748,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     });
     await withSweep(async (h) => {
       const own = owned(h);
-      h.storage.transactionSync(() => { own.book.spend(limits, false, 'earlier'); own.book.spend(limits, false, 'urgent'); });
+      h.storage.transactionSync(() => { own.book.spend(limits, false, 'earlier', false); own.book.spend(limits, false, 'urgent', true); });
       h.clock.at += 2 * 3_600_000;
       const again = await triaged(h, { ...TELL, urgent: true }, undefined, own);
       expect([again.effects, again.chose]).toEqual([[], ['held_budget']]);
@@ -755,14 +756,32 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     });
   });
 
-  it('a card raised past the budget is charged to the urgent allowance', async () => {
+  it('a card raised past the budget is charged to the urgent allowance only when the turn called it urgent', async () => {
     await withSweep(async (h) => {
       const own = owned(h);
-      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier', false));
       h.clock.at += 2 * 3_600_000;
       const a = await triaged(h, { decision: 'act', urgent: true }, a => { a.cards.raised = 1; }, own);
       expect(a.chose).toEqual(['act+urgent']);
       expect(own.book.spent()).toMatchObject({ count: 1, urgent: 1 });
+    });
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier', false));
+      h.clock.at += 2 * 3_600_000;
+      const a = await triaged(h, { decision: 'act' }, a => { a.cards.raised = 1; }, own);
+      expect(a.chose).toEqual(['act+over_budget']);
+      expect(own.book.spent()).toMatchObject({ count: 2, urgent: 0 });
+    });
+  });
+
+  it('after the owner\'s day has closed nothing unasked goes, urgent included, and the turn has no card tools', async () => {
+    await withSweep(async (h) => {
+      const own = owned(h, undefined, { closed: true });
+      const a = await triaged(h, { ...TELL, urgent: true }, undefined, own);
+      expect([a.effects, a.chose]).toEqual([[], ['held_closed']]);
+      expect(a.tools[0]).not.toContain('propose_action');
+      expect(own.book.spent()).toMatchObject({ count: 0, urgent: 0 });
     });
   });
 
@@ -780,7 +799,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     const roomy: InterruptLimits = { ...limits, perDay: 5, gapMs: 0 };
     const asked = async (reply: unknown, spokeAfter: boolean) => withSweep(async (h) => {
       const own = { ...owned(h), limits: () => roomy };
-      h.storage.transactionSync(() => own.book.spend(roomy, true, 'update:earlier'));
+      h.storage.transactionSync(() => own.book.spend(roomy, true, 'update:earlier', false));
       if (spokeAfter) own.spoke.at = h.clock.at + 1;
       h.clock.at += 2;
       const a = await triaged(h, reply, undefined, own);
