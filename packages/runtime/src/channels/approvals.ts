@@ -34,7 +34,7 @@ type Undo = ({ op: 'cancel'; id: string } | { op: 'restore'; id: string } | { op
 // Waldo withdrew a card, and the newer card that closed it when one did. chat_approval_json: the owner's message that
 // approved the card in words, where it did.
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null; card_waits_on?: string | null;
-  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null; grant_json?: string | null; settle_tries?: number | null; why_json?: string | null; chat_approval_json?: string | null };
+  replaces?: string | null; withdrawn_reason?: string | null; replaced_by?: string | null; raised_outside?: number | null; withdrawn_outside?: number | null; grant_json?: string | null; settle_after?: number | null; settle_tries?: number | null; why_json?: string | null; chat_approval_json?: string | null };
 // running: approved, and its frozen call waits for or runs on the jobs lane. withdrawn: Waldo closed its own card while it
 // still waited on the owner; nothing ever moves a withdrawn card.
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'running' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone' | 'withdrawn';
@@ -284,6 +284,8 @@ export type ApprovalDesk = Readonly<{
   approveShown(id: string, said: OwnerSaid, trace: string): Promise<ApproveShownOutcome>;
   pending(now: number): readonly ApprovalItem[];
   approvals(now: number, filter?: Readonly<{ state?: AppApprovalStateV1; id?: string }>): Promise<readonly AppApprovalV1[]>;
+  // Settles the granted changes of unknown outcome that are due, as a list read does, for the heartbeat.
+  settleUnknownGrants(): Promise<void>;
   // Waldo's unexpired cards the owner has not settled, oldest first, with the ones they put off marked.
   waiting(): readonly WaitingApproval[];
   // Closes a card of Waldo's that is still waiting, with the owner-visible reason. It never approves; a card the owner
@@ -1168,6 +1170,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const settleGranted = async (id: string, trace: string): Promise<ApprovalDecision | null> => {
     const entry = row(id);
     if (!entry?.grant_json || entry.status !== 'uncertain' || entry.kind !== 'calendar_change' || !deps.effects) return null;
+    // Whoever asks, a row waiting out its back-off is not read again before then.
+    if ((entry.settle_after ?? 0) > deps.now()) return GRANT_UNKNOWN;
     const operationRef = operationRefOf(entry), record = deps.effects.get(`${operationRef}:apply`);
     if (deps.effects.isActive(`${operationRef}:apply`)) return GRANT_UNKNOWN;
     const proposal = JSON.parse(entry.payload_json) as Stored;
@@ -1191,6 +1195,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       return stillUnknown(entry, trace, error instanceof EffectUnknownError ? 'unknown' : error instanceof Error && error.message === 'effect identity conflict' ? 'identity_conflict' : 'failed');
     }
+  };
+  // The due rows, the longest waiting first, a few at a time; each outside any transaction, and a failure never stops the rest.
+  const settleUnknownGrants = async () => {
+    const due = sql.exec<{ id: string }>("SELECT id FROM ledger WHERE grant_json IS NOT NULL AND status = 'uncertain' AND COALESCE(settle_after, 0) <= ? ORDER BY COALESCE(settle_after, 0), created_at LIMIT 10", deps.now()).toArray();
+    for (const { id } of due) await settleGranted(id, id).catch(() => deps.log({ trace: id, hop: 'grant_settle', ms: 0, ok: false, code: 'failed' }));
   };
   const CHANGED_SINCE_SHOWN: ApprovalDecision = { toast: 'Card changed', message: 'That card changed after you saw it, so nothing was done.' };
   const replayAccepted = (entry: LedgerRow): ApprovalDecision =>
@@ -2107,6 +2116,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const chatApprovable = !!entry && shownInFullHere(entry).length > 0;
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}), ...(chatApprovable ? { chatApprovable } : {}) };
     },
+    settleUnknownGrants,
     async approvals(now, filter = {}) {
       expireDue();
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
@@ -2117,8 +2127,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // A change a standing grant made was never the owner's approval, so the list leaves it out, its receipt being its record;
       // one whose outcome is unknown stays in it while it is unknown. A read of the list, never a lookup of one approval (which
       // each turn makes), first settles those due, the longest waiting first.
-      const unsettled = filter.id ? [] : sql.exec<{ id: string }>("SELECT id FROM ledger WHERE grant_json IS NOT NULL AND status = 'uncertain' AND COALESCE(settle_after, 0) <= ? ORDER BY COALESCE(settle_after, 0), created_at LIMIT 10", deps.now()).toArray();
-      for (const { id } of unsettled) await settleGranted(id, id).catch(() => deps.log({ trace: id, hop: 'grant_settle', ms: 0, ok: false, code: 'failed' }));
+      if (!filter.id) await settleUnknownGrants();
       const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ["(grant_json IS NULL OR status = 'uncertain')"]), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {

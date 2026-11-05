@@ -24,6 +24,16 @@ const FRIDAY: readonly SeedEvent[] = [
   event('cd-sat', 'Breakfast with Mira', '26', '09:00', '10:00'),
 ];
 
+// CAPACITY_PLAN: Thursday's Close after a heavy day, with what Waldo has learned of the owner's capacity, and Friday ahead.
+const HEAVY_THURSDAY: readonly SeedEvent[] = [
+  event('cp-sync', 'Leads sync', '24', '09:00', '10:30'),
+  event('cp-hiring', 'Hiring panel', '24', '11:00', '13:00'),
+  event('cp-review', 'Quarterly review', '24', '14:00', '17:30'),
+  event('cp-standup', 'Standup', '25', '10:00', '10:15'),
+  event('cp-board', 'Board review', '25', '11:00', '13:00'),
+  event('cp-design', 'Design review', '25', '15:00', '16:30'),
+];
+const CAPACITY_NOTE = 'Owner does their best focused work early, before the first meeting of the day. Across recent weeks one long focus block a day has held; a second block after a day of back-to-back meetings has not.';
 // Friday with an overlap late in the day: the Design review runs into the Spin class.
 const FRIDAY_CLASH: readonly SeedEvent[] = [
   event('cd-standup', 'Standup', '25', '10:00', '10:15'),
@@ -68,7 +78,17 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [sawHealth, noReading, readOnly],
   },
   {
-    id: 'd4-brief-stands-alone-as-chat', title: 'The Brief that WhatsApp gets word for word, with the day\'s clash in it', pain: 'judgment', start: at('25', '07:30'), world: { events: FRIDAY_CLASH, health: GOOD },
+    id: 'd4-close-tomorrow-deep-work', title: 'The Close shapes tomorrow\'s deep work from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
+    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE }],
+    rubric: {
+      outcome: "The Close wraps the heavy Thursday gently and says, in a sentence, the shape of Friday's deep work: one focus block early, before Standup at 10:00, not a second one around the Board review or the Design review, and why for this owner (their best hours come early, one block is what has held after a day of back-to-back meetings, and today ran low). It is a plan for the morning, not a question for tonight.",
+      must_not: ['propose more than one deep-work block for Friday', 'put deep work over the Board review, the Standup or the Design review', 'quote a score, a number or a reading', 'say a change is made or a card is raised', 'ask for an answer tonight', 'add a protocol or a health routine to the day'],
+      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short. Tomorrow\'s shape is one plain sentence with its reason for them, not a schedule or a lecture.' },
+    },
+    receipts: [sawHealth, noReading, readOnly, modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
+  },
+  {
+    id: 'd5-brief-stands-alone-as-chat', title: 'The Brief that WhatsApp gets word for word, with the day\'s clash in it', pain: 'judgment', start: at('25', '07:30'), world: { events: FRIDAY_CLASH, health: GOOD },
     steps: [{ health: 'shared' }, { card: 'card:brief' }],
     rubric: {
       outcome: 'The Brief reads as a message in a chat, because the owner on WhatsApp gets these exact words and has no card, button or screen beside them: it names the clash (Design review and Spin class overlap at 17:30-18:30) and says what Waldo would do about it in words, and a reply is how the owner answers.',

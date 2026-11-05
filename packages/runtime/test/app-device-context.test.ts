@@ -85,6 +85,8 @@ describe('app device-context routes', () => {
       { ...upload, place: { ...place, latitude: 12.97, longitude: 77.59 } },
       { ...upload, place: { ...place, accuracy_m: 3000 } },
       { ...upload, place: { ...place, locality: '12.971599,77.594566' } },
+      { ...upload, place: { ...place, locality: '१२.९७१५९९,७७.५९४५६६' } },
+      { ...upload, place: { ...place, locality: 'Sector 128', region: 'Block 45' } },
       { ...upload, place: { locality: 'Testville', timezone: 'Asia/Kolkata', platform: 'android', observed_at: '2026-11-05T08:00:00Z' } },
       'not json',
     ]) expect((await post('/app/v1/device-context/place', bad)).status).toBe(400);

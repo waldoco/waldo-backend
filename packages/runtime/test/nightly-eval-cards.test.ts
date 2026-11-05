@@ -20,8 +20,8 @@ const card = async (id: string, text: string) => {
 };
 
 describe('the day-card set in the catalogue', () => {
-  it('runs the good-day Brief, the Check-in, the Close and the Brief a WhatsApp copy repeats word for word nightly, each with a receipt, a rubric, a voice rubric and a card step', () => {
-    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line', 'd4-brief-stands-alone-as-chat']);
+  it('runs the good-day Brief, the Check-in, the Close, the capacity Close and the Brief a WhatsApp copy repeats word for word nightly, each with a receipt, a rubric, a voice rubric and a card step', () => {
+    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line', 'd4-close-tomorrow-deep-work', 'd5-brief-stands-alone-as-chat']);
     for (const entry of CARD_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
@@ -34,8 +34,8 @@ describe('the day-card set in the catalogue', () => {
 });
 
 describe('a day card in the nightly world', () => {
-  it('d4: asks the card model for a clash the Brief must name, through the same card prompt the app and WhatsApp share', async () => {
-    const { failed, sent } = await card('d4-brief-stands-alone-as-chat', 'Friday: board review 11 to 1. Design review and spin class overlap from 5:30 to 6:30; want me to move the spin class to 7?');
+  it('d5: asks the card model for a clash the Brief must name, through the same card prompt the app and WhatsApp share', async () => {
+    const { failed, sent } = await card('d5-brief-stands-alone-as-chat', 'Friday: board review 11 to 1. Design review and spin class overlap from 5:30 to 6:30; want me to move the spin class to 7?');
     expect(failed).toEqual([]);
     expect(sent[0]).toContain('Design review');
     expect(sent[0]).toContain('Spin class with Dev');

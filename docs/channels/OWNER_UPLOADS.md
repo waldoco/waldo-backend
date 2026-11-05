@@ -17,7 +17,7 @@ This covers whatever the owner sends, health documents included (for example a l
 
 - **Bytes:** the `ARTIFACTS` R2 bucket, under the owner's workspace prefix `workspace/v1/<environment>/<namespace>/<owner id>/`. Every read and write is admitted against the owner's directory binding.
 - **Metadata** (path, file id, revision, size, hash, provenance): the owner object's `workspace_manifest` in Durable Object SQLite.
-- **Taint:** every workspace file is tainted `external`. What the model reads from it is data, never instructions.
+- **Taint:** every workspace file is tainted `external`. What the model reads from it is data, never instructions. One exception: unpacking an archive the owner sent themselves (`owner_upload`) does not taint the turn. Its listing is the owner's own material, so their request to unzip it holds across the follow-up calls a large archive needs. Reading the unpacked files still taints the turn, and unpacking a forwarded, mailed or generated archive does too.
 
 ## Limits
 
