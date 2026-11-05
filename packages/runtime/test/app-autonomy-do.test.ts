@@ -79,7 +79,7 @@ it.each(['1', '0'])('reads and changes the owner\'s autonomy through the router 
       const read = await call('GET', '/autonomy', 'approvals=5,autonomy=1');
       expect(read.status).toBe(200);
       const settings = appAutonomyV1Schema.parse(await read.json());
-      expect(settings).toMatchObject({ paused: null, classes: expect.arrayContaining([expect.objectContaining({ class: 'calendar.move_own_block', availability: 'available', grants: [] })]) });
+      expect(settings).toMatchObject({ paused: null, classes: expect.arrayContaining([expect.objectContaining({ class: 'calendar.move_own_block', availability: autonomy === '1' ? 'available' : 'not_yet', grants: [] })]) });
       const now = Date.now();
       const terms = { scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '08:00', to: '19:00' }, weekdays: [1, 2, 3, 4, 5], min_lead_minutes: 30 },
         limits: { max_per_day: 3, timezone: 'UTC' }, valid_from: now, expires_at: now + 30 * 86_400_000 };
