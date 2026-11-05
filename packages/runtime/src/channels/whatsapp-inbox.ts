@@ -44,6 +44,11 @@ const attached = (r: WhatsAppInboxRecord): number => [...(r.earlier ?? []), r.up
   return message?.document !== undefined || message?.photo !== undefined;
 }).length;
 
+// Whether a waiting row rides in the burst that starts at `first` and already holds `files` files. The one rule both the claim
+// and the running turn's overtaken check use, so a turn is never dropped for a message the claim would not have joined to it.
+const joins = (first: WhatsAppInboxRecord, files: number, candidate: WhatsAppInboxRecord): boolean =>
+  candidate.subject === first.subject && burstOwnerMessage(candidate.update) && files + attached(candidate) <= LLM_ATTACHMENTS_MAX;
+
 // The owner's words an update carries: its text or caption, the quoted message of Waldo's it replies to, and a file's name.
 const TEXT_PATHS = [['text'], ['caption'], ['reply_to_message', 'text'], ['document', 'file_name']] as const;
 const texts = (update: WaSyntheticUpdate | null): string[] => {
@@ -151,7 +156,7 @@ export class WhatsAppOwnerInbox {
   /** Whether a newer burst message from the same sender waits behind this running burst row, so its reply may be dropped for one turn that answers both. */
   overtaken(id: string): boolean {
     const r = this.get(id), next = this.next();
-    return this.merge && !!r && r.state === 'running' && burstOwnerMessage(r.update) && !!next && next.subject === r.subject && burstOwnerMessage(next.update);
+    return this.merge && !!r && r.state === 'running' && burstOwnerMessage(r.update) && !!next && joins(r, attached(r), next);
   }
 
   /** The running turn's model folded a waiting row into its own answer: it completes without a turn of its own. Only a row still admitted folds. Runs inside the running turn's commit. */
@@ -240,7 +245,7 @@ export class WhatsAppOwnerInbox {
     const run = [first];
     let files = attached(first);
     for (const r of waiting.slice(1)) {
-      if (r.subject !== first.subject || !burstOwnerMessage(r.update) || files + attached(r) > LLM_ATTACHMENTS_MAX) break;
+      if (!joins(first, files, r)) break;
       run.push(r); files += attached(r);
     }
     return run;

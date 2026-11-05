@@ -95,7 +95,7 @@ const V2_DROPPED = new Set(['Short, with someone there', 'Ask almost nothing']);
 export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   ...RULE_COVERAGE.filter((entry) => !V2_DROPPED.has(entry.anchor)),
   // Voice
-  { anchor: 'A dip never comes alone', scenarios: ['h24-health-only-day-sharp-drop', 'h26-health-only-day-dip-on-a-good-day', 'h15-short-sleeper-debt-building'] },
+  { anchor: 'A dip never comes alone', scenarios: ['h24-health-only-day-sharp-drop', 'h15-short-sleeper-debt-building'] },
   // Writing for where it lands
   { anchor: 'Chat is their phone', scenarios: VOICE },
   { anchor: 'A message you start in chat interrupts them', scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },

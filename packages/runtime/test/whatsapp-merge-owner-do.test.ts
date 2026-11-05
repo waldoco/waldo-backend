@@ -162,6 +162,22 @@ it('a forwarded note, a file and a text sent together are one turn: the model re
   });
 }, 60_000);
 
+// A burst holds at most as many files as the model takes; the file past that waits for the next turn, and the turn that is
+// running does not drop its reply for a message it could not have carried.
+it('five files in one burst are a turn of four and a turn of one: two replies, and no turn is dropped for the fifth', async () => {
+  await whatsappOwner('wa-merge-five-files', async (admit, drain, graph) => {
+    const file = (n: number) => ({ id: `wamid.file${n}`, type: 'document', document: { id: 'media-notes', filename: `notes-${n}.md`, mime_type: 'text/markdown' } });
+    await admit(...[1, 2, 3, 4, 5].map(file));
+    await drain();
+    expect(turns()).toHaveLength(2);
+    const first = JSON.stringify(turns()[0]!.input), second = JSON.stringify(turns()[1]!.input);
+    for (const n of [1, 2, 3, 4]) expect(first).toContain(`notes-${n}.md`);
+    expect(first).not.toContain('notes-5.md');
+    expect(second).toContain('notes-5.md');
+    expect(replies(graph)).toHaveLength(2);
+  });
+}, 60_000);
+
 it('texts sent a moment apart within the quiet window are one turn', async () => {
   await whatsappOwner('wa-merge-quiet', async (admit, drain, graph) => {
     await admit(text('Hey Waldo', 'wamid.hey'));

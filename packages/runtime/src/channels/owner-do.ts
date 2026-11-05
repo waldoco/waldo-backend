@@ -2393,8 +2393,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const scope = this.whatsappInbox().scope(record, abort.signal, () =>
       kv.get<string>('whatsapp_subject') === record.subject && kv.get<boolean>('whatsapp_unlinked') !== true && kv.get<string>('do_name') === doName);
     const update = record.update!;
-    if (record.earlier?.length) this.whatsappEarlier = { updateId: Number((update as { update_id?: unknown }).update_id),
-      turns: (await new TelegramPollingAdapter({ getUpdates: async () => record.earlier! }, 0).poll(0)).accepted };
+    if (record.earlier?.length) {
+      const accepted = (await new TelegramPollingAdapter({ getUpdates: async () => record.earlier! }, 0).poll(0)).accepted;
+      // A burst message that does not parse is left out of the turn; say so, by count only.
+      if (accepted.length < record.earlier.length) console.log(JSON.stringify({ hop: 'whatsapp_burst_dropped', ok: false, detail: `schema_rejected:${record.earlier.length - accepted.length}` }));
+      this.whatsappEarlier = { updateId: Number((update as { update_id?: unknown }).update_id), turns: accepted };
+    }
     this.activeScope = scope; this.activeAbort = abort;
     const active = this.activeWhatsApp = { scope, wamid: record.wamid, admittedAt: record.admittedAt, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
     let timeout: ReturnType<typeof setTimeout> | undefined;

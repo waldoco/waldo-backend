@@ -15,7 +15,10 @@ export const fileBook = (sql: Sql) => {
     record(media: TelegramMedia, caption: string, at: number): void {
       const name = media.fileName ?? (media.kind === 'photo' ? 'photo.jpg' : media.kind === 'voice' ? 'voice-note.ogg' : 'file');
       const mime = media.mimeType ?? (media.kind === 'photo' ? 'image/jpeg' : null);
-      sql.exec('INSERT INTO owner_files (kind, file_id, name, mime, size, caption, at) VALUES (?, ?, ?, ?, ?, ?, ?)', media.kind, media.fileId, name, mime, media.fileSize, caption.slice(0, 300), at);
+      // A turn that runs again (a requeued burst) records its files again; one reference per file.
+      sql.exec(`INSERT INTO owner_files (kind, file_id, name, mime, size, caption, at)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM owner_files WHERE kind = ? AND file_id = ?)`,
+      media.kind, media.fileId, name, mime, media.fileSize, caption.slice(0, 300), at, media.kind, media.fileId);
     },
     list(): readonly StoredFile[] {
       return sql.exec<StoredFile>('SELECT * FROM owner_files ORDER BY at DESC LIMIT 200').toArray();

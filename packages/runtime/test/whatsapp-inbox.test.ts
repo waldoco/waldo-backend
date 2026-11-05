@@ -266,6 +266,8 @@ it('a burst carries at most as many files as the model takes; the next file star
   admitUpdates(inbox, storage, [1, 2, 3, 4, 5].map(n => ({ wamid: `w${n}`, update: fileFrom(`part-${n}.md`) })));
   const first = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
   expect([first.wamid, earlierOf(first)]).toEqual(['w4', [1, 2, 3]]);
+  // The fifth file could not ride with these four, so the running turn is not overtaken by it and keeps its reply.
+  expect(inbox.overtaken(first.id)).toBe(false);
   inbox.settle(first, true);
   const second = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
   expect([second.wamid, earlierOf(second)]).toEqual(['w5', []]);
