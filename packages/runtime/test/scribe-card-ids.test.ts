@@ -50,8 +50,30 @@ describe('card numbers are still redacted', () => {
     ['Amex 4-6-5', '3782 822463 10005'],
     ['Amex 4-6-5 with hyphens', '3782-822463-10005'],
     ['fifteen Amex digits in a row', '378282246310005'],
+    ['4-4-4-4 with dots', '4111.1111.1111.1111'],
+    ['8-8 grouping', '41111111 11111111'],
+    ['4-12 grouping', '4111 111111111111'],
   ])('%s', (_name, card) => {
     expect(textOf(`my card is ${card}.`)).toEqual({ text: 'my card is [REDACTED_CREDIT_CARD].', cards: 1 });
+  });
+
+  // A hyphen or a letter beside a card is not an identifier: only a uuid is.
+  it.each([
+    ['CC-4111111111111111', 'CC-[REDACTED_CREDIT_CARD]'],
+    ['Visa-4111 1111 1111 1111', 'Visa-[REDACTED_CREDIT_CARD]'],
+    ['4111111111111111-12/27', '[REDACTED_CREDIT_CARD]-12/27'],
+    ['4111 1111 1111 1111-exp', '[REDACTED_CREDIT_CARD]-exp'],
+    ['card_4111111111111111', 'card_[REDACTED_CREDIT_CARD]'],
+    ['x4111111111111111', 'x[REDACTED_CREDIT_CARD]'],
+    ['pay:4111-1111-1111-1111;', 'pay:[REDACTED_CREDIT_CARD];'],
+  ])('redacts the card in %s', (input, expected) => {
+    expect(textOf(input).text).toBe(expected);
+    expect(textOf(input, 'owner_reply').text).toBe(expected);
+  });
+
+  it('redacts a card written against an id with a hyphen, and keeps the id', () => {
+    const id = '19043673-2379-4309-be95-0123456789ab';
+    expect(textOf(`4111111111111111-${id}`)).toEqual({ text: `[REDACTED_CREDIT_CARD]-${id}`, cards: 1 });
   });
 
   it('redacts a card beside an id and keeps the id', () => {

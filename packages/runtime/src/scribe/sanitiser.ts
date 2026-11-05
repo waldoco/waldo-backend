@@ -360,21 +360,40 @@ function cloneRegex(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, pattern.flags.replaceAll('g', ''));
 }
 
-// The card pattern's fifteen-digit match is an Amex only when its check digit holds; the sixteen-digit shapes redact as they are.
-function failsAmexCheck(match: string): boolean {
-  const digits = match.replace(/\D/g, '');
-  if (digits.length !== 15) return false;
-  let sum = 0;
-  for (let index = 0; index < 15; index += 1) {
-    let digit = Number(digits[14 - index]);
-    if (index % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
-    sum += digit;
+// A card candidate is not a card when its digits sit inside a uuid (a hex-and-hyphen token holding an 8-4-4-4-12 id), which
+// is how an id carrying sixteen digits across its first groups looks to the pattern; and a fifteen-digit one is an Amex
+// only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
+const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const ID_CHAR = /[0-9a-f-]/i;
+
+function insideUuid(text: string, index: number, length: number): boolean {
+  let start = index;
+  while (start > 0 && ID_CHAR.test(text[start - 1]!)) start -= 1;
+  let end = index + length;
+  while (end < text.length && ID_CHAR.test(text[end]!)) end += 1;
+  for (const found of text.slice(start, end).matchAll(UUID_SHAPE)) {
+    const from = start + found.index;
+    if (from < index + length && from + found[0].length > index) return true;
   }
-  return sum % 10 !== 0;
+  return false;
+}
+
+function notACard(match: string, _rest: string, index: number, text: string): boolean {
+  const digits = match.replace(/\D/g, '');
+  if (digits.length === 15) {
+    let sum = 0;
+    for (let at = 0; at < 15; at += 1) {
+      let digit = Number(digits[14 - at]);
+      if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+      sum += digit;
+    }
+    if (sum % 10 !== 0) return true;
+  }
+  return insideUuid(text, index, match.length);
 }
 
 function matchesCard(text: string): boolean {
-  for (const match of text.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))) if (!failsAmexCheck(match[0])) return true;
+  for (const match of text.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))) if (!notACard(match[0], '', match.index, text)) return true;
   return false;
 }
 
@@ -1143,8 +1162,8 @@ function replaceAndCount(
   replacement: string,
   kind: RedactionKind,
   counts: Map<RedactionKind, number>,
-  // A match it returns true for (given the text after it) is left as it is and not counted.
-  keep?: (match: string, rest: string) => boolean,
+  // A match it returns true for (given the text after it, and where the match sits) is left as it is and not counted.
+  keep?: (match: string, rest: string, index: number, text: string) => boolean,
 ): string {
   if (keep !== undefined) {
     const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
@@ -1153,7 +1172,7 @@ function replaceAndCount(
     let replaced = 0;
     for (const match of text.matchAll(global)) {
       const end = match.index + match[0].length;
-      if (keep(match[0], text.slice(end))) continue;
+      if (keep(match[0], text.slice(end), match.index, text)) continue;
       output += text.slice(last, match.index) + replacement;
       last = end;
       replaced += 1;
@@ -1284,7 +1303,7 @@ function redactPiiText(
     '[REDACTED_CREDIT_CARD]',
     'credit_card',
     counts,
-    failsAmexCheck,
+    notACard,
   );
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);

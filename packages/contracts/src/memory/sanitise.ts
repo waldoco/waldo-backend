@@ -404,10 +404,10 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
 export const PII_PATTERNS = {
   email: /\b[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
-  // Card-shaped, not digit-shaped: sixteen digits in a row, or four groups of four each set off from the next, or an Amex
-  // 4-6-5 (the runtime also holds that one to the check digit). A token that goes on in a word character or hyphen is an
-  // identifier, not a card, so no part of a uuid reads as one.
-  cc: /(?<![\w-])(?:\d{4}(?:[\s-]\d{4}){3}|\d{16}|3[47]\d{2}[\s-]\d{6}[\s-]\d{5}|3[47]\d{13})(?![\w-])/g,
+  // A card candidate: sixteen digits in four groups of four, or an Amex 4-6-5, with a space, dot or hyphen between groups or
+  // none, and no digit on either side. The runtime keeps the candidates that sit inside a uuid and holds a fifteen-digit
+  // one to its check digit, so no part of an identifier is read as a card number.
+  cc: /(?<!\d)(?:\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}|3[47]\d{2}[\s.-]?\d{6}[\s.-]?\d{5})(?!\d)/g,
   ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
   ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
