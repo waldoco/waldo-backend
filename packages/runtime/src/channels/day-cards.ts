@@ -11,7 +11,6 @@ import { localIso, localToEpoch } from './reminders';
 import { localDayWindow, shiftDay } from '../health/scores/time';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
-const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
@@ -275,9 +274,10 @@ export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timez
   return (await applyDayPlan(scheduler, book, timezone, now, defaultPlan(DAY_CARDS))).length > 0;
 };
 
+// The owner's local day, whole on a 23- or 25-hour day around a clock change.
 export const dayWindow = (now: number, timezone: string): Readonly<{ from: number; to: number }> => {
-  const midnight = localToEpoch(`${localIso(now, timezone).slice(0, 10)}T00:00`, timezone);
-  return { from: midnight, to: midnight + DAY_MS };
+  const day = localDayWindow(localIso(now, timezone).slice(0, 10), timezone);
+  return { from: day.start, to: day.end };
 };
 
 // A card waiting for the owner (WhatsApp outside its 24-hour window) is current until the owner's next card is due, which

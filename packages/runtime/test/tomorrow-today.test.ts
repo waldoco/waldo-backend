@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardWindow } from '../src/channels/day-cards';
+import { cardExpiry, cardWindow, dayWindow } from '../src/channels/day-cards';
 import { CAPACITY_LINES } from '../src/prompt/capacity';
 import { DAY_CARDS, dayCardPrompt, TOMORROW_TODAY_INSTRUCTION } from '../src/prompt/day-cards';
 
@@ -27,6 +27,14 @@ describe('the window a card reads', () => {
 
   it('in a zone without clock changes, a day is the owner\'s local day', () => {
     expect(cardWindow(card('card:close'), Date.parse('2026-11-05T16:00:00Z'), 'Asia/Kolkata')).toEqual({ from: Date.parse('2026-11-05T18:30:00Z'), to: Date.parse('2026-11-06T18:30:00Z') });
+  });
+});
+
+describe('the owner\'s day around a clock change', () => {
+  it('is whole on London\'s 25-hour and 23-hour days, so a card waiting that day expires at its real end', () => {
+    expect(dayWindow(Date.parse('2026-10-25T10:00:00Z'), 'Europe/London')).toEqual({ from: Date.parse('2026-10-24T23:00:00Z'), to: Date.parse('2026-10-26T00:00:00Z') });
+    expect(dayWindow(Date.parse('2027-03-28T10:00:00Z'), 'Europe/London')).toEqual({ from: Date.parse('2027-03-28T00:00:00Z'), to: Date.parse('2027-03-28T23:00:00Z') });
+    expect(cardExpiry(Date.parse('2026-10-25T20:30:00Z'), 'Europe/London', [])).toBe(Date.parse('2026-10-26T00:00:00Z'));
   });
 });
 
