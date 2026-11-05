@@ -385,7 +385,7 @@ describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
     });
     const on = model.briefModels[0];
     model.briefTools = []; model.briefModels = []; model.brief = [{ text: 'SKIP' }];
-    await owned('day-shape-midday-off', {}, async ({ card, approvals }) => {
+    await owned('day-shape-midday-off', { PROACTIVE_ACT_AHEAD: '0' }, async ({ card, approvals }) => {
       await card('card:midday');
       expect(model.briefTools[0]).not.toContain('propose_calendar_change');
       expect(await approvals()).toEqual([]);
