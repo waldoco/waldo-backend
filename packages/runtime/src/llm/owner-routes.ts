@@ -106,6 +106,18 @@ export const lightRoutePolicy = (light: ModelName): RoutingPolicy => routingPoli
   template_fallback: true,
 });
 
+// The strong role's route on a light-chat turn: its model, then its fallback (by default the other provider's chat model)
+// when that provider's key is deployed, then the floor. With neither set it is the chat route ownerRoutePolicy builds.
+export const strongRoutePolicy = (strong: ModelName, fallback: ModelName | undefined, access: OwnerModelAccess): RoutingPolicy => {
+  const second = fallback ?? OWNER_MODELS[otherProvider(PROVIDER_OF[strong] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER)].chat;
+  const provider = PROVIDER_OF[second] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER;
+  return routingPolicySchema.parse({
+    routes: [{ trigger: 'user_message', primary: ownerStep(strong, true), fallback: second !== strong && validModelCredential(keyOf(access, provider)) ? [ownerStep(second, true)] : [], floor: 'template' }],
+    escalation: [],
+    template_fallback: true,
+  });
+};
+
 // One gateway for the owner path: each attempt goes to its step's provider. A provider whose key is not deployed fails
 // its step as auth_failed without a network call, so the route reaches the floor as fast as it did with one provider.
 export const ownerModelGateway = (access: OwnerModelAccess, options: Readonly<{

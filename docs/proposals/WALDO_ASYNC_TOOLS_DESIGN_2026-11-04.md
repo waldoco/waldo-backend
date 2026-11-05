@@ -61,13 +61,19 @@ Other properties:
 
 ### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [built; switch "0"]
 
-- The owner's own reply takes its **first step** on the provider's auxiliary model (Haiku 5.5 on Anthropic, Luna on OpenAI), with the chat step's own request plus one tool, `escalate`. The light model answers quick, simple chat itself. Anything else hands the turn to the chat model (Sonnet 5.5 / Terra), which takes the same step and writes the turn's one reply. Side jobs are unchanged.
+- The owner's own reply takes its **first step** on the **light role**, with the chat step's own request plus one tool, `escalate`. The light role answers quick, simple chat itself. Anything else hands the turn to the **strong role**, which takes the same step and writes the turn's one reply. Side jobs are unchanged.
+- **Roles, not models.** The escalation path names no model. Each environment can set:
+  - `WALDO_LIGHT_ROLE_MODEL`, which takes the light step;
+  - `WALDO_STRONG_ROLE_MODEL`, which takes a handed-over turn;
+  - `WALDO_STRONG_ROLE_FALLBACK_MODEL`, which answers when the strong role's provider fails.
+
+  Each must be a roster model on an owner-path provider (`lightChatRoles`, validated). A refused value is logged once by variable name and keeps its default. Unset, the roles are the deploy provider's own (`OWNER_MODELS`): its auxiliary model, its chat model, and the other provider's chat model. Today that is Haiku 5.5 → Sonnet 5.5 → Terra on Anthropic, and Luna → Terra → Sonnet 5.5 on OpenAI. Swapping a model is a config change.
 - **The owner's 5 Nov rule:** hard asks, every day plan and every health-aware answer are written by the chat model. Which turns those are is the light model's judgment, stated in the `escalate` description (`channels/async-tools.ts`); no keyword rule decides it. The nightly `lc-` scenarios measure how often it hands over.
 - **Capability boundary, not judgment:** the light step is the reply only as plain, whole text. Any tool call (`escalate` or another), a cut-off reply, or a failure discards the step unseen and the chat model takes it. So the light model never runs a tool, raises a card or takes an action, and at most one call per turn is spent before the hand-over.
-- The light step streams nothing, has no floor line and no hosted web search, runs one attempt with no fallback and a 30 s bound, and reads the provider breaker without moving it. A failed light step hands over; the chat route keeps its fallback to the other provider's chat model, so an outage never lands on a second light model.
+- The light step streams nothing, has no floor line and no hosted web search, runs one attempt with no fallback and a 30 s bound, and reads the provider breaker without moving it. A failed light step hands over; the strong role's route keeps its fallback, so an outage never lands on a second light model.
 - Task workers run every task on the chat model (Sonnet 5.5 / Terra), not only `effort: 'deep'` ones. Today `standard` effort runs on auxiliary (`tasks/worker-loop.ts:230`). This is a real cost increase per task.
 - **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The switch stays "0" in staging and production until the owner decides; the 5 Nov rule is what makes it safe to try.
-- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`; the light step (`lightRoutePolicy`) keeps both. Each model keeps its own cache.
+- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`. The light step (`lightRoutePolicy`) and the strong role (`strongRoutePolicy`, which is the chat route itself when no role is set) keep both. Each model keeps its own cache.
 
 ### What the owner sees
 

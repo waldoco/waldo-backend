@@ -7,7 +7,7 @@ import {
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
 } from '@waldo/contracts';
-import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy } from '../src/llm/owner-routes';
+import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy, strongRoutePolicy } from '../src/llm/owner-routes';
 
 // Which provider runs the owner path is one deploy setting, Claude unless it says openai. A provider whose key is not
 // deployed cannot run it, so the other one does; with both keys, each route falls to the other provider.
@@ -75,6 +75,16 @@ it('logs each unrecognised value once, so a mistyped rollback is seen without a 
   } finally {
     warn.mockRestore();
   }
+});
+
+it('builds the strong role\'s route as the chat route when no fallback is set, and with a set fallback in its place', () => {
+  for (const primary of ['anthropic', 'openai'] as const) {
+    const { chat } = ownerModels({ ...both, primary });
+    expect(strongRoutePolicy(chat, undefined, both)).toEqual(ownerRoutePolicy(chat, chat, both));
+  }
+  const [route] = strongRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, both).routes;
+  expect(route!.fallback.map((step) => step.model)).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+  expect(strongRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, { openaiApiKey: 'fixture-openai' }).routes[0]!.fallback).toEqual([]);
 });
 
 it('routes the light step of the owner\'s reply (WALDO_LIGHT_CHAT) as a chat call with no fallback: Haiku with the cache and output room, alone', () => {

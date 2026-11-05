@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { OPENAI_PROVIDER, OWNER_MODELS } from '@waldo/contracts';
 import { appHistoryResultV1Schema, appMessageReceiptV1Schema } from '../../contracts/src/app/core';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { appSubjectFor } from '../src/channels/app-api';
@@ -121,6 +121,8 @@ const worker = (host: Host, ticket: TaskTicket, access: Parameters<typeof taskMo
 });
 const attemptOf = (state: DurableObjectState, id: string) => jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => crypto.randomUUID() }).startAttempt(id)!;
 const LONG_TOOLS = ['browse_page', 'browse_act', 'read_drive', 'delegate_task'];
+// The owner path here runs on OpenAI: its auxiliary model is the light role, its chat model the strong role.
+const { auxiliary: LIGHT_ROLE, chat: STRONG_ROLE } = OWNER_MODELS[OPENAI_PROVIDER];
 
 it('with WALDO_ASYNC_TOOLS on, the owner turn starts long work as a task and answers at once; a newer message is answered while the task browses; the report follows', async () => {
   await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, state, name) => {
@@ -194,12 +196,12 @@ it('with the harness tool loader, the owner turn\'s catalogue names no long tool
   });
 }, 60_000);
 
-// The light step's start_task is a tool call, so it hands the turn over unrun: the chat model starts the task, once.
-it('with WALDO_LIGHT_CHAT on, the owner\'s reply takes its light step on the auxiliary model, the chat model starts the task, and a standard task runs on the chat model', async () => {
+// The light step's start_task is a tool call, so it hands the turn over unrun: the strong role starts the task, once.
+it('with WALDO_LIGHT_CHAT on, the owner\'s reply takes its light step on the light role, the strong role starts the task, and a standard task runs on the strong role', async () => {
   await withOwner({ WALDO_ASYNC_TOOLS: '1', WALDO_LIGHT_CHAT: '1' }, async (owner, state, name) => {
     await send(owner, name, 'light-a-0001', 'Find me three hotels near the venue with prices');
     await completed(owner, name, 'light-a-0001');
-    expect(seen.state.models).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
+    expect(seen.state.models).toEqual([LIGHT_ROLE, STRONG_ROLE, STRONG_ROLE]);
     expect(seen.state.ownerTools[0]).toContain('escalate');
     expect(seen.state.ownerTools[1]).not.toContain('escalate');
     expect(jobs(state.storage.sql)).toHaveLength(1);
@@ -207,14 +209,14 @@ it('with WALDO_LIGHT_CHAT on, the owner\'s reply takes its light step on the aux
     expect(JSON.parse(job!.brief_json)).toMatchObject({ effort: 'standard' });
     seen.state.release();
     expect(await worker(owner, attemptOf(state, job!.id), { openaiApiKey: 'synthetic-fixture', primary: 'openai' }, true)).toBe('reported');
-    expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toEqual([`worker_model:${OPENAI_GPT_6_1_TERRA_MODEL}`, `worker_model:${OPENAI_GPT_6_1_TERRA_MODEL}`]);
+    expect(seen.state.trace.filter(step => step.startsWith('worker_model:'))).toEqual([`worker_model:${STRONG_ROLE}`, `worker_model:${STRONG_ROLE}`]);
   });
   // Off, the owner's reply runs on the chat model.
   await withOwner({ WALDO_ASYNC_TOOLS: '1' }, async (owner, _state, name) => {
     seen.state.models.length = 0;
     await send(owner, name, 'light-b-0001', 'What time is it?');
     await completed(owner, name, 'light-b-0001');
-    expect(new Set(seen.state.models)).toEqual(new Set([OPENAI_GPT_6_1_TERRA_MODEL]));
+    expect(new Set(seen.state.models)).toEqual(new Set([STRONG_ROLE]));
   });
 }, 60_000);
 
