@@ -453,9 +453,9 @@ describe('through the owner turn', () => {
 
 type Vars = Readonly<Record<string, string>>;
 describe('APPROVE_IN_CHAT in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+  it('is off in production and on in staging', () => {
     const parsed = parseJsonc(config) as { vars: Vars; env: { staging: { vars: Vars } } };
     expect(parsed.vars.APPROVE_IN_CHAT).toBe('0');
-    expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('0');
+    expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
   });
 });

@@ -1,4 +1,5 @@
 import type { APIResponse,Page, Route } from '@cloudflare/playwright';
+import { writesOnGet } from './public-web-policy';
 
 // Match the installed Playwright request redirect default; this is not a retry.
 export const GENERAL_BROWSER_REDIRECT_LIMIT = 20;
@@ -6,7 +7,10 @@ export class GeneralRedirectError extends Error {
   readonly code = 'rejected';
   constructor() { super('browser_redirect_rejected'); }
 }
-type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;challenge?(page: Page): void;document?(page: Page): void;attachment?(response:APIResponse):Promise<void> }>;
+// The body the page sends, for the one request an owner approval can admit. Redirect hops never carry one: a redirect
+// that keeps a non-GET method is refused below.
+export type GeneralRequestBody = Readonly<{ contentType: string | null; data: string | null }>;
+type Routing = Readonly<{ authorize(url: string, method: string, body?: GeneralRequestBody): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;challenge?(page: Page): void;document?(page: Page): void;attachment?(response:APIResponse):Promise<void> }>;
 
 // Neither continue nor fulfill(302) re-intercepts the complete Chromium chain.
 // Fetch each response without redirects; main documents re-enter page.goto so
@@ -19,7 +23,10 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
   const visited = new Set<string>();
   for (;;) {
     if (visited.has(url) || visited.size > GENERAL_BROWSER_REDIRECT_LIMIT) throw new GeneralRedirectError();
-    visited.add(url); await options.authorize(url, method);
+    visited.add(url);
+    const reads = ['GET', 'HEAD'].includes(method);
+    if (reads && writesOnGet(url)) throw new GeneralRedirectError();
+    await options.authorize(url, method, !reads && visited.size === 1 ? { contentType: request.headers()['content-type'] ?? null, data: request.postData() } : undefined);
     const response = await route.fetch({ maxRedirects: 0, timeout: options.timeout(), ...(visited.size > 1 ? { url, method, headers, ...(method !== request.method() ? { postData: '' } : {}) } : {}) });
     await options.admit();
     const status = response.status();

@@ -120,6 +120,11 @@ it('denies missing/currently revoked source and private egress before allocating
   expect(await read({ ...args, url: 'http://169.254.169.254/latest' } as never, context)).toMatchObject({ ok: false, code: 'rejected' });
   expect(f.calls).toEqual([]);
 });
+it('refuses a Google Forms formResponse address before allocating, since opening it records a response', async () => {
+  const f = fake(), read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
+  expect(await read({ ...args, url: 'https://docs.google.com/forms/d/e/fictional-form/formResponse?entry.1=Yes&submit=Submit' } as never, context)).toMatchObject({ ok: false, code: 'rejected' });
+  expect(f.calls).toEqual([]);
+});
 it('revocation after allocation retains known ID for cleanup and suppresses content', async () => {
   const f = fake(); let admitted = true;
   f.sdk.acquire = async () => { f.calls.push('acquire'); admitted = false; return { sessionId: 'private-id' }; };
