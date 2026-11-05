@@ -19,6 +19,11 @@ import type { JudgeInput } from './judge';
 import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
 import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { changeLines, type Change } from '../../src/channels/update-cards';
+import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
+import { triagePrompt } from '../../src/prompt/update-cards';
+// The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
+export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 
 export type Step =
@@ -34,7 +39,10 @@ export type Step =
   | Readonly<{ card: CardId }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
-  | Readonly<{ outside_job: string }>;
+  | Readonly<{ outside_job: string }>
+  // A batch of Google changes reaches the triage turn (GOOGLE_REALTIME_TRIAGE) through the production prompt, tainted
+  // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
+  | Readonly<{ triage: readonly Change[] }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
 // call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave.
 export type TrialMetrics = Readonly<{
@@ -168,6 +176,22 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `A background job reads this outside text: ${step.outside_job}` });
         const said = await responder.prompt(`${scenario.id}-outside-${turn}`, 1, step.outside_job, time, undefined, undefined, undefined, undefined, 'external');
         transcript.push({ role: 'waldo', surface: 'notification', text: said });
+      } else if ('triage' in step) {
+        turn += 1;
+        const changes = changeLines(step.triage);
+        transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) these changes reach Waldo from the owner's calendars and inbox, and it triages them:\n${changes}` });
+        skills.turn(`${scenario.id}-triage-${turn}`);
+        const offered = new Set(world.handlers.map((handler) => handler.name));
+        const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
+          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
+        const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
+        const before = carded();
+        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
+        // As the owner object does: a card the turn raised is the act; an unreadable reply is left for the next card.
+        const chosen = parseTriage(reply);
+        const raised = carded() > before;
+        world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
+        if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });

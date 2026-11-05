@@ -62,6 +62,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
+  // Off unless "1".
+  NEXT_DUE_ALARM?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
@@ -159,6 +162,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
   // revise a delivered day card or push. Anything else keeps the update card as it was.
   WALDO_DAY_STATE?: string;
+  // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
+  // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
+  GOOGLE_REALTIME_TRIAGE?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

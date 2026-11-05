@@ -31,8 +31,9 @@ const shown = (value: unknown): string | null => typeof value === 'string' && va
 const heldChange = (change: Change, recordedAt: string): HeldChanges['changes'][number] | null => {
   let detail: Record<string, unknown>;
   try { detail = JSON.parse(change.detail) as Record<string, unknown>; } catch { return null; }
-  if (change.source === 'mail') return { source: 'mail', at: recordedAt, kind: 'new', from: kept(detail.from), subject: kept(detail.subject) };
-  if (change.kind === 'new') return null;
+  // A read, archive or star is something the owner did, and a count of unopened mail names no mail: neither is held for them.
+  if (change.source === 'mail') return change.kind === 'new' ? { source: 'mail', at: recordedAt, kind: 'new', from: kept(detail.from), subject: kept(detail.subject) } : null;
+  if (change.kind !== 'added' && change.kind !== 'changed' && change.kind !== 'cancelled') return null;
   const before = change.before ? { start: change.before.start, end: change.before.end, all_day: change.before.all_day } : undefined;
   return { source: 'calendar', at: recordedAt, kind: change.kind, title: kept(detail.title), start: shown(detail.start), end: shown(detail.end),
     all_day: detail.all_day === true, ...(before ? { before } : {}) };

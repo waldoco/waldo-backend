@@ -148,6 +148,16 @@ export class Scheduler {
     return moved;
   }
 
+  // Moves an armed entry with no retry pending to `at`, earlier or later; nothing else about it changes. It does not re-arm:
+  // an alarm pass that re-armed to hold its schedule keeps that hold. Returns whether it moved.
+  retime(id: string, at: number): boolean {
+    return this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = MAX(?, updated_at + 1)
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at != ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+  }
+
   // The owner lifts a pause: the row runs now, with a fresh count. Only a paused row moves.
   async resume(id: string): Promise<boolean> {
     const now = this.deps.now();
@@ -654,11 +664,13 @@ export class Scheduler {
     );
   }
 
+  // The schedule's next entry: the wake rearm() passes to the arbiter.
+  nextWake(): number | null {
+    return nextWakeBound(readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries);
+  }
+
   async rearm(): Promise<void> {
-    const bound = nextWakeBound(
-      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
-    );
-    await rearmSharedAlarm(this.storage, bound, this.deps.now());
+    await rearmSharedAlarm(this.storage, this.nextWake(), this.deps.now());
   }
 }
 

@@ -1,5 +1,6 @@
 import { ownerEffectOperationRef, type OwnerEffectLedger } from '../../channels/owner-effect-ledger';
 import { taskSourceClient } from '../task-source-io';
+import { MAX_STORED_ITEM_CHARS } from '../../conversation/tool-output-store';
 import { availabilityWindows, ownerWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
@@ -251,6 +252,13 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // message is cut silently; the rest of each body is read by offset.
 const BODY_CHUNK = 12_000;
 export const READ_BODY_BUDGET = 40_000;
+// A page whose headers are long (many recipients) gets less body, so the whole result stays within what the tool-output
+// store keeps; a cut store would leave the later messages' ids out of reach. The rest of each body follows by offset.
+const READ_RESULT_MAX_CHARS = MAX_STORED_ITEM_CHARS - 8_000;
+const pageBodyBudget = (messages: readonly ThreadMessage[]) => {
+  const headers = JSON.stringify(messages.map(({ body: _body, artifact_scan: _scan, ...shown }) => shown)).length;
+  return Math.max(0, Math.min(READ_BODY_BUDGET, READ_RESULT_MAX_CHARS - headers));
+};
 const RUN_MAX = 2_048;
 const CUT_GUARD = 256;
 export const omitLongRuns = (text: string): string => text.replace(/[^\s"'<>)\]]+/g, (run) => run.length > RUN_MAX ? `[${run.length} characters of unbroken text omitted]` : run);
@@ -274,7 +282,7 @@ export const scribedExternal = <T extends Parameters<typeof sanitise>[0]['payloa
 };
 export const scribedBody = (text: string, canaries: readonly string[]): string => scribedExternal({ body: text }, canaries).body;
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
+type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[]; budget?: number }>;
 // A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the
 // message is then found by paging the thread, within the reply-parent lookup's budget of 10 pages.
 const UNKNOWN_MESSAGE = () => new GoogleCallRefused('not_found', 'body_message_id is not a message in this thread.', 'Read the thread without body_message_id to get its message ids, then pass one of those.');
@@ -306,7 +314,7 @@ export const withoutFlaggedLinks = (body: string): string => {
 };
 
 const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) => {
-  let budget = read.first ? READ_BODY_BUDGET : BODY_CHUNK;
+  let budget = read.budget ?? (read.first ? READ_BODY_BUDGET : BODY_CHUNK);
   const shownMessages = [];
   for (const item of messages) {
     const { artifact_scan: scan, body_full_chars: clipped, attachments: listed, ...visible } = item;
@@ -344,45 +352,56 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
 
 // The view of a read_thread result too long to show: every message's id, sender, recipients, time, subject and opening,
 // with how much body it holds, so the model picks the message it needs and reads that one whole. The openings share what
-// is left of the view's cap after everything else; a thread too long even for that keeps id, sender, time and subject.
+// is left of the view's cap after everything else. A thread too long for that drops the openings, then the recipients,
+// then all but id, sender, time, subject and the body flags, so every message stays named.
 const SPILL_OPENING_MAX = 300;
 const SPILL_RECIPIENTS = 5;
-const SPILL_SUBJECT_MAX = 120;
+const SPILL_HEADER_MAX = 120;
 const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads the full result in order.';
 type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; recipients_capped?: true; body_source?: ThreadMessage['body_source']; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
 const recipients = (list: readonly string[] | undefined) => list === undefined ? {} : { addresses: list.slice(0, SPILL_RECIPIENTS), ...(list.length > SPILL_RECIPIENTS ? { more: list.length - SPILL_RECIPIENTS } : {}) };
 const fitsSpill = (view: unknown) => JSON.stringify(view).length <= TOOL_SPILL_VIEW_MAX_CHARS;
+const bodyFlags = (message: ShownMessage) => ({
+  ...(message.recipients_capped ? { recipients_capped: true } : {}),
+  ...(message.body_source === 'snippet' || message.body_source === 'none' ? { body_source: message.body_source } : {}),
+});
 export const threadSpill = (data: unknown) => {
   const { thread_id, account, cursor, messages } = data as Readonly<{ thread_id: string; account: unknown; cursor: string | null; messages: readonly ShownMessage[] }>;
   if (!Array.isArray(messages)) throw new Error('not a thread result');
-  const withOpenings = (opening: number) => ({
-    thread_id, account, cursor,
-    messages: messages.map((message) => ({
-      id: message.id, from: message.from, at: message.at, subject: message.subject,
-      ...(message.to ? { to: recipients(message.to) } : {}), ...(message.cc ? { cc: recipients(message.cc) } : {}), ...(message.recipients_capped ? { recipients_capped: true } : {}),
-      opening: message.body.slice(0, opening), body_chars_here: message.body.length,
-      ...(message.body_source === 'snippet' || message.body_source === 'none' ? { body_source: message.body_source } : {}),
-      ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
-      ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
-      ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
-    })),
-    next: `This thread is too long to show whole: each message above shows its opening. ${READ_ONE}`,
+  const view = (shows: string, project: (message: ShownMessage) => Record<string, unknown>) => ({
+    thread_id, account, cursor, messages: messages.map(project),
+    next: `This thread is too long to show whole: each message above shows ${shows}. ${READ_ONE}`,
   });
+  const detail = (message: ShownMessage, opening: number | null, withRecipients: boolean) => ({
+    id: message.id, from: message.from, at: message.at, subject: message.subject,
+    ...(withRecipients && message.to ? { to: recipients(message.to) } : {}), ...(withRecipients && message.cc ? { cc: recipients(message.cc) } : {}),
+    ...(opening === null ? {} : { opening: message.body.slice(0, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
+    ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
+    ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
+  });
+  const withOpenings = (opening: number) => view('its opening', (message) => detail(message, opening, true));
   const bare = withOpenings(0);
   if (fitsSpill(bare)) {
     let opening = Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length)));
     // JSON escapes can make an opening longer than its characters, so the measured view decides.
     for (;;) {
-      const view = withOpenings(opening);
-      if (opening === 0 || fitsSpill(view)) return view;
+      const shown = withOpenings(opening);
+      if (opening === 0 || fitsSpill(shown)) return shown;
       opening = Math.floor(opening * 0.8);
     }
   }
-  return {
-    thread_id, account, cursor,
-    messages: messages.map((message) => ({ id: message.id, from: message.from, at: message.at, subject: message.subject.slice(0, SPILL_SUBJECT_MAX) })),
-    next: `This thread is too long to show whole, even with openings: each message above shows its id, sender, time and subject. ${READ_ONE}`,
-  };
+  const steps = [
+    () => view('its recipients and how much body it holds, without an opening', (message) => detail(message, null, true)),
+    () => view('how much body it holds, without recipients or an opening', (message) => detail(message, null, false)),
+  ];
+  for (const step of steps) {
+    const shown = step();
+    if (fitsSpill(shown)) return shown;
+  }
+  return view('its id, sender, time and subject only', (message) => ({
+    id: message.id, from: message.from.slice(0, SPILL_HEADER_MAX), at: message.at, subject: message.subject.slice(0, SPILL_HEADER_MAX), ...bodyFlags(message),
+  }));
 };
 
 // An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can
@@ -568,7 +587,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: null, messages: await readMessages([message], { offset: body_offset ?? 0, first: false, canaries })};
       }
       const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true, bodyChunks: true });
-      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries })};
+      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries, budget: pageBodyBudget(page.messages) })};
     }),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
