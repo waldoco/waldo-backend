@@ -370,7 +370,8 @@ export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
 // consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
-  consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+  consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined,
+  memoryUsed: (turnId: string) => readonly Readonly<{ id: string; text: string }>[] | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter(shownRow);
   const { taken, size, before: beforeId } = pageWindow(cursor, limit);
   const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
@@ -393,8 +394,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];
     const rated = entry.role === 'assistant' ? rating(entry.id) : undefined;
+    const used = entry.role === 'assistant' && entry.parentId ? memoryUsed(entry.parentId) : undefined;
     return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...replies, ...receipt], channel: entry.surface, parent_id: entry.parentId,
-      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }) };
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }), ...(used === undefined ? {} : { memory_used: [...used] }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
