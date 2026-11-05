@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { TOOL_PERMISSIONS, type ProposeCalendarChangeArgs } from '@waldo/contracts';
 import { CURATED_PACK_SKILLS } from '../src/skills/curated-catalog';
+import { CURATED_SKILLS, CuratedOwnerSkills, curatedSkills } from '../src/skills/curated-owner';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import type { Proactivity } from '../src/channels/loops';
 import { localIso } from '../src/channels/reminders';
@@ -854,6 +855,20 @@ describe('the health-protocols skill', () => {
     expect(skill).toBeDefined();
     for (const tool of skill!.required_tools) expect(TOOL_PERMISSIONS.user_message, tool).toContain(tool);
     expect(skill!.trigger_types).toEqual(['user_message']);
+  });
+
+  it('reaches owner turns only while HEALTH_ACTIONS is on: off, the owner\'s book neither lists nor loads it', async () => {
+    expect(curatedSkills(true).map(entry => entry.name)).toContain('health-protocols');
+    expect(curatedSkills(false).map(entry => entry.name)).not.toContain('health-protocols');
+    expect(CURATED_SKILLS).toBe(curatedSkills(false));
+    await withTrigger(async ({ sql }) => {
+      const turn = { owner: 'o-1', turnId: 't-1', trigger: 'user_message' as const, ownerText: '', assertCurrent: async () => undefined };
+      const off = new CuratedOwnerSkills(sql as SqlStorage, 'o-1');
+      expect(off.list().map(entry => entry.name)).not.toContain('health-protocols');
+      expect(off.load('health-protocols', skill!.version, turn).ok).toBe(false);
+      const on = new CuratedOwnerSkills(sql as SqlStorage, 'o-1', undefined, 'o-1', curatedSkills(true));
+      expect(on.load('health-protocols', skill!.version, turn).ok).toBe(true);
+    });
   });
 
   it('every evidence line carries its grade, so the model can tell science from habit', () => {

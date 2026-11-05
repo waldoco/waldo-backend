@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
-import { CURATED_SKILLS } from '../src/skills/curated-owner';
+import { curatedSkills } from '../src/skills/curated-owner';
 import { callBudget } from '../evals/nightly/budget';
 import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
 import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
@@ -11,7 +11,7 @@ import { runTrial } from '../evals/nightly/trial';
 // with the owner's skill book, a scripted model loads the fitting skill without being asked, and the receipts tell a reply
 // that keeps the boundary from one that breaks it. Which skill the live model picks, and how well it helps, is the judge's.
 const scenario = (id: string) => SKILL_SCENARIOS.find((entry) => entry.id === id)!;
-const skill = (name: string) => CURATED_SKILLS.find((entry) => entry.name === name)!;
+const skill = (name: string) => curatedSkills(true).find((entry) => entry.name === name)!;
 const trial = async (id: string, skillName: string, reply: string) => {
   const entry = scenario(id);
   const said = entry.steps.find((step) => 'say' in step);
