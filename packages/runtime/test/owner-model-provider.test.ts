@@ -76,3 +76,9 @@ it('logs each unrecognised value once, so a mistyped rollback is seen without a 
     warn.mockRestore();
   }
 });
+
+it('routes the owner\'s reply on the lighter model (WALDO_LIGHT_CHAT) as a chat call: Haiku with the cache and output room, then Terra', () => {
+  const [route] = ownerRoutePolicy(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, both, true).routes;
+  expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 });
+  expect(route!.fallback).toEqual([{ provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_1_TERRA_MODEL, cache: 'none', max_tokens: 4096 }]);
+});

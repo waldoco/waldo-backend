@@ -140,3 +140,19 @@ describe('turnReceipt', () => {
     expect(long!.line).toContain('a'.repeat(201));
   });
 });
+
+// A task's title is the model's words. start_task refuses a brief that carries health values, so only a task that started is
+// named: a refused title never reaches the line or the typed receipt the transcript keeps.
+describe('a started task in the receipt', () => {
+  const started = (seq: number, title: string, ok: boolean): LoopEventLike => ({ seq, call: { name: 'start_task', args: { profile: 'reader', title, goal: 'g', context: '', done_when: 'd' } }, ok, ...(ok ? {} : { code: 'invalid_args', reason: 'tool_result_error' }) });
+  it('names an accepted task by its title and a refused one by nothing it was asked to carry', async () => {
+    const events = [started(1, 'Why HRV dropped to 38 ms', false), started(2, 'Why recovery dipped', true)];
+    const line = receiptLine(events)!;
+    expect(line).toContain('task started Why recovery dipped');
+    expect(line).not.toContain('38');
+    expect(line).not.toContain('HRV');
+    const receipt = await turnReceipt(events);
+    expect(JSON.stringify(receipt)).not.toContain('38 ms');
+    expect(receipt!.items.map(item => item.target)).toEqual([null, 'Why recovery dipped']);
+  });
+});

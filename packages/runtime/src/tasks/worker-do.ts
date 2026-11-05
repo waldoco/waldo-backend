@@ -6,6 +6,7 @@ import type { LoopToolResult } from '../conversation/tool-loop';
 import { modelProviderSetting } from '../llm/owner-routes';
 import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
+import { lightChatEnabled } from '../channels/async-tools';
 import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // A task worker: one object per job attempt, holding nothing but the ticket it was started with. It runs the attempt from
@@ -52,7 +53,7 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
       };
       const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health };
-      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
+      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env)), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';
     }
