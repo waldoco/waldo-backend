@@ -433,7 +433,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       await tick(state, owner);
       expect(looks(state)).toBe(0);
     });
-    await owned('intervention-tick-off', {}, async ({ state, owner }) => {
+    await owned('intervention-tick-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
       await tick(state, owner);
       expect(looks(state)).toBe(0);
     });
