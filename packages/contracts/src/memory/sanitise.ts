@@ -402,8 +402,12 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by
 // the runtime; these four are the pinned regex forms.
 export const PII_PATTERNS = {
-  email: /\b[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
+  // A match starts where its run of local-part characters starts, so each character is read once: starting on a word boundary
+  // inside the run made a long run of "a.a.a." quadratic.
+  email: /(?<![\w._%+-])[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
+  // Not for use on its own: this is a candidate, looser than a card. Mask uuids and long hex ids first and hold a fifteen-digit
+  // match to its check digit, as cardMatches does in runtime/src/scribe/sanitiser.ts.
   // A card candidate: sixteen digits in four groups of four, or an Amex 4-6-5, with a space, dot or hyphen between groups or
   // none, and no digit on either side. The runtime keeps the candidates that sit inside a uuid and holds a fifteen-digit
   // one to its check digit, so no part of an identifier is read as a card number.

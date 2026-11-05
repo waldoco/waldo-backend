@@ -361,11 +361,12 @@ function cloneRegex(pattern: RegExp): RegExp {
 }
 
 // A card candidate is not a card when it sits inside an identifier: a uuid (8-4-4-4-12 hex), whose groups hold sixteen digits
-// across its first three, or a long hex id (a 32-character id, a 40-character SHA). The identifiers are masked before the
+// across its first three, or a long hex id (a run of 20 or more hex characters holding a letter, with or not with a 0x: a
+// 24-character object id, a 32-character id, a 40-character SHA, a 0x hash). The identifiers are masked before the
 // scan, so a real card next to one is still found, and the masked text keeps every index. A fifteen-digit candidate is an
 // Amex only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
 const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const HEX_ID = /(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])/gi;
+const HEX_ID = /(?<![0-9a-z])(?:0x)?(?=[0-9a-f]*[a-f])[0-9a-f]{20,}(?![0-9a-z])/gi;
 
 function cardMatches(text: string): RegExpMatchArray[] {
   const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length)).replace(HEX_ID, id => '#'.repeat(id.length));
