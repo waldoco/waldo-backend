@@ -4,6 +4,7 @@ import {
   approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalLabelsV1Schema, approvalQuestionV1Schema, approvalReviewV1Schema,
   epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, REPLY_TEXT_MAX_CHARS, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
+import { appAutonomyGrantTermsV1Schema } from './autonomy';
 import { surfaceNameV1Schema } from './surfaces';
 import { appWhyV1Schema } from './why';
 
@@ -58,11 +59,13 @@ export const appApprovalExactV1Schema = z.strictObject({
   task: appApprovalTaskExactV1Schema.optional(),
   // Who a send as Waldo comes from: the display name and Waldo's own address, as the recipients' clients show them.
   sender: z.strictObject({ name: z.string().min(1).max(200).regex(/^[^\r\n]*$/), address: z.email() }).optional(),
+  // The standing grant approving creates, approvals revision 7: the same terms the autonomy settings confirm.
+  grant: appAutonomyGrantTermsV1Schema.optional(),
 });
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope', agent_mail_send: 'recipients',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope', agent_mail_send: 'recipients', standing_grant: 'grant',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 // An approval the health trigger raised carries the model's one-line reason for it, approvals revision 4. Only the
@@ -88,6 +91,8 @@ export const appApprovalV1Schema = z.strictObject({
   .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' || kind === 'agent_mail_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
     { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
   .refine(({ kind, exact: { sender } }) => (kind === 'agent_mail_send') === (sender !== undefined), { error: 'a send as Waldo names its sender, and nothing else does', path: ['exact', 'sender'] })
+  .refine(({ kind, exact }) => kind !== 'standing_grant' || Object.keys(exact).every(key => key === 'grant'), { error: 'a standing grant card shows only the grant', path: ['exact'] })
+  .refine(({ kind, exact: { grant } }) => kind === 'standing_grant' || grant === undefined, { error: 'only a standing grant card carries grant terms', path: ['exact', 'grant'] })
   .refine(({ state, withdrawal }) => withdrawal === undefined || state === 'superseded', { error: 'only a superseded card says why it was withdrawn', path: ['withdrawal'] })
   .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
@@ -97,7 +102,10 @@ export const appApprovalV1Schema = z.strictObject({
 export const APP_APPROVALS_AGENT_MAIL_REVISION = 5;
 // A build that predates revision 6 reads a withdrawn card as superseded alone.
 export const APP_APPROVALS_WITHDRAWAL_REVISION = 6;
-// A build that predates revision 8 is never sent the steps behind a card. Revision 7 is allocated to standing grants.
+// A card that asks the owner to create a standing grant is approvals revision 7; an older build is never shown one on the
+// list, and its chat history carries the card's text instead of the card. A build that declares revision 8 reads it too.
+export const APP_APPROVALS_STANDING_GRANT_REVISION = 7;
+// A build that predates revision 8 is never sent the steps behind a card.
 export const APP_APPROVALS_WHY_REVISION = 8;
 export const APP_APPROVALS_CONTRACT_REVISION = 8;
 // An approval as a build reading `revision` parses it: revision 7 and below is the shape before the steps behind it, revision 5 the shape before the withdrawal, revision 3 the shape

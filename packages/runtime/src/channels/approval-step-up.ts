@@ -8,7 +8,9 @@ import type { ApprovalActionV1, ApprovalKindV1 } from '../../../contracts/src/ap
 // undoing within its window reaches only those the approved change reached. Approving one change to the owner's own things
 // stays one tap in chat; approving anything that reaches other people, or acts on a site, a tool or external content, is
 // handed to the app. A calendar change reaches other people when it has guests or is on a calendar other than the primary one.
-export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared', Readonly<{ gated: boolean; why: string }>>> = {
+// A standing grant is classified by its class: one over the owner's own things is approved like a change to them, and one that
+// lets Waldo reach other people or act on a site is handed to the app.
+export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared' | 'standing_grant_reaching', Readonly<{ gated: boolean; why: string }>>> = {
   email_send: { gated: true, why: 'Sends one email as the owner to other people; it cannot be called back.' },
   message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },
   agent_mail_send: { gated: true, why: "Sends one email as Waldo, from the owner's Waldo address, to other people; it cannot be called back." },
@@ -18,10 +20,14 @@ export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_share
   browser_submit: { gated: true, why: 'Submits a form on a website as the owner.' },
   mcp_call: { gated: true, why: 'Runs a tool on a connected server, which can act beyond the owner\'s own things.' },
   tainted_action: { gated: true, why: 'Runs an action that content from outside asked for.' },
+  standing_grant: { gated: false, why: "Lets Waldo change the owner's own things without asking, within the terms shown; revocable any time." },
+  standing_grant_reaching: { gated: true, why: 'Lets Waldo send to other people or act on a site without asking.' },
 };
+const REACHING_CLASSES: readonly string[] = ['message.send_to_named', 'errand.run_on_site'];
 export const appApprovalStepUp = (item: Pick<AppApprovalV1, 'kind' | 'exact'>, action: ApprovalActionV1): boolean => {
   if (action !== 'approve') return false;
   const changes = item.exact.changes;
   const shared = item.kind === 'calendar_change' && (changes?.guests !== undefined || changes?.emails_guests !== undefined || changes?.calendar !== undefined);
-  return STEP_UP_APPROVALS[shared ? 'calendar_shared' : item.kind]?.gated !== false;
+  const reaching = item.kind === 'standing_grant' && (item.exact.grant === undefined || REACHING_CLASSES.includes(item.exact.grant.scope.class));
+  return STEP_UP_APPROVALS[shared ? 'calendar_shared' : reaching ? 'standing_grant_reaching' : item.kind]?.gated !== false;
 };

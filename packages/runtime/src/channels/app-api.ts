@@ -384,7 +384,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
-    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
+    // A card this build cannot read is told in words, after the reply's own words and before its receipt line.
+    const told = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    const text = link ? `${told.trim() ? `${told}\n\n` : ''}${link}${tail}` : told === body ? stored : `${told}${tail}`;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];

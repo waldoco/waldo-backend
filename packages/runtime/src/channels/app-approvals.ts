@@ -1,4 +1,4 @@
-import { APP_APPROVALS_AGENT_MAIL_REVISION, appApprovalAtRevision, appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { APP_APPROVALS_AGENT_MAIL_REVISION, APP_APPROVALS_STANDING_GRANT_REVISION, appApprovalAtRevision, appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { approvalControlReceipt, controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
 import { APP_APPROVAL_DECISIONS_PATH, APP_APPROVALS_PATH } from './app-api';
@@ -27,8 +27,10 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
     if ([...url.searchParams.keys()].some(key => key !== 'state' || url.searchParams.getAll(key).length !== 1)) return reply({ error: 'invalid_query' }, 400);
     const query = appApprovalListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams)); if (!query.success) return reply({ error: 'invalid_query' }, 400);
     const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'approvals');
-    // A send as Waldo has no shape an older build can parse, so that build is never shown one.
-    const shown = (await listed(query.data)).filter(item => item.kind !== 'agent_mail_send' || revision >= APP_APPROVALS_AGENT_MAIL_REVISION);
+    // A send as Waldo and a standing grant card have no shape an older build can parse, so that build is never shown one; its chat
+    // history carries the card's words instead.
+    const shown = (await listed(query.data)).filter(item => (item.kind !== 'agent_mail_send' || revision >= APP_APPROVALS_AGENT_MAIL_REVISION)
+      && (item.kind !== 'standing_grant' || revision >= APP_APPROVALS_STANDING_GRANT_REVISION));
     const parsed = appApprovalListV1Schema.safeParse({ approvals: shown.map(item => appApprovalAtRevision(item, revision)) });
     await host.assertCurrent(); return parsed.success ? reply(parsed.data) : reply({ error: 'projection_unavailable' }, 503);
   }
