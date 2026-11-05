@@ -5283,7 +5283,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       try {
         const code = await runCapacityPass({ store: memory, kv: storage.kv, timezone: clock.timezone, now: Date.now, transaction: work => storage.transactionSync(work), healthNotes: healthMemoryOn(identity),
-          health: async () => { const shown = await healthContext.latest(trace); return shown ? renderHealth(shown) : null; },
+          health: async () => { const shown = await healthContext.read(trace); return shown === 'unknown' || shown === null ? shown : renderHealth(shown); },
           google: () => google.client(), ask: input => responder.capacity!(trace, input) });
         log({ trace, hop: 'capacity', ms: Date.now() - started, ok: true, code, detail: code });
       } catch (error) {
@@ -5868,7 +5868,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow,
-            capacity ? capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.latest(trace) !== null), recentBlocks(storage.sql, now, clock.timezone)) : undefined)).trim();
+            capacity ? capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)) : undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);

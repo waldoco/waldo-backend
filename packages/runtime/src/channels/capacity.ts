@@ -9,6 +9,10 @@ import { localIso } from './reminders';
 export const CAPACITY_NOTE_KEY = 'capacity:claim_id';
 // Whether the note was written while the owner shared their health. A note that drew on the body is never shown once they stop.
 export const CAPACITY_BODY_KEY = 'capacity:from_body';
+// The owner set the note aside: they dismissed or forgot it. Waldo writes no new one; only the owner can reopen it.
+export const CAPACITY_SET_ASIDE_KEY = 'capacity:set_aside';
+// The note's evidence is fixed: what the model reasoned from could carry the body day by day, and evidence is stored as written.
+export const CAPACITY_EVIDENCE = "Waldo's nightly capacity pass: the calendar's shape, the owner's memory and their shared zone words";
 // The calendar the pass reads: the past week, for the load the owner carried, and tomorrow, for what is coming.
 export const CAPACITY_PAST_DAYS = 7;
 const CALENDAR_LIMIT = 250;
@@ -19,26 +23,33 @@ type Sql = Pick<SqlStorage, 'exec'>;
 export type CapacityNote = Readonly<{ id: number; text: string; owner: boolean }>;
 
 // The note the pass last wrote, or the owner's own correction of it: a correction supersedes the claim, and the claim that
-// replaced it names it. A note forgotten or dismissed is gone, and the key with it.
+// replaced it names it. A note the owner dismissed or forgot is set aside for good, until they reopen it.
 export const capacityNote = (store: ClaimStore, kv: Kv): CapacityNote | null => {
-  const claims = [...store.claims(), ...store.claims('superseded')];
+  const claims = [...store.claims(), ...store.claims('promoted'), ...store.claims('superseded')];
   const seen = new Set<number>();
+  let setAside = false;
   for (let id = kv.get<number>(CAPACITY_NOTE_KEY); id !== undefined && !seen.has(id);) {
     seen.add(id);
     const claim = claims.find(found => found.id === id);
-    if (claim?.status === 'active') return { id: claim.id, text: claim.text, owner: claim.origin === 'owner' };
-    id = claim ? claims.find(found => found.supersedes_id === claim.id)?.id : undefined;
+    if (claim?.status === 'active' || claim?.status === 'promoted') return { id: claim.id, text: claim.text, owner: claim.origin === 'owner' };
+    id = claim && claims.find(found => found.supersedes_id === claim.id)?.id;
+    // Gone, or replaced by a correction that is gone: the owner dismissed or forgot it, or it is mid-purge. A note the pass
+    // replaces or retires moves or drops the key itself, so it never ends here.
+    if (id === undefined) setAside = true;
   }
   kv.delete(CAPACITY_NOTE_KEY);
   kv.delete(CAPACITY_BODY_KEY);
+  if (setAside) kv.put(CAPACITY_SET_ASIDE_KEY, true);
   return null;
 };
+export const capacitySetAside = (kv: Kv): boolean => kv.get<boolean>(CAPACITY_SET_ASIDE_KEY) === true;
 
 // The note a day card may read: none while the owner's health notes are off, and none drawn from a body they no longer share.
-export const cardCapacityNote = (store: ClaimStore, kv: Kv, healthNotes: boolean, healthShared: boolean): string | null => {
+// A health read that failed says nothing about sharing, so the note stands.
+export const cardCapacityNote = (store: ClaimStore, kv: Kv, healthNotes: boolean, healthShared: boolean | 'unknown'): string | null => {
   if (!healthNotes) return null;
   const note = capacityNote(store, kv);
-  return note && (healthShared || note.owner || kv.get<boolean>(CAPACITY_BODY_KEY) !== true) ? note.text : null;
+  return note && (healthShared !== false || note.owner || kv.get<boolean>(CAPACITY_BODY_KEY) !== true) ? note.text : null;
 };
 
 const clock = (at: number, timezone: string): string => localIso(at, timezone).slice(11, 16);
@@ -85,20 +96,22 @@ export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14)
   ).toArray().map(row => `- ${row.block === 'rest' ? 'rest' : 'deep work'} block${row.start ? ` for ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${row.status === 'open' || row.status === 'card_unconfirmed' ? 'waiting on them' : row.status === 'done' ? 'they said yes' : row.status === 'skipped' ? 'they said no' : row.status}`).join('\n');
 };
 
-export type CapacityOutcome = 'kept' | 'unchanged' | 'held' | 'retired' | 'owner_held' | 'health_notes_off' | 'no_memory';
+export type CapacityOutcome = 'kept' | 'unchanged' | 'held' | 'retired' | 'owner_held' | 'set_aside' | 'health_unknown' | 'health_notes_off' | 'no_memory';
 type Transaction = <T>(work: () => T) => T;
 
 // Writes the pass's answer as the new note through the same admission as every background memory write, then retires the
-// note it replaces, in one transaction. The owner's own correction is never replaced: the owner owns what they wrote.
-export const keepCapacityNote = (store: ClaimStore, kv: Kv, raw: string, at: string, body: boolean, transaction: Transaction = work => work()): Extract<CapacityOutcome, 'kept' | 'unchanged' | 'held'> => {
-  const reply = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { note?: unknown; evidence?: unknown };
+// note it replaces, in one transaction. The owner's own correction is never replaced, even one made while the model was
+// answering, and a note the owner set aside stays aside. A note the model marks as touching a forgotten topic is held.
+export const keepCapacityNote = (store: ClaimStore, kv: Kv, raw: string, at: string, body: boolean, transaction: Transaction = work => work()): Extract<CapacityOutcome, 'kept' | 'unchanged' | 'held' | 'owner_held' | 'set_aside'> => {
+  const reply = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { note?: unknown; touches_forgotten?: unknown };
   const note = typeof reply.note === 'string' ? reply.note.trim() : '';
   if (!note) return 'unchanged';
-  const evidence = typeof reply.evidence === 'string' && reply.evidence.trim() ? reply.evidence.trim() : 'capacity pass';
-  const ops = JSON.stringify({ add: [{ kind: 'health', text: note, source: 'inferred', evidence, touches_forgotten: false, aliases: ['capacity', 'deep work', 'focus hours'], aliases_touch_forgotten: false, area: 'mind' }],
+  const ops = JSON.stringify({ add: [{ kind: 'health', text: note, source: 'inferred', evidence: CAPACITY_EVIDENCE, touches_forgotten: reply.touches_forgotten !== false, aliases: ['capacity', 'deep work', 'focus hours'], aliases_touch_forgotten: false, area: 'mind' }],
     corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, pin: [], unpin: [], areas: [] });
   return transaction(() => {
     const current = capacityNote(store, kv);
+    if (current?.owner) return 'owner_held';
+    if (capacitySetAside(kv)) return 'set_aside';
     if (current?.text.trim() === note) return 'unchanged';
     let written = 0;
     applyClaimOps(store, ops, at, 'capacity pass', undefined, undefined, false, outcome => { written = outcome.written; });
@@ -111,9 +124,12 @@ export const keepCapacityNote = (store: ClaimStore, kv: Kv, raw: string, at: str
   });
 };
 
-// A note drawn from a body the owner no longer shares, which the pass could not rewrite without it, leaves memory.
-const retire = (store: ClaimStore, kv: Kv, id: number, transaction: Transaction): 'retired' => transaction(() => {
-  store.setStatus(id, 'superseded');
+// A note drawn from a body the owner no longer shares, which the pass could not rewrite without it, leaves memory, unless
+// the owner made it theirs while the model was answering.
+const retire = (store: ClaimStore, kv: Kv, transaction: Transaction): 'retired' | 'owner_held' => transaction(() => {
+  const current = capacityNote(store, kv);
+  if (current?.owner) return 'owner_held';
+  if (current) store.setStatus(current.id, 'superseded');
   kv.delete(CAPACITY_NOTE_KEY);
   kv.delete(CAPACITY_BODY_KEY);
   return 'retired';
@@ -123,8 +139,8 @@ export type CapacityPassDeps = Readonly<{
   store: ClaimStore | undefined; kv: Kv; timezone: string; now: () => number; transaction?: Transaction;
   // The owner's health-notes setting: off, Waldo keeps nothing about their health, energy or focus.
   healthNotes: boolean;
-  // Their body today, as the zone words every turn reads, or null when they share none.
-  health: () => Promise<string | null>;
+  // Their body today, as the zone words every turn reads; null when they share none; 'unknown' when the read failed.
+  health: () => Promise<string | null | 'unknown'>;
   google: () => Promise<GoogleClient | null>;
   ask: (input: string) => Promise<string>;
 }>;
@@ -135,14 +151,17 @@ export const runCapacityPass = async (deps: CapacityPassDeps): Promise<CapacityO
   if (!deps.healthNotes) return 'health_notes_off';
   const current = capacityNote(deps.store, deps.kv);
   if (current?.owner) return 'owner_held';
+  if (capacitySetAside(deps.kv)) return 'set_aside';
   const transaction = deps.transaction ?? (work => work());
   const now = deps.now(), days = capacityDays(now, deps.timezone);
   const client = await deps.google();
   const items = client ? await client.events(new Date(localDayWindow(days[0]!, deps.timezone).start).toISOString(), new Date(localDayWindow(days.at(-1)!, deps.timezone).end).toISOString(), CALENDAR_LIMIT, false) : [];
   const health = await deps.health();
+  // An outage is not a revoke: the note stays as it is until the body can be read again.
+  if (health === 'unknown') return 'health_unknown';
   const withdrawn = current !== null && health === null && deps.kv.get<boolean>(CAPACITY_BODY_KEY) === true;
   const raw = await deps.ask(capacityInput({ now: localIso(now, deps.timezone).replace('T', ' ').slice(0, 16), note: current?.text ?? null, health, withdrawn,
     calendar: client ? calendarShape(items, days, deps.timezone, now) : NO_CALENDAR }));
   const outcome = keepCapacityNote(deps.store, deps.kv, raw, new Date(deps.now()).toISOString(), health !== null, transaction);
-  return withdrawn && outcome !== 'kept' ? retire(deps.store, deps.kv, current.id, transaction) : outcome;
+  return withdrawn && (outcome === 'unchanged' || outcome === 'held') ? retire(deps.store, deps.kv, transaction) : outcome;
 };
