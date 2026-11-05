@@ -125,8 +125,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'workspace_list',
   'workspace_read',
   'workspace_search',
-  // extract_archive: entry names and the listing are the archive's own text.
-  'extract_archive',
   'browse_page',
   'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
@@ -138,7 +136,10 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 
 // Tools whose result is outside text on some calls only: each result carries its own stamp, and the dispatcher accepts
 // either. raise_approval: its list shows card text Waldo raised while working with outside text, such as an MCP card.
-export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval'];
+// extract_archive: an archive the owner sent themselves is their own material, so its listing does not taint the turn and
+// their "unzip this" holds across the follow-up calls a large archive needs; any other archive (a forward, a mail
+// attachment, Waldo's own output) is outside text.
+export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval', 'extract_archive'];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,

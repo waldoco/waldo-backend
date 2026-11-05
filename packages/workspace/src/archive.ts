@@ -1,5 +1,5 @@
 import { Inflate } from 'fflate';
-import { LIMITS, validatePath, WorkspaceError, type WorkspaceStore } from './store';
+import { LIMITS, validatePath, WorkspaceError, type Provenance, type WorkspaceStore } from './store';
 
 // Hard limits for unpacking an archive inside the Worker. These are safety bounds (zip bombs, memory, CPU), not judgment:
 // what to unpack and why is the model's call. The ratio is only enforced past ratioFloorBytes, where it means something.
@@ -150,7 +150,7 @@ export type ExtractRequest = Readonly<{
 }>;
 export type ExtractSkip = Readonly<{ entry: string; reason: EntrySkip | 'duplicate' | 'exists' | 'name_too_long' | 'not_in_archive' | 'not_selected' }>;
 export type ExtractResult = Readonly<{
-  archive_path: string; folder: string;
+  archive_path: string; folder: string; provenance: Provenance;
   entries_total: number; listing: readonly Readonly<{ name: string; kind: ArchiveEntry['kind']; size: number }>[]; listing_truncated: boolean;
   written: readonly Readonly<{ entry: string; path: string; file_id: string; revision: number; byte_size: number; mime: string }>[];
   skipped: readonly ExtractSkip[];
@@ -216,5 +216,5 @@ export const extractArchive = async (store: WorkspaceStore, request: ExtractRequ
     }
   }
   if (!stopped && !request.entries?.length && request.prefix === undefined && chosen.length === 0 && listed.length > 0) stopped = 'per_call_limit';
-  return { archive_path: meta.path, folder, entries_total: files.length, listing, listing_truncated: listed.length > listing.length, written, skipped, ...(stopped ? { stopped } : {}) };
+  return { archive_path: meta.path, folder, provenance: meta.provenance, entries_total: files.length, listing, listing_truncated: listed.length > listing.length, written, skipped, ...(stopped ? { stopped } : {}) };
 };

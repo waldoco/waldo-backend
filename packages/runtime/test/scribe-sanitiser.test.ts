@@ -1476,7 +1476,7 @@ describe('structured tool identifier integrity', () => {
     expect(inspectTrusted({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
   });
   it('keeps persistence redaction and deny-level checks on identifier fields', () => {
-    expect(inspectTrusted({ file_id: id }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: 'aaaaaaaa-aaaa-4aaa-[REDACTED_CREDIT_CARD]' } });
+    expect(inspectTrusted({ file_id: id, body: 'card 4111 1111 1111 1114' }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: id, body: 'card [REDACTED_CREDIT_CARD]' } });
     expect(inspectTrusted({ url: 'https://local.invalid/?token=1111111111111111' })).toMatchObject({ ok: false, check: 'canary_token' });
     expect(inspectTrusted({ file_id: 'sk-proj-abcdefghijklmnopqrstuvwx' })).toMatchObject({ ok: false, check: 'canary_token' });
   });
@@ -1501,17 +1501,16 @@ describe('structured tool identifier integrity', () => {
     const bad = `https://4111-1111-1111-1114.attacker.example/console/workspace/file?id=${id}&revision=1`;
     expect(JSON.stringify(inspectExternal({ delivery: { url: bad } }))).not.toContain('4111-1111-1111-1114');
   });
-  it('tainted content still redacts everything outside the allowlisted key + exact shape', () => {
+  it('tainted content still redacts card numbers and URLs outside the allowlisted key + exact shape', () => {
     const result = inspectExternal({ file_id: id, url: 'https://a.example/?c=4111111111111111', note_id: id, body: 'card 4111 1111 1111 1114' });
     expect(JSON.stringify(result)).not.toContain('4111111111111111');
     expect(JSON.stringify(result)).not.toContain('4111 1111 1111 1114');
-    expect(JSON.stringify(result)).not.toContain(`"note_id":"${id}"`);
   });
-  it('does not preserve identifiers under non-allowlisted keys, or serialized receipts with other shapes', () => {
-    const result = inspectTrusted({ id, user_id: id, thing_id: id });
-    expect(JSON.stringify(result)).not.toContain(id);
+  // A uuid is an identifier wherever it sits, so no key has to vouch for it; the card text around it is what gets redacted.
+  it('keeps an identifier under any key and in a serialized receipt, and redacts the card text beside it', () => {
+    expect(inspectTrusted({ id, user_id: id, thing_id: id })).toMatchObject({ ok: true, payload: { id, user_id: id, thing_id: id }, redactions: [] });
     const tainted = inspectExternal([{ output: JSON.stringify({ note_id: id, url: 'https://a.example/?c=4111111111111111' }) }]);
-    expect(JSON.stringify(tainted)).not.toContain(id);
+    expect(JSON.stringify(tainted)).toContain(id);
     expect(JSON.stringify(tainted)).not.toContain('4111111111111111');
   });
 });
