@@ -360,6 +360,24 @@ function cloneRegex(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, pattern.flags.replaceAll('g', ''));
 }
 
+// The card pattern's fifteen-digit match is an Amex only when its check digit holds; the sixteen-digit shapes redact as they are.
+function failsAmexCheck(match: string): boolean {
+  const digits = match.replace(/\D/g, '');
+  if (digits.length !== 15) return false;
+  let sum = 0;
+  for (let index = 0; index < 15; index += 1) {
+    let digit = Number(digits[14 - index]);
+    if (index % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+    sum += digit;
+  }
+  return sum % 10 !== 0;
+}
+
+function matchesCard(text: string): boolean {
+  for (const match of text.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))) if (!failsAmexCheck(match[0])) return true;
+  return false;
+}
+
 function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
 }
@@ -1163,7 +1181,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (matches(PII_PATTERNS.cc, view)) return 'credit_card';
+    if (matchesCard(view)) return 'credit_card';
     if (matches(PII_PATTERNS.phone, view)) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
@@ -1253,8 +1271,7 @@ function redactPiiText(
 ): string {
   // Model/owner-bound workspace references keep their exact bytes for later calls, only under an
   // allowlisted key and in the exact shape the producer emits; a URL must also be clean outside
-  // its uuid slot. Taint is not checked (the provider pass taints a whole batch). Known residual:
-  // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
+  // its uuid slot. Taint is not checked (the provider pass taints a whole batch).
   // Everything else (free text, other keys, other URL shapes) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
     if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
@@ -1267,6 +1284,7 @@ function redactPiiText(
     '[REDACTED_CREDIT_CARD]',
     'credit_card',
     counts,
+    failsAmexCheck,
   );
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
