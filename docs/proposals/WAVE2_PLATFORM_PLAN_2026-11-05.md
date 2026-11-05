@@ -1,6 +1,6 @@
 # Wave 2 platform plan: Android AppFunctions, iOS App Intents, widget, Live Activity, device signals (5 November 2026)
 
-Status: **plan, not built.** Base: `beta-mvp` `60496b8b`. The design for device signals is the companion ADR draft, [`ADR_DRAFT_DEVICE_CONTEXT_2026-11-05.md`](ADR_DRAFT_DEVICE_CONTEXT_2026-11-05.md).
+Status: **plan, accepted with the device-context ADR** (5 November 2026; the gate's edits applied). Slice B1 is built in #1902; nothing else is. Base: `beta-mvp` `60496b8b`. The design for device signals is the companion ADR, [`ADR_DEVICE_CONTEXT_2026-11-05.md`](ADR_DEVICE_CONTEXT_2026-11-05.md).
 
 Every platform fact below was read from a primary page on 5 Nov 2026 and carries its link. Anything not confirmed on such a page is marked **[unverified]**; a conclusion is marked **[inference]**. Two research passes read the pages. I re-checked the three AppFunctions claims that decide the Android plan (Gemini status, the permission, the library version) on the pages myself.
 
@@ -67,7 +67,7 @@ Every platform fact below was read from a primary page on 5 Nov 2026 and carries
   - Shipping apps reach it through App Schemas (`@AppIntent(schema:)`). ([WWDC26 session 240](https://developer.apple.com/videos/play/wwdc2026/240/), [App Intents for Siri AI](https://developer.apple.com/documentation/appintents/apple-intelligence-and-siri-ai))
   - The schema domains include calendar, mail, reminders and search. **There is no health or fitness domain.** `.assistant` is "available only in Japan". ([domains](https://developer.apple.com/documentation/appintents/app-schema-domains))
   - Custom actions outside the schemas are a developer preview that does not ship in App Store builds. ([developer preview](https://developer.apple.com/documentation/appintents/siri-ai-developer-preview))
-- **What this means.** Ship App Shortcuts now; they work by voice. Waldo is not a calendar or mail app, so whether to adopt the calendar or reminders schemas is a later question **[inference]**.
+- **What this means.** Ship App Shortcuts now; they work by voice. Then, as an A3 follow-up, adopt Siri AI's **Journaling** schema domain for quick log, so "log to Waldo…" reaches the new Siri from an App Store build. The domain list names journaling. Which actions it declares, and whether Siri AI offers it or only Shortcuts does, is checked when that follow-up starts **[unverified]**.
 
 ### Widgets and Live Activities
 
@@ -141,25 +141,30 @@ Switch names follow the repo rule: `"0"` in production, `"1"` in staging once th
 
 | # | Slice | Owner | Depends on | Switch | Tests | Size |
 |---|---|---|---|---|---|---|
-| **B1** | Device-context contract, place consent and latest-place storage, app routes | backend | none (dark); the ADR review before any app ships against it | `DEVICE_PLACE` | contract valid/invalid; pgTAP; Worker route tests | M (draft PR, this lane) |
+| **B1** | Device-context contract; place consent; latest time zone and place per phone (a time-zone-only upload is accepted); app routes | backend | none | `DEVICE_PLACE` | contract valid/invalid; pgTAP; Worker route tests | M (#1902) |
 | **B2** | `get_device_context` tool: place name, time zone, age; turn-only. Offered in owner chat, the Brief and the Close, `patrol`, `intervention`, `fetch_alert` and `handoff_plan` | backend | B1 | `DEVICE_PLACE` | tool tests; permissions table; prompt snapshot; trace scrub | S |
-| **B3** | Weather: a WeatherKit REST adapter (signing key as a secret), a cell-keyed cache with no owner id, and the `get_weather` tool | backend | B1; owner picks the provider; `provider_lookup` consent | `DEVICE_WEATHER` | adapter mock in CI and real provider in nightly; cache holds no owner id; tool tests | M |
+| **B3** | Weather: a WeatherKit REST adapter (signing key as a secret), a cell-keyed cache with no owner id, and the `get_weather` tool | backend | B1; WeatherKit (the gate's pick for forecast and UV); the place consent's `provider_lookup` purpose | `DEVICE_WEATHER` | adapter mock in CI and real provider in nightly; cache holds no owner id; tool tests | M |
 | **B4** | Air quality from a second provider | backend | B3; owner decision | `DEVICE_WEATHER` | as B3 | S |
-| **B5** | `GET /app/v1/today`: compact read for the widget, intents and AppFunctions | backend | none | none (read-only, additive) or `APP_TODAY` | contract and route tests | S–M |
-| **B6** | Live Activity push: register push-to-start and update tokens (additive to the devices contract), an APNs `liveactivity` sender, under the proactive ledger's limits | backend | owner ruling on lock-screen content; A5 | `LIVE_ACTIVITY` | sender mock; ledger budget test | M–L |
-| **A1** | Place consent screen; foreground coarse read; rounding to the cell on the phone; upload; ADR-0082 purge | app | B1 | app flag | device test on both platforms | M |
+| **B5** | `GET /app/v1/today`: compact read for the widget, intents and AppFunctions | backend | none | **none.** It is read-only and additive, and shows the owner only what their own `/calendar/day`, `/approvals` and chat already show. The route ships live, and the app decides when to call it | contract and route tests | S–M |
+| **B6** | Live Activity push: register push-to-start and update tokens (additive to the devices contract), an APNs `liveactivity` sender, under the proactive ledger's limits | backend | owner ruling on lock-screen content | `LIVE_ACTIVITY` | sender mock; ledger budget test | M–L |
+| **A1** | One place consent screen naming the weather provider, granting the three purposes in order. The IANA time zone is uploaded on **every wake** (foreground, and background health sync), with no location permission. The coarse place is read in the foreground and rounded to the cell on the phone. ADR-0082 purge | app | B1 | app flag | device test on both platforms, including a time-zone upload from a background sync | M |
 | **A2** | Android screen-time upload, follow-on to #234 | Ashish | existing `SCREEN_TIME` routes | `SCREEN_TIME` | device test | M |
-| **A3** | iOS App Intents and App Shortcuts: Ask Waldo, Today, Open pending cards, Quick log | app | B5 (Today); shared keychain group | app flag | device test plus Shortcuts | M |
+| **A3** | iOS App Intents and App Shortcuts: Ask Waldo, Today, Open pending cards, Quick log. Follow-up: Siri AI's Journaling schema for quick log | app | B5 (Today); shared keychain group | app flag | device test plus Shortcuts | M |
 | **A4** | iOS widget, private on the Lock Screen | app | B5, A3 | app flag | device test | M |
 | **A5** | iOS Live Activity for the day's next move | app | B6, owner ruling | app flag | device test | L |
-| **A6** | Android AppFunctions on API 36+: `askWaldo`, `getToday`, `listPendingCards`, `quickLog` | app | B5; Gemini early access for real use | app flag | `adb shell cmd app_function` | M–L |
+| **A6** | Android AppFunctions on API 36+: `askWaldo`, `getToday`, `listPendingCards`, `quickLog`. Tested with `adb`. The owner should apply to Google's Early Access Program, because no user can reach it through Gemini until Google accepts us | app | B5 | app flag | `adb shell cmd app_function` | M–L |
 | **A7** | iOS on-device-only screen-time view | app | Apple entitlement approval | — | — | M, deferred |
 | **D1** | Privacy notice and store listings: place, weather provider, screen time, AppFunctions | owner and legal | before production | — | — | S |
 
-**Order.**
-1. B1 → B2 → A1 makes place real end to end.
-2. B3 adds weather.
-3. B5 unblocks A3, A4 and A6 in parallel.
-4. B6 and A5 wait for the lock-screen ruling.
+**Order** (the gate's, 5 Nov):
+1. B1 (#1902) and B5, in parallel.
+2. B2, together with A1 (including the time-zone upload) and A3.
+3. B3: weather on WeatherKit.
+4. A4: the widget.
+5. A6: AppFunctions, tested with `adb`.
+6. B4, once an air-quality provider is picked.
+7. B6, then A5, after the lock-screen ruling.
+
+App slices go to waldoco/waldo-app against `main`, additive to `app.v1`.
 
 Steps and trips need no slice: steps already flow through the health plane, and trips are the model's reading of mail, calendar and place.
