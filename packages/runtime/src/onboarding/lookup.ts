@@ -72,8 +72,9 @@ export const lookupPending = (deps: Pick<LookupDeps, 'book' | 'consent' | 'start
 };
 
 export type LookupApplierDeps = Readonly<{
-  // How many findings were recorded since this time: the ones the look-up's worker kept, whatever the owner did with them since.
-  found(since: number): number;
+  // The findings recorded since this time, as a count and the sites they came from: the ones the look-up's worker kept,
+  // whatever the owner did with them since.
+  found(since: number): Readonly<{ count: number; sources: readonly string[] }>;
   // Why an update card cannot reach the owner now (quiet hours, follow-ups off, a surface that would only hold it), or null.
   gate(): MachineHeld | null;
   // Sends the card under its key, on the apply's trace; commit is the job's settle, written with the send.
@@ -83,10 +84,17 @@ export type LookupApplierDeps = Readonly<{
 }>;
 
 const things = (count: number) => count === 1 ? 'one thing' : `${count} things`;
-const endText = (count: number, finished: boolean): string => finished
-  ? count ? `I finished looking you up on the public web and found ${things(count)} that look like you. Have a look and keep, correct or forget each one.`
+const SITES_NAMED = 4;
+const sitesText = (sources: readonly string[]) => {
+  if (!sources.length) return '';
+  const named = sources.slice(0, SITES_NAMED).join(', '), more = sources.length - SITES_NAMED;
+  return `, from ${named}${more > 0 ? ` and ${more} more` : ''}`;
+};
+const REVIEW = 'They are in What Waldo knows, each with the page it came from, to keep, correct or forget. Withdrawing the look-up there stops it and deletes everything I found.';
+const endText = (found: Readonly<{ count: number; sources: readonly string[] }>, finished: boolean): string => finished
+  ? found.count ? `I finished looking you up on the public web and found ${things(found.count)} that look like you${sitesText(found.sources)}. ${REVIEW}`
     : 'I finished looking you up on the public web and found nothing I could stand behind, so I kept nothing.'
-  : count ? `I couldn't finish looking you up on the public web, but I found ${things(count)} that look like you before I stopped. Have a look and keep, correct or forget each one.`
+  : found.count ? `I couldn't finish looking you up on the public web, but I found ${things(found.count)} that look like you${sitesText(found.sources)} before I stopped. ${REVIEW}`
     : "I couldn't finish looking you up on the public web, and found nothing I could stand behind before I stopped.";
 
 // The look-up's worker records its findings as it goes, so its end is the news: one card, through the update cards' gate,
@@ -102,7 +110,7 @@ export const lookupApplier = (deps: LookupApplierDeps): MachineHandler => {
   };
   return {
     decidesOnEmpty: true,
-    apply: (row, _result, io) => tell(row, io, true),
+    apply: (row, result, io) => tell(row, io, result.status === 'done'),
     parked: (row, io) => tell(row, io, false),
     ended: (row) => { const grant = lookupGrant(row); if (grant !== null) deps.ended(grant); },
   };

@@ -145,6 +145,17 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     get: (id: string): AppFindingV1 | null => { settle(); const row = byId(id); return row ? shown(row) : null; },
     // How many findings were recorded at or after this time and are still listed.
     foundSince: (at: number): number => { settle(); return sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings WHERE found_at >= ?', at).one().n; },
+    // The sites those findings came from, most findings first: a host only, never a path or a page title.
+    sourcesSince(at: number): readonly string[] {
+      settle();
+      const counts = new Map<string, number>();
+      for (const row of sql.exec<{ source_url: string }>('SELECT source_url FROM owner_findings WHERE found_at >= ?', at).toArray()) {
+        let host: string;
+        try { host = new URL(row.source_url).hostname.replace(/^www\./, ''); } catch { continue; }
+        if (host) counts.set(host, (counts.get(host) ?? 0) + 1);
+      }
+      return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([host]) => host);
+    },
     // Keep and correct are the owner's own act in the app, so the claim they write carries owner provenance.
     decide(id: string, decision: Readonly<{ action: 'keep' } | { action: 'correct'; text: string }>, at: number): 'kept' | 'corrected' | 'not_found' {
       settle();

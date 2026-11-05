@@ -6023,7 +6023,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The look-up's worker records its findings as it goes; its end tells the owner how it went, under the update cards' gate,
     // and lets a web stage that settled without it read the findings.
     const lookupApply = lookupApplier({
-      found: since => findingStore(storage.sql, memory, lookupConsent(), Date.now).foundSince(since),
+      found: since => { const store = findingStore(storage.sql, memory, lookupConsent(), Date.now); return { count: store.foundSince(since), sources: store.sourcesSince(since) }; },
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
       deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }

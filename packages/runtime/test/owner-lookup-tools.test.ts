@@ -157,3 +157,15 @@ describe('owner look-up tools', () => {
     expect(await turn(storage, 'Look me up. My site is samrivera.dev.', { pages: t.pages }).run('record_owner_finding', work)).toMatchObject({ ok: true });
   }));
 });
+
+describe('the sites a look-up read', () => {
+  it('lists each finding\'s site once, by host only, so the end card names where it looked and never a path or a title', () => withStorage(async storage => {
+    const t = turn(storage, 'Look me up. My site is samrivera.dev.');
+    t.agree();
+    await t.run('web_search', { query: 'Sam Rivera samrivera.dev', limit: 5 });
+    await t.run('record_owner_finding', work);
+    await t.run('record_owner_finding', { ...work, text: 'Based in Pune', evidence_quote: 'a product manager at Acme in Pune', category: 'location' });
+    expect(t.findings.sourcesSince(0)).toEqual(['samrivera.dev']);
+    expect(t.findings.sourcesSince(Date.now() + 1)).toEqual([]);
+  }));
+});

@@ -126,7 +126,7 @@ describe('when the look-up job ends', () => {
   type Told = { id: string; trace: string; text: string };
   const applier = (over: Partial<LookupApplierDeps> = {}) => {
     const told: Told[] = [], ended: number[] = [];
-    const deps: LookupApplierDeps = { found: () => 2, gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
+    const deps: LookupApplierDeps = { found: () => ({ count: 2, sources: ['example.org', 'github.com'] }), gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
     return { told, ended, handler: lookupApplier(deps) };
   };
   const reported = (book: JobBook, d: LookupDeps) => {
@@ -142,7 +142,7 @@ describe('when the look-up job ends', () => {
   it('tells the owner what it found, counted from the findings it recorded, and lets the web stage read them', () => withOwner(async ({ book, deps }) => {
     const id = reported(book, deps());
     const since: number[] = [];
-    const { told, ended, handler } = applier({ found: (at) => { since.push(at); return 2; } });
+    const { told, ended, handler } = applier({ found: (at) => { since.push(at); return { count: 2, sources: ['example.org', 'github.com'] }; } });
     const hops: string[] = [];
     await apply(book, id, handler, hops);
     expect(told).toHaveLength(1);
@@ -154,9 +154,40 @@ describe('when the look-up job ends', () => {
     expect(hops).toContain('machine_applied');
   }));
 
+  it('names the sites it read, points to What Waldo knows, and says how to have it all deleted', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const { told, handler } = applier();
+    await apply(book, id, handler);
+    expect(told[0]!.text).toContain('example.org');
+    expect(told[0]!.text).toContain('github.com');
+    expect(told[0]!.text).toContain('What Waldo knows');
+    expect(told[0]!.text).toMatch(/withdraw/i);
+  }));
+
+  it('caps the sites it names and counts the rest; a card with nothing found names none and promises nothing to review', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const many = ['a.example', 'b.example', 'c.example', 'd.example', 'e.example', 'f.example'];
+    const { told, handler } = applier({ found: () => ({ count: 6, sources: many }) });
+    await apply(book, id, handler);
+    expect(told[0]!.text).toContain('a.example');
+    expect(told[0]!.text).not.toContain('f.example');
+    expect(told[0]!.text).toMatch(/and 2 more/);
+  }));
+
+  it('a worker that failed says it could not finish, not that it finished with nothing', () => withOwner(async ({ book, deps }) => {
+    const d = deps();
+    agree(d.consent, T0);
+    startLookup(d, identity);
+    const row = openLookup(book)!;
+    expect(book.report(book.startAttempt(row.id)!, { status: 'failed', summary: 'Search kept erroring.', findings: [], proposals: [], left: [] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+    const { told, handler } = applier({ found: () => ({ count: 0, sources: [] }) });
+    await apply(book, row.id, handler);
+    expect(told[0]!.text).toMatch(/couldn't finish/);
+  }));
+
   it('says so honestly when it found nothing, rather than staying silent', () => withOwner(async ({ book, deps }) => {
     const id = reported(book, deps());
-    const { told, handler } = applier({ found: () => 0 });
+    const { told, handler } = applier({ found: () => ({ count: 0, sources: [] }) });
     await apply(book, id, handler);
     expect(told).toHaveLength(1);
     expect(told[0]!.text).not.toMatch(/\d/);
