@@ -5181,25 +5181,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'replan_failed' })));
     // WAKE_BRIEF: the owner's wearable shows a night that just ended. A Brief still to come gets one turn on a queue of its own,
     // so a wake is never absorbed into a calendar re-plan whose prompt does not know of it; the model sends it now, earlier, or
-    // keeps it. Never later. The trace carries codes only: when the Brief moved would say when the owner woke.
+    // keeps it. Never later. Every row is timed, so none is labelled a wake: the turn runs as a day re-plan, and only a failure
+    // is logged, as a re-plan's.
     const wakeCards = async (trace: string) => {
       const started = Date.now(), now = Date.now(), local = localIso(now, clock.timezone);
       const target = schedPrefs.enabled('daily_brief') ? wakeTarget(plans, clock.timezone, now) : 'nothing_to_move';
-      if (target === 'nothing_to_move') return log({ trace, hop: 'brief_wake', ms: 0, ok: true, code: target });
-      if (!takeWakeTurn(storage.kv, local.slice(0, 10), wakeTurnsPerDay(this.env.WAKE_BRIEF_TURNS_PER_DAY))) return log({ trace, hop: 'brief_wake', ms: 0, ok: true, code: 'turn_limit' });
+      if (target === 'nothing_to_move' || !takeWakeTurn(storage.kv, local.slice(0, 10), wakeTurnsPerDay(this.env.WAKE_BRIEF_TURNS_PER_DAY))) return;
       try {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
         const said = dayPlanInput({ localNow: local, calendar, cards: [target.card], proactivity: proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1'),
           wake: { planned: target.time!, weekday: new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: clock.timezone }).format(now) } });
         const time = parseWakeReply(await responder.planDay(trace, said), target.time!, local.slice(11, 16));
-        const moved = time !== null && await applyWake(scheduler, plans, clock.timezone, Date.now(), time);
-        log({ trace, hop: 'brief_wake', ms: Date.now() - started, ok: true, code: moved ? (time === 'now' ? 'now' : 'earlier') : 'kept' });
+        if (time !== null) await applyWake(scheduler, plans, clock.timezone, Date.now(), time);
       } catch (error) {
-        log({ trace, hop: 'brief_wake', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
     };
     const wakeToday = coalesced<string>(job => { void this.serial(job); }, trace => this.asOwnerJob('brief', trace, () => wakeCards(trace))
-      .catch(() => log({ trace, hop: 'brief_wake', ms: 0, ok: false, code: 'wake_failed' })));
+      .catch(() => log({ trace, hop: 'day_plan', ms: 0, ok: false, code: 'replan_failed' })));
     // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
     // lands in the schedule retry/quarantine policy unchanged. Past-due loops become a reader job written with the scan; the
     // worker checks them off this pass, and the jobs lane applies what it found (heartbeatApply below).
@@ -5374,10 +5373,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A night just ended. The wake reaches the model only while the owner's daily Brief is on and their health may reach the
     // model now: consent withdrawn after the upload, or never given, keeps the Brief at its planned time.
     const wakeNoticed = async () => {
-      const trace = `brief-wake:${crypto.randomUUID()}`;
-      const code = !schedPrefs.enabled('daily_brief') ? 'brief_off' : healthSnapshot(await readModelHealth().catch(() => null)) === null ? 'no_consent' : 'woke';
-      log({ trace, hop: 'brief_wake', ms: 0, ok: true, code });
-      if (code === 'woke') wakeToday(trace);
+      if (schedPrefs.enabled('daily_brief') && healthSnapshot(await readModelHealth().catch(() => null)) !== null) wakeToday(`day-plan:${crypto.randomUUID()}`);
     };
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),

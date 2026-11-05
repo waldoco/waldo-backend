@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyDayPlan, applyWake, armDayCards, dayPlanBook, parseWakeReply, SET_FOR_TODAY, takeWakeTurn, wakeTarget, wakeTurnsPerDay, WOKE_REASON } from '../src/channels/day-cards';
+import { applyDayPlan, applyWake, armDayCards, dayPlanBook, parseWakeReply, SET_FOR_TODAY, takeWakeTurn, wakeTarget, wakeTurnsPerDay, MOVED_EARLIER } from '../src/channels/day-cards';
 import { reopensAt } from '../src/channels/interruptions';
 import { sleepJustEnded, wakeFreshMs } from '../src/health/wake-notice';
 import { DAY_CARDS, dayCardPrompt, dayPlanInput, PROSE_RULE, SCHEDULE_HEADING, SCHEDULE_RULE } from '../src/prompt/day-cards';
@@ -69,7 +69,7 @@ describe('the wake turn moves only a Brief still to come, and never later', () =
       expect(reopensAt(kolkata('06:40'), tz, window)).toBe(kolkata('08:30'));
       expect(await applyWake(scheduler, book, tz, kolkata('06:40'), 'now')).toBe(true);
       expect(scheduler.read('card:brief')?.due_at).toBe(kolkata('06:40'));
-      expect(book.read('2026-11-04').find(row => row.card === 'card:brief')).toMatchObject({ time: '06:40', reason: WOKE_REASON, state: 'pending' });
+      expect(book.read('2026-11-04').find(row => row.card === 'card:brief')).toMatchObject({ time: '06:40', reason: MOVED_EARLIER, state: 'pending' });
       // No app delivery yet: a WhatsApp or iMessage owner's day opens at the wake all the same.
       expect(reopensAt(kolkata('06:41'), tz, window)).toBeNull();
       expect(scheduler.read('card:midday')?.due_at).toBe(kolkata('14:00'));
