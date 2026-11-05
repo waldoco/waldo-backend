@@ -32,7 +32,7 @@ type GraphCall = Record<string, unknown> & { type?: string; status?: string; con
 beforeEach(() => { model.requests = []; model.react = null; model.gate = null; model.entered = () => {}; });
 
 type Admit = (...messages: Record<string, unknown>[]) => Promise<void>;
-const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[]) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
+const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[], storage: DurableObjectStorage) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
@@ -72,7 +72,7 @@ const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<vo
       }));
       expect(response.status).toBe(200);
     };
-    try { await run(admit, () => drainWhatsAppTurns(instance), graph); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
+    try { await run(admit, () => drainWhatsAppTurns(instance), graph, state.storage); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 
 const replies = (graph: readonly GraphCall[]) => graph.filter(call => call.type === 'text').map(call => call.text!.body);
@@ -168,13 +168,37 @@ it('five files in one burst are a turn of four and a turn of one: two replies, a
   await whatsappOwner('wa-merge-five-files', async (admit, drain, graph) => {
     const file = (n: number) => ({ id: `wamid.file${n}`, type: 'document', document: { id: 'media-notes', filename: `notes-${n}.md`, mime_type: 'text/markdown' } });
     await admit(...[1, 2, 3, 4, 5].map(file));
-    await drain();
+    // A drain that keeps overtaking its own turn never ends; fail instead of hanging.
+    await Promise.race([drain(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the drain did not settle')), 20_000))]);
     expect(turns()).toHaveLength(2);
     const first = JSON.stringify(turns()[0]!.input), second = JSON.stringify(turns()[1]!.input);
     for (const n of [1, 2, 3, 4]) expect(first).toContain(`notes-${n}.md`);
     expect(first).not.toContain('notes-5.md');
     expect(second).toContain('notes-5.md');
     expect(replies(graph)).toHaveLength(2);
+  });
+}, 60_000);
+
+// A burst message that does not parse is left out of the turn, and the owner object says so by count, never by content.
+it('a burst message that fails the schema is left out and logged by count only', async () => {
+  await whatsappOwner('wa-merge-schema-drop', async (admit, drain, graph, storage) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await admit(
+        { id: 'wamid.bad', type: 'document', document: { id: 'media-notes', filename: 'secret-name.md', mime_type: 'text/markdown' } },
+        text('Here is the plan', 'wamid.said'),
+      );
+      for (const [key, row] of storage.kv.list<{ update: { message: { document?: unknown } } | null }>({ prefix: 'whatsapp:inbox-record:' })) {
+        if (row.update?.message.document !== undefined) { row.update.message.document = { file_name: 'secret-name.md' }; storage.kv.put(key, row); }
+      }
+      await drain();
+      const dropped = log.mock.calls.map(call => String(call[0])).filter(line => line.includes('whatsapp_burst_dropped'));
+      expect(dropped).toHaveLength(1);
+      expect(JSON.parse(dropped[0]!)).toMatchObject({ hop: 'whatsapp_burst_dropped', ok: false, detail: 'schema_rejected:1' });
+      expect(dropped[0]).not.toContain('secret-name');
+      expect(lastMessage()).toContain('Here is the plan');
+      expect(replies(graph)).toHaveLength(1);
+    } finally { log.mockRestore(); }
   });
 }, 60_000);
 

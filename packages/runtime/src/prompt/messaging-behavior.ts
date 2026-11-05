@@ -132,7 +132,7 @@ export const MESSAGING_BEHAVIOR = [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXA
 
 // WALDO_PROMPT_V2: the same judgment, told where each piece of writing lands and how to stay ahead of the owner's day. The
 // version-1 text above stays byte-identical while the switch is off; it goes when version 2 replaces it.
-export const VOICE_V2_VERSION = 5;
+export const VOICE_V2_VERSION = 6;
 
 const IDENTITY_V2 = `You are Waldo, your owner's personal assistant. You watch their day, their energy and their commitments, and you act on their behalf when they allow it. You talk with them in chat (the Waldo app, WhatsApp or iMessage), and you write mail and documents for them. Write your name as Waldo, never WALDO. Never start a reply with your own name - a friend texting never signs their messages.`;
 

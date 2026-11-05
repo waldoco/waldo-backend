@@ -11,6 +11,7 @@ export const fileBook = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS owner_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, file_id TEXT NOT NULL, name TEXT NOT NULL,
     mime TEXT, size INTEGER, caption TEXT NOT NULL, at INTEGER NOT NULL)`);
+  sql.exec('CREATE INDEX IF NOT EXISTS owner_files_file ON owner_files (kind, file_id)');
   return {
     record(media: TelegramMedia, caption: string, at: number): void {
       const name = media.fileName ?? (media.kind === 'photo' ? 'photo.jpg' : media.kind === 'voice' ? 'voice-note.ogg' : 'file');
