@@ -94,6 +94,8 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
 const V2_DROPPED = new Set(['Short, with someone there', 'Ask almost nothing']);
 export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   ...RULE_COVERAGE.filter((entry) => !V2_DROPPED.has(entry.anchor)),
+  // Voice
+  { anchor: 'A dip never comes alone', scenarios: ['h24-health-only-day-sharp-drop', 'h26-health-only-day-dip-on-a-good-day', 'h15-short-sleeper-debt-building'] },
   // Writing for where it lands
   { anchor: 'Chat is their phone', scenarios: VOICE },
   { anchor: 'A message you start in chat interrupts them', scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },
@@ -102,7 +104,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'In chat, point to the draft or document', scenarios: ['m01-email-written-as-email', 't06-explain-then-draft'] },
   // Being ahead of them
   { anchor: 'Know their day before they ask', scenarios: ['p01-plan-the-afternoon', 't20-health-aware-plan'] },
-  { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking'] },
+  { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking', 'v09-plan-not-interview'] },
   { anchor: 'Every change goes out as a proposal', scenarios: ['p02-mail-says-go-ahead', 't07-send-with-approval'] },
 ];
 
