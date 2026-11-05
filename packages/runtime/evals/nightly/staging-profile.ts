@@ -73,6 +73,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it on'),
+  HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),

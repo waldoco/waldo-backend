@@ -4,11 +4,12 @@
 // owner's /skills lifecycle commands, which no scenario here exercises.
 import type { OwnerSkillCapability } from '../../src/skills/curated-host';
 import { createJobSkillCapability } from '../../src/skills/curated-host';
+import { curatedSkills } from '../../src/skills/curated-owner';
 import { localTrustedBriefScheduleInput } from '../../src/llm/run-loop-adapters';
 
 export const trialSkillBook = (sql: SqlStorage) => {
   const owner = localTrustedBriefScheduleInput().admission.verified_authority.principal_ref;
-  const open = (turnId: string) => createJobSkillCapability(sql, { owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent: async () => undefined });
+  const open = (turnId: string) => createJobSkillCapability(sql, { owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent: async () => undefined, catalog: curatedSkills(true) });
   let current = open('trial-start');
   const capability: OwnerSkillCapability = Object.freeze({
     handlers: current.handlers.map(handler => ({ ...handler, handle: (args: never, ctx: never) => current.handlers.find(live => live.name === handler.name)!.handle(args, ctx) })),

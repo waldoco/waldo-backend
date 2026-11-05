@@ -58,7 +58,7 @@ import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createJobSkillCapability, createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
-import { seededSkillCustody } from '../skills/curated-owner';
+import { curatedSkills as curatedCatalog, seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
@@ -138,7 +138,8 @@ import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
-import { nextOccurrence, Scheduler } from '../scheduler/multiplexer';
+import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
+import { CURATED_PACK_SKILLS } from '../skills/curated-catalog';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
 import { semanticRecallFromEnv, semanticTraceEntry } from '../memory/semantic-recall';
 import { reviewedThrough } from '../memory/select-memory';
@@ -1303,7 +1304,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const sql = this.ctx.storage.sql;
     return { admit: () => this.admitOwnerJob(), chain,
       // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
-      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent }) };
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1') }) };
   }
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
@@ -4656,7 +4657,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const assertSkillOwnerCurrent = async () => { scope.admit(); };
       // The receipt read runs on every tool round; one failure line per turn keeps the bounded trace table readable.
       let receiptsUnavailableLogged = false;
-      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, turnId: turn.traceId,
+      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1'), turnId: turn.traceId,
         trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch }, scope);
       return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
         await assertSkillOwnerCurrent();
@@ -5335,6 +5336,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
       const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens) : gateBudget;
+      const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
       let outcome: HealthTriggerOutcome = 'failed';
@@ -5348,10 +5350,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             tasks: tasks ? () => tasks.tasks('todo', 50) : null, loops: () => loops.list() }, from, to, timezone);
         },
         admit: budget.admit, charge: budget.charge,
+        ...(healthActions ? { actions: { protocols: healthActions, through: 'through the end of tomorrow',
+          until: (now: number) => nextDailyLocalOccurrence('00:00', timezone, nextDailyLocalOccurrence('00:00', timezone, now)) } } : {}),
         decide: async (id, prompt, format) => {
           const asked = Date.now();
           let answered = false;
-          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format, undefined, undefined, interrupts !== null); answered = true; return said; }
+          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format, undefined, undefined, interrupts !== null || healthActions !== null); answered = true; return said; }
           finally { log({ trace: id, hop: 'machine_turn', ms: Date.now() - asked, ok: answered, detail: 'health_card' }); }
         },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),
