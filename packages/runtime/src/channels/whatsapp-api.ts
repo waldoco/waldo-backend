@@ -439,6 +439,15 @@ export const plainOwnerText = (update: WaSyntheticUpdate | null): boolean => {
   return typeof message?.text === 'string' && message.reply_to_message === undefined && message.forward_origin === undefined && !message.text.trimStart().startsWith('/');
 };
 
+// A message that may ride in one turn with the owner's messages sent around it: text, a forward or a file the owner sent,
+// never a command, an approval reply (a callback, not a message) or a quoted reply, which names its own target.
+export const burstOwnerMessage = (update: WaSyntheticUpdate | null): boolean => {
+  const message = (update as { message?: { text?: unknown; reply_to_message?: unknown; document?: unknown; photo?: unknown; voice?: unknown; audio?: unknown } } | null)?.message;
+  if (!message || message.reply_to_message !== undefined) return false;
+  if (typeof message.text === 'string') return !message.text.trimStart().startsWith('/');
+  return message.document !== undefined || message.photo !== undefined || message.voice !== undefined || message.audio !== undefined;
+};
+
 // Meta redelivers a webhook until it gets a 200, for up to 7 days
 // (https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks/ , "Webhook delivery failure").
 // A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier

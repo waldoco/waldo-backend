@@ -36,10 +36,16 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
   const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {
     turn.runScope?.admit();
-    const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
+    const members = [...(turn.earlier ?? []), turn];
+    const media = members.some(one => one.media)
+      ? await time('media', () => Promise.all(members.map(one => one.media ? loadTelegramMedia(one.media, readers ?? {}) : undefined)))
+      : [];
     turn.runScope?.admit();
-    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}),
-      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }, time);
+    const parts = members.flatMap((one, index) => [...one.parts, ...(media[index]?.parts ?? [])]);
+    const files = media.flatMap(loaded => loaded?.attachment ? [loaded.attachment] : []);
+    const attachments = [...(turn.attachments ?? []), ...files];
+    return core.respond({ ...envelope(turn), parts,
+      ...(attachments.length === 1 && !turn.attachments?.length ? { attachment: attachments[0]! } : attachments.length ? { attachments } : {}) }, time);
   };
   return {
     ...core, respond,
