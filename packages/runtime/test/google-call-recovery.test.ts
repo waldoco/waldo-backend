@@ -106,15 +106,30 @@ describe('Inline & Spill: the view shown for a result too long to show', () => {
     }
   });
 
-  it('a result too long for the store says how to reach what was cut, and shows no view of it', async () => {
-    const huge = { messages: Array.from({ length: 200 }, (_, i) => ({ id: `m${i}`, body: 'lorem ipsum '.repeat(60) })) };
+  it('a result too long for the store shows its view, flags of the cut items included, and says how to reach what was cut', async () => {
+    const huge = { messages: Array.from({ length: 200 }, (_, i) => ({ id: `m${i}`, body: 'lorem ipsum '.repeat(60), quarantined: ['otp'] })) };
+    const view = (data: unknown) => ({ messages: (data as typeof huge).messages.map(({ id, quarantined }) => ({ id, quarantined })) });
     const result = await dispatchTool({ id: 'c1', name: 'search_communication', args: { query: 'sam' } }, ctx, {
-      handlers: [{ ...spilling(() => ({ ids: [] })), handle: async () => ({ ok: true, data: huge, source_taint: 'external' }) as never }], offload: inMemoryToolOutputStore(),
+      handlers: [{ ...spilling(view), handle: async () => ({ ok: true, data: huge, source_taint: 'external' }) as never }], offload: inMemoryToolOutputStore(),
     });
-    const shown = (result as { data: { truncated: boolean; inline?: unknown; next?: string } }).data;
+    const shown = (result as { data: { truncated: boolean; stored_chars: number; head?: string; inline?: { messages: { id: string; quarantined: string[] }[] }; next?: string } }).data;
     expect(shown.truncated).toBe(true);
-    expect(shown.inline).toBeUndefined();
+    expect(shown.stored_chars).toBe(65_536);
+    expect(shown.head).toBeUndefined();
+    expect(shown.inline!.messages.at(-1)).toEqual({ id: 'm199', quarantined: ['otp'] });
     expect(shown.next).toContain('smaller limit');
+  });
+
+  it('the raw head never ends inside a character that takes two code units', async () => {
+    for (const lead of ['a', 'aa']) {
+      const data = { messages: [{ id: 'm0', body: lead + '\u{1F600}'.repeat(10_000) }] };
+      const result = await dispatchTool({ id: 'c1', name: 'search_communication', args: { query: 'sam' } }, ctx, {
+        handlers: [{ ...spilling(() => ({ all: 'x'.repeat(9_000) })), handle: async () => ({ ok: true, data, source_taint: 'external' }) as never }], offload: inMemoryToolOutputStore(),
+      });
+      const head = (result as { data: { head: string } }).data.head;
+      expect(head.length).toBeGreaterThanOrEqual(3_999);
+      expect(() => encodeURIComponent(head)).not.toThrow();
+    }
   });
 
   it('withholds a secret in the view as the store does', async () => {
@@ -191,6 +206,45 @@ describe('the read_thread index on a long thread', () => {
     expect(view.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
     expect(String(view.messages[0]!.from).length).toBeGreaterThan(0);
     expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('the last step keeps exactly as many quote marks as fit in 120 escaped characters', () => {
+    const view = spillOf([{ id: 'm0', from: '"'.repeat(5_000), at, subject: 'Notes', body: '' }]);
+    expect(view.next).toContain('id, sender, time and subject');
+    expect(String(view.messages[0]!.from)).toBe('"'.repeat(60));
+  });
+
+  it('the last step gives the room short subjects leave to long senders, so a sender keeps its address', () => {
+    const sender = 'Priyanka Ramasubramanian-Venkataraman <priyanka.ramasubramanian@a-long-company-domain.example.test>';
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      id: `m${i}`, from: sender, at, subject: i === 0 ? 'x'.repeat(3_000) : 'Notes', body: '', recipients_capped: true, body_source: 'snippet',
+      body_withheld: 'scribe_refused', quarantined: ['otp'], body_truncated: true, attachments: [{}, {}],
+    }));
+    const view = spillOf(messages);
+    expect(view.next).toContain('id, sender, time and subject');
+    expect(view.messages.map((m) => m.from)).toEqual(messages.map(() => sender));
+    expect(view.messages[1]!.subject).toBe('Notes');
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('the last step fits under the cap for any mix of sender and subject lengths and escapes', () => {
+    for (const n of [10, 15, 20]) for (const kind of ['a', '"', '\u0001']) for (const senderChars of [20, 60, 120, 200]) for (const subjectChars of [20, 60, 200]) {
+      const messages = Array.from({ length: n }, (_, i) => ({
+        id: `m${i}`, from: kind.repeat(senderChars), at, subject: kind.repeat(i === 0 ? 8_000 : subjectChars), body: '', recipients_capped: true, body_source: 'snippet',
+        body_withheld: 'scribe_refused', quarantined: ['otp'], body_truncated: true, attachments: [{}, {}],
+      }));
+      const view = spillOf(messages);
+      const shown = `${n} messages of ${JSON.stringify(kind)}, sender ${senderChars}, subject ${subjectChars}`;
+      expect(view.next, shown).toContain('id, sender, time and subject');
+      expect(JSON.stringify(view).length, shown).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+    }
+  });
+
+  it('an opening never ends inside a character that takes two code units', () => {
+    const view = spillOf([{ id: 'm0', from: 'a@example.test', at, subject: 'Notes', body: `a${'😀'.repeat(1_000)}` }]);
+    const opening = String(view.messages[0]!.opening);
+    expect(opening.length).toBeGreaterThan(0);
+    expect(() => encodeURIComponent(opening)).not.toThrow();
   });
 
   it('keeps a third page of 20 widely addressed messages whole in the store, so its index names every message', async () => {

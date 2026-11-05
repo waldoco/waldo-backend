@@ -5,7 +5,7 @@ import { md5Hex } from '../channels/md5';
 import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { PARK_WORDS } from '../prompt/fixed-lines';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
 import { applyInterrupted, carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
 
@@ -19,7 +19,7 @@ export type MachineItem = Readonly<{ ref: string; detail: string }>;
 // A brief persists with its job, and the owner's health values are never stored: an item that carries one keeps its ref,
 // so the worker can still look it up, and drops its words.
 export const HEALTH_DETAIL_DROPPED = '(detail not kept: it carries health values; read it by its ref if you need it)';
-const keptItem = (item: MachineItem): MachineItem => numericHealthIn(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
+const keptItem = (item: MachineItem): MachineItem => numericHealthInJsonText(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
 
 export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;

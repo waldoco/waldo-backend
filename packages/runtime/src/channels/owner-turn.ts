@@ -31,11 +31,11 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
-import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
-import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
+import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, toolActivity, toolsWhere } from '../tools/records';
 import { FIND_TOOLS, harnessToolLoader } from '../tools/loader';
@@ -47,7 +47,7 @@ import { ownerProfilePrompt } from '../memory/owner-profile';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
-import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
+import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
 import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
@@ -60,7 +60,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { SecondMessageRound } from './second-message';
-import { OWNER_TURN_LONG_TOOLS } from './async-tools';
+import { LIGHT_ESCALATE, LIGHT_ROLE_MAX_TOKENS, OWNER_TURN_LONG_TOOLS, type LightChatRoles } from './async-tools';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
@@ -112,18 +112,21 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
 // dayCards: where today's Brief, Check-in and Close stand, for the owner's own turns ('' when none is planned).
 export class OvertakenTurnError extends Error { constructor() { super('owner turn overtaken by newer owner messages'); this.name = 'OvertakenTurnError'; } }
+// The light step got no answer; the turn goes on to the chat model.
+class LightStepFailed extends Error {}
 // newerOwnerInput: the owner has sent more since this turn (its run scope) began, so a reply that did nothing yet is dropped for one that answers it all.
 // newerOwnerMessages: the owner's newer messages on this turn's chat, offered to the model at each round of their own turn (second-message.ts).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; the reply
 // as the model reads it back carries modelLine instead. Taken once that reply is saved.
 // asyncTools: the owner's own turn holds no long tool (async-tools.ts); its long work goes to start_task.
-// lightChat: the owner's own reply runs on the auxiliary model, as a chat call (async-tools.ts).
+// lightChat: the owner's reply takes a light step that answers quick chat or hands the turn to the strong role (async-tools.ts);
+// lightRoles: the models each role runs on, where the environment sets them.
 // skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
 // capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
-export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean }>;
+export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -225,8 +228,13 @@ export const createOwnerResponder = (
   const access = ownerModelAccess(modelAccess);
   const harnessLoader = access.toolLoader === 'harness';
   const providerSearch = access.toolSearch === true && !harnessLoader;
+  const promptV2 = access.promptV2 === true;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
+  // WALDO_LIGHT_CHAT: the light step's route and the strong role's, which is the chat route unless the environment sets it.
+  const lightRoles = privateOwner?.lightRoles ?? {};
+  const lightPolicy = lightRoutePolicy(lightRoles.light ?? auxiliaryModel);
+  const strongPolicy = lightRoles.strong === undefined && lightRoles.strongFallback === undefined ? policy : strongRoutePolicy(lightRoles.strong ?? model, lightRoles.strongFallback, access);
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
@@ -273,7 +281,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false) => {
     await assertCurrent();
     if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
@@ -281,8 +289,8 @@ export const createOwnerResponder = (
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
     let reasoning: string | undefined;
-    const lightReply = privateOwner?.lightChat === true && ownerTurnActive && purpose === 'reply' && modelOverride === undefined;
-    const effectivePolicy = lightReply ? ownerRoutePolicy(auxiliaryModel, model, access, true)
+    const strong = privateOwner?.lightChat === true && ownerTurnActive && purpose === 'reply' && modelOverride === undefined;
+    const effectivePolicy = light ? lightPolicy : strong ? strongPolicy
       : modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
     // when one historical entry is unrenderable, the retry carries only the current text instead
@@ -294,9 +302,13 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const streamed = ownerCall && purpose === 'reply' ? activeOwnerTurn?.replyStream : undefined;
-    const adapter = withReplyStream(gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } }),
-      streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
+    // The light step streams nothing: the owner sees no word of a step that may hand the turn over.
+    const streamed = ownerCall && purpose === 'reply' && !light ? activeOwnerTurn?.replyStream : undefined;
+    const timeoutMs = light ? MODEL_CALL_TIMEOUT_MS : ownerCall ? OWNER_TURN_CALL_TIMEOUT_MS : undefined;
+    const routed = gateway ?? ownerModelGateway(access, { ...(timeoutMs ? { timeoutMs } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    // One attempt: a failed light step is not sent again, it hands over.
+    const once: LLMGatewayAdapter = light ? { complete: async (request) => { const result = await routed.complete(request); return result.ok ? result : { ...result, retry: { allowed: false } }; } } : routed;
+    const adapter = withReplyStream(once, streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -310,7 +322,10 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
-    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })), ...(turnSanitise ? { sanitiseMemo: turnSanitise.memo } : {}) }).complete({
+    // The light step reads the owner's provider breaker and never moves it: a slow light model must not push the chat model off its provider.
+    const breaker = light ? { isOpen: (provider: Parameters<typeof circuitBreaker.isOpen>[0]) => circuitBreaker.isOpen(provider), recordSuccess: () => {}, recordFailure: () => {} }
+      : observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider }));
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: breaker, ...(turnSanitise ? { sanitiseMemo: turnSanitise.memo } : {}) }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
@@ -320,15 +335,15 @@ export const createOwnerResponder = (
         const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
         return {
           cache_key: cacheKey,
-          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: light ? lightRoles.lightMaxTokens ?? LIGHT_ROLE_MAX_TOKENS : outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? brainTools(tools, providerSearch && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
-          ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
+          ...(tools ? brainTools(tools, providerSearch && purpose === 'reply' && !light) : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools && ownerTurnActive && purpose === 'reply' && !light ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
-      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' && !light ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
     access.onAttempts?.(result.attempts);
     await assertCurrent();
@@ -337,7 +352,7 @@ export const createOwnerResponder = (
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       // These calls run on the voice block, so a shift in behaviour or cache share can be traced to a voice bump.
-      ...(purpose === 'reply' || purpose === 'background_decision' ? { voice_version: VOICE_VERSION } : {}),
+      ...(purpose === 'reply' || purpose === 'background_decision' ? { voice_version: voiceVersion(promptV2) } : {}),
       context: {
         tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
@@ -358,9 +373,9 @@ export const createOwnerResponder = (
     const routing = floor
       ? { fallback_fired: true, ...(lastFailure?.outcome === 'failure' ? { error_code: lastFailure.code } : {}) }
       : served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ...costKind, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
+    if (!result.ok) log({ trace, hop: `llm_${light ? 'reply_light' : purpose}`, ...costKind, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ...costKind, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
+      trace, hop: `llm_${light ? 'reply_light' : purpose}`, ...costKind, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
       ...(result.tool_search_degraded ? { tool_search_degraded: true, ...(result.tool_search_rejection ? { tool_search_rejection: result.tool_search_rejection } : {}) } : {}),
       ...(response?.ttft_ms === undefined ? {} : { ttft_ms: response.ttft_ms }),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
@@ -371,17 +386,18 @@ export const createOwnerResponder = (
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
-    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt`, ...costKind })) log(entry);
+    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${light ? 'reply_light' : purpose}_attempt`, ...costKind })) log(entry);
     if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
       log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
     }
+    if (!result.ok && light) throw new LightStepFailed();
     if (!result.ok) {
       const message = `live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason, result.scribe_stage].filter(Boolean).join(': ') || result.reason})`;
       const down = modelDownReason(result);
       throw down ? new ModelUnavailableError(down, message) : new Error(message);
     }
     // A reply cut off by the model's length limit would otherwise read as a finished thought.
-    if (purpose === 'reply' && response!.truncated && !response!.tool_calls?.length) return { ...response!, text: `${response!.text}\n\n(I stopped early: that reply hit my length limit. Ask me to continue.)` };
+    if (purpose === 'reply' && !light && response!.truncated && !response!.tool_calls?.length) return { ...response!, text: `${response!.text}\n\n(I stopped early: that reply hit my length limit. Ask me to continue.)` };
     return response!;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
@@ -413,7 +429,7 @@ export const createOwnerResponder = (
     const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
     const reach = conversationStore?.recalls;
-    const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
+    const episodes = searched && reach ? withinReach(searched, reach) : searched;
     const args = { claims: memoryFor(source), question: text, room, holds: barrier().holds, ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) };
     // With memory selection on, recall waits no longer than its deadline, and offers stubs past its full lines to a call that
     // can open them with read_memory.
@@ -596,7 +612,7 @@ export const createOwnerResponder = (
         // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
         onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
-        step: async (tools, turns) => {
+        step: async function turnStep(tools, turns) {
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
@@ -676,7 +692,10 @@ export const createOwnerResponder = (
             turns: { kind: 'turns', turns },
           }, held, forgetBarrierMode);
           const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, harnessLoader ? 'harness' : providerSearch, backgroundDirect, asyncTools() && turnHandlers.some((handler) => handler.name === 'start_task')),
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, {
+              toolSearch: harnessLoader ? 'harness' : providerSearch, direct: backgroundDirect,
+              background: asyncTools() && turnHandlers.some((handler) => handler.name === 'start_task'), v2: promptV2,
+            }),
             skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
@@ -711,20 +730,33 @@ export const createOwnerResponder = (
           const turnPrompt = built.prompt;
           const entries = cut.history;
           const current = entries[entries.length - 1]!;
-          entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
+          const ownTail = current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added;
+          entries[entries.length - 1] = { ...current, content: ownTail + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
+          const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };
+          const files = attachments.length ? attachments : undefined;
+          // WALDO_LIGHT_CHAT: the turn's first step runs on the light role. It reads the system prompt, the conversation and the
+          // clock, and nothing this turn admitted: no health, day plan, memory, recall or tool results, no attachment, and no tool
+          // but escalate. Its plain, whole text is the reply; anything else (escalate, a cut-off reply, a failure) is dropped
+          // unseen and the strong role takes this step with everything. A stop or steer that came meanwhile runs the step again.
+          const lightNow = lightFirst && !files;
+          lightFirst = false;
+          if (lightNow) {
+            const started = Date.now();
+            const lightContext = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }).turnContext;
+            const lightEntries = [...entries.slice(0, -1), { ...current, content: `${ownTail}\n\n${lightContext}` }];
+            const light = await complete(trace, 'reply', system, lightEntries, undefined, undefined, [LIGHT_ESCALATE], undefined, undefined, undefined, true)
+              .catch((error: unknown) => { if (error instanceof LightStepFailed) return undefined; throw error; });
+            const route = light === undefined ? 'failed' : light.tool_calls?.length ? (light.tool_calls.some((call) => call.name === LIGHT_ESCALATE.name) ? 'escalated' : 'tool')
+              : light.truncated ? 'truncated' : 'answered';
+            log({ trace, hop: 'light_route', ms: Date.now() - started, ok: true, detail: route });
+            if (route === 'answered') return light!;
+            if (control.revision() !== contextSteering) return turnStep(tools, turns);
+          }
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
           // to it, gets the chat model.
-          return complete(trace, 'reply',
-          { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections },
-          entries,
-          undefined,
-          attachments.length ? attachments : undefined,
-          tools,
-          cut.turns,
-          ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel,
-          );
+          return complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel);
         },
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
@@ -745,6 +777,8 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  // The owner's own turn has not yet taken its light step (WALDO_LIGHT_CHAT).
+  let lightFirst = false;
   // Read once when a turn starts, so a turn that crosses the ceiling mid-flight finishes on the model it began with. Past the
   // ceiling the provider clamps every call to the auxiliary route, which is where machine turns already run.
   let turnSpend: RouteSpendState | undefined;
@@ -852,6 +886,7 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
+    lightFirst = fromOwner && privateOwner?.lightChat === true;
     turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
@@ -870,7 +905,7 @@ export const createOwnerResponder = (
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; lightFirst = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
       // A reply the owner's newer messages overtook, from a turn that called no tool, is neither saved nor sent: the host runs
@@ -1003,7 +1038,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.lightRoles ? { lightRoles: privateOwner.lightRoles } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -1066,7 +1101,7 @@ export const createOwnerResponder = (
           const eligible = (claim: import('../memory/claims').Claim) => claim.origin === 'owner' && claim.kind !== 'health';
           // The decision gets the stable behaviour text as its system prompt and, like an owner turn, its clock and memory as a
           // turn context after the job's text, so the system prompt's turn-context rule holds here too.
-          const system = messagingSystemPrompt([]);
+          const system = messagingSystemPrompt([], undefined, { v2: promptV2 });
           const clockLine = ownerClockLine(clock);
           // Memory rides the decision's message, so it gets what the message budget leaves after the job's text.
           const room = messageChars - [said, TURN_CONTEXT_HEADER, clockLine].join('\n\n').length - 2_048;

@@ -41,6 +41,26 @@ describe('task job book', () => {
     });
   });
 
+  it('a table an earlier build made, which does not admit the no_progress park, is rebuilt with a running row, its lease and park retries kept', async () => {
+    const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-${seq += 1}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql, at = 1_800_000_000_000, deps = { now: () => at, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() };
+      for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement.replace(", 'no_progress'", ''));
+      sql.exec(`INSERT INTO task_jobs (id, kind, profile, idempotency_key, origin, surface, brief_json, brief_digest, status, attempt, lease_token, lease_until,
+        deadline_at, checkpoint_seq, park_retries, created_at, updated_at) VALUES ('job_old', 'task', 'reader', 'turn-0:call-0', 'tg-1', 'app', ?, 'digest',
+        'running', 2, 'tok-old', ?, ?, 3, 1, ?, ?)`, JSON.stringify(brief), at + TASK_LEASE_MS, at + 3_600_000, at - 60_000, at - 1_000);
+      expect(() => sql.exec("UPDATE task_jobs SET park_reason = 'no_progress' WHERE id = 'job_old'")).toThrow();
+      const before = sql.exec('SELECT * FROM task_jobs').toArray();
+      const book = jobBook(sql, deps);
+      expect(sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'task_jobs'").one().sql).toContain("'no_progress'");
+      expect(sql.exec('SELECT * FROM task_jobs').toArray()).toEqual(before);
+      expect(book.get('job_old')).toMatchObject({ status: 'running', attempt: 2, lease_token: 'tok-old', lease_until: at + TASK_LEASE_MS, checkpoint_seq: 3, park_retries: 1 });
+      expect(book.park('job_old', 'no_progress')).toBe(true);
+      expect(book.get('job_old')).toMatchObject({ park_reason: 'no_progress', lease_token: null, park_retries: 1 });
+      expect(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'task_jobs%' ORDER BY name").toArray().map(row => row.name)).toEqual(['task_jobs', 'task_jobs_open']);
+    });
+  });
+
   it('writes the job before any I/O, once per idempotency key', async () => {
     await withBook((book) => {
       const first = book.create(job());
