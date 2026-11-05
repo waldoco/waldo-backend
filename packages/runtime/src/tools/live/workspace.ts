@@ -92,17 +92,18 @@ const extractArchiveHandler = (open: (ctx?: ToolDispatcherContext) => Promise<Wo
   autonomy_gated: false,
   mutates_state: true,
   handle: async (args: ExtractArchiveArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
-    if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Extract invocation identity is unavailable.', source_taint: 'external' };
+    if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Extract invocation identity is unavailable.', source_taint: null };
     const store = await open(ctx);
     await ctx.assertTaskSourceCurrent?.();
     ctx.runScope?.admit();
     try {
       const data = await extractArchive(store, { file_id: args.file_id, revision: args.revision, ...(args.entries ? { entries: args.entries } : {}), ...(args.prefix ? { prefix: args.prefix } : {}),
         operationIdFor: entry => workspaceOperationId([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId, entry], 'extract_archive') });
-      return { ok: true, data, source_taint: 'external' };
+      // The owner's own upload is their material; anything else in the workspace may carry outside text. Failures are fixed text.
+      return { ok: true, data, source_taint: data.provenance === 'owner_upload' ? null : 'external' };
     } catch (error) {
-      if (error instanceof ArchiveError) return { ok: false, code: 'invalid_args', error: error.message, source_taint: 'external' };
-      if (error instanceof WorkspaceError) return toResult({ ok: false, code: error.code, error: error.message, source_taint: 'external' });
+      if (error instanceof ArchiveError) return { ok: false, code: 'invalid_args', error: error.message, source_taint: null };
+      if (error instanceof WorkspaceError) return toResult({ ok: false, code: error.code, error: error.message, source_taint: null });
       throw error;
     }
   },

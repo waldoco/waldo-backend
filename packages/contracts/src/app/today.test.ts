@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appTodayRoutesV1, appTodayV1Schema } from './today';
+import { APP_TODAY_DEADLINE_MS_V1, appTodayApiErrorV1Schema, appTodayRoutesV1, appTodayV1Schema } from './today';
 
 // Synthetic values: a made-up day and event.
 const event = { id: 'evt-1', title: 'Design review', start: '2026-11-06T10:00:00+05:30', end: '2026-11-06T11:00:00+05:30', category: 'meeting' };
@@ -28,6 +28,14 @@ describe('today', () => {
       { ...today, day: null },
       { ...today, events: [event] },
     ]) expect(appTodayV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  it('refuses with a closed error code, and answers within a few seconds', () => {
+    expect(appTodayApiErrorV1Schema.safeParse({ error: 'unavailable' }).success).toBe(true);
+    expect(appTodayApiErrorV1Schema.safeParse({ error: 'invalid_request', message: 'no query' }).success).toBe(true);
+    for (const bad of [{ error: 'not_found' }, { error: 'unavailable', detail: 'x' }, { error: 'unavailable', message: 'x'.repeat(1001) }, {}])
+      expect(appTodayApiErrorV1Schema.safeParse(bad).success).toBe(false);
+    expect(APP_TODAY_DEADLINE_MS_V1).toBeLessThanOrEqual(10_000);
   });
 
   it('declares its route', () => {

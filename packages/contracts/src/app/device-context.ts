@@ -51,7 +51,9 @@ export const deviceContextConsentWithdrawV1Schema = z.strictObject({
 // deletion_routed: what the signal kept was deleted by this withdrawal.
 export const deviceContextConsentChangeV1Schema = z.strictObject({ consent: deviceContextConsentV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 // The one consent screen in one call: each purpose at the epoch the app last read for it, granted storage first and all or none.
-// The answer lists the purposes in that order. Withdrawals stay one purpose at a time.
+// The answer lists the purposes in that order. A purpose already granted, sent at its current epoch, is answered as it stands,
+// so a retry after re-reading the epochs succeeds; a stale epoch on any purpose refuses the whole call with epoch_conflict.
+// Withdrawals stay one purpose at a time.
 export const deviceContextConsentGrantBatchV1Schema = z.strictObject({
   request_id: requestId, signal: deviceContextSignalV1Schema, version: z.literal(DEVICE_CONTEXT_CONSENT_VERSION_V1),
   purposes: z.array(z.strictObject({ purpose: deviceContextPurposeV1Schema, expected_epoch: epoch }))
@@ -66,10 +68,13 @@ export const deviceContextConsentBatchV1Schema = z.strictObject({
 // A geohash cell of exactly 5 characters in the geohash alphabet (no a, i, l or o).
 export const placeCellV1Schema = z.string().regex(/^[0-9b-hjkmnp-z]{5}$/);
 const timezone = z.string().min(1).max(64);
-// The OS's name for the cell, never a way to carry a position: no decimal number, no degree sign and at most four digits
-// ("Sector 128" fits, "12.97,77.59" does not). The database checks the same.
-const placeName = line(80).refine(name => !/[0-9][.,][0-9]|°/.test(name) && name.replace(/[^0-9]/g, '').length <= 4,
+// The OS's names for the cell, never a way to carry a position: no decimal number and no degree sign in either, and at most four
+// digits across locality and region together ("Sector 128" fits, "12.97,77.59" does not). Digits are any script's decimal
+// digits, so a coordinate in Devanagari or fullwidth digits counts the same. The database checks the same.
+const placeName = line(80).refine(name => !/\p{Nd}\s*[.,\u00B7\u066B\u066C\uFF0C\uFF0E]\s*\p{Nd}|[\u00B0\u00BA\u02DA]/u.test(name),
   { error: 'a place name carries no position' });
+const digits = (name: string | undefined) => (name ?? '').match(/\p{Nd}/gu)?.length ?? 0;
+const namesCarryNoPosition = (place: { locality?: string; region?: string } | null) => !place || digits(place.locality) + digits(place.region) <= 4;
 const platform = z.enum(['ios', 'android']);
 // One reading from the phone: always its time zone, and the cell when the app is open with location allowed. The names are the
 // phone's own OS's for that cell, so they come only with it; a phone that cannot name the place still sends the cell.
@@ -82,13 +87,15 @@ export const devicePlaceV1Schema = z.strictObject({
   platform,
   observed_at: instant,
 }).refine(reading => reading.cell !== undefined || [reading.locality, reading.region, reading.country].every(name => name === undefined),
-  { error: 'a place name comes only with its cell', path: ['cell'] });
+  { error: 'a place name comes only with its cell', path: ['cell'] })
+  .refine(namesCarryNoPosition, { error: 'a place name carries no position', path: ['locality'] });
 
 // The zone, and the cell when sent, replace the earlier ones from the same device, each unless the earlier one was observed later;
 // an upload that changes neither is answered superseded.
 // expected_epoch is the storage_compute epoch the phone read with consent; an upload from before a withdrawal is refused, so it
 // cannot repopulate what was deleted. device_id is the app installation id the push registration uses. A reading observed more
-// than 30 days ago is refused.
+// than 30 days ago is refused. A refused reading keeps nothing, its zone included: an app whose OS names fail the place-name
+// rule (a 400 invalid_request) sends the same reading again without locality and region.
 export const devicePlaceIngestV1Schema = z.strictObject({
   request_id: requestId,
   expected_epoch: epoch,
@@ -115,7 +122,7 @@ export const devicePlaceStoredV1Schema = z.strictObject({
     region: placeName.optional(),
     country: z.string().regex(/^[A-Z]{2}$/).optional(),
     observed_at: instant,
-  }).nullable(),
+  }).refine(namesCarryNoPosition, { error: 'a place name carries no position', path: ['locality'] }).nullable(),
 });
 export const devicePlacesV1Schema = z.strictObject({ places: z.array(devicePlaceStoredV1Schema).max(DEVICE_PLACE_MAX_DEVICES_V1) });
 
