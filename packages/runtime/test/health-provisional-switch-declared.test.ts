@@ -80,6 +80,13 @@ describe('MEDICATIONS in the Worker config', () => {
   });
 });
 
+describe('BROWSER_FORM_SUBMIT in the Worker config', () => {
+  it('is on in staging for the Google Forms run, and off in production', () => {
+    expect(parsed.vars.BROWSER_FORM_SUBMIT).toBe('0');
+    expect(parsed.env.staging.vars.BROWSER_FORM_SUBMIT).toBe('1');
+  });
+});
+
 describe('WALDO_RECALL_CHAIN in the Worker config', () => {
   it('is off in both blocks until the gate turns it on at a named deploy', () => {
     expect(parsed.vars.WALDO_RECALL_CHAIN).toBe('0');
