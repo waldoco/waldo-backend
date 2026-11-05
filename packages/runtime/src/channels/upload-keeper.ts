@@ -9,6 +9,8 @@ export type KeepFile = Readonly<{
   // Stable for this file on its surface (a Telegram file id, a WhatsApp media id, a message and index), so a redelivered
   // message is the same write, not a second file.
   key: string;
+  // Someone else's file the owner passed on (a forward): kept as an import, never as the owner's own upload.
+  forwarded?: boolean;
 }>;
 export type KeptUpload =
   | Readonly<{ status: 'saved'; path: string; file_id: string; revision: number }>
@@ -42,7 +44,7 @@ export const uploadKeeper = (open: () => Promise<WorkspaceStore>, ownerRef: stri
   const mime = file.mime && MIME.test(file.mime) && file.mime !== 'application/octet-stream' ? file.mime : mimeForName(file.filename);
   try {
     const store = await open();
-    const meta = await store.write({ path: await uploadPath(`${ownerRef}:${file.key}`, file.filename, root), bytes: file.bytes, mime, expected_revision: 0, provenance,
+    const meta = await store.write({ path: await uploadPath(`${ownerRef}:${file.key}`, file.filename, root), bytes: file.bytes, mime, expected_revision: 0, provenance: file.forwarded ? 'provider_import' : provenance,
       operation_id: await workspaceOperationId([ownerRef, file.key], 'owner_upload') });
     return { status: 'saved', path: meta.path, file_id: meta.file_id, revision: meta.revision };
   } catch (error) {

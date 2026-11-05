@@ -80,7 +80,7 @@ const keepMedia = async (media: TelegramMedia, what: string, readable: Omit<LLMA
   try { bytes = await download(media.fileId); } catch { return { parts: noted(`[Owner sent a ${what}, but it could not be downloaded.]`) }; }
   if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent a ${what} larger than 20 MB, which cannot be read here.]`) };
   const filename = readable?.filename ?? media.fileName ?? 'file';
-  const kept = await keep({ bytes, filename, mime: readable?.mime_type ?? media.mimeType, key: `media:${media.fileId}` });
+  const kept = await keep({ bytes, filename, mime: readable?.mime_type ?? media.mimeType, key: `media:${media.fileId}`, ...(media.forwarded ? { forwarded: true } : {}) });
   return { parts: noted(keptNote(what, kept, readable !== null)), ...(readable ? { attachment: { ...readable, data_base64: toBase64(bytes) } } : {}) };
 };
 

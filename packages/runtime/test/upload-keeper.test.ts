@@ -37,6 +37,12 @@ describe('every owner upload is kept (WALDO_FILE_TOOLS on)', () => {
     expect(loaded.parts).toEqual([{ authorship: 'media_note', text: `[Owner sent a file "a.zip". Saved in their workspace as ${file.path} (file_id ${file.file_id}, revision 1). It is not attached here; open it with the workspace tools.]` }]);
   });
 
+  it('a forwarded file is kept as an import, not as the owner\'s own upload', async () => {
+    const w = await setup();
+    await loadTelegramMedia({ ...zipDoc, forwarded: true }, { download: async () => bytes, keep: w.keep });
+    expect(w.state().files[0]).toMatchObject({ provenance: 'provider_import' });
+  });
+
   it('still attaches a readable type and saves it too', async () => {
     const w = await setup();
     const loaded = await loadTelegramMedia({ kind: 'document', fileId: 'tg-pdf', fileName: 'Plan.pdf', mimeType: 'application/pdf', fileSize: 2 }, { download: async () => new Uint8Array([104, 105]), keep: w.keep });
