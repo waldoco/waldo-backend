@@ -53,8 +53,8 @@ export const workspaceWriteArgsSchema = z.strictObject({
  .refine(value => value.edits === undefined || value.expected_revision > 0, {message:'edits require an existing revision'});
 export type WorkspaceWriteArgs = z.infer<typeof workspaceWriteArgsSchema>;
 
-// Unpack a workspace zip into a folder beside it. The runtime caps writes per call at this count, so a selection never
-// names more than one call can write.
+// Unpack a workspace zip into a folder beside it. The runtime starts at most this many entries per call, refused ones
+// included, so a selection never names more than one call can unpack.
 export const EXTRACT_ARCHIVE_MAX_ENTRIES = 25;
 export const extractArchiveArgsSchema = z.strictObject({
   file_id: z.string().min(1).max(100),

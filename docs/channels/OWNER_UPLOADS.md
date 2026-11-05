@@ -11,7 +11,7 @@ When `WALDO_FILE_TOOLS` is "1" (staging), every file the owner sends Waldo is ke
 | Mail to the owner's Waldo address | Every attached file, but not parts the mail shows inline, and nothing from a mail the Scribe withholds | `provider_import`, because a mail is third-party text | `mail/<8 hex>/<file name>` |
 | The app | Nothing yet. The app has no file upload | n/a | n/a |
 
-This covers whatever the owner sends, health documents included (for example a lab report PDF). It is the owner's own content, kept in their own workspace. It is never copied into memory, logs, traces or the health plane.
+This covers whatever the owner sends, health documents included (for example a lab report PDF or a photo of a prescription). Under the repository rules in `CLAUDE.md`, a document the owner sends is normal agent context within the owner's authorization: it is kept in R2 in their own workspace and the model may read it. ADR-0081 (as amended by `docs/app/HEALTH_PLANE_AMENDMENT.md`) governs synced wearable readings only. Those stay on the Supabase health plane and are never written into the workspace. A kept file is never copied into memory, logs, traces or the health plane.
 
 ## Where it lives
 
@@ -24,7 +24,7 @@ This covers whatever the owner sends, health documents included (for example a l
 - 10 MB per file.
 - 100 MB per owner.
 - 500 files.
-- 500 write receipts for the life of the workspace. Nothing prunes them yet, which is an owner decision.
+- 500 write receipts for the life of the workspace. Nothing prunes them yet, so after 500 writes the workspace refuses new files as full. Pruning is a follow-up.
 
 A file over a limit is not kept, and the turn's note says why.
 

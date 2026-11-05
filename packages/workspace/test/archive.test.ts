@@ -49,7 +49,7 @@ describe('extractArchive', () => {
   });
 
   it('lists a large archive without writing, then writes only what was chosen', async () => {
-    const many = Array.from({ length: ARCHIVE_LIMITS.writesPerCall + 5 }, (_, i) => ({ name: `f${i}.txt`, text: String(i) }));
+    const many = Array.from({ length: ARCHIVE_LIMITS.entriesPerCall + 5 }, (_, i) => ({ name: `f${i}.txt`, text: String(i) }));
     const { store, meta } = await upload(await buildZip(many));
     const listed = await extractArchive(store, { file_id: meta.file_id, revision: 1, operationIdFor: opFor() });
     expect(listed.written).toEqual([]);
@@ -58,6 +58,16 @@ describe('extractArchive', () => {
     const chosen = await extractArchive(store, { file_id: meta.file_id, revision: 1, entries: ['f3.txt', 'missing.txt'], operationIdFor: opFor() });
     expect(chosen.written.map(w => w.entry)).toEqual(['f3.txt']);
     expect(chosen.skipped).toEqual([{ entry: 'missing.txt', reason: 'not_in_archive' }]);
+  });
+
+  it('counts refused entries toward the per-call limit, so a call cannot inflate entry after refused entry', async () => {
+    const bad = Array.from({ length: ARCHIVE_LIMITS.entriesPerCall + 5 }, (_, i) => ({ name: `bad-${i}.txt`, text: 'payload', deflate: true, crc: 1 }));
+    const zip = await buildZip([...bad, { name: 'good.txt', text: 'fine' }]);
+    const { store, meta } = await upload(zip);
+    const out = await extractArchive(store, { file_id: meta.file_id, revision: 1, prefix: '', operationIdFor: opFor() });
+    expect(out.written).toEqual([]);
+    expect(out.skipped).toHaveLength(ARCHIVE_LIMITS.entriesPerCall);
+    expect(out.stopped).toBe('per_call_limit');
   });
 
   it('refuses the whole archive when any entry escapes its folder', async () => {

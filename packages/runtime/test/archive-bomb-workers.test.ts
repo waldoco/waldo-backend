@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Inflate } from 'fflate';
-import { INFLATE_SLICE_BYTES, inflateEntry, readZipDirectory } from '@waldo/workspace';
+import { ARCHIVE_LIMITS, INFLATE_SLICE_BYTES, extractArchive, inflateEntry, readZipDirectory, type WorkspaceStore } from '@waldo/workspace';
 
 // In workerd, not Node: the platform DecompressionStream inflates whatever it is handed without backpressure, so a capped
 // reader still let a lying-header bomb fill the isolate. The inflater must stop within one compressed slice of the cap.
@@ -15,18 +15,26 @@ const zeros = async (total: number): Promise<Uint8Array> => {
   await writer.close();
   return new Uint8Array(await read);
 };
-// One deflated entry whose header claims declaredSize bytes.
-const zipOf = (compressed: Uint8Array, declaredSize: number): Uint8Array => {
-  const name = new TextEncoder().encode('bomb.bin');
-  const local = new Uint8Array(30 + name.length + compressed.length); const lv = new DataView(local.buffer);
-  lv.setUint32(0, 0x04034b50, true); lv.setUint16(8, 8, true); lv.setUint32(18, compressed.length, true); lv.setUint32(22, declaredSize, true); lv.setUint16(26, name.length, true);
-  local.set(name, 30); local.set(compressed, 30 + name.length);
-  const central = new Uint8Array(46 + name.length); const cv = new DataView(central.buffer);
-  cv.setUint32(0, 0x02014b50, true); cv.setUint16(10, 8, true); cv.setUint32(20, compressed.length, true); cv.setUint32(24, declaredSize, true); cv.setUint16(28, name.length, true);
-  central.set(name, 46);
+// `count` deflated entries, each its own copy of `compressed`, whose headers claim declaredSize bytes.
+const zipOf = (compressed: Uint8Array, declaredSize: number, count = 1): Uint8Array => {
+  const locals: Uint8Array[] = [], centrals: Uint8Array[] = [];
+  let offset = 0;
+  for (let i = 0; i < count; i++) {
+    const name = new TextEncoder().encode(count === 1 ? 'bomb.bin' : `bomb-${i}.bin`);
+    const local = new Uint8Array(30 + name.length + compressed.length); const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(8, 8, true); lv.setUint32(18, compressed.length, true); lv.setUint32(22, declaredSize, true); lv.setUint16(26, name.length, true);
+    local.set(name, 30); local.set(compressed, 30 + name.length);
+    const central = new Uint8Array(46 + name.length); const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(10, 8, true); cv.setUint32(20, compressed.length, true); cv.setUint32(24, declaredSize, true); cv.setUint16(28, name.length, true); cv.setUint32(42, offset, true);
+    central.set(name, 46);
+    locals.push(local); centrals.push(central); offset += local.length;
+  }
+  const size = centrals.reduce((n, c) => n + c.length, 0);
   const end = new Uint8Array(22); const ev = new DataView(end.buffer);
-  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, 1, true); ev.setUint16(10, 1, true); ev.setUint32(12, central.length, true); ev.setUint32(16, local.length, true);
-  const out = new Uint8Array(local.length + central.length + 22); out.set(local); out.set(central, local.length); out.set(end, local.length + central.length);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, count, true); ev.setUint16(10, count, true); ev.setUint32(12, size, true); ev.setUint32(16, offset, true);
+  const out = new Uint8Array(offset + size + 22);
+  let at = 0;
+  for (const part of [...locals, ...centrals, end]) { out.set(part, at); at += part.length; }
   return out;
 };
 
@@ -59,3 +67,26 @@ it('an honest entry still inflates whole in workerd', async () => {
   const [entry] = readZipDirectory(zip);
   expect(new TextDecoder().decode(await inflateEntry(zip, entry!, 50 * 1024 * 1024))).toBe(new TextDecoder().decode(text));
 });
+
+it('2,000 lying entries in one call stop after a bounded amount of inflation, refused entries included', async () => {
+  // Each entry claims 1 MiB and inflates to 4 MiB, so every one is refused; before, each was still inflated to its cap.
+  const zip = zipOf(await zeros(4 * 1024 * 1024), 1024 * 1024, ARCHIVE_LIMITS.directoryEntries);
+  const store = { export: async () => ({ bytes: zip, meta: { path: 'uploads/x/bomb.zip', provenance: 'owner_upload' } }) } as unknown as WorkspaceStore;
+  let produced = 0;
+  const push = Inflate.prototype.push;
+  const counted = new WeakSet<Inflate>();
+  vi.spyOn(Inflate.prototype, 'push').mockImplementation(function (this: Inflate, chunk: Uint8Array, final?: boolean) {
+    if (!counted.has(this)) { counted.add(this); const ondata = this.ondata; this.ondata = (data, last) => { produced += data.byteLength; ondata.call(this, data, last); }; }
+    return push.call(this, chunk, final);
+  });
+  const started = Date.now();
+  const result = await extractArchive(store, { file_id: 'f', revision: 1, prefix: '', operationIdFor: async (entry) => entry });
+  expect(result).toMatchObject({ entries_total: ARCHIVE_LIMITS.directoryEntries, written: [], stopped: 'per_call_limit' });
+  expect(result.skipped.length).toBeGreaterThan(0);
+  expect(result.skipped.length).toBeLessThanOrEqual(ARCHIVE_LIMITS.entriesPerCall);
+  expect(result.skipped.every((skip) => skip.reason === 'corrupt' || skip.reason === 'too_large')).toBe(true);
+  // At most one slice's worth past each entry's cap (DEFLATE: about 1 MiB per 1 KiB slice).
+  expect(produced).toBeLessThanOrEqual(ARCHIVE_LIMITS.entriesPerCall * (1024 * 1024 + 1100 * INFLATE_SLICE_BYTES));
+  expect(produced).toBeLessThanOrEqual(ARCHIVE_LIMITS.inflatedBytesPerCall + 1100 * INFLATE_SLICE_BYTES);
+  expect(Date.now() - started).toBeLessThan(5_000);
+}, 120_000);

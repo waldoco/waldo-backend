@@ -1,10 +1,12 @@
 import { Inflate } from 'fflate';
 import { LIMITS, validatePath, WorkspaceError, type WorkspaceStore } from './store';
 
-// Hard limits for unpacking an archive inside the Worker. These are safety bounds (zip bombs, memory), not judgment:
+// Hard limits for unpacking an archive inside the Worker. These are safety bounds (zip bombs, memory, CPU), not judgment:
 // what to unpack and why is the model's call. The ratio is only enforced past ratioFloorBytes, where it means something.
+// entriesPerCall counts every entry inflation starts on, refused or written, and inflatedBytesPerCall every byte the
+// inflater produces, kept or thrown away: a call over 2,000 entries whose headers lie stops after a bounded amount of work.
 export const ARCHIVE_LIMITS = {
-  directoryEntries: 2000, listedEntries: 200, writesPerCall: 25, totalBytesPerCall: 50 * 1024 * 1024,
+  directoryEntries: 2000, listedEntries: 200, entriesPerCall: 25, inflatedBytesPerCall: 50 * 1024 * 1024,
   entryBytes: LIMITS.fileBytes, ratio: 100, ratioFloorBytes: 1024 * 1024,
 } as const;
 
@@ -81,7 +83,8 @@ export const readZipDirectory = (bytes: Uint8Array): readonly ArchiveEntry[] => 
 };
 
 export type EntrySkip = 'symlink' | 'encrypted' | 'unsupported_method' | 'too_large' | 'compression_ratio' | 'corrupt';
-const EntryFailure = class extends Error { constructor(public readonly reason: EntrySkip) { super(reason); } };
+// inflated: bytes the inflater produced before the entry was refused, which still count against the call's budget.
+const EntryFailure = class extends Error { constructor(public readonly reason: EntrySkip, public readonly inflated = 0) { super(reason); } };
 
 // Compressed bytes handed to the inflater at a time. DEFLATE expands at most about 1032:1, so one slice can never become
 // more than about 1 MiB, and inflation stops within one slice of the cap. The platform DecompressionStream is not used:
@@ -120,13 +123,13 @@ export const inflateEntry = async (bytes: Uint8Array, entry: ArchiveEntry, budge
         inflater.push(data.subarray(at, next), next === data.length);
       }
       if (data.length === 0) inflater.push(new Uint8Array(0), true);
-    } catch { throw new EntryFailure('corrupt'); }
-    if (stop) throw new EntryFailure(stop);
+    } catch { throw new EntryFailure('corrupt', total); }
+    if (stop) throw new EntryFailure(stop, total);
     out = new Uint8Array(total);
     let offset = 0;
     for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
   }
-  if (out.length !== entry.size || crc32(out) !== entry.crc32) throw new EntryFailure('corrupt');
+  if (out.length !== entry.size || crc32(out) !== entry.crc32) throw new EntryFailure('corrupt', out.length);
   return out;
 };
 
@@ -178,21 +181,28 @@ export const extractArchive = async (store: WorkspaceStore, request: ExtractRequ
       if (!found) skipped.push({ entry: name, reason: 'not_in_archive' });
       return found ? [found] : [];
     });
-  } else chosen = request.prefix !== undefined || listed.length <= ARCHIVE_LIMITS.writesPerCall ? listed : [];
+  } else chosen = request.prefix !== undefined || listed.length <= ARCHIVE_LIMITS.entriesPerCall ? listed : [];
   const written: { entry: string; path: string; file_id: string; revision: number; byte_size: number; mime: string }[] = [];
   const seen = new Set<string>();
-  let budget = ARCHIVE_LIMITS.totalBytesPerCall;
+  let budget = ARCHIVE_LIMITS.inflatedBytesPerCall;
+  let started = 0;
   let stopped: ExtractResult['stopped'];
   for (const entry of chosen) {
-    if (written.length >= ARCHIVE_LIMITS.writesPerCall) { stopped = 'per_call_limit'; break; }
+    if (started >= ARCHIVE_LIMITS.entriesPerCall || budget <= 0) { stopped = 'per_call_limit'; break; }
     const key = entry.name.normalize('NFC').toLowerCase();
     if (seen.has(key)) { skipped.push({ entry: entry.name, reason: 'duplicate' }); continue; }
     seen.add(key);
     const path = `${folder}/${entry.name}`.normalize('NFC');
     try { validatePath(path); } catch { skipped.push({ entry: entry.name, reason: 'name_too_long' }); continue; }
     let out: Uint8Array;
+    started++;
     try { out = await inflateEntry(bytes, entry, budget); }
-    catch (error) { if (error instanceof EntryFailure) { skipped.push({ entry: entry.name, reason: error.reason }); continue; } throw error; }
+    catch (error) {
+      if (!(error instanceof EntryFailure)) throw error;
+      budget -= error.inflated;
+      skipped.push({ entry: entry.name, reason: error.reason });
+      continue;
+    }
     budget -= out.length;
     const mime = mimeForName(entry.name);
     try {

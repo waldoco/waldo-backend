@@ -66,7 +66,7 @@ describe('extract_archive', () => {
   });
 
   it('has a schema the runtime cap matches, owner-turn permission, and an exempt, idempotent record', () => {
-    expect(EXTRACT_ARCHIVE_MAX_ENTRIES).toBe(ARCHIVE_LIMITS.writesPerCall);
+    expect(EXTRACT_ARCHIVE_MAX_ENTRIES).toBe(ARCHIVE_LIMITS.entriesPerCall);
     expect(extractArchiveArgsSchema.safeParse({ file_id: 'f', revision: 1 }).success).toBe(true);
     expect(extractArchiveArgsSchema.safeParse({ file_id: 'f', revision: 1, path: '../x' }).success).toBe(false);
     expect(Object.entries(TOOL_PERMISSIONS).filter(([, tools]) => tools.includes('extract_archive')).map(([key]) => key)).toEqual(['user_message']);
