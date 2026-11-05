@@ -109,6 +109,9 @@ describe('WeatherKit', () => {
       expect(await weatherKit(credentials, null, fetcher, () => NOW).forecast('tdr1v', 'Asia/Kolkata')).toBeNull();
       expect(logged.map(line => JSON.parse(line))).toEqual([{ hop: 'weatherkit', code }]);
     }
-    expect(await weatherKit({ ...credentials, privateKey: 'not a key' }, null, provider(apple).fetcher, () => NOW).forecast('tdr1v', 'Asia/Kolkata')).toBeNull();
+    logged.length = 0;
+    const { asked, fetcher } = provider(apple);
+    expect(await weatherKit({ ...credentials, privateKey: 'not a key' }, null, fetcher, () => NOW).forecast('tdr1v', 'Asia/Kolkata')).toBeNull();
+    expect([asked, logged.map(line => JSON.parse(line))]).toEqual([[], [{ hop: 'weatherkit', code: 'token' }]]);
   });
 });

@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import { devicePlaceStoredV1Schema } from '../../../../contracts/src/app/device-context';
 import { invokeDeviceContext } from '../../channels/app-device-context';
-import type { WeatherKit } from '../../connectors/weatherkit';
+import { weatherKit, weatherKitCredentials, type WeatherCache, type WeatherKit, type WeatherKitEnv } from '../../connectors/weatherkit';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -65,3 +65,11 @@ export const getWeatherHandler = (book: WeatherPlaceBook, provider: WeatherKit, 
 });
 
 const result = (data: GetWeatherResult) => ({ ok: true as const, data, source_taint: null });
+
+// get_weather is offered only with the place switch, the weather switch and the WeatherKit key all present.
+export const weatherTools = (
+  env: WeatherKitEnv & Readonly<{ DEVICE_PLACE?: string; DEVICE_WEATHER?: string }>, call: SignedCall | null, doName: string | null, clock: OwnerClock, cache: WeatherCache | null,
+) => {
+  const credentials = env.DEVICE_PLACE === '1' && env.DEVICE_WEATHER === '1' ? weatherKitCredentials(env) : null;
+  return credentials ? [getWeatherHandler(weatherPlaceBook(call, doName), weatherKit(credentials, cache), clock)] : [];
+};

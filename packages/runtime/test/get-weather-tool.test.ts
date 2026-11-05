@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getWeatherResultSchema } from '@waldo/contracts';
 import { md5Hex } from '../src/channels/md5';
 import type { Forecast, WeatherKit } from '../src/connectors/weatherkit';
-import { getWeatherHandler, weatherPlaceBook } from '../src/tools/live/weather';
+import { getWeatherHandler, weatherPlaceBook, weatherTools } from '../src/tools/live/weather';
 
 // Synthetic values: made-up cells, cities and forecast. "now" is 12:00 UTC on 5 Nov 2026.
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-11-05T12:00:00Z') };
@@ -69,6 +69,15 @@ describe('get_weather', () => {
       const { asked, handler } = setup(answer, weather);
       expect(await handler.handle({}, ctx)).toEqual({ ok: true, source_taint: null, data: { state: 'unavailable', reason } });
       if (reason !== 'provider_unavailable') expect(asked).toEqual([]);
+    }
+  });
+
+  it('is offered only with both switches on and all four WeatherKit secrets set', () => {
+    const on = { DEVICE_PLACE: '1', DEVICE_WEATHER: '1', WEATHERKIT_TEAM_ID: 'TEAM123456', WEATHERKIT_SERVICE_ID: 'in.example.weather', WEATHERKIT_KEY_ID: 'KEY1234567', WEATHERKIT_PRIVATE_KEY: 'synthetic' };
+    const offered = (env: Record<string, string>) => weatherTools(env, null, 'do-x', clock, null).map(tool => tool.name);
+    expect(offered(on)).toEqual(['get_weather']);
+    for (const off of [{ DEVICE_PLACE: '0' }, { DEVICE_WEATHER: '0' }, { DEVICE_PLACE: '' }, { DEVICE_WEATHER: '' }, { WEATHERKIT_PRIVATE_KEY: '' }, { WEATHERKIT_TEAM_ID: '' }]) {
+      expect(offered({ ...on, ...off })).toEqual([]);
     }
   });
 });

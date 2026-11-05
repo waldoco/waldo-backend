@@ -95,8 +95,9 @@ export const weatherKit = (credentials: WeatherKitCredentials, cache: WeatherCac
     try { const hit = await cache?.get(key); if (hit) return hit; } catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'cache_read' })); }
     const { latitude, longitude } = geohashCentre(cell);
     const url = `https://weatherkit.apple.com/api/v1/weather/en/${latitude.toFixed(4)}/${longitude.toFixed(4)}?dataSets=currentWeather,forecastDaily&timezone=${encodeURIComponent(timezone)}`;
-    let response: Response;
-    try { response = await fetcher(url, { headers: { authorization: `Bearer ${await weatherKitToken(credentials, at)}` } }); }
+    let token: string, response: Response;
+    try { token = await weatherKitToken(credentials, at); } catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'token' })); return null; }
+    try { response = await fetcher(url, { headers: { authorization: `Bearer ${token}` } }); }
     catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'fetch_failed' })); return null; }
     if (!response.ok) { console.error(JSON.stringify({ hop: 'weatherkit', code: `status_${response.status}` })); return null; }
     let forecast: Forecast | null;

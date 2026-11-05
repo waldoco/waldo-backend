@@ -123,7 +123,7 @@ describe('trace health scrub at the gate, capture on', () => {
 
   it('withholds a device-context or weather tool hop whole: no phone zone, city or forecast reaches a trace', () => {
     const output = '{"state":"available","devices":[{"device":1,"timezone":"Asia/Dubai","place":{"locality":"Testville"}}]}';
-    for (const hop of ['tool_get_device_context', 'task_tool_get_device_context', 'tool_get_weather']) {
+    for (const hop of ['tool_get_device_context', 'task_tool_get_device_context', 'tool_get_weather', 'task_tool_get_weather']) {
       const gated = gateTraceEntry({ trace: 'tg-3', hop, ms: 1, ok: true, text: { input: '{}', output } }, true);
       expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
     }
