@@ -25,7 +25,7 @@ import { ensureSchema } from '../src/tracer/schema';
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
 // Each scripted turn is a list of rounds; a request is the Brief's when it carries the scheduled-card header.
-const model = vi.hoisted(() => ({ brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], briefRequests: [] as string[], ownerRequests: [] as string[], results: [] as string[] }));
+const model = vi.hoisted(() => ({ briefModels: [] as string[], brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], briefRequests: [] as string[], ownerRequests: [] as string[], results: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -34,7 +34,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const asked = String(request.messages.at(-1)?.content ?? '');
-    const brief = asked.includes('[Scheduled card "The Brief"');
+    const brief = asked.includes('[Scheduled card "');
+    if (brief) model.briefModels.push(request.model);
     (brief ? model.briefTools : model.ownerTools).push((request.tools ?? []).map(tool => tool.name));
     if (brief) model.briefAsked.push(asked);
     (brief ? model.briefRequests : model.ownerRequests).push(JSON.stringify(request));
@@ -88,7 +89,7 @@ const storedText = (state: DurableObjectState) => {
 };
 
 beforeEach(() => {
-  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
+  model.briefModels = []; model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
   calendar.events = [STARTUP]; calendar.created = []; calendar.moved = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -112,6 +113,8 @@ type Steps = Readonly<{
   owner: Owner; state: DurableObjectState;
   // The Brief fires through the scheduler, as it does at its planned time.
   brief(): Promise<void>;
+  // Any day card, fired the same way.
+  card(id: 'card:midday' | 'card:close'): Promise<void>;
   say(text: string): Promise<void>;
   history(): Promise<ReturnType<typeof appHistoryResultV1Schema.parse>>;
   approvals(): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
@@ -141,6 +144,15 @@ const owned = async (name: string, settings: Readonly<Record<string, unknown>>, 
       let sent = 0;
       await run({
         owner, state,
+        card: async id => {
+          state.storage.sql.exec('DELETE FROM schedule');
+          dayPlanBook(state.storage.sql).save(DAY, { card: id, time: '08:00', reason: 'planned' });
+          await new Scheduler(state.storage.sql, state.storage, productionDeps())
+            .schedule({ id, kind: 'brief', payloadRefs: { id }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+          state.storage.kv.put('owner_alarm_last_v1', 1);
+          await owner.alarm();
+          await state.storage.deleteAlarm();
+        },
         brief: async () => {
           state.storage.sql.exec('DELETE FROM schedule');
           dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '08:00', reason: 'planned' });
@@ -355,6 +367,38 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
     await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
+    });
+  });
+});
+
+// PROACTIVE_ACT_AHEAD: the day shape the owner approved. The Check-in offers its one decision on a card, like the planning Brief,
+// in the chat role; whether the plan slipped, and so whether it says anything, is the model's.
+describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
+  it('the Check-in may put its decision on a card, in the chat role; with the switch off it reads and writes only', async () => {
+    const MOVE = { action: 'move', event_id: 'ev-startup', title: 'Startup time', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:45:00Z`, reason: 'The deck block slipped; this gives it the afternoon' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'Check-in\nThe deck block slipped. Moving Startup time to 5 gives it back; it is on a card.' }];
+    await owned('day-shape-midday-on', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, approvals }) => {
+      await card('card:midday');
+      expect(model.briefTools[0]).toContain('propose_calendar_change');
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
+      expect(calendar.moved).toBe(0);
+    });
+    const on = model.briefModels[0];
+    model.briefTools = []; model.briefModels = []; model.brief = [{ text: 'SKIP' }];
+    await owned('day-shape-midday-off', { PROACTIVE_ACT_AHEAD: '0' }, async ({ card, approvals }) => {
+      await card('card:midday');
+      expect(model.briefTools[0]).not.toContain('propose_calendar_change');
+      expect(await approvals()).toEqual([]);
+    });
+    expect(model.briefModels[0]).not.toBe(on);
+  });
+
+  it('a Check-in that finds the plan holding sends nothing', async () => {
+    model.brief = [{ text: 'SKIP' }];
+    await owned('day-shape-midday-holding', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, history, approvals }) => {
+      await card('card:midday');
+      expect((await history()).messages).toEqual([]);
+      expect(await approvals()).toEqual([]);
     });
   });
 });
