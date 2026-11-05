@@ -72,11 +72,14 @@ const ACT_AHEAD = [
   'When this batch needs the owner, act with exactly one card per clash, built from that move: send_email with the reply as it should go, or propose_calendar_change. Its reason is one line on why this is right for them now. The card is the notification, and nothing happens until they approve it.',
   'When nothing here needs the owner, choose brief or silent: nothing reaches them.',
 ].join(' ');
-// How a message reads where the owner reads Waldo: short in a chat, structured in mail. The app's cards carry their own detail.
-export const channelStyle = (surface: string): string =>
-  surface === 'email' ? 'The owner reads Waldo by email: a message is structured, with a clear first line and short sections.'
-    : surface === 'app' ? 'The owner reads Waldo in the app: a message is a line or two; a card carries the detail.'
-      : 'The owner reads Waldo in a chat: a message is one or two short lines, with no headers or lists.';
+// How a message reads where proactive work reaches the owner, by what that surface shows (proactive-surface.ts READS):
+// beside the day's cards, a line or two with the card carrying the detail; in a chat, one or two short lines.
+export type ReadsAs = 'cards' | 'chat';
+const STYLES: Readonly<Record<ReadsAs, string>> = {
+  cards: 'The owner reads Waldo in the app: a message is a line or two; a card carries the detail.',
+  chat: 'The owner reads Waldo in a chat: a message is one or two short lines, with no headers or lists.',
+};
+export const channelStyle = (reads: ReadsAs): string => STYLES[reads];
 
 export const triagePrompt = (localNow: string, context: Readonly<{ changes: string; ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups?: boolean;
   cards: string; revisesCards: boolean; goals: string; hold: TriageHold | null; left: number;
