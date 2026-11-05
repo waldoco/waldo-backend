@@ -39,6 +39,19 @@ export const UPDATE_SWEEP_ACT_AHEAD_TEXT = {
   ].join(' '),
 } as const;
 
+// PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, with nothing new arriving. What is worth raising is
+// the brain's judgment; the worker only finds what is drifting.
+export const INTERVENTION_JOB_TEXT = {
+  title: 'Look across the day',
+  goal: [
+    'Nothing new arrived: look across the owner\'s plate for what is drifting.',
+    'Read their calendar for today and the next two days, their tasks, the loops Waldo holds open for them, replies they owe, and recent mail threads they are part of.',
+    'Find what is slipping or at risk: something planned that has not happened, a commitment that now clashes, a task or reply going stale, a backlog building, a personal plan or hobby getting crowded out.',
+    'Put each in findings, with its ref and what it means for the owner; leave out what is on track.',
+  ].join(' '),
+  done_when: NOTHING_IS_NORMAL,
+} as const;
+
 export const MEETING_PREP_JOB_TEXT = {
   title: 'Meeting prep',
   goal: [

@@ -85,6 +85,7 @@ import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, 
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
+import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
@@ -304,6 +305,10 @@ type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[]
 // What Google said about one connected account at its latest connect: object KV 'google:profiles', keyed by account id.
 type GoogleProfileFact = GoogleProfile & Readonly<{ at: number }>;
 
+// The patrol entries: the health trigger's evaluation, and Waldo's own look across the owner's plate, told apart by entry id.
+const patrolOf = (health: (entry: ScheduleEntry) => Promise<void>, look: (entry: ScheduleEntry) => Promise<void>) =>
+  (entry: ScheduleEntry): Promise<void> => (entry.id === INTERVENTION_REVIEW_ID ? look(entry) : health(entry));
+
 type OwnerRuntime = Readonly<{
   owner: number;
   listener: TelegramOwnerListener | null;
@@ -336,6 +341,8 @@ type OwnerRuntime = Readonly<{
   healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
+  // PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, a patrol entry beside the health trigger's.
+  interventionReview(entry: ScheduleEntry): Promise<void>;
   healthTrigger(entry: ScheduleEntry): Promise<HealthTriggerOutcome>;
   watches(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void | 'waiting_on_model'>;
@@ -3148,7 +3155,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       }
       const appWithTelegramCopy = this.appWithTelegramCopy(channel);
-      const { scheduler, fire, beat, nightly, briefs, healthTrigger, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal, runs } = this.setup(channel);
+      const { scheduler, fire, beat, nightly, briefs, healthTrigger, interventionReview, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal, runs } = this.setup(channel);
       await ready;
       // The release's boot work ran with `ready`; a pass that stopped before it (a directory retry) leaves the release unmarked.
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
@@ -3217,7 +3224,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
         // revoked account runs nothing, and an outage asks again without spending attempts.
-        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, patrol: recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, healthTrigger) };
+        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, patrol: patrolOf(recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, healthTrigger), interventionReview) };
         // A paused job's notice goes out from the runtime that ran the jobs, so it lands where their messages do.
         let notices = noticeFailures;
         if (consoleAuth(this.env)) {
@@ -3229,7 +3236,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
           const app = await this.appRunsOwnerJobs(channel, owner);
           if (app) {
-            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder, patrol: recordedRun(app.runs, 'health_trigger', HEALTH_TRIGGER_RUN, app.healthTrigger) };
+            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder, patrol: patrolOf(recordedRun(app.runs, 'health_trigger', HEALTH_TRIGGER_RUN, app.healthTrigger), app.interventionReview) };
             notices = app.noticeFailures;
           }
         }
@@ -4545,6 +4552,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       reopens: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)),
       closed: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)) !== null,
     } : null;
+    // PROACTIVE_INTERVENTIONS (with the owner's limits): Waldo's own look across the owner's plate, on its cadence. The owner
+    // turning follow-ups off or volume to low is their no to unasked messages.
+    const interventions = this.env.PROACTIVE_INTERVENTIONS === '1' ? interrupts : null;
+    const reachesOut = () => { const { followups, volume } = loops.proactivity(); return followups !== false && volume !== 'low'; };
+    // The look runs only inside the owner's day, from the Brief to the Close (interrupts.closed); its next run is armed there.
+    const armLook = (now: number, again = false) => armInterventionReview(scheduler,
+      nextLookAt(now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN), clock.timezone, day => plans.window(day, clock.timezone)), again);
+    const lookFollows = async (on: boolean) => { if (interventions && on && armable('heartbeat')) await armLook(Date.now()); else await dropLook(); };
+    const dropLook = async () => { if (scheduler.lookup(INTERVENTION_REVIEW_ID).state !== 'absent') { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); cancelMachine('intervention'); } };
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
     const pushDirectory = () => {
       const call = signedRpc(this.env), doName = identity.get<string>('do_name');
@@ -4605,15 +4621,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => undefined)) : Promise.resolve(),
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
+      interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
     ]);
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
-        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine })) : this.browserReady)
+        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows })) : this.browserReady)
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
       .then(async ([, [, , seeded]]) => {
-        await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine });
+        await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows });
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
         // Boot work is the nightly memory job's migration and the day plan that arms the Brief, run as those jobs.
@@ -4867,7 +4884,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
+      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
@@ -5732,6 +5749,42 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         settled: () => this.ctx.waitUntil(wakeBriefSweep(scheduler, Date.now()).then(() => undefined, () => undefined)),
       } } : {}),
     });
+    // PROACTIVE_INTERVENTIONS: the look's apply turn, in the chat role and tainted like every turn over the worker's reads; its
+    // message goes out like an update card, under the owner's limits.
+    const interventionApply = interventions ? interventionApplier({
+      book: interventions.book, limits: interventions.limits, timezone: () => clock.timezone, now: () => Date.now(),
+      consent: reachesOut, quiet, closed: interventions.closed, transaction: work => storage.transactionSync(work),
+      context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
+        cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv)) }),
+      turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', true)),
+      cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
+      deliver: async (id, trace, text, commit) => {
+        if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+          doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + UPDATE_CARD_FRESH_MS }, work => storage.transactionSync(() => { work(); commit(); }));
+      },
+      chose: (trace, code) => log({ trace, hop: 'intervention', ms: 0, ok: true, code }),
+    }) : null;
+    // The look's tick: it starts a reader job only when something unasked could still go now (consent, quiet hours, the
+    // owner's day, a question waiting, the budget); otherwise it ends there, at no model cost. Either way it arms the next.
+    const interventionReview = async (entry: ScheduleEntry) => {
+      const trace = `${entry.id}:${entry.occurrence_at}`;
+      // The owner's heartbeat preference governs Waldo's own look too: off, the look ends and is not re-armed.
+      if (!interventions || !schedPrefs.enabled('heartbeat')) { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); return; }
+      const now = Date.now();
+      await armLook(now, true);
+      const closed = interventions.book.hold({ consent: reachesOut(), quiet: quiet(), closed: interventions.closed(), asks: false, urgent: false, limits: interventions.limits() });
+      if (closed !== null) { log({ trace, hop: 'intervention_review', ms: 0, ok: true, code: `held_${closed}` }); return; }
+      const made = storage.transactionSync(() => {
+        if (workerRouteDown(modelAccess)) return 'held_breaker' as const;
+        const written = enqueueMachine(this.jobs(), interventionSpec({ surface: channel, timezone: clock.timezone, now }), heldTopicsOf(claimStore(storage.sql)));
+        if (written.code === 'enqueued') holdTaskJobsDue(storage.kv, now);
+        return written.code;
+      });
+      log({ trace, hop: 'intervention_review', ms: Date.now() - now, ok: true, code: made });
+      if (made === 'enqueued') await armTaskJobsWake(storage, Date.now());
+    };
     const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
       if (card === null) return;
@@ -5958,7 +6011,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // settled without it read the findings.
     const lookupApply = { decidesOnEmpty: true, apply: async (_row: unknown, _result: unknown, io: { settle(): void }) => { io.settle(); return 'skipped' as const; },
       ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
@@ -6025,7 +6078,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'schedule.set' || action === 'schedule.reset') {
           const kind = SCHEDULE_KINDS.find((candidate) => candidate === id);
           if (action === 'schedule.set') { if (!kind || (value !== 'on' && value !== 'off')) return false; schedPrefs.set(kind, value === 'on'); } else schedPrefs.reset();
-          await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow() }, action === 'schedule.set' ? kind : undefined);
+          await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow(), alongHeartbeat: lookFollows }, action === 'schedule.set' ? kind : undefined);
         } else if (action === 'proactivity.set') {
           const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });

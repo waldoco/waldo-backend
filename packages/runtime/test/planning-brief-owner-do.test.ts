@@ -16,6 +16,9 @@ import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
+import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
+import { loopBook } from '../src/channels/loops';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
@@ -399,6 +402,83 @@ describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
       await card('card:midday');
       expect((await history()).messages).toEqual([]);
       expect(await approvals()).toEqual([]);
+    });
+  });
+});
+
+// PROACTIVE_INTERVENTIONS: Waldo's own look is a patrol entry beside the health trigger's. Its tick starts one reader job when
+// something could still reach the owner, and none when the owner said no to unasked messages.
+describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () => {
+  const tick = async (state: DurableObjectState, owner: Steps['owner']) => {
+    state.storage.sql.exec('DELETE FROM schedule');
+    await new Scheduler(state.storage.sql, state.storage, productionDeps())
+      .schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+    state.storage.kv.put('owner_alarm_last_v1', 1);
+    await owner.alarm();
+    await state.storage.deleteAlarm();
+  };
+  const looks = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n;
+
+  it('the tick starts one reader job; the health trigger keeps its own patrol entry', async () => {
+    await owned('intervention-tick-on', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner, hops }) => {
+      await tick(state, owner);
+      expect(looks(state)).toBe(1);
+      expect(hops()).toContain('intervention_review');
+      expect(hops()).not.toContain('health_trigger');
+    });
+  });
+
+  it('with the owner\'s no to unasked messages, or the switch off, the tick starts nothing', async () => {
+    await owned('intervention-tick-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+    });
+    await owned('intervention-tick-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+    });
+  });
+
+  it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
+    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
+      await tick(state, owner);
+      expect(armed()).toEqual([{ due_at: AT + 180 * 60_000, recurrence_json: null }]);
+      const night = Date.parse(`${DAY}T22:00:00Z`), tickAt = Date.now;
+      Date.now = () => night;
+      try {
+        state.storage.sql.exec('DELETE FROM task_jobs');
+        await tick(state, owner);
+        expect(looks(state)).toBe(0);
+        expect(armed().map(row => row.due_at)).toEqual([AT + 24 * 3_600_000]);
+      } finally { Date.now = tickAt; }
+    });
+  });
+
+  it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
+    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
+      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<boolean> }).act({ action: 'schedule.set', id: 'heartbeat', value });
+      expect(armed()).toBe(1);
+      expect(await set('off')).toBe(true);
+      expect(armed()).toBe(0);
+      expect(await set('on')).toBe(true);
+      expect(armed()).toBe(1);
+    });
+  });
+
+  it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
+    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      state.storage.sql.exec('DELETE FROM schedule');
+      await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - 1000);
+      const sql = state.storage.sql;
+      schedulePreferences(sql, loopBook(sql, { newId: () => 'l', now: () => AT })).set('heartbeat', false);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(looks(state)).toBe(0);
+      expect(sql.exec('SELECT id FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()).toEqual([]);
     });
   });
 });

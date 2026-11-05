@@ -125,6 +125,8 @@
     "PROACTIVE_URGENT_PER_DAY": "1",
     "PROACTIVE_GAP_MIN": "60",
     "PROACTIVE_ACT_AHEAD": "0",
+    "PROACTIVE_INTERVENTIONS": "0",
+    "PROACTIVE_REVIEW_EVERY_MIN": "180",
     "AGENT_MAIL_ZONE_ID": ""
   },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
@@ -303,6 +305,8 @@
         "PROACTIVE_URGENT_PER_DAY": "1",
         "PROACTIVE_GAP_MIN": "60",
         "PROACTIVE_ACT_AHEAD": "1",
+        "PROACTIVE_INTERVENTIONS": "1",
+        "PROACTIVE_REVIEW_EVERY_MIN": "180",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
