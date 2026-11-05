@@ -109,5 +109,16 @@
   "undo_result": {
     "request_id": "undo-000001", "receipt": { "state": "recorded", "message": "Cancelled before it was posted." },
     "duplicate": false, "receipt_state": "undone"
+  },
+  "standing_grant_card": {
+    "approval_id": "p0042", "kind": "standing_grant", "state": "open",
+    "review": "Let Waldo place, move and remove its own focus blocks on sam@example.com's primary calendar, without asking each time?\nWhen: weekdays, 08:00 to 19:00 (Asia/Kolkata), at least 30 minutes ahead\nAt most 3 a day, until 30 Nov 2026\nOnly blocks Waldo made, with no guests. Undo each one until it starts; revoke or pause any time in Settings.",
+    "exact": { "grant": {
+      "scope": { "class": "calendar.move_own_block", "account": "sam@example.com", "window": { "from": "08:00", "to": "19:00" }, "weekdays": [1, 2, 3, 4, 5], "min_lead_minutes": 30 },
+      "limits": { "max_per_day": 3, "timezone": "Asia/Kolkata" }, "valid_from": 1793091600000, "expires_at": 1795683600000
+    } },
+    "payload_digest": "sha256:4242424242424242424242424242424242424242424242424242424242424242", "expires_at": 1793134800000,
+    "actions": ["approve", "skip", "defer"], "presented_surfaces": ["app"],
+    "question": "Let Waldo do this on its own?", "labels": { "approve": "Allow" }
   }
 }

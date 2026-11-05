@@ -107,3 +107,10 @@ describe('SCREEN_TIME in the Worker config', () => {
     expect(parsed.env.staging.vars.SCREEN_TIME).toBe('1');
   });
 });
+
+describe('DEVICE_PLACE in the Worker config', () => {
+  it('is off in production and on in staging, where the deploy applies migration 20261105180000 first', () => {
+    expect(parsed.vars.DEVICE_PLACE).toBe('0');
+    expect(parsed.env.staging.vars.DEVICE_PLACE).toBe('1');
+  });
+});

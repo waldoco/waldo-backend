@@ -10,6 +10,7 @@ import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-director
 import { signedRpc } from '../identity/owner-directory';
 import { dailyScoresFor } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { APP_DEVICE_CONTEXT_PATH, handleAppDeviceContext } from './app-device-context';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
@@ -29,11 +30,13 @@ export const APP_THREADS_PATH = `${APP_PATH}/threads`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
 export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
+export const APP_AUTONOMY_PATH = `${APP_PATH}/autonomy`;
+export const APP_AUTONOMY_CHANGES_PATH = `${APP_AUTONOMY_PATH}/changes`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -254,12 +257,18 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-screen-time:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     return handleAppScreenTime({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
   }
+  // Device context spends its own per-owner budget. Off, the routes are not there.
+  if (url.pathname === APP_DEVICE_CONTEXT_PATH || url.pathname.startsWith(`${APP_DEVICE_CONTEXT_PATH}/`)) {
+    if (env.DEVICE_PLACE !== '1') return fail(404);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
+  }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
   const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -317,9 +326,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
+    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST' || request.method === 'PUT';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
@@ -384,7 +393,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
-    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
+    // A card this build cannot read is told in words, after the reply's own words and before its receipt line.
+    const told = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    const text = link ? `${told.trim() ? `${told}\n\n` : ''}${link}${tail}` : told === body ? stored : `${told}${tail}`;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];
