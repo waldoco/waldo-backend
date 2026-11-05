@@ -367,6 +367,10 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
     await owned('planning-brief-question-off', { PLANNING_BRIEF: '1' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
+    });
+  });
+});
+
 // PROACTIVE_ACT_AHEAD: the day shape the owner approved. The Check-in offers its one decision on a card, like the planning Brief,
 // in the chat role; whether the plan slipped, and so whether it says anything, is the model's.
 describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {

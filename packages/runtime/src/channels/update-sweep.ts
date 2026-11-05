@@ -263,7 +263,7 @@ export type UpdateSweepApplyDeps = Readonly<{
     // How many approval cards were raised since `at`: what the turn offered with propose_action.
     cardsSince(at: number): number;
     // PROACTIVE_ACT_AHEAD: the turn builds on the worker's prepared move, and writes for the surface the owner reads.
-    actAhead?: Readonly<{ style: string }>;
+    actAhead?: Readonly<{ style(): string }>;
   }>;
 }>;
 
@@ -323,7 +323,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const canAct = own ? ownHold(true, false) === null : hold === null;
     const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups,
       cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
-      ...(sense.actAhead ? { actAhead: sense.actAhead } : {}) });
+      ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct));
     const chosen = parseTriage(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true;

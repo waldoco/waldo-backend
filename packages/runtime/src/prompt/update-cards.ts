@@ -69,7 +69,7 @@ const HOLDS: Readonly<Record<TriageHold, string>> = {
 // Acting ahead: Waldo brings the owner the prepared outcome, once, with why; or says nothing.
 const ACT_AHEAD = [
   'The worker may have prepared a move in its proposals: a drafted reply or a calendar change, with why. Check it against today\'s plan and how the owner\'s day and body are going (their health logs, when shared), and fix what it got wrong.',
-  'When this batch needs the owner, act with exactly one card per clash, built from that move: send_email with the reply as it should go, or propose_calendar_change. Its reason is one line on why this is right for them now. The card is the notification and they can undo what it does.',
+  'When this batch needs the owner, act with exactly one card per clash, built from that move: send_email with the reply as it should go, or propose_calendar_change. Its reason is one line on why this is right for them now. The card is the notification, and nothing happens until they approve it.',
   'When nothing here needs the owner, choose brief or silent: nothing reaches them.',
 ].join(' ');
 // How a message reads where the owner reads Waldo: short in a chat, structured in mail. The app's cards carry their own detail.

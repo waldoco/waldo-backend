@@ -558,7 +558,7 @@ describe('applying a sweep job with the day state', () => {
 // or revise, with a push), brief (left for the next main card) or silent (noted, not carried). Code holds only quiet hours,
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
 type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number }; goals: { asked: number } }>;
-const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style: string }>): TriageApply => {
+const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>): TriageApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
@@ -808,7 +808,7 @@ describe('acting ahead on an update', () => {
     h.events.push(MOVED);
     await h.check({ actAhead: true });
     report(h, result);
-    const a = applyingTriage(h, undefined, { style: STYLE });
+    const a = applyingTriage(h, undefined, { style: () => STYLE });
     a.reply.text = JSON.stringify(reply);
     setup(a);
     await a.lane();

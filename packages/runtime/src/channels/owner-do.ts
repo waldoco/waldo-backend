@@ -5674,7 +5674,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
         // A done row is a record of something that ran (a draft), not a card waiting on the owner.
         cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
-        ...(actAhead ? { actAhead: { style: channelStyle(channel) } } : {}),
+        // Written for where proactive work reaches the owner: on the app, the surface they chose ("reach you on").
+        ...(actAhead ? { actAhead: { style: () => channelStyle(channel === 'app' ? wantedTargets(proactiveSurface(storage.kv))[0] ?? 'app' : channel) } } : {}),
       } } : {}),
       deliver: async (id, trace, text, recordId, commit, effect) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
