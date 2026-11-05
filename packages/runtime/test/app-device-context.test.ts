@@ -71,12 +71,20 @@ describe('app device-context routes', () => {
     expect(call!.body.p_sig).toBe(await routerSignature(SECRET, Number(call!.body.p_at), `device_context.place_ingest.owner-1.${md5Hex(payload)}`));
   });
 
+  it('forwards a time zone sent alone', async () => {
+    rpcResult = { request_id: 'dc-zone-0001', replayed: false, status: 'accepted' };
+    const zoneOnly = { request_id: 'dc-zone-0001', expected_epoch: 1, device_id: DEVICE, place: { timezone: 'Asia/Dubai', platform: 'ios', observed_at: '2026-11-05T08:00:00Z' } };
+    expect((await post('/app/v1/device-context/place', zoneOnly)).status).toBe(200);
+    expect(JSON.parse(String(rpcs.at(-1)!.body.p_payload))).toEqual(zoneOnly);
+  });
+
   it('refuses anything finer than the cell, or outside the contract, before any database call', async () => {
     for (const bad of [
       { ...upload, owner: 'someone-else' },
       { ...upload, place: { ...place, cell: 'tdr1wx' } },
       { ...upload, place: { ...place, latitude: 12.97, longitude: 77.59 } },
       { ...upload, place: { ...place, accuracy_m: 3000 } },
+      { ...upload, place: { locality: 'Testville', timezone: 'Asia/Kolkata', platform: 'android', observed_at: '2026-11-05T08:00:00Z' } },
       'not json',
     ]) expect((await post('/app/v1/device-context/place', bad)).status).toBe(400);
     expect((await post('/app/v1/device-context/place', upload, { 'idempotency-key': 'another-key-1' })).status).toBe(400);
@@ -111,10 +119,12 @@ describe('app device-context routes', () => {
   });
 
   it('the owner\'s read-back asks for the owner purpose and drops a stored row that no longer reads as the contract\'s', async () => {
-    rpcResult = { places: [{ device_id: DEVICE, received_at: '2026-11-05T08:00:01.000Z', place }, { device_id: DEVICE, received_at: '2026-11-05T08:00:01.000Z', place: { cell: 'tdr1wxyz' } }] };
+    const stored = { device_id: DEVICE, received_at: '2026-11-05T08:00:01.000Z', platform: 'android', timezone: 'Asia/Kolkata', timezone_observed_at: '2026-11-05T08:00:00.000Z',
+      place: { cell: 'tdr1w', locality: 'Testville', region: 'Test Region', country: 'IN', observed_at: '2026-11-05T08:00:00.000Z' } };
+    rpcResult = { places: [stored, { ...stored, place: { cell: 'tdr1wxyz', observed_at: '2026-11-05T08:00:00.000Z' } }] };
     const response = await get('/app/v1/device-context/place');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ places: [{ device_id: DEVICE, received_at: '2026-11-05T08:00:01.000Z', place }] });
+    expect(await response.json()).toEqual({ places: [stored] });
     expect(JSON.parse(String(rpcs.at(-1)!.body.p_payload))).toEqual({ purpose: 'owner' });
     expect(logged).toEqual(['app device context stored place shape']);
   });
@@ -122,7 +132,7 @@ describe('app device-context routes', () => {
   it('never logs a cell, a place name or a time zone', async () => {
     rpcResult = { error: 'consent_required' };
     await post('/app/v1/device-context/place', upload);
-    rpcResult = { places: [{ device_id: DEVICE, received_at: 'not a time', place }] };
+    rpcResult = { places: [{ device_id: DEVICE, received_at: 'not a time', platform: 'android', timezone: 'Asia/Kolkata', timezone_observed_at: 'x', place }] };
     await get('/app/v1/device-context/place');
     rpcResult = { request_id: 'dc-place-0001', replayed: false, status: 'kept' };
     await post('/app/v1/device-context/place', upload);

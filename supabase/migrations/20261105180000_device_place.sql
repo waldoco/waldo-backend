@@ -1,14 +1,17 @@
--- Device context on the health plane, first signal place: the latest coarse place per owner and device, sent by the owner's
--- phone and read by the owner through the app (and, in a later slice, by the owner's agent). The contract is
--- packages/contracts/src/app/device-context.ts; the design is docs/proposals/ADR_DRAFT_DEVICE_CONTEXT_2026-11-05.md.
+-- Device context on the health plane, first signal place: the latest time zone and coarse place per owner and device, sent by
+-- the owner's phone and read by the owner through the app (and, in a later slice, by the owner's agent). The contract is
+-- packages/contracts/src/app/device-context.ts; the design is docs/proposals/ADR_DEVICE_CONTEXT_2026-11-05.md.
 --
 -- - Consent is per signal, apart from health and screen time: purposes storage_compute, model_processing and provider_lookup,
 --   each with an epoch, on the screen-time pattern. The last two sit on top of storage. Withdrawing storage withdraws all three
 --   and deletes the signal's stored rows and upload receipts; withdrawing either other purpose only stops that use.
--- - waldo.device_place_latest holds one row per owner and device, overwritten: a 5-character geohash cell, the OS place names,
---   the time zone and the platform. No coordinate, no history. An older observation never overwrites a newer one.
--- - Retention: a place not refreshed in 30 days, and receipts older than 90 days, go with the health retention sweep
---   (re-created below with lines added). Account deletion removes everything through the owners cascade.
+-- - waldo.device_place_latest holds one row per owner and device, overwritten: the time zone the phone sends on every wake, and
+--   the 5-character geohash cell with the OS place names when the app is open with location allowed. Each part keeps its own
+--   observation time, so a zone-only upload leaves the last cell in place and an older reading never overwrites a newer one.
+--   No coordinate, no history.
+-- - Retention: a row not refreshed in 30 days, upload receipts older than 7 days (zone uploads come on every wake) and consent
+--   receipts older than 90 days go with the health retention sweep (re-created below with lines added). Account deletion removes
+--   everything through the owners cascade.
 -- - Every call is a signed router call that resolves the owner from the private locator; no role touches the tables.
 
 create table waldo.device_context_consents (
@@ -35,8 +38,11 @@ create table waldo.device_place_latest (
   owner_id uuid not null references waldo.owners (id) on delete cascade,
   device_id uuid not null,
   epoch integer not null check (epoch > 0),
-  place jsonb not null check (jsonb_typeof(place) = 'object' and place->>'cell' ~ '^[0-9b-hjkmnp-z]{5}$'),
-  observed_at timestamptz not null,
+  platform text not null check (platform in ('ios', 'android')),
+  timezone text not null check (length(timezone) between 1 and 64),
+  timezone_observed_at timestamptz not null,
+  place jsonb check (place is null or (jsonb_typeof(place) = 'object' and place->>'cell' ~ '^[0-9b-hjkmnp-z]{5}$')),
+  place_observed_at timestamptz check ((place is null) = (place_observed_at is null)),
   created_at timestamptz not null default now(),
   received_at timestamptz not null default now(),
   primary key (owner_id, device_id)
@@ -173,15 +179,16 @@ language sql security definer set search_path = '' as $$ select waldo.device_con
 create function waldo.device_context_consent_withdraw(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language sql security definer set search_path = '' as $$ select waldo.device_context_consent_change(false, p_do_name, p_payload, p_at, p_sig) $$;
 
--- One place from one device. The place's own shape is the contract's, checked by the Worker; here its keys are closed, the cell is
--- coarse and the time zone and time are real. An observation more than 10 minutes in the future is refused; one older than the
--- stored observation for the same device is answered superseded and changes nothing.
+-- One reading from one device: always its time zone, and a cell when the app was open with location allowed. The reading's own
+-- shape is the contract's, checked by the Worker; here its keys are closed, the cell is coarse, names come only with a cell and
+-- the zone and time are real. A reading more than 10 minutes in the future is refused. The zone and the cell each replace the
+-- stored ones only if they were observed no earlier; a reading that changes neither is answered superseded.
 create function waldo.device_context_place_ingest(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   v_owner uuid := waldo.device_context_owner('place_ingest', p_do_name, p_payload, p_at, p_sig);
-  v_body jsonb; v_place jsonb; v_id text; v_prior waldo.device_context_requests; v_epoch integer; v_device uuid; v_observed timestamptz;
-  v_refusal jsonb; v_status text := 'accepted'; v_result jsonb;
+  v_body jsonb; v_reading jsonb; v_id text; v_prior waldo.device_context_requests; v_epoch integer; v_device uuid; v_observed timestamptz;
+  v_place jsonb; v_refusal jsonb; v_status text := 'accepted'; v_result jsonb;
 begin
   if v_owner is null then return '{"error":"not_linked"}'; end if;
   perform 1 from waldo.owners where id = v_owner for update;
@@ -189,17 +196,19 @@ begin
   begin v_body := p_payload::jsonb; exception when others then return '{"error":"invalid_request"}'; end;
   if jsonb_typeof(v_body) is distinct from 'object'
     or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('request_id', 'expected_epoch', 'device_id', 'place')) then return '{"error":"invalid_request"}'; end if;
-  v_id := v_body->>'request_id'; v_place := v_body->'place';
+  v_id := v_body->>'request_id'; v_reading := v_body->'place';
   if jsonb_typeof(v_body->'request_id') is distinct from 'string' or v_id !~ '^[A-Za-z0-9_-]{8,96}$'
     or jsonb_typeof(v_body->'expected_epoch') is distinct from 'number' or (v_body->>'expected_epoch') !~ '^[0-9]{1,9}$'
     or jsonb_typeof(v_body->'device_id') is distinct from 'string' or (v_body->>'device_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    or jsonb_typeof(v_place) is distinct from 'object'
-    or exists (select 1 from jsonb_object_keys(v_place) k where k not in ('cell', 'locality', 'region', 'country', 'timezone', 'platform', 'observed_at'))
-    or jsonb_typeof(v_place->'cell') is distinct from 'string' or (v_place->>'cell') !~ '^[0-9b-hjkmnp-z]{5}$'
-    or jsonb_typeof(v_place->'timezone') is distinct from 'string' or not exists (select 1 from pg_timezone_names where name = v_place->>'timezone')
-    or v_place->>'platform' is null or v_place->>'platform' not in ('ios', 'android')
-    or jsonb_typeof(v_place->'observed_at') is distinct from 'string' then return '{"error":"invalid_request"}'; end if;
-  begin v_observed := (v_place->>'observed_at')::timestamptz; exception when others then return '{"error":"invalid_request"}'; end;
+    or jsonb_typeof(v_reading) is distinct from 'object'
+    or exists (select 1 from jsonb_object_keys(v_reading) k where k not in ('cell', 'locality', 'region', 'country', 'timezone', 'platform', 'observed_at'))
+    or (v_reading ? 'cell' and (jsonb_typeof(v_reading->'cell') is distinct from 'string' or (v_reading->>'cell') !~ '^[0-9b-hjkmnp-z]{5}$'))
+    or (not v_reading ? 'cell' and (v_reading ?| array['locality', 'region', 'country']))
+    or exists (select 1 from jsonb_each(v_reading - array['cell', 'timezone', 'platform', 'observed_at']) e where jsonb_typeof(e.value) is distinct from 'string')
+    or jsonb_typeof(v_reading->'timezone') is distinct from 'string' or not exists (select 1 from pg_timezone_names where name = v_reading->>'timezone')
+    or v_reading->>'platform' is null or v_reading->>'platform' not in ('ios', 'android')
+    or jsonb_typeof(v_reading->'observed_at') is distinct from 'string' then return '{"error":"invalid_request"}'; end if;
+  begin v_observed := (v_reading->>'observed_at')::timestamptz; exception when others then return '{"error":"invalid_request"}'; end;
   if v_observed > now() + interval '10 minutes' then return '{"error":"invalid_request"}'; end if;
   select * into v_prior from waldo.device_context_requests where owner_id = v_owner and request_id = v_id;
   if found then
@@ -213,16 +222,26 @@ begin
   v_device := (v_body->>'device_id')::uuid;
   if not exists (select 1 from waldo.device_place_latest where owner_id = v_owner and device_id = v_device)
     and (select count(*) from waldo.device_place_latest where owner_id = v_owner) >= 8 then return '{"error":"invalid_request"}'; end if;
-  insert into waldo.device_place_latest (owner_id, device_id, epoch, place, observed_at) values (v_owner, v_device, v_epoch, v_place, v_observed)
-    on conflict (owner_id, device_id) do update set place = excluded.place, epoch = excluded.epoch, observed_at = excluded.observed_at, received_at = now()
-      where waldo.device_place_latest.observed_at <= excluded.observed_at;
+  if v_reading ? 'cell' then v_place := v_reading - array['timezone', 'platform', 'observed_at']; end if;
+  insert into waldo.device_place_latest as t (owner_id, device_id, epoch, platform, timezone, timezone_observed_at, place, place_observed_at)
+    values (v_owner, v_device, v_epoch, v_reading->>'platform', v_reading->>'timezone', v_observed, v_place, case when v_place is not null then v_observed end)
+    on conflict (owner_id, device_id) do update set
+      epoch = excluded.epoch,
+      platform = case when t.timezone_observed_at <= excluded.timezone_observed_at then excluded.platform else t.platform end,
+      timezone = case when t.timezone_observed_at <= excluded.timezone_observed_at then excluded.timezone else t.timezone end,
+      timezone_observed_at = greatest(t.timezone_observed_at, excluded.timezone_observed_at),
+      place = case when excluded.place is not null and (t.place_observed_at is null or t.place_observed_at <= excluded.place_observed_at) then excluded.place else t.place end,
+      place_observed_at = case when excluded.place is not null and (t.place_observed_at is null or t.place_observed_at <= excluded.place_observed_at) then excluded.place_observed_at else t.place_observed_at end,
+      received_at = now()
+    where t.timezone_observed_at <= excluded.timezone_observed_at
+      or (excluded.place is not null and (t.place_observed_at is null or t.place_observed_at <= excluded.place_observed_at));
   if not found then v_status := 'superseded'; end if;
   v_result := jsonb_build_object('request_id', v_id, 'replayed', false, 'status', v_status);
   insert into waldo.device_context_requests (owner_id, request_id, operation, payload_digest, response) values (v_owner, v_id, 'place_ingest', md5(p_payload), v_result);
   return v_result;
 end $$;
 
--- The latest place per device, newest first. purpose owner is the owner's own view and needs storage consent; purpose model is the
+-- The latest zone and place per device, most recently heard from first. purpose owner is the owner's own view and needs storage consent; purpose model is the
 -- agent's read and needs storage and model use.
 create function waldo.device_context_place_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -236,7 +255,11 @@ begin
   v_refusal := waldo.device_context_refusal(v_owner, 'place', case when v_body->>'purpose' = 'model' then array['storage_compute', 'model_processing'] else array['storage_compute'] end);
   if v_refusal is not null then return v_refusal; end if;
   return jsonb_build_object('places', coalesce((select jsonb_agg(jsonb_build_object('device_id', p.device_id,
-      'received_at', to_char(p.received_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'place', p.place) order by p.observed_at desc, p.device_id)
+      'received_at', to_char(p.received_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'platform', p.platform, 'timezone', p.timezone,
+      'timezone_observed_at', to_char(p.timezone_observed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'place', case when p.place is null then null else p.place || jsonb_build_object('observed_at',
+        to_char(p.place_observed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) end)
+      order by p.timezone_observed_at desc, p.device_id)
     from waldo.device_place_latest p where p.owner_id = v_owner), '[]'::jsonb));
 end $$;
 
@@ -250,8 +273,8 @@ grant execute on function waldo.device_context_consent_list(text, text, bigint, 
   waldo.device_context_consent_withdraw(text, text, bigint, text), waldo.device_context_place_ingest(text, text, bigint, text),
   waldo.device_context_place_read(text, text, bigint, text) to anon;
 
--- Retention (20261103120000): the per-owner call and the sweep also age out places not refreshed in 30 days and device-context
--- receipts older than 90 days, and the sweep finds an owner whose only expired rows are those. The result keeps its keys.
+-- Retention (20261103120000): the per-owner call and the sweep also age out rows not refreshed in 30 days, upload receipts older
+-- than 7 days and consent receipts older than 90 days, and the sweep finds an owner whose only expired rows are those. The result keeps its keys.
 create or replace function waldo.health_retention_apply(p_owner uuid, p_auth uuid) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_raw integer; v_requests integer; v_context integer; v_cut date := (now() at time zone 'UTC')::date - 733;
@@ -269,7 +292,8 @@ begin
   delete from waldo.screen_time_days where owner_id = p_owner and day < (now() at time zone 'UTC')::date - 90;
   delete from waldo.screen_time_requests where owner_id = p_owner and created_at < now() - interval '90 days';
   delete from waldo.device_place_latest where owner_id = p_owner and received_at < now() - interval '30 days';
-  delete from waldo.device_context_requests where owner_id = p_owner and created_at < now() - interval '90 days';
+  delete from waldo.device_context_requests where owner_id = p_owner
+    and created_at < now() - case when operation = 'place_ingest' then interval '7 days' else interval '90 days' end;
   return jsonb_build_object('raw_deleted', v_raw, 'requests_deleted', v_requests, 'context_deleted', v_context);
 end $$;
 
@@ -298,7 +322,8 @@ begin
       or exists (select 1 from waldo.screen_time_days t where t.owner_id = o.id and t.day < (now() at time zone 'UTC')::date - 90)
       or exists (select 1 from waldo.screen_time_requests q where q.owner_id = o.id and q.created_at < now() - interval '90 days')
       or exists (select 1 from waldo.device_place_latest p where p.owner_id = o.id and p.received_at < now() - interval '30 days')
-      or exists (select 1 from waldo.device_context_requests c where c.owner_id = o.id and c.created_at < now() - interval '90 days')
+      or exists (select 1 from waldo.device_context_requests c where c.owner_id = o.id
+        and c.created_at < now() - case when c.operation = 'place_ingest' then interval '7 days' else interval '90 days' end)
     order by o.id limit v_limit + 1 for update of o skip locked
   loop
     if v_n = v_limit then v_more := true; exit; end if;

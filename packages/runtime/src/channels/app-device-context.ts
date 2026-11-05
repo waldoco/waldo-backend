@@ -71,8 +71,8 @@ const places = async ({ rpc, doName }: AppDeviceContextInput): Promise<Response>
   const rows = (result as { places?: unknown } | null)?.places;
   if (!Array.isArray(rows)) return settle(result, devicePlacesV1Schema, 'places');
   const kept = rows.flatMap(row => {
-    const { device_id, received_at, place } = (row ?? {}) as Record<string, unknown>;
-    const parsed = devicePlaceStoredV1Schema.safeParse({ device_id, received_at, place });
+    const { device_id, received_at, platform, timezone, timezone_observed_at, place } = (row ?? {}) as Record<string, unknown>;
+    const parsed = devicePlaceStoredV1Schema.safeParse({ device_id, received_at, platform, timezone, timezone_observed_at, place });
     if (!parsed.success) console.error('app device context stored place shape');
     return parsed.success ? [parsed.data] : [];
   });

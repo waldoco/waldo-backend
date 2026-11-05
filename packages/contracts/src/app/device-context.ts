@@ -1,17 +1,19 @@
 import { z } from 'zod';
 
 // Device context: what the owner's phone tells Waldo about the owner's surroundings, one consent per signal. The first signal is
-// place: the latest coarse place per device, so the agent can know the owner's city and time zone, and later the weather there.
-// The design is the device-context ADR draft (docs/proposals/ADR_DRAFT_DEVICE_CONTEXT_2026-11-05.md).
+// place: the latest time zone and coarse place per device, so the agent can know the owner's city and zone, and later the weather
+// there. The design is the device-context ADR (docs/proposals/ADR_DEVICE_CONTEXT_2026-11-05.md).
 //
-// - Consent per signal, with three purposes: storage_compute (keep it), model_processing (let Waldo's AI read it) and
-//   provider_lookup (send the cell's centre, with no owner or device id, to a weather provider). The last two sit on top of
-//   storage. The server owns status and epoch; an unknown state reads as not granted.
+// - The owner sees one place consent; the server keeps three purposes so each can be withdrawn alone: storage_compute (keep it),
+//   model_processing (let Waldo's AI read it) and provider_lookup (send the cell's centre, with no owner or device id, to the
+//   weather provider the consent names). The last two sit on top of storage. The server owns status and epoch; an unknown state
+//   reads as not granted.
 // - Withdrawing storage_compute withdraws all three and deletes every stored place and upload receipt.
 // - Coarse is a schema rule: the phone rounds to a 5-character geohash cell (about 4.9 km square) before sending. There is no
 //   latitude or longitude field, so the server never holds anything finer.
-// - What is kept: the latest place per device, overwritten, never a history. A place not refreshed in 30 days is removed by the
-//   health retention sweep. Account deletion removes it with the owner.
+// - The phone sends its time zone on every wake, with or without a cell; an upload with no cell leaves the last cell in place.
+// - What is kept: the latest zone and place per device, overwritten, never a history. A row not refreshed in 30 days is removed by
+//   the health retention sweep. Account deletion removes it with the owner.
 // - Egress: the cell never reaches the model or a log; the place name and time zone reach the owner's model context in the turn
 //   that asked, and the owner's own read-back.
 
@@ -50,18 +52,23 @@ export const deviceContextConsentChangeV1Schema = z.strictObject({ consent: devi
 
 // A geohash cell of exactly 5 characters in the geohash alphabet (no a, i, l or o).
 export const placeCellV1Schema = z.string().regex(/^[0-9b-hjkmnp-z]{5}$/);
-// The place as the phone's own OS names it. Every name is optional: a phone that cannot name the place still sends the cell.
+const timezone = z.string().min(1).max(64);
+const platform = z.enum(['ios', 'android']);
+// One reading from the phone: always its time zone, and the cell when the app is open with location allowed. The names are the
+// phone's own OS's for that cell, so they come only with it; a phone that cannot name the place still sends the cell.
 export const devicePlaceV1Schema = z.strictObject({
-  cell: placeCellV1Schema,
+  cell: placeCellV1Schema.optional(),
   locality: line(80).optional(),
   region: line(80).optional(),
   country: z.string().regex(/^[A-Z]{2}$/).optional(),
-  timezone: z.string().min(1).max(64),
-  platform: z.enum(['ios', 'android']),
+  timezone,
+  platform,
   observed_at: instant,
-});
+}).refine(reading => reading.cell !== undefined || [reading.locality, reading.region, reading.country].every(name => name === undefined),
+  { error: 'a place name comes only with its cell', path: ['cell'] });
 
-// The latest place from one device replaces the earlier one, unless the earlier one was observed later (status superseded).
+// The zone, and the cell when sent, replace the earlier ones from the same device, each unless the earlier one was observed later;
+// an upload that changes neither is answered superseded.
 // expected_epoch is the storage_compute epoch the phone read with consent; an upload from before a withdrawal is refused, so it
 // cannot repopulate what was deleted. device_id is the app installation id the push registration uses.
 export const devicePlaceIngestV1Schema = z.strictObject({
@@ -76,8 +83,21 @@ export const devicePlaceIngestReceiptV1Schema = z.strictObject({
   status: z.enum(['accepted', 'superseded']),
 });
 
-// What Waldo kept, for the owner's own view. Needs storage consent only.
-export const devicePlaceStoredV1Schema = z.strictObject({ device_id: z.uuid(), received_at: instant, place: devicePlaceV1Schema });
+// What Waldo kept, for the owner's own view. Needs storage consent only. place is null until the phone has sent a cell.
+export const devicePlaceStoredV1Schema = z.strictObject({
+  device_id: z.uuid(),
+  received_at: instant,
+  platform,
+  timezone,
+  timezone_observed_at: instant,
+  place: z.strictObject({
+    cell: placeCellV1Schema,
+    locality: line(80).optional(),
+    region: line(80).optional(),
+    country: z.string().regex(/^[A-Z]{2}$/).optional(),
+    observed_at: instant,
+  }).nullable(),
+});
 export const devicePlacesV1Schema = z.strictObject({ places: z.array(devicePlaceStoredV1Schema).max(DEVICE_PLACE_MAX_DEVICES_V1) });
 
 // The runtime may attach a short message; a client acts on `error` only.

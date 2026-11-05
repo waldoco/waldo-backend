@@ -14,6 +14,13 @@ describe('device place', () => {
     expect(devicePlaceV1Schema.safeParse({ cell: '0zzzz', timezone: 'UTC', platform: 'ios', observed_at: '2026-11-05T08:00:00.000Z' }).success).toBe(true);
   });
 
+  it('accepts a time zone alone, sent on a wake with no location, but never a place name without its cell', () => {
+    expect(devicePlaceV1Schema.safeParse({ timezone: 'Asia/Dubai', platform: 'android', observed_at: '2026-11-05T08:00:00Z' }).success).toBe(true);
+    expect(devicePlaceV1Schema.safeParse({ locality: 'Testville', timezone: 'Asia/Dubai', platform: 'android', observed_at: '2026-11-05T08:00:00Z' }).success).toBe(false);
+    expect(devicePlaceV1Schema.safeParse({ country: 'IN', timezone: 'Asia/Dubai', platform: 'android', observed_at: '2026-11-05T08:00:00Z' }).success).toBe(false);
+    expect(devicePlaceV1Schema.safeParse({ platform: 'android', observed_at: '2026-11-05T08:00:00Z' }).success).toBe(false);
+  });
+
   it('refuses anything finer than the cell, and any extra field', () => {
     for (const bad of [
       { ...place, cell: 'tdr1wx' },
@@ -60,9 +67,15 @@ describe('device context routes', () => {
     expect(deviceContextConsentListV1Schema.safeParse({ consents: [row('storage_compute'), row('model_processing'), row('provider_lookup'), row('storage_compute')] }).success).toBe(false);
   });
 
-  it('the read-back holds at most eight devices', () => {
-    const stored = { device_id: ingest.device_id, received_at: '2026-11-05T08:00:01Z', place };
-    expect(devicePlacesV1Schema.safeParse({ places: [stored] }).success).toBe(true);
+  it('the read-back gives each phone\'s zone and, once sent, its place, each with its own time, for at most eight phones', () => {
+    const stored = {
+      device_id: ingest.device_id, received_at: '2026-11-05T08:00:01Z', platform: 'android', timezone: 'Asia/Dubai', timezone_observed_at: '2026-11-05T09:00:00Z',
+      place: { cell: 'tdr1w', locality: 'Testville', country: 'IN', observed_at: '2026-11-05T08:00:00Z' },
+    };
+    expect(devicePlacesV1Schema.safeParse({ places: [stored, { ...stored, place: null }] }).success).toBe(true);
+    expect(devicePlacesV1Schema.safeParse({ places: [{ ...stored, place: { ...stored.place, cell: 'tdr1wx' } }] }).success).toBe(false);
+    expect(devicePlacesV1Schema.safeParse({ places: [{ ...stored, place: { ...stored.place, observed_at: undefined } }] }).success).toBe(false);
+    expect(devicePlacesV1Schema.safeParse({ places: [{ ...stored, place: undefined }] }).success).toBe(false);
     expect(devicePlacesV1Schema.safeParse({ places: Array.from({ length: 9 }, () => stored) }).success).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(46);
+select plan(52);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -22,6 +22,9 @@ create function pg_temp.withdraw(owner text,id text,purpose text,epoch int) retu
   select pg_temp.dc('consent_withdraw',owner,jsonb_build_object('request_id',id,'signal','place','purpose',purpose,'expected_epoch',epoch)::text) $$;
 create function pg_temp.place(cell text,minutes_ago int default 5) returns jsonb language sql as $$
   select jsonb_build_object('cell',cell,'locality','Testville','region','Test Region','country','IN','timezone','Asia/Kolkata','platform','android',
+    'observed_at',to_char((now() - make_interval(mins => minutes_ago)) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')) $$;
+create function pg_temp.zone(zone text,minutes_ago int default 5) returns jsonb language sql as $$
+  select jsonb_build_object('timezone',zone,'platform','android',
     'observed_at',to_char((now() - make_interval(mins => minutes_ago)) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')) $$;
 create function pg_temp.ingest(owner text,id text,epoch int,device text,place jsonb) returns jsonb language sql as $$
   select pg_temp.dc('place_ingest',owner,jsonb_build_object('request_id',id,'expected_epoch',epoch,'device_id',device,'place',place)::text) $$;
@@ -46,8 +49,9 @@ select is(array(select r||'.'||t from unnest(array['anon','authenticated','servi
 select ok((select bool_and(c.relrowsecurity and c.relforcerowsecurity) from pg_class c join pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'waldo' and c.relname in ('device_context_consents','device_context_scopes','device_place_latest','device_context_requests') and c.relkind = 'r'),
   'row-level security is forced on every table');
-select is((select count(*)::int from information_schema.columns where table_schema = 'waldo' and table_name = 'device_place_latest'
-  and column_name ~ '(lat|lon|coord|accuracy|history)'),0,'the place table has no coordinate, accuracy or history column');
+select is(array(select column_name::text from information_schema.columns where table_schema = 'waldo' and table_name = 'device_place_latest' order by ordinal_position),
+  array['owner_id','device_id','epoch','platform','timezone','timezone_observed_at','place','place_observed_at','created_at','received_at'],
+  'the place table holds a zone and a cell per phone, and no coordinate, accuracy or history column');
 select throws_ok($$ select waldo.device_context_consent_list('dc-owner-a','{}',extract(epoch from now())::bigint,'forged') $$,'42501','unsigned router call','a forged call is refused');
 select throws_ok(format($$ select waldo.device_context_place_read('dc-owner-b','{"purpose":"owner"}',%s,%L) $$,extract(epoch from now())::bigint,
   pg_temp.sig('device_context.place_read.dc-owner-a.'||md5('{"purpose":"owner"}'),extract(epoch from now())::bigint)),
@@ -81,28 +85,41 @@ select is(pg_temp.ingest('dc-owner-a','place-0005',1,'5e910000-0000-0000-0000-00
 select is((select place->>'cell' from waldo.device_place_latest where owner_id='5e310000-0000-0000-0000-0000000000a3'),'tdr1y','and changes nothing');
 select is(pg_temp.ingest('dc-owner-a','place-0004',1,'5e910000-0000-0000-0000-000000000001',pg_temp.place('tdr1q'))->>'error','idempotency_conflict',
   'a reused upload id with a new body is refused');
+select is(pg_temp.ingest('dc-owner-a','zone-0001',1,'5e910000-0000-0000-0000-000000000001',pg_temp.zone('Asia/Dubai',2))->>'status','accepted',
+  'a time zone alone, sent on a background wake, is kept');
+select is((select jsonb_build_array(timezone,place->>'cell',place_observed_at < timezone_observed_at) from waldo.device_place_latest
+  where owner_id='5e310000-0000-0000-0000-0000000000a3'),'["Asia/Dubai","tdr1y",true]'::jsonb,'and leaves the last cell in place, with its own older time');
+select is(pg_temp.ingest('dc-owner-a','zone-0002',1,'5e910000-0000-0000-0000-000000000001',pg_temp.zone('Europe/London',90))->>'status','superseded',
+  'an older zone arriving late changes nothing');
+select is(pg_temp.ingest('dc-owner-a','zone-0003',1,'5e910000-0000-0000-0000-000000000001',pg_temp.place('tdr1v',3) || '{"timezone":"Asia/Kolkata"}')->>'status','accepted',
+  'a reading with a cell older than the zone but newer than the cell still moves the cell');
+select is((select jsonb_build_array(timezone,place->>'cell') from waldo.device_place_latest where owner_id='5e310000-0000-0000-0000-0000000000a3'),
+  '["Asia/Dubai","tdr1v"]'::jsonb,'while the newer zone stays');
 
 select is((select count(*)::int from unnest(array[
   pg_temp.place('tdr1wx'), pg_temp.place('tdr1a'), pg_temp.place('TDR1W'),
   pg_temp.place('tdr1w') || '{"latitude":12.97,"longitude":77.59}',
   pg_temp.place('tdr1w') || '{"timezone":"Mars/Olympus"}',
   pg_temp.place('tdr1w') || '{"platform":"web"}',
+  pg_temp.zone('Asia/Kolkata') || '{"locality":"Testville"}',
+  pg_temp.place('tdr1w') || '{"locality":42}',
   pg_temp.place('tdr1w',-60)]) p
-  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),7,
-  'a finer or malformed cell, coordinates, an unknown zone or platform, and a time an hour ahead are all refused');
+  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),9,
+  'a finer or malformed cell, coordinates, an unknown zone or platform, a name without a cell or not text, and a time an hour ahead are all refused');
 select is(pg_temp.dc('place_ingest','dc-owner-a',jsonb_build_object('request_id','place-0006','expected_epoch',1,'device_id','5e910000-0000-0000-0000-000000000001',
   'place',pg_temp.place('tdr1w'),'history','[]'::jsonb)::text),'{"error":"invalid_request"}'::jsonb,'the upload body is closed');
 
 create temp table own as select pg_temp.read('dc-owner-a','owner') as v;
-select is((select jsonb_build_array(jsonb_array_length(v->'places'),v->'places'->0->'place'->>'cell',v->'places'->0 ? 'received_at') from own),'[1,"tdr1y",true]'::jsonb,
-  'the owner reads back the latest place, with when it arrived');
+select is((select jsonb_build_array(jsonb_array_length(v->'places'),v->'places'->0->'place'->>'cell',v->'places'->0->>'timezone',
+  v->'places'->0 ? 'received_at',v->'places'->0->'place' ? 'observed_at',v->'places'->0 ? 'timezone_observed_at') from own),'[1,"tdr1v","Asia/Dubai",true,true,true]'::jsonb,
+  'the owner reads back the latest zone and place, each with its own time');
 select is(pg_temp.read('dc-owner-b','owner'),'{"error":"consent_required"}'::jsonb,'another owner without consent is refused');
 select is((pg_temp.grant_('dc-owner-b','grant-b-store','storage_compute',0) is not null, pg_temp.read('dc-owner-b','owner')->'places')::text,'(t,[])','and with consent of their own still never sees it');
 select is(pg_temp.read('dc-owner-a','model'),'{"error":"consent_required"}'::jsonb,'the agent cannot read it with storage consent alone');
 
 select is(pg_temp.grant_('dc-owner-a','grant-model-1','model_processing',0)->'consent'->>'status','granted','model use is granted on top of storage');
 select ok(pg_temp.ingest('dc-owner-a','place-0007',1,'5e910000-0000-0000-0000-000000000002',pg_temp.place('tdr4b',1))->>'status' = 'accepted','a second phone sends its place');
-select is((select jsonb_agg(p->'place'->>'cell') from jsonb_array_elements(pg_temp.read('dc-owner-a','model')->'places') p),'["tdr4b","tdr1y"]'::jsonb,
+select is((select jsonb_agg(p->'place'->>'cell') from jsonb_array_elements(pg_temp.read('dc-owner-a','model')->'places') p),'["tdr4b","tdr1v"]'::jsonb,
   'the agent reads each phone''s latest place, newest first');
 
 select is(pg_temp.withdraw('dc-owner-a','withdraw-model-1','model_processing',1)->'deletion_routed','false'::jsonb,'withdrawing model use deletes nothing');
@@ -119,13 +136,18 @@ select is((select count(*)::int from waldo.device_context_requests where owner_i
 select is(pg_temp.ingest('dc-owner-a','place-0008',1,'5e910000-0000-0000-0000-000000000001',pg_temp.place('tdr1w')),'{"error":"consent_withdrawn"}'::jsonb,
   'an upload queued before the withdrawal cannot repopulate it');
 
--- Retention: a place not refreshed in 30 days is removed by the health sweep, which finds an owner whose only old rows are these.
-insert into waldo.device_place_latest(owner_id,device_id,epoch,place,observed_at,received_at) values
-  ('5e310000-0000-0000-0000-0000000000b3','5e910000-0000-0000-0000-0000000000b8',1,'{"cell":"tdr1x"}',now() - interval '31 days',now() - interval '31 days'),
-  ('5e310000-0000-0000-0000-0000000000b3','5e910000-0000-0000-0000-0000000000b9',1,'{"cell":"tdr1y"}',now() - interval '29 days',now() - interval '29 days');
+-- Retention: a row not refreshed in 30 days is removed by the health sweep, which finds an owner whose only old rows are these.
+insert into waldo.device_place_latest(owner_id,device_id,epoch,platform,timezone,timezone_observed_at,place,place_observed_at,received_at) values
+  ('5e310000-0000-0000-0000-0000000000b3','5e910000-0000-0000-0000-0000000000b8',1,'ios','UTC',now() - interval '31 days','{"cell":"tdr1x"}',now() - interval '31 days',now() - interval '31 days'),
+  ('5e310000-0000-0000-0000-0000000000b3','5e910000-0000-0000-0000-0000000000b9',1,'ios','UTC',now() - interval '29 days','{"cell":"tdr1y"}',now() - interval '29 days',now() - interval '29 days');
+insert into waldo.device_context_requests(owner_id,request_id,operation,payload_digest,response,created_at) values
+  ('5e310000-0000-0000-0000-0000000000a3','old-upload-1','place_ingest','x','{}',now() - interval '8 days'),
+  ('5e310000-0000-0000-0000-0000000000a3','old-grant-1','consent_grant','x','{}',now() - interval '8 days');
 select ok((pg_temp.sweep('{"limit":200}')->>'owners')::int >= 1,'the sweep visits an owner with only an old place');
 select is((select array_agg(place->>'cell') from waldo.device_place_latest where owner_id='5e310000-0000-0000-0000-0000000000b3'),array['tdr1y'],
-  'and removes only the place older than 30 days');
+  'and removes only the row older than 30 days');
+select is((select array_agg(request_id order by request_id) from waldo.device_context_requests where owner_id='5e310000-0000-0000-0000-0000000000a3' and request_id like 'old-%'),
+  array['old-grant-1'],'upload receipts go after 7 days, consent receipts stay');
 
 delete from waldo.owners where id='5e310000-0000-0000-0000-0000000000b3';
 select is((select count(*)::int from waldo.device_place_latest where owner_id='5e310000-0000-0000-0000-0000000000b3')
