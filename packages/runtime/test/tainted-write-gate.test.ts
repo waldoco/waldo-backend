@@ -190,7 +190,7 @@ const rows = (state: DurableObjectState) => state.storage.sql.exec<{ id: string;
 describe('a tainted turn is refused an owner-statement tool, never carded', () => {
   it('the refused set is exactly the records that name the refusal', () => {
     const refused = toolNameSchema.options.filter((tool) => taintedCallRefused(tool, 'external'));
-    expect(refused).toEqual(['approve_shown', 'set_sleep_need', 'track_medication', 'log_medication', 'stop_medication']);
+    expect(refused).toEqual(['approve_shown', 'set_sleep_need', 'track_medication', 'log_medication', 'stop_medication', 'propose_standing_grant']);
     for (const tool of toolNameSchema.options) expect(taintedCallRefused(tool, null), tool).toBe(false);
   });
 

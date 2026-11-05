@@ -17,11 +17,12 @@ const WANTED: Readonly<Record<ProactiveSurface, readonly ProactiveTarget[]>> = {
 };
 // What a surface shows the owner: the app shows the day's cards beside a message; a chat shows the message alone.
 const READS: Readonly<Record<ProactiveTarget, ReadsAs>> = { app: 'cards', whatsapp: 'chat', imessage: 'chat' };
-// How the owner reads the proactive work an app owner's runtime sends: by the surface that takes it first, except that one
-// message goes to a chat too when the surface names one, and that chat has no card to lean on, so it is written to stand alone.
+// How the owner reads the proactive work an app owner's runtime sends: by the surface that takes it first. Under
+// PROACTIVE_BOTH_DEFAULT, one message goes to a chat too when the surface names one, and that chat has no card to lean on, so
+// it is written to stand alone. With the switch off, owners who chose a surface before it read as they always did.
 export const proactiveReads = (kv: Pick<Kv, 'get'>, bothDefault = false): ReadsAs => {
   const wanted = wantedTargets(proactiveSurface(kv, bothDefault));
-  return wanted.some(target => READS[target] === 'chat') ? 'chat' : READS[wanted[0] ?? 'app'];
+  return bothDefault && wanted.some(target => READS[target] === 'chat') ? 'chat' : READS[wanted[0] ?? 'app'];
 };
 // Whether a surface can take the work itself, so that its delivery settles the job; one that cannot only gets copies.
 const SETTLES: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: true, imessage: false };
@@ -114,11 +115,11 @@ export const WHATSAPP_COPY_FRESH_MS = 24 * 60 * 60 * 1000;
 // Delivers to the app first, and only a message the app took is copied, under that app message's id. A send worth delivering
 // only now (a one-time code, a short-lived link) is never queued for a chat surface, which may hold it for days. A copy that
 // cannot be queued is reported by its code alone and never fails or repeats the app delivery.
-export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
+export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string, until?: number) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
   async (text: string, send?: AppSend) => {
     const row = await deliver(text, send);
     if (send?.nowOnly) return row;
-    try { await queue(`${prefix}${row}`, text); } catch { report('copy_failed'); }
+    try { await queue(`${prefix}${row}`, text, send?.copyUntil); } catch { report('copy_failed'); }
     return row;
   };
 

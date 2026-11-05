@@ -363,7 +363,7 @@ describe('the owner turning the sweep off', () => {
 // With the day state the apply turn answers with typed effects: revise a day card that already reached the owner, say an
 // update, push with either, or nothing. Code holds the owner's quiet hours and which cards reached them; the model judges
 // what is worth it.
-type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string }[]; chose: string[]; quiet: { on: boolean }; named: { on: boolean }; settled: { n: number } }>;
+type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string; inPlace?: true }[]; chose: string[]; quiet: { on: boolean }; named: { on: boolean }; settled: { n: number } }>;
 const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], surface = 'app'): DayApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [];
@@ -403,7 +403,7 @@ describe('applying a sweep job with the day state', () => {
       await a.lane();
       expect(a.turns[0]!.text).toContain('The Brief reached them in the app at 08:00');
       expect(a.turns[0]!.text).toContain('"revise"');
-      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', push: 'Sync with Krati at 17:00 changed' }]);
+      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', inPlace: true, push: 'Sync with Krati at 17:00 changed' }]);
       expect(a.chose).toEqual(['revise+push']);
       expect(judged(h.sql)).toEqual([1]);
     });
@@ -672,6 +672,7 @@ describe('the triage turn', () => {
       const a = await triaged(h, { decision: 'tell', revise: { card: 'card:brief', text: 'The afternoon starts at 17:00 now.' }, push: { event: 'e-sync' } }, a => { a.quiet.on = true; });
       expect(a.effects).toEqual([expect.objectContaining({ text: 'The afternoon starts at 17:00 now.', revision: 'card:brief' })]);
       expect(a.effects[0]!.push).toBeUndefined();
+      expect(a.effects[0]).toMatchObject({ inPlace: true });
       expect(a.chose).toEqual(['held_quiet']);
       expect(h.updates.interrupts(DAY).count).toBe(0);
     });
@@ -681,8 +682,17 @@ describe('the triage turn', () => {
     await withSweep(async (h) => {
       const a = await triaged(h, { decision: 'tell', revise: { card: 'card:brief', text: 'The afternoon starts at 17:00 now.' } });
       expect(a.chose).toEqual(['revise']);
+      expect(a.effects[0]).toMatchObject({ inPlace: true });
       expect(a.effects[0]!.push).toBeUndefined();
       expect(h.updates.interrupts(DAY).count).toBe(0);
+    });
+  });
+
+  it('a revision that raises a push is not in place: it is an interrupt and is charged', async () => {
+    await withSweep(async (h) => {
+      const a = await triaged(h, { decision: 'tell', revise: { card: 'card:brief', text: 'The afternoon starts at 17:00 now.' }, push: { event: 'e-sync' } });
+      expect(a.effects[0]!.inPlace).toBeUndefined();
+      expect(h.updates.interrupts(DAY).count).toBe(1);
     });
   });
 
