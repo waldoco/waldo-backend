@@ -223,11 +223,12 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
 
 // The production model step: the owner's route policy on the model the brief asked for, through the scribe, with a call
 // timeout per round. A route that runs out of providers is unavailability, not the task failing.
-export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter): TaskModel => {
+// strong: every task runs on the chat model, as it does with WALDO_LIGHT_CHAT on, where the owner's turns run on the lighter one.
+export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter, strong = false): TaskModel => {
   const health = access.health ?? new InMemoryCircuitBreaker();
   const { chat, auxiliary } = ownerModels(access);
   return async ({ ticket, claim, system, content, tools, turns, canaries }) => {
-    const model: ModelName = claim.brief.effort === 'deep' ? chat : auxiliary;
+    const model: ModelName = strong || claim.brief.effort === 'deep' ? chat : auxiliary;
     const started = Date.now();
     // A worker call may reason as long as an owner turn's reply: it has no reply waiting on it.
     const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access, { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS }), circuitBreaker: health }).complete({

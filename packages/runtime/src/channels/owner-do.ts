@@ -77,6 +77,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_B
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
+import { asyncToolsEnabled, lightChatEnabled } from './async-tools';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
@@ -270,7 +271,7 @@ import { gmailPush, stopChannel } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
-import { BROWSER_TOOLS, LOOKUP_ORIGIN } from '../tasks/profiles';
+import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
@@ -467,7 +468,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // later rating scores naming different trace ids.
     if (langfuseOtlpConfig(env)) ownerTraceSalt(ctx.storage.kv);
     this.browserTrial = browserTrial;
-    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.browserScope ?? this.activeScope, chainScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => (this.typedBrowserHost = config?.enabled === true, browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.OWNER_DO && env.OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
@@ -621,6 +622,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // iMessage and device setup controls queue here, apart from turns, so a revoke never waits behind the turn it stops.
   // Nothing on this queue may wait on serial(): owner storage erase runs inside serial() and waits for this queue.
   private channelQueue: Promise<unknown> = Promise.resolve();
+  // A task's browser steps while WALDO_ASYNC_TOOLS is on (browserSerial). Owner storage erase waits for it too.
+  private browserQueue: Promise<unknown> = Promise.resolve();
+  private browserScope: RunEffectScope | undefined;
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
@@ -655,12 +659,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       now: Date.now,
       handlers: (surface, row) => row.origin === LOOKUP_ORIGIN ? self.setup(surface as ChannelKind).lookupToolHandlers() : self.setup(surface as ChannelKind).toolHandlers(),
       context: surface => self.setup(surface as ChannelKind).taskContext(),
-      // The owner's browser serves one active run, so a job's browser step takes the serial lane with its own scope.
-      serialBrowser: (scope, work) => self.serial(async () => {
-        const previous = self.activeScope;
-        self.activeScope = scope;
-        try { return await work(); } finally { if (self.activeScope === scope) self.activeScope = previous; }
-      }),
+      // The owner's browser serves one active run, so a job's browser step takes the serial lane with its own scope. With
+      // WALDO_ASYNC_TOOLS on, the owner's own turns hold no browser tool, so a task that only reads pages takes the browser lane
+      // instead and the owner's messages keep running while a page loads. A step that can act on a page (an errand's, an
+      // approved replay's) can raise a card or record an effect, which this object files under the run on its chain, so it
+      // keeps the chain, and takes the browser lane inside it, so the browser still serves one run at a time.
+      serialBrowser: (scope, work) => {
+        const laned = asyncToolsEnabled(self.env);
+        if (laned && self.readsPagesOnly(scope)) return self.browserSerial(scope, work);
+        const onChain = async () => {
+          const previous = self.activeScope;
+          self.activeScope = scope;
+          try { return await work(); } finally { if (self.activeScope === scope) self.activeScope = previous; }
+        };
+        return self.serial(laned ? () => self.browserSerial(scope, onChain) : onChain);
+      },
       releaseBrowser: scope => { self.ctx.waitUntil(self.ownerBrowser.finish(scope).catch(() => undefined)); },
       log: entry => self.taskLog(entry),
       spend: () => self.setup(self.taskChannel()).monthSpend(),
@@ -1887,7 +1900,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
             chatLinks:()=>this.proactiveLinks(auth),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
@@ -2768,7 +2781,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const limited=this.consoleRateLimited(actionsRoute?'action':'read');
           if(limited)return limited;
           if(ownerControlsRoute||ownerActionsRoute){
-            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())};
+            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()};
             let response:Response;
             if(ownerControlsRoute){const view=ownerControlsView(url.searchParams);if(!view)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});response=await ownerControlsRead(view,deps);}
             else {let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}response=await ownerControlsAction(form,deps);}
@@ -2936,7 +2949,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const done = admin && doName ? await this.purgeOwnerFiles() && await admin.deleteOwner(doName) : false;
         if (!done) return noticePage('invalid');
         const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': clearConsoleCookie(CONSOLE_COOKIE) } });
-        await this.channelSerial(() => this.ctx.storage.deleteAll());
+        await this.eraseOwnerStorage();
         return response;
       }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
@@ -3531,6 +3544,32 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
+  }
+  private readsPagesOnly(scope: RunEffectScope): boolean {
+    const row = scope.runId.startsWith('task:') ? this.jobs().get(scope.runId.slice('task:'.length)) : undefined;
+    return row?.kind === 'task' && !jobTools(row).includes('browse_act');
+  }
+  // One browser step at a time, apart from the owner's chain: the browser serves the lane's scope while a step runs. Anything
+  // else that reaches the browser then meets a scope that is not its own and is closed, as a mismatched scope always is.
+  private browserSerial<T>(scope: RunEffectScope, work: () => Promise<T>): Promise<T> {
+    const run = this.browserQueue.then(async () => {
+      this.browserScope = scope;
+      try { return await work(); } finally { if (this.browserScope === scope) this.browserScope = undefined; }
+    });
+    this.browserQueue = run.catch(() => undefined);
+    return run;
+  }
+  // Owner storage erase. It runs on the channel queue and holds its place on the browser lane from the moment it is asked
+  // for: it waits for the browser steps queued before it, and a step queued after it runs after the erase and finds no
+  // job book. Neither queue waits on serial(), so the chain cannot deadlock on it.
+  private eraseOwnerStorage(): Promise<void> {
+    const before = this.browserQueue;
+    let erased!: () => void;
+    this.browserQueue = new Promise<void>(resolve => { erased = resolve; });
+    return this.channelSerial(async () => {
+      await before;
+      try { await this.ctx.storage.deleteAll(); } finally { erased(); }
+    });
   }
   private channelSerial<T>(work: () => Promise<T>): Promise<T> {
     const run = this.channelQueue.then(work);
@@ -4699,6 +4738,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const profileView = this.env.OWNER_PROFILE === '1';
     // The owner's newer messages on the running turn's chat, offered to that turn at each round; nothing while the switch is off.
     const newerOwnerMessages = () => this.secondMessages.round();
+    // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may run on the lighter model.
+    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env) };
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's lower ceiling.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : MONTHLY_SPEND_CEILING_USD }) : undefined;
@@ -4794,13 +4835,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined,compactionSettings(this.env)),episodes,()=>Date.now()),
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...router} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==iMessageTurnText(record))throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),
       // Scheduled jobs for an owner whose only surface is iMessage run as the owner the pass admitted.
-      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
+      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...router} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...router,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it
