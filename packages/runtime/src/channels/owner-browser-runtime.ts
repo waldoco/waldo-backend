@@ -49,6 +49,9 @@ export const COMMON_BROWSER_LEASE_DUE='common_browser_lease_due_v1';
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
+  // The run on the owner's serial chain, which the owner's model calls belong to. A browser step can run apart from that
+  // chain (a task's, with WALDO_ASYNC_TOOLS on), so model calls check this one; absent, the active scope.
+  chainScope?(): RunEffectScope | undefined;
   typedHost?(): boolean;
 }>) {
   fenceLostNativeHandoffs(options.storage,Date.now());
@@ -84,6 +87,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const owner = await verifyOwnerBinding(options.env, held, options.actualDoId, options.env.OWNER_DO);
       if (!bound(held) || !owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
     };
+  const chainScope = () => (options.chainScope ?? options.activeScope)();
   const current = (ctx: ToolDispatcherContext) => {
     const scope = options.activeScope(), supplied = ctx.runScope, held = binding();
     // Hooks copy the context object, but retain these host-created functions.
@@ -246,7 +250,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
         let metered: Promise<LLMGatewayAdapter> | undefined;
         return { async complete(request) {
-          const scope = options.activeScope(), supplied = request.runScope;
+          const scope = chainScope(), supplied = request.runScope;
           if (!scope || !supplied || scope.runId !== supplied.runId || scope.attempt !== supplied.attempt
             || scope.admit !== supplied.admit || scope.commit !== supplied.commit || scope.deadline !== supplied.deadline) throw new ClosedRunError();
           scope.admit();
@@ -255,15 +259,15 @@ export function ownerBrowserRuntime(options: Readonly<{
           const holdsFunding = () => funded(scope);
           if (!holdsFunding()) {
             await assertOwner(); scope.admit();
-            if (options.activeScope() !== scope) throw new ClosedRunError();
+            if (chainScope() !== scope) throw new ClosedRunError();
             // Allocation may have appeared while directory authority was pending.
             if (!holdsFunding()) return gateway.complete(request);
           }
           const config = await automatic.configuration().catch(cause=>{traceBrowserFailure('trial_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;return undefined;});
           scope.admit();
-          if (options.activeScope() !== scope) throw new ClosedRunError();
+          if (chainScope() !== scope) throw new ClosedRunError();
           if(!config?.meterGateway||config.expiresAt<=Date.now()){
-            const owner=await assertOwner();scope.admit();if(options.activeScope()!==scope)throw new ClosedRunError();
+            const owner=await assertOwner();scope.admit();if(chainScope()!==scope)throw new ClosedRunError();
             const pinned=options.storage.kv.get<any>('common_owner_browser_registration_v1');
             if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
             return gateway.complete(request);

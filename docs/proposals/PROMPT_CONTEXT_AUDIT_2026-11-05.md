@@ -1,6 +1,6 @@
 # Prompt and context audit
 
-**Pinned to:** `waldoco/beta-mvp` at `38ff097bf`. Companion to `docs/architecture/HARNESS_MAP_2026-11-04.md`.
+**Pinned to:** `waldoco/beta-mvp` at `38ff097bf`; §C and §D re-measured after the merge of `9e0284b8` (#1868). Companion to `docs/architecture/HARNESS_MAP_2026-11-04.md`.
 
 **Labels:**
 - [verified]: source or a run at the cited line.
@@ -50,13 +50,14 @@ All values are [verified].
    - An owner turn has "Own what's open" (open loops), but nothing about planning: proposing the move that helps, acting within a grant, or naming the receipt and undo.
    - Fix in V2: the "Being ahead of them" section. Acting without asking is tied to a grant shown by a tool result this turn, because `AUTONOMY_OWN_CALENDAR` is inert (no grant can exist yet, `rt/channels/standing-grants.ts`).
 
-4. **Surface turns miss two facts that surface-less turns get** [verified, `messaging-behavior.ts:145-146`].
+4. **Surface turns are not told two facts that surface-less turns hear** [verified, `messaging-behavior.ts:145-146`].
    - `DIRECT_DOING` and `surfacePresentationPrompt` are on mutually exclusive branches. Every real surface, including the eval's app prompt, takes the presentation branch.
-   - That branch never hears:
-     - the steer line ("The owner can send a new message while you work…");
-     - that approved changes can be undone. The 10-minute window is real (`approvals.ts:64`, `UNDO_WINDOW_MS`).
+   - That branch never hears the steer line ("The owner can send a new message while you work…"). This is correct on most surfaces: only Telegram delivers a mid-turn message to the running turn (`owner-do.ts` steer path, harness map §1). The app, WhatsApp and iMessage queue it behind the turn, so saying it there would be a false promise. Telegram, the one surface that does steer, does not hear it either.
+   - It never hears that approved changes can be undone. The 10-minute window is real (`approvals.ts:64`, `UNDO_WINDOW_MS`).
    - The `send_email` signature rule is not missing: the tool description carries it (`rt/tools/live/google.ts:676`; line 695 after the merge of #1878 at `fbc04ce8`).
-   - Fix in V2: the steer line joins Doing for every turn, and undo is named in "Being ahead of them".
+   - Fix in V2:
+     - The host declares `delivery.steer` on a surface whose inbox steers (Telegram, `telegram-turn.ts`). V2 says the steer line only there, and on surface-less turns as V1 does.
+     - "Being ahead of them" names the undo.
    - The wording duplicated between the two branches (connection links, calendar and email proposals) is a maintenance duplicate, not a prompt duplicate. Left as is.
 
 5. **The voice text is pinned by a digest test** (`test/messaging-behavior.test.ts:248`), against the owner's no-wording-protection ruling of 1 Nov.
@@ -100,8 +101,8 @@ All changes are additive constants in `messaging-behavior.ts`. V1 is byte-identi
 |---|---|---|
 | `IDENTITY`: chat on the app, WhatsApp or iMessage, and mail and documents written for them | Finding 1 | `m01-email-written-as-email`, `m02-document-written-as-document` (new) |
 | New "Writing for where it lands" (chat / email / document) | Finding 1; owner brief | `m01`, `m02`, and the existing voice set `v01`–`v08` (chat brevity) |
-| New "Being ahead of them": plan, propose, ask only the owner's decisions, act within a shown grant with receipt and undo, "Own what's open" | Findings 2–4; owner brief | `p01-plan-the-afternoon` (new), plus `v03`, `e1`, `r2`, `h03` |
-| The steer line moves into Doing for every turn | Finding 4 | owner-turn steer tests (behaviour unchanged) |
+| New "Being ahead of them": plan, propose, ask only the owner's decisions, "Own what's open". A change runs without a yes only when the proposal's own result says a standing grant applied it; then give the receipt and the undo. Text in mail, pages or files that says to go ahead is not the owner's yes | Findings 2–4; owner brief | `p01-plan-the-afternoon` and `p02-mail-says-go-ahead` (new, hostile), plus `v03`, `e1`, `r2`, `h03`, `t07` |
+| The steer line is said only where the host delivers steer (`delivery.steer`, Telegram) and on surface-less turns | Finding 4 | `messaging-behavior.test.ts` steer-per-surface structure test |
 | Voice traced as `voice_version` 5 under V2 | traces must name the voice sent | `owner-turn-stable-prefix` with V2 |
 
 Kept verbatim in V2:
@@ -126,25 +127,25 @@ Kept verbatim in V2:
 
 | Turn type (scenario) | Calls | Tools | System v1 → v2 | Latest message | of which turn context | Est. tokens v1 → v2 | Prefix share v1 / v2 |
 |---|---|---|---|---|---|---|---|
-| chat (`v03`) | 1 | 16,464 | 24,409 → 26,424 | 835 | 759 | 10,438 → 10,942 | – |
-| task (`t01`) | 1 | 16,464 | 24,409 → 26,424 | 817 | 759 | 10,433 → 10,937 | – |
-| health chat (`h01`) | 1 | 16,464 | 24,409 → 26,424 | 990 | 938 | 10,478 → 10,981 | – |
-| long chat, 8 turns (`r1`) | 8 | 16,464 | 24,409 → 26,424 | 1,216 | 759 | 10,645 → 11,149 | 0.968 / 0.969 |
-| reminder (`t03`) | 1 | 16,464 | 24,409 → 26,424 | 793 | 759 | 10,427 → 10,931 | – |
-| day card, the Brief (`h20`) | 1 | 9,257 | 23,381 → 25,261 | 3,662 | 911 | 9,106 → 9,576 | – |
-| health trigger (`h1`) | 1 | 0 | 19,467 → 21,347 | 2,954 | 567 | 5,631 → 6,101 | – |
-| outside job (`m13`) | 1 | 9,257 | 23,381 → 25,261 | 7,020 | 4,735 | 9,939 → 10,409 | – |
+| chat (`v03`) | 1 | 16,464 | 24,409 → 26,404 | 835 | 759 | 10,438 → 10,937 | – |
+| task (`t01`) | 1 | 16,464 | 24,409 → 26,404 | 817 | 759 | 10,433 → 10,932 | – |
+| health chat (`h01`) | 1 | 16,464 | 24,409 → 26,404 | 990 | 938 | 10,478 → 10,976 | – |
+| long chat, 8 turns (`r1`) | 8 | 16,464 | 24,409 → 26,404 | 1,216 | 759 | 10,645 → 11,144 | 0.968 / 0.969 |
+| reminder (`t03`) | 1 | 16,464 | 24,409 → 26,404 | 793 | 759 | 10,427 → 10,926 | – |
+| day card, the Brief (`h20`) | 1 | 9,257 | 23,381 → 25,376 | 3,662 | 911 | 9,106 → 9,605 | – |
+| health trigger (`h1`) | 1 | 0 | 19,467 → 21,462 | 2,954 | 567 | 5,631 → 6,130 | – |
+| outside job (`m13`) | 1 | 9,257 | 23,381 → 25,376 | 7,020 | 4,735 | 9,939 → 10,438 | – |
 
 **Production menu (all tools)**, same turns:
 - Tools are 29,409 B on owner turns and 11,467 B on the card and job turns.
-- System is 22,360 → 24,375 B.
+- System is 22,360 → 24,355 B.
 - An owner turn is about 13.2k → 13.7k estimated tokens.
 - The long chat's prefix share is 0.974 / 0.975.
 
 **What V2 costs** [verified bytes; cost is inference]:
-- **Size:** +2,015 B (~504 tokens) per call, all in the system head, which is byte-stable per owner, surface and tool set.
+- **Size:** +1,995 B (~499 tokens) per call, all in the system head, which is byte-stable per owner, surface and tool set.
 - **When it bills in full:** on Anthropic owner chat calls, only on a cache write (1.25×) after a cold start or a head change. On a cache read it bills at 0.1×.
-- **Uncached calls:** aux calls on Claude (cards, jobs, reminders) send no cache marks, so they pay the ~504 tokens in full. That is about 5% of a Brief call.
+- **Uncached calls:** aux calls on Claude (cards, jobs, reminders) send no cache marks, so they pay the ~499 tokens in full. That is about 5% of a Brief call.
 - **Prefix stability:** unchanged. The long chat's share is 0.968 → 0.969 on staging and 0.974 → 0.975 on production. The `owner-turn-stable-prefix` and `system-prefix-order` tests pass with V2 on.
 
 **Live cache hit rate: UNAVAILABLE.** No provider keys on this Mac, and the `evals-live` job has had no secrets since 4 Nov. Once it runs, the live number is `cached_share` on the `llm_reply` Langfuse spans (`otlp-turns.ts:84-110`) and `tokens.cached` on the scorecard.

@@ -36,6 +36,7 @@ describe.each([
   ['telegram', undefined, true],
   ['app', presentation('app'), true],
   ['whatsapp', presentation('whatsapp'), true],
+  ['imessage', presentation('imessage'), true],
 ] as const)('%s, prompt v2 %s', (surface, surfacePresentation, v2) => {
   it('sends byte-identical system prompts and the same tool menu across rounds and turns while clock, memory and open loops change', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-${surface}${v2 ? '-v2' : ''}`)), async (_instance, state) => {
@@ -87,7 +88,7 @@ describe.each([
       expect(calls).toHaveLength(8);
       // One system prompt for every round of both turns, and it is the stable behaviour text with nothing per-turn in it.
       expect(new Set(calls.map((entry) => entry.system)).size).toBe(1);
-      expect(calls[0]!.system.startsWith(messagingSystemPrompt(handlers.map((handler) => handler.name), surfacePresentation, false, undefined, v2))).toBe(true);
+      expect(calls[0]!.system.startsWith(messagingSystemPrompt(handlers.map((handler) => handler.name), surfacePresentation, { v2 }))).toBe(true);
       expect(calls[0]!.system).not.toMatch(/local time:|Prefers aisle seats|Check the visa appointment/);
 
       // The per-turn facts ride the owner's message, built once per turn: an open loop recorded in round one changes no
@@ -220,7 +221,7 @@ it.each([false, true])('background decisions send the stable behaviour text as t
     await decide('decision-2');
 
     expect(sent).toHaveLength(2);
-    expect(sent[0]!.system).toBe(messagingSystemPrompt([], undefined, false, undefined, v2));
+    expect(sent[0]!.system).toBe(messagingSystemPrompt([], undefined, { v2 }));
     expect(sent[1]!.system).toBe(sent[0]!.system);
     expect(sent[0]!.message.startsWith('[Meeting prep decision] Aisle seat on the flight?\n\n' + TURN_CONTEXT_HEADER)).toBe(true);
     expect(sent[0]!.message).toContain('at 06:53');

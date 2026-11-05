@@ -84,8 +84,9 @@ export const MODEL_UNREACHABLE_REPLY = "I can't reach my model right now. I've k
 // The floor stays 'template' on every route: the routes run under the user_message trigger, and the routing contract
 // keeps user-facing triggers on the template (ADR-0069 §4). Only the owner's own reply passes a renderTemplate, so a side
 // job that exhausts its route fails as template_unavailable and its caller treats that as deferred work.
-export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, access: OwnerModelAccess): RoutingPolicy => {
-  const chat = primary === chatModel;
+// chat: the call is the owner's own reply. It defaults to "runs on the chat model"; the owner's reply on the lighter model
+// (WALDO_LIGHT_CHAT) passes it, so it keeps the reply's cache and output room and falls back to the other provider's chat model.
+export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, access: OwnerModelAccess, chat = primary === chatModel): RoutingPolicy => {
   const second = otherProvider(PROVIDER_OF[primary] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER);
   return routingPolicySchema.parse({
     routes: [{

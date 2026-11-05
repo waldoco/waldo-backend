@@ -22,7 +22,7 @@ const shuffled = (names: readonly string[], seed: number): string[] => {
 // host assembled its handlers in.
 describe('tool catalogue in the system prompt', () => {
   it.each([false, true])('is byte-identical for the same admitted set in any order (prompt v2 %s)', (v2) => {
-    const prompts = new Set(Array.from({ length: 20 }, (_, seed) => messagingSystemPrompt(shuffled(NAMES, seed + 1), presentation, 'harness', undefined, v2)));
+    const prompts = new Set(Array.from({ length: 20 }, (_, seed) => messagingSystemPrompt(shuffled(NAMES, seed + 1), presentation, { toolSearch: 'harness', v2 })));
     expect(prompts.size).toBe(1);
   });
 
@@ -38,8 +38,8 @@ describe('tool catalogue in the system prompt', () => {
 
   it('changes only when the admitted set changes', () => {
     const without = NAMES.filter((name) => name !== 'browse_act');
-    expect(messagingSystemPrompt(shuffled(without, 3), presentation, 'harness')).toBe(messagingSystemPrompt(shuffled(without, 4), presentation, 'harness'));
-    expect(messagingSystemPrompt(without, presentation, 'harness')).not.toBe(messagingSystemPrompt(NAMES, presentation, 'harness'));
+    expect(messagingSystemPrompt(shuffled(without, 3), presentation, { toolSearch: 'harness' })).toBe(messagingSystemPrompt(shuffled(without, 4), presentation, { toolSearch: 'harness' }));
+    expect(messagingSystemPrompt(without, presentation, { toolSearch: 'harness' })).not.toBe(messagingSystemPrompt(NAMES, presentation, { toolSearch: 'harness' }));
   });
 });
 

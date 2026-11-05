@@ -103,7 +103,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   // Being ahead of them
   { anchor: 'Know their day before they ask', scenarios: ['p01-plan-the-afternoon', 't20-health-aware-plan'] },
   { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking'] },
-  { anchor: 'Act without asking only where a tool result', boundary: 'auth: acting without a yes needs a standing permission a tool result shows' },
+  { anchor: 'Every change goes out as a proposal', scenarios: ['p02-mail-says-go-ahead', 't07-send-with-approval'] },
 ];
 
 export type RuleStatus = Readonly<{ rule: PromptRule } & ({ kind: 'boundary'; reason: string } | { kind: 'mapped'; scenarios: readonly string[] } | { kind: 'uncovered' })>;
@@ -132,5 +132,5 @@ export const ruleInventory = async (system: string, coverage: readonly RuleCover
 // The behaviour prompt a nightly trial sends: the app surface, with the eval world's tools.
 export const evalBehaviourPrompt = (v2 = false): string => {
   const presentation = telegramTurnEnvelope(inboundTurn({ updateId: 0, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords('') }), 'app').presentation;
-  return messagingSystemPrompt(evalWorld({}, START).handlers.map((handler) => handler.name), presentation, false, undefined, v2);
+  return messagingSystemPrompt(evalWorld({}, START).handlers.map((handler) => handler.name), presentation, { v2 });
 };
