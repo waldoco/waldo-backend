@@ -73,6 +73,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   CAPACITY_PLAN: gap('the nightly capacity pass is not run in a trial; the cap- case runs the Close with a seeded capacity note'),
   TOMORROW_TODAY: gap('the Close cases run with the switch in their steps; a trial runs no approval of the cards it raises'),
   WALDO_RECALL_CHAIN: gap('the trial\'s search_episodes runs without the recall chain, and its world keeps no runs, tasks or cards to link; test/recall-chain.test.ts measures it; staging has it on'),
+  WALDO_FILE_TOOLS: gap('a trial turn carries no upload; the zip and meeting cases in the files nightly scenarios measure the tools, and test/upload-keeper.test.ts the keeping; staging has it on'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),

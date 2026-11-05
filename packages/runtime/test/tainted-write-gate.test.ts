@@ -44,6 +44,7 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   'workspace writes': [
     ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
     ['workspace_render', { source_file_id: 'f1', source_revision: 1, path: 'out/vendor.pdf', expected_revision: 0, format: 'pdf' }],
+    ['extract_archive', { file_id: 'abcdefab-cdef-4abc-8abc-000000000001', revision: 1 }],
   ],
   artifacts: [
     ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
@@ -167,7 +168,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
       'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
-      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
+      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
       'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
