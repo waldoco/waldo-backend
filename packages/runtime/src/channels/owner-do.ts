@@ -138,7 +138,8 @@ import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
-import { nextOccurrence, Scheduler } from '../scheduler/multiplexer';
+import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
+import { CURATED_PACK_SKILLS } from '../skills/curated-catalog';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
 import { semanticRecallFromEnv, semanticTraceEntry } from '../memory/semantic-recall';
 import { reviewedThrough } from '../memory/select-memory';
@@ -5300,6 +5301,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
       const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits) : gateBudget;
+      const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
       let outcome: HealthTriggerOutcome = 'failed';
@@ -5313,10 +5315,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             tasks: tasks ? () => tasks.tasks('todo', 50) : null, loops: () => loops.list() }, from, to, timezone);
         },
         admit: budget.admit, charge: budget.charge,
+        ...(healthActions ? { actions: { protocols: healthActions, through: 'through the end of tomorrow',
+          until: (now: number) => nextDailyLocalOccurrence('00:00', timezone, nextDailyLocalOccurrence('00:00', timezone, now)) } } : {}),
         decide: async (id, prompt, format) => {
           const asked = Date.now();
           let answered = false;
-          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format, undefined, undefined, interrupts !== null); answered = true; return said; }
+          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format, undefined, undefined, interrupts !== null || healthActions !== null); answered = true; return said; }
           finally { log({ trace: id, hop: 'machine_turn', ms: Date.now() - asked, ok: answered, detail: 'health_card' }); }
         },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),

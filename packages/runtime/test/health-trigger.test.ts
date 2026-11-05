@@ -1,7 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, type ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { CURATED_PACK_SKILLS } from '../src/skills/curated-catalog';
+import { numericHealthIn } from '../src/scribe/sanitiser';
 import type { Proactivity } from '../src/channels/loops';
 import { localIso } from '../src/channels/reminders';
 import type { CalendarItem, TaskItem } from '../src/connectors/google';
@@ -786,5 +788,78 @@ describe('telling the app a health card is up', () => {
       await expect(runHealthTrigger(h.deps({ decide, reschedule: async () => { throw new Error('scheduler unavailable'); } }))).resolves.toBe('no_op');
       expect(h.logs.at(-1)).toContain('"code":"failed"');
     });
+  });
+});
+
+// HEALTH_ACTIONS: the decision reasons from the reviewed health protocols and reads through the owner's next day. The protocols
+// are content the model weighs; nothing in code picks one, sets a bedtime or a target.
+describe('the health trigger with the health protocols', () => {
+  const PROTOCOLS = CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')!.body_markdown;
+  const UNTIL = Date.parse('2026-10-22T18:30:00Z');
+  const actions = { protocols: PROTOCOLS, until: () => UNTIL, through: 'through the end of tomorrow' };
+
+  it('golden: the decision reads the protocols and the owner\'s plan through tomorrow, and proposes one move in words only', async () => {
+    await withTrigger(async ({ sql, deps, prompts, proposals, logs }) => {
+      const windows: [number, number][] = [];
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ actions, comingItems: async (from, to) => { windows.push([from, to]); return [REVIEW, DRIVE]; } }))).toBe('proposed');
+      expect(windows).toEqual([[NOW, UNTIL]]);
+      expect(prompts[0]).toContain(PROTOCOLS);
+      expect(proposals).toHaveLength(1);
+      for (const leak of LEAKS) for (const text of [...prompts, ...logs, everything(sql), JSON.stringify(proposals)]) expect(text).not.toContain(leak);
+    });
+  });
+
+  it('with the switch off the decision is as before: no protocols, the next 24 hours', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const windows: [number, number][] = [];
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      await runHealthTrigger(deps({ comingItems: async (from, to) => { windows.push([from, to]); return [REVIEW]; } }));
+      expect(windows).toEqual([[NOW, NOW + 24 * 60 * 60_000]]);
+      expect(prompts[0]).not.toContain(PROTOCOLS);
+    });
+  });
+
+  it('health not shared: no decision is asked for, so nothing invents how the owner is', async () => {
+    await withTrigger(async ({ deps, prompts, proposals }) => {
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ actions, readHealth: async () => null }))).toBe('no_health');
+      expect([prompts, proposals]).toEqual([[], []]);
+    });
+  });
+
+  it('a health-only day: the note reads the protocols too, and a note with a reading in it is refused', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      const delivered: string[] = [];
+      const soloNotice = { enabled: () => true, held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
+      const noting = (text: string) => deps({ actions, comingItems: async () => [], soloNotice, decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notice', text }); } });
+      expect(await runHealthTrigger(noting('You slept 4.5 hours, so take it easy.'))).toBe('egress_refused');
+      expect(prompts[0]).toContain(PROTOCOLS);
+      expect(delivered).toEqual([]);
+    });
+  });
+
+  it('reasons written for the person pass the reading check; a reading does not', () => {
+    for (const reason of ['Your first meeting is at 9, so an earlier night keeps the morning sharp.', 'A short night and a full afternoon, so I moved the 6 pm run to tomorrow.', 'Light day after two hard sessions: an easy walk instead of intervals at 7.'])
+      expect(numericHealthIn(reason), reason).toBe(false);
+    expect(numericHealthIn('Your HRV is 38 ms, so rest today.')).toBe(true);
+  });
+});
+
+describe('the health-protocols skill', () => {
+  const skill = CURATED_PACK_SKILLS.find(entry => entry.name === 'health-protocols');
+
+  it('is a bundled skill over existing owner-turn tools that any owner turn can load', () => {
+    expect(skill).toBeDefined();
+    for (const tool of skill!.required_tools) expect(TOOL_PERMISSIONS.user_message, tool).toContain(tool);
+    expect(skill!.trigger_types).toEqual(['user_message']);
+  });
+
+  it('every evidence line carries its grade, so the model can tell science from habit', () => {
+    const evidence = skill!.body_markdown.slice(skill!.body_markdown.indexOf('## Evidence'), skill!.body_markdown.indexOf('## The owner'));
+    const lines = evidence.split('\n').filter(line => line.startsWith('- '));
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect(line, line).toMatch(/\((?:[A-D](?:\/[A-D])?)[;,)]|\((?:[A-D](?:\/[A-D])?), |the owner's notes/);
   });
 });
