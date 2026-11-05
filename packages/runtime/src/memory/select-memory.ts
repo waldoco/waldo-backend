@@ -1,5 +1,5 @@
 import { LIFE_AREAS } from '@waldo/contracts';
-import { CONSTELLATION_BLOCK_MAX_CHARS, constellationBlock, FACTS_BLOCK_MAX_CHARS, fittingLines, MEMORY_HEADER, pinnedIn, PROFILE_BLOCK_MAX_CHARS, profileClaims, profileLine, statedReading, withoutBringUpLess, type Claim, type ClaimStore } from './claims';
+import { CONSTELLATION_BLOCK_MAX_CHARS, constellationBlock, FACTS_BLOCK_MAX_CHARS, fittingLines, memoryHeader, pinnedIn, PROFILE_BLOCK_MAX_CHARS, profileClaims, profileLine, statedReading, withoutBringUpLess, type Claim, type ClaimStore } from './claims';
 import { EMBED_TIMEOUT_MS } from './semantic-recall';
 import { RECALL_MAX_CHARS, recallForTurn, type RecallEpisodes, type RecallLeg, type RecallNear, type TurnRecall } from './turn-recall';
 
@@ -9,7 +9,7 @@ import { RECALL_MAX_CHARS, recallForTurn, type RecallEpisodes, type RecallLeg, t
 // counts: which note matters is the model's call, at the nightly (pins) and in the turn (which stub to open).
 export const CORE_ROOM = PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS + CONSTELLATION_BLOCK_MAX_CHARS;
 export const RECALLED_ROOM = RECALL_MAX_CHARS;
-const HEADER = `${MEMORY_HEADER} <owner_new> is what the owner said since Waldo last reviewed memory, oldest first.`;
+const headerFor = (shown: readonly Claim[]) => `${memoryHeader(shown)} <owner_new> is what the owner said since Waldo last reviewed memory, oldest first.`;
 
 const leftOutLine = (claims: readonly Claim[]): string => {
   const counts = new Map<string, number>();
@@ -39,7 +39,7 @@ export const coreMemory = (store: ClaimStore, room: number, reviewed: Reviewed):
     parts.push(text); left -= size;
     return true;
   };
-  if (!push(HEADER)) return '';
+  if (!push(headerFor([...pinnedIn(eligible, 'profile'), ...pinnedIn(eligible, 'facts'), ...fresh]))) return '';
   const shown = new Set<number>();
   // The claims of one block that fit within budget, taken from the end when newest win.
   const block = (tag: string, claims: readonly Claim[], budget: number, newestWin = false): number => {
