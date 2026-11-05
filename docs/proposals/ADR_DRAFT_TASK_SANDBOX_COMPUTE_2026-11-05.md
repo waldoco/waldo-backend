@@ -135,7 +135,7 @@ What survives a stop:
     - the task holds an egress grant (§4).
 
     In either case, only files the owner chose for this task may be staged: files they named or sent in the owner turn that started it, or confirmed on the task's card. A file the model found through `workspace_list` needs that confirmation.
-  - **Internet is off whenever an owner file is staged.** A task with an egress grant can therefore stage owner files only with the owner's confirmation and with the grant's hosts unreachable while those files are present. In practice a task either stages owner files or holds a grant, never both. No grant can become a way to send the owner's files out.
+  - **Internet is off whenever an owner file is staged.** A task with an egress grant can therefore stage owner files only with the owner's confirmation and with the grant's hosts unreachable for the whole attempt. In practice a task either stages owner files or holds a grant, never both. No grant can become a way to send the owner's files out.
   - **Synced readings never enter a sandbox** (§5): only workspace files are staged, never a health-plane read.
   - **Health documents the owner sent** (a lab report, for example) are workspace files under the same rule:
     - What the task produces from them goes back only to the owner's workspace, as `sandbox_output`.
