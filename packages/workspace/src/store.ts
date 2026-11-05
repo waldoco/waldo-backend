@@ -26,7 +26,18 @@ export const validatePath = (path: string): void => {
 export const digest = async (bytes: Uint8Array): Promise<string> => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice().buffer))].map(b => b.toString(16).padStart(2, '0')).join('');
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const decode = (bytes: Uint8Array): string => { try { return utf8.decode(bytes); } catch { return fail('invalid'); } };
-const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(o => o.status === 'pending').reduce((s, o) => s + o.body.byte_size, 0);
+// What a binary file's first bytes say it is, whatever its name or declared type claims.
+const SIGNATURES: readonly (readonly [string, number, readonly number[]])[] = [
+  ['zip archive', 0, [0x50, 0x4b, 0x03, 0x04]], ['zip archive', 0, [0x50, 0x4b, 0x05, 0x06]], ['pdf document', 0, [0x25, 0x50, 0x44, 0x46]],
+  ['png image', 0, [0x89, 0x50, 0x4e, 0x47]], ['jpeg image', 0, [0xff, 0xd8, 0xff]], ['gif image', 0, [0x47, 0x49, 0x46, 0x38]],
+  ['webp image', 8, [0x57, 0x45, 0x42, 0x50]], ['gzip archive', 0, [0x1f, 0x8b]], ['tar archive', 257, [0x75, 0x73, 0x74, 0x61, 0x72]],
+  ['7z archive', 0, [0x37, 0x7a, 0xbc, 0xaf]], ['rar archive', 0, [0x52, 0x61, 0x72, 0x21]], ['legacy office document', 0, [0xd0, 0xcf, 0x11, 0xe0]],
+  ['mp4 or mov video', 4, [0x66, 0x74, 0x79, 0x70]], ['ogg audio', 0, [0x4f, 0x67, 0x67, 0x53]], ['mp3 audio', 0, [0x49, 0x44, 0x33]],
+  ['sqlite database', 0, [0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]], ['executable', 0, [0x7f, 0x45, 0x4c, 0x46]], ['executable', 0, [0x4d, 0x5a]],
+];
+export const detectBinary = (bytes: Uint8Array): string | null =>
+  SIGNATURES.find(([, at, magic]) => magic.every((b, i) => bytes[at + i] === b))?.[0] ?? null;
+const byteTotal =(state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(o => o.status === 'pending').reduce((s, o) => s + o.body.byte_size, 0);
 const copyMeta = (meta: FileMeta): FileMeta => ({ ...meta });
 export type LiteralEdit = Readonly<{ before: string; after: string }>;
 export type TextRevision = Readonly<{ path: string; expected_revision: number; operation_id: string; mime: string; text?: string; edits?: readonly LiteralEdit[] }>;
@@ -239,7 +250,11 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       const record = transact(state => { const meta = state.files.find(f => f.file_id === fileId && f.state === 'ready'); const body = state.bodies.find(b => b.file_id === fileId && b.revision === revision); return meta && body ? { meta, body } : null; });
       if (!record) fail('not_found');
       const bytes = await verifyBody(record!.body);
-      decode(bytes); // Invalid UTF-8 remains binary; never replacement-text fallback.
+      // Invalid UTF-8 remains binary; never replacement-text fallback. A binary file says what it is instead.
+      try { utf8.decode(bytes); } catch {
+        transact(state => { if (!state.files.some(f => f.file_id === fileId && f.state === 'ready')) fail('not_found'); });
+        return { file_id: fileId, revision, text: null, binary: { mime: record!.body.mime, detected: detectBinary(bytes) }, total_bytes: bytes.length, next_offset: null, source_taint: 'external' as const };
+      }
       if (offset > bytes.length || (offset < bytes.length && (bytes[offset]! & 0xc0) === 0x80)) fail('invalid');
       let end = Math.min(offset + length, bytes.length);
       while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;

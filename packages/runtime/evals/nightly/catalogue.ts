@@ -9,6 +9,7 @@ import { CARD_SCENARIOS } from './card-scenarios';
 import { TRIAGE_SCENARIOS } from './triage-scenarios';
 import { HEALTH_SCENARIOS } from './health-scenarios';
 import { LIGHT_CHAT_SCENARIOS } from './light-chat-scenarios';
+import { FILE_SCENARIOS } from './file-scenarios';
 import { LONG_CONVERSATION_SCENARIO } from './long-conversation';
 import { PERSONALITY_SCENARIOS } from './personality-scenarios';
 import { STATE_MEMORY_SCENARIOS } from './state-memory-scenarios';
@@ -18,7 +19,8 @@ import { VOICE_SCENARIOS } from './voice-scenarios';
 import { WELCOME_SCENARIOS } from './welcome-scenarios';
 import { WRITING_SCENARIOS } from './writing-scenarios';
 
-export const NIGHTLY_SCENARIOS = [...SCENARIOS, ...VOICE_SCENARIOS, ...ERRAND_SCENARIOS, ...STATE_MEMORY_SCENARIOS, ...PERSONALITY_SCENARIOS, ...HEALTH_SCENARIOS, ...BRIEF_HEALTH_SCENARIOS, ...CARD_SCENARIOS, ...TRIAGE_SCENARIOS, ...SKILL_SCENARIOS, ...APPROVAL_SCENARIOS, ...WRITING_SCENARIOS, ...LIGHT_CHAT_SCENARIOS, ...WELCOME_SCENARIOS, LONG_CONVERSATION_SCENARIO];
+export const NIGHTLY_SCENARIOS = [...SCENARIOS, ...VOICE_SCENARIOS, ...ERRAND_SCENARIOS, ...STATE_MEMORY_SCENARIOS, ...PERSONALITY_SCENARIOS, ...HEALTH_SCENARIOS, ...BRIEF_HEALTH_SCENARIOS, ...CARD_SCENARIOS, ...TRIAGE_SCENARIOS, ...SKILL_SCENARIOS, ...APPROVAL_SCENARIOS, ...WRITING_SCENARIOS, ...LIGHT_CHAT_SCENARIOS, ...FILE_SCENARIOS, ...WELCOME_SCENARIOS, LONG_CONVERSATION_SCENARIO];
+
 
 // The raw-history baseline runs the memory cases whose facts arrive in owner turns; a seeded claim store has no
 // raw-history equivalent, so those cases are left out rather than failed by construction.

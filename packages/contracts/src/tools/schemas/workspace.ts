@@ -53,6 +53,17 @@ export const workspaceWriteArgsSchema = z.strictObject({
  .refine(value => value.edits === undefined || value.expected_revision > 0, {message:'edits require an existing revision'});
 export type WorkspaceWriteArgs = z.infer<typeof workspaceWriteArgsSchema>;
 
+// Unpack a workspace zip into a folder beside it. The runtime starts at most this many entries per call, refused ones
+// included, so a selection never names more than one call can unpack.
+export const EXTRACT_ARCHIVE_MAX_ENTRIES = 25;
+export const extractArchiveArgsSchema = z.strictObject({
+  file_id: z.string().min(1).max(100),
+  revision: z.int().positive(),
+  entries: z.array(z.string().min(1).max(240)).min(1).max(EXTRACT_ARCHIVE_MAX_ENTRIES).optional(),
+  prefix: z.string().min(1).max(240).optional(),
+}).refine(value => value.entries === undefined || value.prefix === undefined, { message: 'choose entries or a prefix, not both' });
+export type ExtractArchiveArgs = z.infer<typeof extractArchiveArgsSchema>;
+
 // Render bounded saved text to genuine document bytes; binary data never enters model arguments.
 export const workspaceRenderArgsSchema = z.strictObject({
   source_file_id: z.string().min(1).max(100),

@@ -33,8 +33,8 @@ Each signal has one store and one writer. No signal is copied into a second stor
 |---|---|---|---|---|---|
 | **Screen time, Android** (exists, #1863) | Usage access on the phone | Supabase `waldo.screen_time_days`. Writer: the `screen_time_*` signed router calls behind `/app/v1/screen-time/*` | Its own consent, purposes `storage_compute` and `model_processing` | 90 days | `get_screen_time`, turn-only |
 | **Screen time, iOS** | Apple's Screen Time APIs | **None on the server.** Apple's report extension cannot send data off the device (see the platform plan) | — | — | Nothing, unless the owner types it |
-| **Time zone** (new) | The phone's IANA time zone, sent on **every app wake**, including background health sync. No location permission is needed | Supabase `waldo.device_place_latest`, one row per owner and phone. Writer: the `device_context_*` signed router calls behind `/app/v1/device-context/place` | The place consent (§2) | Latest only; removed after 30 days without a refresh | `get_device_context`: the zone and how old the reading is |
-| **Coarse place** (new) | The phone's own coarse location, rounded **on the phone** to a 5-character geohash cell (about 4.9 km × 4.9 km), plus the place name the OS gives (locality, region, country) | The same row as the time zone. Overwritten, never appended. An upload with only a time zone leaves the last cell in place, with its own time | The place consent (§2) | Latest only; removed after 30 days without a refresh | `get_device_context`: the place name, how old it is and which phone sent it. **Never the cell** |
+| **Time zone** (new) | The phone's IANA time zone, sent on **every app wake**, including background health sync. No location permission is needed | Supabase `waldo.device_place_latest`, one row per owner and phone. Writer: the `device_context_*` signed router calls behind `/app/v1/device-context/place` | The place consent (§2) | Latest only. Nothing observed more than 30 days ago is accepted, shown or kept | `get_device_context`: the zone and how old the reading is |
+| **Coarse place** (new) | The phone's own coarse location, rounded **on the phone** to a 5-character geohash cell (about 4.9 km × 4.9 km), plus the place name the OS gives (locality, region, country) | The same row as the time zone. Overwritten, never appended. An upload with only a time zone leaves the last cell in place, with its own time | The place consent (§2) | Latest only. Nothing observed more than 30 days ago is accepted, shown or kept | `get_device_context`: the place name, how old it is and which phone sent it. **Never the cell** |
 | **Weather, UV and air** (new) | A weather provider, called **by the Worker** with the cell's centre only. WeatherKit REST covers forecast and UV; a second source covers air quality, which WeatherKit lacks | Not stored per owner. A shared cache keyed by cell and hour holds no owner or device id | The place consent, which names the provider. It can be withdrawn on its own | What the provider's cache terms allow; at most a few hours | `get_weather`: today and tomorrow where the owner is, as a short summary |
 | **Steps** (exists) | HealthKit or Health Connect, through the existing health ingest | The health plane (ADR-0081), unchanged | Health consent, unchanged | Unchanged | `get_health` signal `steps`. A step goal is what the owner says, kept as memory. No new store |
 | **Trips** | Booking mail and calendar (existing connectors), plus a change of place or time zone | No new store. Mail, calendar and open loops already hold trips | The existing connector grants | Unchanged | The model reads mail and calendar as today and judges whether it is a trip |
@@ -61,7 +61,7 @@ Each signal has one store and one writer. No signal is copied into a second stor
 | `model_processing` | Let Waldo's model read them | `get_device_context` and `get_weather` answer `consent_withdrawn`. The row stays until storage is withdrawn or the row expires |
 | `provider_lookup` | Weather lookups with the cell's centre | `get_weather` answers `consent_withdrawn`. Place still works |
 
-**Granting.** The app grants all three together from the one consent screen, storage first, because the others sit on top of it. The pattern is screen time's:
+**Granting.** The app grants all three in one call from the one consent screen (`POST /app/v1/device-context/consents/batch`). The server grants storage first, because the others sit on top of it, and grants all or none. Withdrawals stay one purpose at a time. The pattern is screen time's:
 - the server owns status and the epoch;
 - every write carries `expected_epoch`;
 - every request carries an idempotent `request_id`;
@@ -188,7 +188,7 @@ Location is personal data, not ADR-0081 health data. It lives on the health plan
   - a cell one character too long;
   - a latitude field;
   - an extra key;
-  - place names without a cell.
+  - place names without a cell, or with a position written into them.
 - **pgTAP, proving that:**
   - withdrawing storage deletes rows and receipts and moves the epoch;
   - an upload at the old epoch is refused;
