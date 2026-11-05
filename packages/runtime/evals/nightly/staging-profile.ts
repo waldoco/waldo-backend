@@ -62,7 +62,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
-  BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it off until the owner turns it on for the Google Forms run'),
+  BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it off'),
   WELCOME_V2: gap('the welcome build runs once at setup, never in a turn trial; staging has it off'),

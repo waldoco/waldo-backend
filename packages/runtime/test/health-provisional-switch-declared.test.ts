@@ -81,9 +81,9 @@ describe('MEDICATIONS in the Worker config', () => {
 });
 
 describe('BROWSER_FORM_SUBMIT in the Worker config', () => {
-  it('is off in both blocks until the owner turns it on for the staging Google Forms run', () => {
+  it('is on in staging for the Google Forms run, and off in production', () => {
     expect(parsed.vars.BROWSER_FORM_SUBMIT).toBe('0');
-    expect(parsed.env.staging.vars.BROWSER_FORM_SUBMIT).toBe('0');
+    expect(parsed.env.staging.vars.BROWSER_FORM_SUBMIT).toBe('1');
   });
 });
 
