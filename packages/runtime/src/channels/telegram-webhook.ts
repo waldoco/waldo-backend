@@ -172,6 +172,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_CLAIM_CONTROLS?: string;
+  MEMORY_VALIDITY?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

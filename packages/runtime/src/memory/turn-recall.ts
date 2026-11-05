@@ -12,6 +12,7 @@ export const RECALL_MAX_CHARS = 3_000;
 const RECALL_CLAIMS = 12;
 // With stubs on, the matches after the first RECALL_CLAIMS come as stubs, as does a full line that does not fit.
 const RECALL_STUBS = 12;
+const RECALL_REPLACED = 3;
 const STUB_CHARS = 60;
 const RECALL_EPISODES = 8;
 // A follow-up as short as "and that?" has too few words to match on, so the previous owner message's words join it.
@@ -83,6 +84,8 @@ const header = (meaning: boolean) => `Matched to this message by shared words${m
 const STUB_NOTE = ' A stub (c12 stub) shows only how a note starts; read it whole with read_memory and its ids.';
 const cutLine = (count: number) => `(${count} more matches did not fit here; read_memory and search_episodes reach them.)`;
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
+// An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
+const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
 const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
 // word longer than the stub keeps what precedes its digits.
@@ -111,8 +114,8 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 // turn goes on with what the other leg found, and failed names the leg; a row that cannot be read back is left out. The
 // block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits. With stubs,
 // recall reaches further: matches past the full lines, and a full line that does not fit, come as stubs the model can open.
-export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false }: Readonly<{
-  claims: Pick<ClaimStore, 'recall'>;
+export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false }: Readonly<{
+  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced'>>;
   episodes?: RecallEpisodes;
   question: string;
   previous?: string;
@@ -123,6 +126,8 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // The meaning leg for claims, when semantic recall is on. It ranks; claims.recall still decides what may be returned.
   semantic?: RecallNear;
   stubs?: boolean;
+  // MEMORY_VALIDITY: facts a later one replaced that match these words join, dated and marked as no longer true.
+  replaced?: boolean;
 }>): Promise<TurnRecall> => {
   const followed = previous !== undefined && !holds(previous) ? previous : undefined;
   const terms = recallTerms(question, followed);
@@ -140,6 +145,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     recalled = claims.recall(query, stubs ? RECALL_CLAIMS + RECALL_STUBS : RECALL_CLAIMS, near).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases));
   } catch {
     failed.push('claims');
+  }
+  // What used to be true, only as a few extra lines the model weighs for questions about the past; each says it is over.
+  let past: readonly Claim[] = [];
+  if (replaced) {
+    try { past = (claims.recallReplaced?.(query, RECALL_REPLACED) ?? []).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases)); } catch { failed.push('claims'); }
   }
   // A claim and the message it was learned from count once: the claim wins.
   const sources = new Set(recalled.map(sourceEntry));
@@ -169,6 +179,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[] }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
     ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit) })),
+    ...past.map((claim) => ({ full: replacedLine(claim) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);

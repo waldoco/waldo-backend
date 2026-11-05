@@ -81,6 +81,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),
+  MEMORY_VALIDITY: gap('the nightly pass that retires a contradicted claim is not run in a trial; recall of replaced facts is measured by the m-cases the memory evals add'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
