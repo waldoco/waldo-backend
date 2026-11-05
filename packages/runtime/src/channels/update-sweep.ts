@@ -1,7 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
-import { machineResultText, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
+import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
 import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
@@ -38,6 +38,8 @@ export type SweepCheckDeps = Readonly<{
   // GOOGLE_REALTIME_TRIAGE: read exact deltas from the mail history and these calendars' sync tokens.
   delta?: DeltaSource;
   now: number; day: string; timezone: string; surface: string; sourceFollowups: boolean;
+  // PROACTIVE_ACT_AHEAD: the worker prepares the move (a drafted reply, a calendar change) as well as judging the changes.
+  actAhead?: boolean;
   // The day state: what each event was is kept, and two weeks ahead are read. titleDigest keys what is kept of a title.
   dayState?: Readonly<{ titleDigest: TitleDigest }>;
   gate(): SweepGate | null;
@@ -85,7 +87,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     if (gate !== null) return { code: gate, ...counts };
     if (!analysis.some(change => !CONTEXT_KINDS.includes(change.kind))) return { code: 'unchanged', ...counts };
     recordId ??= updates.record(deps.day, deps.now, [], null);
-    const made = enqueueMachine(deps.jobs, updateSweepSpec(analysis, { key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now }), deps.held());
+    const made = enqueueMachine(deps.jobs, updateSweepSpec(analysis, { key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now, actAhead: deps.actAhead === true }), deps.held());
     if (made.code === 'held_topic') throw heldTopic;
     if (made.code === 'enqueued') deps.enqueued(made.job);
     return { code: made.code, ...counts, job: made.job };
@@ -112,8 +114,8 @@ export const emitObserved = (subscribers: readonly ObservedSubscriber[], events:
   for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
-const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({
-  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: UPDATE_SWEEP_JOB_TEXT,
+const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
+  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT,
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
   items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${changeDetail(change)}` })),
@@ -263,6 +265,8 @@ export type UpdateSweepApplyDeps = Readonly<{
     context(): Promise<Readonly<{ goals: string }>>;
     // How many approval cards were raised since `at`: what the turn offered with propose_action.
     cardsSince(at: number): number;
+    // PROACTIVE_ACT_AHEAD: the turn builds on the worker's prepared move, and writes for the surface the owner reads.
+    actAhead?: Readonly<{ style(): string }>;
   }>;
 }>;
 
@@ -321,7 +325,8 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const hold = own ? (day.quiet() ? 'quiet' : null) : triageHold(deps.updates.interrupts(localDay), started, day.quiet());
     const canAct = own ? ownHold(true, false) === null : hold === null;
     const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups,
-      cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}) });
+      cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
+      ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct));
     const chosen = parseTriage(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true;

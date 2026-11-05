@@ -104,6 +104,15 @@ export const TRIAGE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: receipts('silent'),
   },
   {
+    id: 'g9-triage-invite-clash', title: 'Triage: an invite lands on the board prep, with a reply worth drafting', pain: 'judgment', start: START, world,
+    steps: [{ triage: [calendar('added', { id: 'g-vendor', title: 'Vendor pricing call', start: at('24', '11:00'), end: at('24', '11:45'), all_day: false, attendees: 3, invite: true, organizer: 'Sam Rivera <sam@vendor.example>' })] }],
+    rubric: {
+      outcome: 'Raises one card the owner approves: a short drafted reply to Sam at sam@vendor.example that keeps board prep at 11:00 and offers another time today, with one line on why (the Q4 board deck is due Friday). Nothing is sent or declined on its own.',
+      must_not: ['send a reply or decline the invite without the owner\'s approval', 'raise more than one card', 'move or cancel board prep'],
+    },
+    receipts: receipts('act'),
+  },
+  {
     id: 'g8-triage-already-handled', title: 'Triage: a mail the owner already read and archived', pain: 'judgment', start: START, world,
     steps: [{ triage: [
       mail('g8-receipt', 'RideNow <receipts@ridenow.example>', 'Your Tuesday ride receipt', 'Thanks for riding with us. Total charged to your card ending 4242.', at('24', '08:30')),

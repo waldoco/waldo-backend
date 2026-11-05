@@ -8,6 +8,8 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
 import { triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
 import { interruptBook, INTERRUPTS_KEY, type InterruptLimits } from '../src/channels/interruptions';
+import { UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../src/prompt/machine-jobs';
+import { channelStyle } from '../src/prompt/update-cards';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { PUSHES } from '../src/channels/expo-push';
 import type { TaskHost } from '../src/tasks/brain';
@@ -556,7 +558,7 @@ describe('applying a sweep job with the day state', () => {
 // or revise, with a push), brief (left for the next main card) or silent (noted, not carried). Code holds only quiet hours,
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
 type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number; whenOffered?: boolean }; goals: { asked: number } }>;
-const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions']): TriageApply => {
+const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>): TriageApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards: TriageApply['cards'] = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
@@ -580,6 +582,7 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
     triage: {
       context: async () => { goals.asked += 1; return { goals: '- Ship the Q4 board deck by Friday' }; },
       cardsSince: at => (raisedAt >= at && Number.isFinite(raisedAt) ? cards.raised : 0),
+      ...(actAhead ? { actAhead } : {}),
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
@@ -823,5 +826,60 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     const owners = await withSweep(async (h) => (await triaged(h, { decision: 'silent' }, undefined, owned(h))).turns[0]!.text);
     const plain = await withSweep(async (h) => (await triaged(h, { decision: 'silent' })).turns[0]!.text);
     expect([owners.includes('"urgent"'), plain.includes('"urgent"')]).toEqual([true, false]);
+  });
+});
+
+// PROACTIVE_ACT_AHEAD: the worker prepares the move; triage offers it on one card or stays silent. What matters is the model's.
+describe('acting ahead on an update', () => {
+  const INVITE: TaskResult = { status: 'done', summary: 'An invite clashes with the deck block.',
+    findings: [{ text: 'Krati invited the owner to a vendor call at 17:00, over their deck block.', source_ref: 'e-sync' }],
+    proposals: [{ tool: 'send_email', why: 'Keeps the deck block; offers Krati the morning instead.', args: { to: ['krati@client.example'], subject: 'Vendor call', body: 'Could we do 10:00 tomorrow instead? DRAFT-7Q' } }], left: [] };
+  const STYLE = channelStyle('chat');
+  const acting = async (h: Harness, result: TaskResult, reply: unknown, setup: (a: TriageApply) => void = () => undefined) => {
+    h.events.push(MOVED);
+    await h.check({ actAhead: true });
+    report(h, result);
+    const a = applyingTriage(h, undefined, { style: () => STYLE });
+    a.reply.text = JSON.stringify(reply);
+    setup(a);
+    await a.lane();
+    return a;
+  };
+
+  it('the worker is asked to prepare the move as well as judge; without the switch it only judges', async () => {
+    await withSweep(async (h) => {
+      h.events.push(MOVED);
+      await h.check({ actAhead: true });
+      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_ACT_AHEAD_TEXT.goal);
+    });
+    await withSweep(async (h) => {
+      h.events.push(MOVED);
+      await h.check();
+      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_JOB_TEXT.goal);
+    });
+  });
+
+  it('golden: an invite that clashes becomes one card built from the drafted reply, and no message besides', async () => {
+    await withSweep(async (h) => {
+      const a = await acting(h, INVITE, { decision: 'act' }, a => { a.cards.raised = 1; });
+      expect(a.turns[0]!.text).toContain('DRAFT-7Q');
+      expect(a.turns[0]!.text).toContain(STYLE);
+      expect(a.tools[0]).toEqual(expect.arrayContaining(['send_email', 'propose_calendar_change']));
+      expect([a.effects, a.chose]).toEqual([[], ['act']]);
+      expect(h.jobs()[0]!.status).toBe('applied');
+    });
+  });
+
+  it('an update that does not matter: silence, nothing reaches the owner, and nothing spends their budget', async () => {
+    await withSweep(async (h) => {
+      const a = await acting(h, FOUND, { decision: 'silent' });
+      expect([a.effects, a.chose, unfolded(h)]).toEqual([[], ['silent'], '']);
+      expect(h.updates.interrupts(DAY).count).toBe(0);
+    });
+    // The worker found nothing worth hearing: no turn runs at all.
+    await withSweep(async (h) => {
+      const a = await acting(h, NOTHING, { decision: 'tell', say: 'never sent' });
+      expect([a.turns, a.effects]).toEqual([[], []]);
+    });
   });
 });

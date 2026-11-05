@@ -16,6 +16,9 @@ import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
+import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
+import { loopBook } from '../src/channels/loops';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
@@ -25,7 +28,7 @@ import { ensureSchema } from '../src/tracer/schema';
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
 // Each scripted turn is a list of rounds; a request is the Brief's when it carries the scheduled-card header.
-const model = vi.hoisted(() => ({ brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], briefRequests: [] as string[], ownerRequests: [] as string[], results: [] as string[] }));
+const model = vi.hoisted(() => ({ briefModels: [] as string[], brief: [] as Round[], owner: [] as Round[], briefTools: [] as string[][], ownerTools: [] as string[][], briefAsked: [] as string[], briefRequests: [] as string[], ownerRequests: [] as string[], results: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -34,7 +37,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const asked = String(request.messages.at(-1)?.content ?? '');
-    const brief = asked.includes('[Scheduled card "The Brief"');
+    const brief = asked.includes('[Scheduled card "');
+    if (brief) model.briefModels.push(request.model);
     (brief ? model.briefTools : model.ownerTools).push((request.tools ?? []).map(tool => tool.name));
     if (brief) model.briefAsked.push(asked);
     (brief ? model.briefRequests : model.ownerRequests).push(JSON.stringify(request));
@@ -88,7 +92,7 @@ const storedText = (state: DurableObjectState) => {
 };
 
 beforeEach(() => {
-  model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
+  model.briefModels = []; model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
   calendar.events = [STARTUP]; calendar.created = []; calendar.moved = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -112,6 +116,8 @@ type Steps = Readonly<{
   owner: Owner; state: DurableObjectState;
   // The Brief fires through the scheduler, as it does at its planned time.
   brief(): Promise<void>;
+  // Any day card, fired the same way.
+  card(id: 'card:midday' | 'card:close'): Promise<void>;
   say(text: string): Promise<void>;
   history(): Promise<ReturnType<typeof appHistoryResultV1Schema.parse>>;
   approvals(): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
@@ -141,6 +147,15 @@ const owned = async (name: string, settings: Readonly<Record<string, unknown>>, 
       let sent = 0;
       await run({
         owner, state,
+        card: async id => {
+          state.storage.sql.exec('DELETE FROM schedule');
+          dayPlanBook(state.storage.sql).save(DAY, { card: id, time: '08:00', reason: 'planned' });
+          await new Scheduler(state.storage.sql, state.storage, productionDeps())
+            .schedule({ id, kind: 'brief', payloadRefs: { id }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+          state.storage.kv.put('owner_alarm_last_v1', 1);
+          await owner.alarm();
+          await state.storage.deleteAlarm();
+        },
         brief: async () => {
           state.storage.sql.exec('DELETE FROM schedule');
           dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '08:00', reason: 'planned' });
@@ -355,6 +370,115 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
     await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
+    });
+  });
+});
+
+// PROACTIVE_ACT_AHEAD: the day shape the owner approved. The Check-in offers its one decision on a card, like the planning Brief,
+// in the chat role; whether the plan slipped, and so whether it says anything, is the model's.
+describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
+  it('the Check-in may put its decision on a card, in the chat role; with the switch off it reads and writes only', async () => {
+    const MOVE = { action: 'move', event_id: 'ev-startup', title: 'Startup time', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:45:00Z`, reason: 'The deck block slipped; this gives it the afternoon' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'Check-in\nThe deck block slipped. Moving Startup time to 5 gives it back; it is on a card.' }];
+    await owned('day-shape-midday-on', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, approvals }) => {
+      await card('card:midday');
+      expect(model.briefTools[0]).toContain('propose_calendar_change');
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
+      expect(calendar.moved).toBe(0);
+    });
+    const on = model.briefModels[0];
+    model.briefTools = []; model.briefModels = []; model.brief = [{ text: 'SKIP' }];
+    await owned('day-shape-midday-off', { PROACTIVE_ACT_AHEAD: '0' }, async ({ card, approvals }) => {
+      await card('card:midday');
+      expect(model.briefTools[0]).not.toContain('propose_calendar_change');
+      expect(await approvals()).toEqual([]);
+    });
+    expect(model.briefModels[0]).not.toBe(on);
+  });
+
+  it('a Check-in that finds the plan holding sends nothing', async () => {
+    model.brief = [{ text: 'SKIP' }];
+    await owned('day-shape-midday-holding', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, history, approvals }) => {
+      await card('card:midday');
+      expect((await history()).messages).toEqual([]);
+      expect(await approvals()).toEqual([]);
+    });
+  });
+});
+
+// PROACTIVE_INTERVENTIONS: Waldo's own look is a patrol entry beside the health trigger's. Its tick starts one reader job when
+// something could still reach the owner, and none when the owner said no to unasked messages.
+describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () => {
+  const tick = async (state: DurableObjectState, owner: Steps['owner']) => {
+    state.storage.sql.exec('DELETE FROM schedule');
+    await new Scheduler(state.storage.sql, state.storage, productionDeps())
+      .schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+    state.storage.kv.put('owner_alarm_last_v1', 1);
+    await owner.alarm();
+    await state.storage.deleteAlarm();
+  };
+  const looks = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n;
+
+  it('the tick starts one reader job; the health trigger keeps its own patrol entry', async () => {
+    await owned('intervention-tick-on', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner, hops }) => {
+      await tick(state, owner);
+      expect(looks(state)).toBe(1);
+      expect(hops()).toContain('intervention_review');
+      expect(hops()).not.toContain('health_trigger');
+    });
+  });
+
+  it('with the owner\'s no to unasked messages, or the switch off, the tick starts nothing', async () => {
+    await owned('intervention-tick-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+    });
+    await owned('intervention-tick-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+    });
+  });
+
+  it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
+    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
+      await tick(state, owner);
+      expect(armed()).toEqual([{ due_at: AT + 120 * 60_000, recurrence_json: null }]);
+      const night = Date.parse(`${DAY}T22:00:00Z`), tickAt = Date.now;
+      Date.now = () => night;
+      try {
+        state.storage.sql.exec('DELETE FROM task_jobs');
+        await tick(state, owner);
+        expect(looks(state)).toBe(0);
+        expect(armed().map(row => row.due_at)).toEqual([AT + 24 * 3_600_000]);
+      } finally { Date.now = tickAt; }
+    });
+  });
+
+  it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
+    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
+      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<boolean> }).act({ action: 'schedule.set', id: 'heartbeat', value });
+      expect(armed()).toBe(1);
+      expect(await set('off')).toBe(true);
+      expect(armed()).toBe(0);
+      expect(await set('on')).toBe(true);
+      expect(armed()).toBe(1);
+    });
+  });
+
+  it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
+    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      state.storage.sql.exec('DELETE FROM schedule');
+      await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - 1000);
+      const sql = state.storage.sql;
+      schedulePreferences(sql, loopBook(sql, { newId: () => 'l', now: () => AT })).set('heartbeat', false);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(looks(state)).toBe(0);
+      expect(sql.exec('SELECT id FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()).toEqual([]);
     });
   });
 });

@@ -2,6 +2,7 @@ import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../../contracts/src/app/co
 import type { AppSend, ScheduledAppDelivery } from './surfaces/app';
 import type { OutboxRoute } from './delivery-routes';
 import { telegramReceipt, tookPart, type FinalRecord } from './telegram-final-outbox';
+import type { ReadsAs } from '../prompt/update-cards';
 
 // Where Waldo's proactive messages go for an owner reachable on the app and on a chat surface: the day cards (the Brief among
 // them), reminders, follow-ups and update cards. The owner chooses in the console; the app is the default. WhatsApp can take
@@ -14,6 +15,10 @@ export type ProactiveTarget = 'app' | 'whatsapp' | 'imessage';
 const WANTED: Readonly<Record<ProactiveSurface, readonly ProactiveTarget[]>> = {
   app: ['app'], whatsapp: ['whatsapp'], both: ['app', 'whatsapp'], app_imessage: ['app', 'imessage'],
 };
+// What a surface shows the owner: the app shows the day's cards beside a message; a chat shows the message alone.
+const READS: Readonly<Record<ProactiveTarget, ReadsAs>> = { app: 'cards', whatsapp: 'chat', imessage: 'chat' };
+// How the owner reads the proactive work an app owner's runtime sends: by the surface that takes it first.
+export const proactiveReads = (kv: Pick<Kv, 'get'>): ReadsAs => READS[wantedTargets(proactiveSurface(kv))[0] ?? 'app'];
 // Whether a surface can take the work itself, so that its delivery settles the job; one that cannot only gets copies.
 const SETTLES: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: true, imessage: false };
 // The stored choice read as a list of surfaces, the one that takes the work first and then each that gets a copy. This is
