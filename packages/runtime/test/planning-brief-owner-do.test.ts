@@ -364,7 +364,7 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
 
   it('with the switch off the Brief opens no question', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
-    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1' }, async ({ state, brief }) => {
+    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
     });
