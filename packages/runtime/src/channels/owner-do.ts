@@ -6024,6 +6024,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // and lets a web stage that settled without it read the findings.
     const lookupApply = lookupApplier({
       found: since => { const store = findingStore(storage.sql, memory, lookupConsent(), Date.now); return { count: store.foundSince(since), sources: store.sourcesSince(since) }; },
+      consented: () => lookupConsent().active('owner_lookup'),
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
       deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }

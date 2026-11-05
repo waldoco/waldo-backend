@@ -75,6 +75,8 @@ export type LookupApplierDeps = Readonly<{
   // The findings recorded since this time, as a count and the sites they came from: the ones the look-up's worker kept,
   // whatever the owner did with them since.
   found(since: number): Readonly<{ count: number; sources: readonly string[] }>;
+  // Whether the owner's yes still counts: a withdrawal after the worker reported leaves nothing to tell.
+  consented(): boolean;
   // Why an update card cannot reach the owner now (quiet hours, follow-ups off, a surface that would only hold it), or null.
   gate(): MachineHeld | null;
   // Sends the card under its key, on the apply's trace; commit is the job's settle, written with the send.
@@ -90,7 +92,7 @@ const sitesText = (sources: readonly string[]) => {
   const named = sources.slice(0, SITES_NAMED).join(', '), more = sources.length - SITES_NAMED;
   return `, from ${named}${more > 0 ? ` and ${more} more` : ''}`;
 };
-const REVIEW = 'They are in What Waldo knows, each with the page it came from, to keep, correct or forget. Withdrawing the look-up there stops it and deletes everything I found.';
+const REVIEW = 'They are in What Waldo knows, each with the page it came from, to keep, correct or forget.';
 const endText = (found: Readonly<{ count: number; sources: readonly string[] }>, finished: boolean): string => finished
   ? found.count ? `I finished looking you up on the public web and found ${things(found.count)} that look like you${sitesText(found.sources)}. ${REVIEW}`
     : 'I finished looking you up on the public web and found nothing I could stand behind, so I kept nothing.'
@@ -102,6 +104,7 @@ const endText = (found: Readonly<{ count: number; sources: readonly string[] }>,
 // finding says reaches the owner where they review it, never in a message.
 export const lookupApplier = (deps: LookupApplierDeps): MachineHandler => {
   const tell = async (row: JobRow, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>, finished: boolean) => {
+    if (!deps.consented()) { io.settle(); return 'skipped' as const; }
     const held = deps.gate();
     if (held) { io.settle(); return { held }; }
     await io.current();

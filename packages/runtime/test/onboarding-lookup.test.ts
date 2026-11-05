@@ -126,7 +126,7 @@ describe('when the look-up job ends', () => {
   type Told = { id: string; trace: string; text: string };
   const applier = (over: Partial<LookupApplierDeps> = {}) => {
     const told: Told[] = [], ended: number[] = [];
-    const deps: LookupApplierDeps = { found: () => ({ count: 2, sources: ['example.org', 'github.com'] }), gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
+    const deps: LookupApplierDeps = { found: () => ({ count: 2, sources: ['example.org', 'github.com'] }), consented: () => true, gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
     return { told, ended, handler: lookupApplier(deps) };
   };
   const reported = (book: JobBook, d: LookupDeps) => {
@@ -154,14 +154,13 @@ describe('when the look-up job ends', () => {
     expect(hops).toContain('machine_applied');
   }));
 
-  it('names the sites it read, points to What Waldo knows, and says how to have it all deleted', () => withOwner(async ({ book, deps }) => {
+  it('names the sites it read and points to What Waldo knows', () => withOwner(async ({ book, deps }) => {
     const id = reported(book, deps());
     const { told, handler } = applier();
     await apply(book, id, handler);
     expect(told[0]!.text).toContain('example.org');
     expect(told[0]!.text).toContain('github.com');
     expect(told[0]!.text).toContain('What Waldo knows');
-    expect(told[0]!.text).toMatch(/withdraw/i);
   }));
 
   it('caps the sites it names and counts the rest; a card with nothing found names none and promises nothing to review', () => withOwner(async ({ book, deps }) => {
@@ -172,6 +171,17 @@ describe('when the look-up job ends', () => {
     expect(told[0]!.text).toContain('a.example');
     expect(told[0]!.text).not.toContain('f.example');
     expect(told[0]!.text).toMatch(/and 2 more/);
+  }));
+
+  it('an owner who withdrew the look-up after its worker reported hears nothing about it, and the job still settles', () => withOwner(async ({ book, deps }) => {
+    const d = deps();
+    const id = reported(book, d);
+    d.consent.withdraw('owner_lookup', T0 + 1);
+    const { told, ended, handler } = applier({ consented: () => d.consent.active('owner_lookup') });
+    await apply(book, id, handler);
+    expect(told).toEqual([]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(ended).toEqual([T0]);
   }));
 
   it('a worker that failed says it could not finish, not that it finished with nothing', () => withOwner(async ({ book, deps }) => {
