@@ -14,7 +14,7 @@ import { ownerSpokeSince } from '../src/channels/episodes';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
-import { PROSE_RULE } from '../src/prompt/day-cards';
+import { PROSE_RULE, TOMORROW_TODAY_INSTRUCTION } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -248,6 +248,53 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
       await card('card:brief');
       expect(model.cards[0]!.request).toContain(NO_NOTE);
       expect(model.cards[0]!.request).toContain(JSON.stringify(CAPACITY_LINES.brief).slice(1, -1));
+    });
+  });
+});
+
+// TOMORROW_TODAY: the Close names tomorrow's best hours and puts what would protect them on the owner's cards.
+describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
+  const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early and one block holds after a heavy day' };
+  it('raises a deep-work card in the chat role, under the owner\'s limits, and the calendar waits for yes; off, it offers no card', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nTomorrow your best stretch is before Standup; a block for it waits on your yes. Done for today.' }];
+    await owned('tomorrow-close-on', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      await card('card:close');
+      expect(model.cards[0]!.tools).toContain('propose_calendar_change');
+      expect(model.cards[0]!.request).toContain(JSON.stringify(TOMORROW_TODAY_INSTRUCTION).slice(1, -1));
+      expect(model.cards[0]!.model).not.toBe(WALDO_AUXILIARY_MODEL);
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open', exact: { changes: { action: 'create', title: 'Deck' } } }]);
+      expect(calendar.created).toBe(0);
+      expect(book.spent().count).toBe(0);
+      expect(book.question()).toBeNull();
+    });
+    model.cards = []; model.card = [{ text: 'The Close\nA good day.' }];
+    await owned('tomorrow-close-off', { TOMORROW_TODAY: '0' }, async ({ card, approvals }) => {
+      await card('card:close');
+      expect(model.cards[0]!.tools).not.toContain('propose_calendar_change');
+      expect(await approvals()).toEqual([]);
+    });
+  });
+
+  it('with health shared, refuses a card whose title carries a health word, and raises the clean one', async () => {
+    health.shared = true;
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...HOLD, title: 'Low recovery focus' } }] },
+      { calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block for the deck waits on your yes.' }];
+    await owned('tomorrow-close-egress', { TOMORROW_TODAY: '1' }, async ({ card, approvals }) => {
+      await card('card:close');
+      const cards = await approvals();
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ exact: { changes: { title: 'Deck' } } });
+      expect(calendar.created).toBe(0);
+    });
+  });
+
+  it('without shared health, plans from the calendar and is told there is none', async () => {
+    model.card = [{ text: 'The Close\nTomorrow is open before three.' }];
+    await owned('tomorrow-close-no-health', { TOMORROW_TODAY: '1' }, async ({ card }) => {
+      await card('card:close');
+      expect(model.cards[0]!.request).toContain('No derived health context is available for this invocation.');
+      expect(model.cards[0]!.tools).toContain('propose_calendar_change');
     });
   });
 });

@@ -6,6 +6,7 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { isSkip } from '../../src/channels/day-cards';
 import type { CardId } from '../../src/prompt/day-cards';
 import { capacityContext } from '../../src/prompt/capacity';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -38,7 +39,8 @@ export type Step =
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
   // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
-  | Readonly<{ card: CardId; capacity?: string }>
+  // tomorrow: TOMORROW_TODAY's Close, offered its card tools as the owner object offers them.
+  | Readonly<{ card: CardId; capacity?: string; tomorrow?: true }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
   | Readonly<{ outside_job: string }>
@@ -210,7 +212,8 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('card' in step) {
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
         skills.turn(`${scenario.id}-${step.card}`);
-        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined), time, undefined, undefined, undefined,
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.tomorrow === true), time,
+          step.tomorrow ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined,
           step.capacity === undefined ? undefined : capacityContext(step.capacity, ''), 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
