@@ -399,9 +399,28 @@ export const threadSpill = (data: unknown) => {
     const shown = step();
     if (fitsSpill(shown)) return shown;
   }
-  return view('its id, sender, time and subject only', (message) => ({
-    id: message.id, from: message.from.slice(0, SPILL_HEADER_MAX), at: message.at, subject: message.subject.slice(0, SPILL_HEADER_MAX), ...bodyFlags(message),
+  // The sender and subject share what is left, each at most SPILL_HEADER_MAX characters as JSON writes them.
+  const headersOnly = (chars: number) => view('its id, sender, time and subject only', (message) => ({
+    id: message.id, from: escapedCut(message.from, chars), at: message.at, subject: escapedCut(message.subject, chars), ...bodyFlags(message),
+    ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
   }));
+  let chars = Math.min(SPILL_HEADER_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(headersOnly(0)).length) / Math.max(1, 2 * messages.length)));
+  for (;;) {
+    const shown = headersOnly(Math.max(0, chars));
+    if (chars <= 0 || fitsSpill(shown)) return shown;
+    chars = Math.floor(chars * 0.8);
+  }
+};
+// The longest start of text whose JSON-escaped form is at most max characters, cut between code points.
+const escapedCut = (text: string, max: number) => {
+  let used = 0, end = 0;
+  for (const char of text) {
+    used += JSON.stringify(char).length - 2;
+    if (used > max) break;
+    end += char.length;
+  }
+  return text.slice(0, end);
 };
 
 // An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can

@@ -244,6 +244,18 @@ export const googleErrorReason = (body: unknown): GoogleErrorReason | undefined 
 };
 export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: string; created: string }>;
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
+// What changed in the mailbox since a history id. A cursor Google no longer knows is re-based on the mailbox's current
+// history id with no changes; the caller reads the gap the older way.
+export type MailLabelChange = Readonly<{ message_id: string; thread_id: string; change: 'read' | 'archived' | 'starred' }>;
+export type MailDelta = Readonly<{ state: 'delta'; history_id: string; added: readonly MailItem[]; labels: readonly MailLabelChange[]; left_out: number }>
+  | Readonly<{ state: 'rebased'; history_id: string }>
+  // More history than the page cap: the mailbox's current history id, to be read up to the older way.
+  | Readonly<{ state: 'capped'; history_id: string }>;
+// What changed on one calendar since a sync token, in no time window. A recurring series is one change, its exceptions are
+// their own. An invalid token is re-based from the window start with no changes; a baseline past the page cap gives up.
+export type CalendarDeltaEvent = CalendarChange & Readonly<{ invite?: true; series?: true }>;
+export type CalendarDelta = Readonly<{ state: 'delta'; sync_token: string; events: readonly CalendarDeltaEvent[] }>
+  | Readonly<{ state: 'rebased'; sync_token: string }> | Readonly<{ state: 'capped' }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
 // body_source says what the body was read from; 'snippet' means only Gmail's preview rendered.
@@ -449,6 +461,9 @@ export type GoogleClient = Readonly<{
   changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
+  // A null cursor starts from the mailbox's current history id.
+  mailDelta?(startHistoryId: string | null, limit: number): Promise<MailDelta>;
+  calendarDelta?(calendarId: string, syncToken: string | null, from: number): Promise<CalendarDelta>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
   threadPage?(threadId: string, limit: number, cursor?: string, read?: ThreadRead): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
@@ -459,7 +474,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'restoreEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'restoreEvent', 'changedEvents','changedEventsPage', 'newMail', 'mailDelta', 'calendarDelta', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -1026,6 +1041,69 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     async newMail(since, limit) {
       return mailItems(await listIds(`in:inbox category:primary after:${Math.floor(since / 1000)}`, limit));
     },
+    async mailDelta(startHistoryId, limit) {
+      if ((startHistoryId !== null && !/^\d{1,30}$/.test(startHistoryId)) || !validPageLimit(limit, 50)) throw new Error('invalid Gmail history request');
+      const rebase = async (): Promise<MailDelta> => {
+        const profile = await call('https://gmail.googleapis.com/gmail/v1/users/me/profile', { signal: AbortSignal.timeout(30_000) });
+        if (typeof profile.historyId !== 'string' || !/^\d{1,30}$/.test(profile.historyId)) throw new Error('invalid Gmail profile response');
+        return { state: 'rebased', history_id: profile.historyId };
+      };
+      if (startHistoryId === null) return rebase();
+      const records: GmailHistoryRecord[] = [];
+      let historyId = '', pageToken: string | undefined;
+      for (let page = 0; ; page += 1) {
+        const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/history');
+        url.search = new URLSearchParams([['startHistoryId', startHistoryId], ['maxResults', '100'], ...DELTA_HISTORY_TYPES.map((type): [string, string] => ['historyTypes', type]), ...(pageToken ? [['pageToken', pageToken] as [string, string]] : [])]).toString();
+        let data: Record<string, unknown>;
+        try { data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) }); } catch (error) {
+          if (!(error instanceof GoogleError) || error.status !== 404 || page > 0) throw error;
+          return rebase();
+        }
+        if (typeof data.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || (data.history !== undefined && (!Array.isArray(data.history) || !data.history.every(validHistoryRecord))) || (data.nextPageToken !== undefined && !validProviderToken(data.nextPageToken))) throw new Error('invalid Gmail history response');
+        records.push(...(data.history ?? []) as GmailHistoryRecord[]);
+        historyId = data.historyId;
+        pageToken = data.nextPageToken as string | undefined;
+        if (!pageToken) break;
+        // Each page carries the mailbox's current history id, not the last record's: past the cap, moving there would skip
+        // the records not read, so the caller reads that gap the older way instead.
+        if (page + 1 >= MAIL_DELTA_PAGES) return { state: 'capped', history_id: historyId };
+      }
+      const { added, labels } = historyChanges(records);
+      const opened = added.slice(-limit);
+      return { state: 'delta', history_id: historyId, added: await mailItems(opened.map(entry => entry.id)), labels, left_out: added.length - opened.length };
+    },
+    async calendarDelta(calendarId, syncToken, from) {
+      if (!validGoogleId(calendarId) || (syncToken !== null && !validProviderToken(syncToken)) || !Number.isSafeInteger(from)) throw new Error('invalid Calendar delta request');
+      const read = async (token: string | null): Promise<Readonly<{ events: GoogleEvent[]; syncToken: string }> | null> => {
+        const events: GoogleEvent[] = [];
+        let pageToken: string | undefined;
+        for (let page = 0; page < CALENDAR_DELTA_PAGES; page += 1) {
+          const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+          url.search = new URLSearchParams({ showDeleted: 'true', singleEvents: 'false', maxResults: '250', ...(token ? { syncToken: token } : { timeMin: new Date(from).toISOString() }), ...(pageToken ? { pageToken } : {}) }).toString();
+          const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+          const items = collectionItems(data, 'calendar#events', 250, 'Calendar delta');
+          if (!items.every(item => validCalendarEvent(item) && optionalInstant(item.updated) && optionalInstant(item.created)) || (data.nextSyncToken !== undefined && !validProviderToken(data.nextSyncToken))) throw new Error('invalid Calendar delta response');
+          events.push(...items as GoogleEvent[]);
+          if (typeof data.nextSyncToken === 'string') return { events, syncToken: data.nextSyncToken };
+          pageToken = data.nextPageToken as string | undefined;
+          if (!pageToken) throw new Error('invalid Calendar delta response');
+        }
+        return null;
+      };
+      let found: Awaited<ReturnType<typeof read>>;
+      try { found = await read(syncToken); } catch (error) {
+        if (!(error instanceof GoogleError) || error.status !== 410 || syncToken === null) throw error;
+        const baseline = await read(null);
+        return baseline ? { state: 'rebased', sync_token: baseline.syncToken } : { state: 'capped' };
+      }
+      if (!found) return { state: 'capped' };
+      if (syncToken === null) return { state: 'rebased', sync_token: found.syncToken };
+      return { state: 'delta', sync_token: found.syncToken, events: found.events.map((event): CalendarDeltaEvent => ({
+        ...item({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '',
+        ...(event.status !== 'cancelled' && event.organizer?.self !== true && event.attendees?.find(a => a.self)?.responseStatus === 'needsAction' ? { invite: true as const } : {}),
+        ...(Array.isArray(event.recurrence) && event.recurrence.length ? { series: true as const } : {}),
+      })) };
+    },
     // A1: arbitrary Gmail search - the model builds q clauses (from:, subject:, words) and the
     // handler appends after:/before: from the date range. Same metadata projection as newMail.
     async searchMail(query, limit) {
@@ -1174,8 +1252,45 @@ const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | '
   ...(attachmentsOf(event).length ? { attachments: attachmentsOf(event) } : {}),
 });
 
+// The delta reads stop at these many pages: 500 history records, or 2,000 events in a calendar's baseline.
+const MAIL_DELTA_PAGES = 5;
+const CALENDAR_DELTA_PAGES = 8;
+const DELTA_HISTORY_TYPES = ['messageAdded', 'labelAdded', 'labelRemoved'] as const;
+type HistoryMessage = Readonly<{ id: string; threadId: string; labelIds?: readonly string[] }>;
+type LabelEntry = Readonly<{ message: HistoryMessage; labelIds: readonly string[] }>;
+type GmailHistoryRecord = Readonly<{ messagesAdded?: readonly Readonly<{ message: HistoryMessage }>[]; labelsAdded?: readonly LabelEntry[]; labelsRemoved?: readonly LabelEntry[] }>;
+const validHistoryMessage = (value: unknown): value is HistoryMessage => isObject(value) && validGoogleId(value.id) && validGoogleId(value.threadId)
+  && (value.labelIds === undefined || (Array.isArray(value.labelIds) && value.labelIds.every(label => typeof label === 'string')));
+const validHistoryRecord = (value: unknown): boolean => {
+  if (!isObject(value)) return false;
+  const entries = (key: string, label: boolean) => value[key] === undefined || (Array.isArray(value[key]) && (value[key] as unknown[]).every(entry => isObject(entry) && validHistoryMessage(entry.message)
+    && (!label || (Array.isArray(entry.labelIds) && entry.labelIds.every(id => typeof id === 'string')))));
+  return entries('messagesAdded', false) && entries('labelsAdded', true) && entries('labelsRemoved', true);
+};
+// Today's newMail scope: the inbox's primary tab. Sent mail, drafts, spam and the other tabs are not news.
+const NOT_NEWS = ['DRAFT', 'SENT', 'SPAM', 'TRASH', 'CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'];
+// Label changes say what the owner did with a message: read it, archived it, starred it.
+const historyChanges = (records: readonly GmailHistoryRecord[]): Readonly<{ added: readonly HistoryMessage[]; labels: readonly MailLabelChange[] }> => {
+  const added = new Map<string, HistoryMessage>();
+  const labels: MailLabelChange[] = [];
+  const label = (entry: LabelEntry, change: MailLabelChange['change']) => labels.push({ message_id: entry.message.id, thread_id: entry.message.threadId, change });
+  for (const record of records) {
+    for (const { message } of record.messagesAdded ?? []) {
+      const ids = message.labelIds ?? [];
+      if (ids.includes('INBOX') && !ids.some(id => NOT_NEWS.includes(id))) added.set(message.id, message);
+    }
+    for (const entry of record.labelsAdded ?? []) if (entry.labelIds.includes('STARRED')) label(entry, 'starred');
+    for (const entry of record.labelsRemoved ?? []) {
+      if (entry.labelIds.includes('UNREAD')) label(entry, 'read');
+      if (entry.labelIds.includes('INBOX')) label(entry, 'archived');
+    }
+  }
+  return { added: [...added.values()], labels };
+};
+
 type GoogleEvent = {
   id: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
+  recurrence?: string[];
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
