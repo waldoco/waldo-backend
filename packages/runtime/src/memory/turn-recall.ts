@@ -93,10 +93,11 @@ const stubLine = (claim: Claim) => {
   return `- [c${claim.id} stub · ${claim.kind}] ${cut.trimEnd()}${text.length > STUB_CHARS ? '…' : ''}`;
 };
 const episodeLine = (hit: EpisodeHit) => `- [${hit.speaker}, ${hit.at?.slice(0, 10) ?? 'undated'}, ${hit.surface ? `${hit.surface}, ` : ''}ref ${hit.ref}] ${oneLine(hit.snippet)}`;
-// With the recall chain on, a hit names the rows next to it, each by ref with how it relates and the start of its line; the
-// plain line stands in when that does not fit.
+// With the recall chain on, a hit names its surface and the rows next to it, each by ref with how it relates and the start of
+// its line. The plain line, as the chain-off recall builds it, holds the hit's place; this only takes the room left over.
 const LINK_CHARS = 48;
-const linkedLine = (hit: EpisodeHit) => hit.links?.length ? `${episodeLine(hit)} ${hit.links.map(link => `→ ${link.ref} ${link.rel} "${cutLinkLine(oneLine(link.line), LINK_CHARS)}"`).join(' ')}` : undefined;
+const plainLine = (hit: EpisodeHit) => episodeLine({ ...hit, surface: undefined });
+const linkedLine = (hit: EpisodeHit) => hit.surface || hit.links?.length ? [episodeLine(hit), ...(hit.links ?? []).map(link => `→ ${link.ref} ${link.rel} "${cutLinkLine(oneLine(link.line), LINK_CHARS)}"`)].join(' ') : undefined;
 const OWNER_REF = 'owner, ';
 const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? claim.source_ref.slice(OWNER_REF.length) : undefined;
 
@@ -160,10 +161,10 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   }
   if (episodesFailed) failed.push('episodes');
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. linked is a hit's
-  // line with its links, which only takes the room left once every line is placed, so links never cost a match its place.
+  // line with its surface and links, which only takes the room left once every line is placed, so they never cost a match its place.
   const lines: readonly Readonly<{ full?: string; stub?: string; linked?: string }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
-    ...hits.map((hit) => { const linked = linkedLine(hit); return { full: episodeLine(hit), ...(linked === undefined ? {} : { linked }) }; }),
+    ...hits.map((hit) => { const linked = linkedLine(hit); return { full: plainLine(hit), ...(linked === undefined ? {} : { linked }) }; }),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);

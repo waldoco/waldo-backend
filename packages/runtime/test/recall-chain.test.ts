@@ -313,8 +313,9 @@ describe('turn recall with the recall chain', () => {
     expect(result.on).toMatch(/→ (c\d+|\d+|background_runs:\S+|task_jobs:\S+) (reply|reply_to|after|before|learned|started)/);
     expect(result.off).not.toMatch(/whatsapp|→/);
     expect(result.tight.length).toBeLessThanOrEqual(520);
-    expect(result.tight).toMatch(/whatsapp, ref \d+\]/);
-    expect(result.tight).not.toMatch(/→/);
+    // The surface comes with the links, in the room left once the plain line is placed.
+    expect(result.tight).toMatch(/, ref \d+\] .*Lisbon/);
+    expect(result.tight).not.toMatch(/whatsapp|→/);
     // A link to a message that is itself recalled is left out.
     expect(result.on).not.toMatch(/→ \d+ reply_to/);
   });
@@ -325,7 +326,7 @@ describe('turn recall with the recall chain', () => {
 // each answer shows, and the characters the model reads on the way. The path is fixed, not a model's choice; a live model is
 // measured by the nightly eval, not here. Each extra call is one more model round, which sends the whole prompt again.
 describe('turn recall under its budget with the recall chain', () => {
-  it('recalls the same messages and notes as with the chain off, and spends only the room left on links', async () => {
+  it('recalls every message and note the chain-off recall does, at every room, and spends only the room left on surfaces and links', async () => {
     const result = await inOwner(async state => {
       const world = await seed(state);
       let at = NOW;
@@ -337,16 +338,28 @@ describe('turn recall under its budget with the recall chain', () => {
         await store.save([entry(`whatsapp-${200 + n}-reply`, 'whatsapp', `Noted, will keep it in mind ${n}`, `whatsapp-${200 + n}`)], `whatsapp-${200 + n}-reply`);
       }
       const notes = Array.from({ length: 8 }, (_value, n) => ({ id: 900 + n, kind: 'fact', text: `Lisbon offsite note ${n}: ${'the team wants a quiet hotel near the river with an early checkin and late checkout '.repeat(2)}`, source: 'stated', evidence: 'owner said', origin: 'owner', status: 'active', created_at: '2026-10-28T00:00:00Z', last_seen_at: '2026-10-28T00:00:00Z', seen_count: 1 }));
-      const recall = async (handler: typeof world.episodes) => (await recallForTurn({ claims: { recall: () => notes }, episodes: episodesFromSearchTool(handler as never, OWNER_TURN), question: 'the Lisbon flight and offsite agenda', room: 3_000, holds: () => false, stubs: true })).text;
-      return { on: await recall(world.episodes), off: await recall(searchEpisodesHandler(world.index)) };
+      // Each side's index is read once; the sweep then runs over those answers.
+      const answers = async (handler: typeof world.episodes) => {
+        const episodes = episodesFromSearchTool(handler as never, OWNER_TURN);
+        const hits = await episodes.search('Lisbon flight offsite agenda', 8);
+        const rows = new Map(await Promise.all(hits.map(async hit => [hit.ref, await episodes.get(hit.ref)] as const)));
+        return { search: async () => hits, get: async (ref: string) => rows.get(ref) ?? null };
+      };
+      const sides = { on: await answers(world.episodes), off: await answers(searchEpisodesHandler(world.index)) };
+      const recall = async (side: keyof typeof sides, room: number, count: number) => (await recallForTurn({ claims: { recall: () => notes.slice(0, count) }, episodes: sides[side], question: 'the Lisbon flight and offsite agenda', room, holds: () => false, stubs: true })).text;
+      // Eight notes keep the budget bound at every room; two leave room for links at the top of the sweep.
+      const rooms: { room: number; on: string; off: string }[] = [];
+      for (const count of [8, 2]) for (let room = 500; room <= 3_000; room += 1) rooms.push({ room, on: await recall('on', room, count), off: await recall('off', room, count) });
+      return rooms;
     });
-    const refs = (text: string) => [...text.matchAll(/ref (\d+)\]/g)].map(match => match[1]).sort();
-    const notes = (text: string) => [...text.matchAll(/\[c(\d+)/g)].map(match => match[1]).sort();
-    // The budget binds: something did not fit.
-    expect(result.off).toMatch(/more matches did not fit/);
-    expect(refs(result.on)).toEqual(refs(result.off));
-    expect(notes(result.on)).toEqual(notes(result.off));
-    expect(result.on.length).toBeLessThanOrEqual(3_000);
+    const refs = (text: string) => [...text.matchAll(/ref (\d+)\]/g)].map(match => match[1]!);
+    const notes = (text: string) => [...text.matchAll(/\[c(\d+)/g)].map(match => match[1]!);
+    // The budget binds across the sweep, and the chain-on side does show surfaces and links somewhere in it.
+    const short = result.filter(({ on, off }) => !refs(off).every(ref => refs(on).includes(ref)) || !notes(off).every(id => notes(on).includes(id)));
+    expect(short.map(({ room }) => room)).toEqual([]);
+    expect(result[2_500]!.off).toMatch(/more matches did not fit/);
+    expect(result.some(({ on }) => /whatsapp, ref \d+\] .* → /.test(on))).toBe(true);
+    expect(result.every(({ room, on }) => on.length <= room)).toBe(true);
   });
 });
 
