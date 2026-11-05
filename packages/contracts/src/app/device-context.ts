@@ -94,7 +94,8 @@ export const devicePlaceV1Schema = z.strictObject({
 // an upload that changes neither is answered superseded.
 // expected_epoch is the storage_compute epoch the phone read with consent; an upload from before a withdrawal is refused, so it
 // cannot repopulate what was deleted. device_id is the app installation id the push registration uses. A reading observed more
-// than 30 days ago is refused.
+// than 30 days ago is refused. A refused reading keeps nothing, its zone included: an app whose OS names fail the place-name
+// rule (a 400 invalid_request) sends the same reading again without locality and region.
 export const devicePlaceIngestV1Schema = z.strictObject({
   request_id: requestId,
   expected_epoch: epoch,

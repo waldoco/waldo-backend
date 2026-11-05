@@ -45,7 +45,7 @@ describe('device place', () => {
     expect(devicePlaceV1Schema.safeParse({ ...place, locality: 'Sector 128', region: '5th Block' }).success).toBe(true);
     for (const name of ['12.971599,77.594566', '12,97 77,59', '12°58′N 77°35′E', '1297 7759', 'Near 1.3'])
       for (const field of ['locality', 'region']) expect(devicePlaceV1Schema.safeParse({ ...place, [field]: name }).success).toBe(false);
-    for (const name of ['१२.९७१५९९,७७.५९४५६६', '١٢٫٩٧', '１２９７　７７５９', '12º58 N'])
+    for (const name of ['१२.९७१५९९,७७.५९४५६६', '١٢٫٩٧', '１２９７　７７５９', '12º58 N', 'Near 12\u00A0.\u00A09', '\u{11DE0}\u{11DE2}\u{11DE8}\u{11DE7}\u{11DE1}'])
       for (const field of ['locality', 'region']) expect(devicePlaceV1Schema.safeParse({ ...place, [field]: name }).success).toBe(false);
     expect(devicePlaceV1Schema.safeParse({ ...place, locality: 'Sector 128', region: 'Block 45' }).success).toBe(false);
     expect(devicePlaceV1Schema.safeParse({ ...place, locality: 'Sector 12', region: 'Block 45' }).success).toBe(true);

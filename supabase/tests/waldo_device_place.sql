@@ -118,9 +118,11 @@ select is((select count(*)::int from unnest(array[
   pg_temp.place('tdr1w') || '{"locality":"१२.९७१५९९,७७.५९४५६६"}',
   pg_temp.place('tdr1w') || '{"locality":"１２９７　７７５９"}',
   pg_temp.place('tdr1w') || '{"locality":"Sector 128","region":"Block 45"}',
+  pg_temp.place('tdr1w') || jsonb_build_object('locality', 'Near 12' || chr(160) || '.' || chr(160) || '9'),
+  pg_temp.place('tdr1w') || jsonb_build_object('locality', chr(73184) || chr(73186) || chr(73192) || chr(73191) || chr(73185)),
   pg_temp.place('tdr1w',-60),
   pg_temp.place('tdr1w',40 * 24 * 60)]) p
-  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),16,
+  where pg_temp.ingest('dc-owner-a','place-bad-'||md5(p::text),1,'5e910000-0000-0000-0000-000000000001',p) = '{"error":"invalid_request"}'::jsonb),18,
   'a finer or malformed cell, coordinates in a field or a name in any script or split across names, an unknown zone or platform, a name without a cell or not text, and a time an hour ahead or 40 days back are all refused');
 select is(pg_temp.ingest('dc-owner-a','place-name-1',1,'5e910000-0000-0000-0000-000000000003',pg_temp.place('tdr1w',4) || '{"locality":"Sector 128"}')->>'status','accepted',
   'a place name with a short number in it is kept');
