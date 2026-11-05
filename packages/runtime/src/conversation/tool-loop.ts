@@ -8,7 +8,7 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
@@ -336,7 +336,7 @@ export async function runToolLoop(input: Readonly<{
       }
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
-      const cached = seen.get(key) ?? (unkeptSteps.has(call.name) && numericHealthIn(call.arguments) ? { ok: true } : undefined);
+      const cached = seen.get(key) ?? (unkeptSteps.has(call.name) && numericHealthInJsonText(call.arguments) ? { ok: true } : undefined);
       // Only a completed host action in this exact retained session opens another
       // identical read. Reads and unrelated mutation successes are not action proof.
       const anchor = browserReads.get(key);

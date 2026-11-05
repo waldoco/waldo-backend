@@ -266,6 +266,19 @@ const numericHealthReadings = (text: string): string[] => [
 // carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean => numericHealthReadings(text).length > 0;
 
+// The same floor over a stored value. Its JSON alone is not enough: inside JSON a quote or a tab before a reading is an
+// escape (\" or \t) the floor does not see past, so every string the value holds is also read as it was written.
+const stringsIn = (value: unknown): string[] =>
+  typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn)
+    : value !== null && typeof value === 'object' ? Object.entries(value).flatMap(([key, inner]) => [key, ...stringsIn(inner)]) : [];
+export const numericHealthInValue = (value: unknown): boolean => numericHealthIn(JSON.stringify(value) ?? '') || stringsIn(value).some(numericHealthIn);
+// The same for JSON text (a tool call's arguments, a tool's output): parsed, its strings are read as written; text that is
+// not JSON is read as it is.
+export const numericHealthInJsonText = (text: string): boolean => {
+  if (numericHealthIn(text)) return true;
+  try { return stringsIn(JSON.parse(text)).some(numericHealthIn); } catch { return false; }
+};
+
 // Whether text carries a reading with a number not in `owner`, the owner's words that vouch for it: a reading that came
 // from shared content, Waldo's reply or a device. It keys on where a reading's numbers came from, never on its wording; a
 // date beside a reading is not part of it. With no owner words, every reading is one. The caller keeps `owner` narrow (a

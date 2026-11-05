@@ -6,8 +6,9 @@ import {
   OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
+  OWNER_MODELS,
 } from '@waldo/contracts';
-import { modelProviderSetting, ownerModels, ownerRoutePolicy } from '../src/llm/owner-routes';
+import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy, strongRoutePolicy } from '../src/llm/owner-routes';
 
 // Which provider runs the owner path is one deploy setting, Claude unless it says openai. A provider whose key is not
 // deployed cannot run it, so the other one does; with both keys, each route falls to the other provider.
@@ -77,8 +78,20 @@ it('logs each unrecognised value once, so a mistyped rollback is seen without a 
   }
 });
 
-it('routes the owner\'s reply on the lighter model (WALDO_LIGHT_CHAT) as a chat call: Haiku with the cache and output room, then Terra', () => {
-  const [route] = ownerRoutePolicy(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, both, true).routes;
-  expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 });
-  expect(route!.fallback).toEqual([{ provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_1_TERRA_MODEL, cache: 'none', max_tokens: 4096 }]);
+it('builds the strong role\'s route as the chat route when no fallback is set, and with a set fallback in its place', () => {
+  for (const primary of ['anthropic', 'openai'] as const) {
+    const { chat } = ownerModels({ ...both, primary });
+    expect(strongRoutePolicy(chat, undefined, both)).toEqual(ownerRoutePolicy(chat, chat, both));
+  }
+  // A strong role on one provider with the other provider's strong model as its set fallback.
+  const strong = OWNER_MODELS[OPENAI_PROVIDER].chat, fallback = OWNER_MODELS[ANTHROPIC_PROVIDER].chat;
+  expect(strongRoutePolicy(strong, fallback, both).routes[0]!.fallback.map((step) => step.model)).toEqual([fallback]);
+  expect(strongRoutePolicy(strong, fallback, { openaiApiKey: 'fixture-openai' }).routes[0]!.fallback).toEqual([]);
+});
+
+it('routes the light role\'s step as a chat call with no fallback: the cache and output room, alone', () => {
+  const light = ownerModels({ ...both, primary: 'anthropic' }).auxiliary;
+  const [route] = lightRoutePolicy(light).routes;
+  expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: light, cache: 'anthropic_native', max_tokens: 16_000 });
+  expect(route!.fallback).toEqual([]);
 });

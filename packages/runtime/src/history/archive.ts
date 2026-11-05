@@ -1,4 +1,4 @@
-import { replaceLiteralText, type HistoryEntry, type HistoryKind, type SearchHistoryArgs, type SearchHistoryResult } from '@waldo/contracts';
+import { replaceLiteralText, type HistoryEntry, type HistoryKind, type SearchHistoryChainArgs, type SearchHistoryResult } from '@waldo/contracts';
 import { HISTORY_ARCHIVE_TABLE_SCHEMA } from '../do-schema';
 import { FORGOTTEN, likePrefilter, projectionPredicate, projectionValueHolds } from '../memory/claims';
 import type { ForgetStore } from '../memory/forget-purge';
@@ -153,9 +153,12 @@ export const historyArchiveForgetStore = (deps: Readonly<{ sql: Sql; transaction
 // search_history: newest first across the hot tables, the archive and the decided approval cards. A row moved between two
 // pages keeps its ref and its time, so the cursor neither repeats nor skips it.
 export type ApprovalSummary = (id: string) => string | null;
+// A card still in one of these is the desk's to show, not history's.
+export const UNDECIDED_CARD_STATUSES = ['open', 'changing', 'card_unconfirmed', 'review_only'] as const;
 const iso = (at: number | null) => at === null ? null : new Date(at).toISOString();
 const MAX_WORDS = 8;
-export const searchHistory = (sql: Sql, args: SearchHistoryArgs, approvalSummary: ApprovalSummary): SearchHistoryResult => {
+// args.ref (recall chain on) reads that one entry.
+export const searchHistory = (sql: Sql, args: SearchHistoryChainArgs, approvalSummary: ApprovalSummary): SearchHistoryResult => {
   const kinds = new Set<HistoryKind>(args.kinds ?? ['run', 'task', 'scheduled', 'approval']);
   const parts: string[] = [];
   for (const source of SOURCES) {
@@ -170,7 +173,7 @@ export const searchHistory = (sql: Sql, args: SearchHistoryArgs, approvalSummary
   }
   if (kinds.has('approval') && tableExists(sql, 'ledger')) {
     // Decided as the desk's own Recent list reads it; an open card is the desk's to show.
-    parts.push("SELECT 'ledger:' || id, 'approval', kind, status, COALESCE(decided_at, created_at), decided_at, summary, 0 FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only')");
+    parts.push(`SELECT 'ledger:' || id, 'approval', kind, status, COALESCE(decided_at, created_at), decided_at, summary, 0 FROM ledger WHERE status NOT IN (${UNDECIDED_CARD_STATUSES.map(status => `'${status}'`).join(', ')})`);
   }
   if (!parts.length) return { entries: [], total: 0, next_cursor: null };
   const words = (args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, MAX_WORDS);
@@ -178,6 +181,7 @@ export const searchHistory = (sql: Sql, args: SearchHistoryArgs, approvalSummary
   for (const word of words) { filters.push("instr(lower(COALESCE(summary, '') || ' ' || type || ' ' || status), ?) > 0"); params.push(word); }
   if (args.from !== undefined) { filters.push('ts >= ?'); params.push(Date.parse(args.from)); }
   if (args.to !== undefined) { filters.push('ts < ?'); params.push(Date.parse(args.to)); }
+  if (args.ref !== undefined) { filters.push('ref = ?'); params.push(args.ref); }
   const history = `WITH history (ref, grp, type, status, ts, ended, summary, archived) AS (${parts.join(' UNION ALL ')})`;
   const where = (extra: string[]) => extra.length ? ` WHERE ${extra.join(' AND ')}` : '';
   const total = sql.exec<{ n: number }>(`${history} SELECT COUNT(*) AS n FROM history${where(filters)}`, ...params).one().n;

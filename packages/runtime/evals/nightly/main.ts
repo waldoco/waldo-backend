@@ -17,12 +17,14 @@ import { shardOf } from './shard';
 import { selectScenarios } from './subset';
 import { runNightly } from './suite';
 
+// WALDO_EVAL_PROMPT_V2=on reads the rules of the behavior prompt's version 2.
+const promptV2 = process.env.WALDO_EVAL_PROMPT_V2 === 'on';
 if (process.env.WALDO_EVAL_RULES) {
-  const inventory = await ruleInventory(evalBehaviourPrompt());
+  const inventory = await ruleInventory(evalBehaviourPrompt(promptV2));
   console.log(JSON.stringify(inventory.map(({ rule, ...standing }) => ({ id: rule.id, section: rule.section, ...standing, text: rule.text })), null, 2));
 } else if (process.env.WALDO_EVAL_VERDICT) {
   const id = process.env.WALDO_EVAL_VERDICT;
-  const status = (await ruleInventory(evalBehaviourPrompt())).find((entry) => entry.rule.id === id);
+  const status = (await ruleInventory(evalBehaviourPrompt(promptV2))).find((entry) => entry.rule.id === id);
   if (!status) throw new Error(`no rule ${id}`);
   const runs = ablationRuns(process.env.WALDO_EVAL_RUNS ?? '', (path) => readFileSync(path, 'utf8'));
   console.log(JSON.stringify(ablationReport(status, runs), null, 2));

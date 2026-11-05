@@ -11,7 +11,7 @@ import type { CalendarPrepReceipt } from '../src/channels/telegram-final-outbox'
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, taskBrief, type JobBook, type JobRow } from '../src/tasks/jobs';
 import { runJobsLane } from '../src/tasks/lane';
-import { enqueueMachine } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED } from '../src/tasks/machine';
 
 // Meeting prep as a machine job. A meeting the owner organized or accepted gets a reader job that may read their mail for
 // it; the brain's existing prep decision then runs on what the worker found, with the delivery admission in its commit. An
@@ -81,6 +81,20 @@ describe('the prep sweep writes a machine job for an accepted meeting', () => {
       expect(brief.context).toContain('file_q4_plan_0001');
       expect(brief.context).not.toContain('Untracked link\\",\\"file_id');
       expect(taskBrief(h.jobs()[0]!).machine!.refs).toEqual(['e1', 'mail_query', 'attachments']);
+    });
+  });
+
+  // The event and its attachments reach the brief as JSON, where a quote or a tab before a reading is an escape (\" or \t).
+  it.each([['a quoted reading', 'Why HRV "47 ms" dropped', '47 ms'], ['a tab before a reading', 'recovery\t34% this week', '34%']])('an attachment title with %s keeps the refs and drops the details that carry it', async (_name, title, reading) => {
+    await withPrep(event => ({ ...event, attachments: [{ title, file_id: 'file_recovery_0001' }] }), async (h) => {
+      await h.sweep();
+      const [job] = h.jobs();
+      const brief = taskBrief(job!);
+      expect(brief.context).toContain(`[e1] ${HEALTH_DETAIL_DROPPED}`);
+      expect(brief.context).toContain(`[attachments] ${HEALTH_DETAIL_DROPPED}`);
+      expect(brief.context).toContain('from:asha@example.test');
+      expect(job!.brief_json).not.toContain(reading);
+      expect(brief.machine!.refs).toEqual(['e1', 'mail_query', 'attachments']);
     });
   });
 
