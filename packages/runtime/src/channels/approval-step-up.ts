@@ -18,10 +18,14 @@ export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_share
   browser_submit: { gated: true, why: 'Submits a form on a website as the owner.' },
   mcp_call: { gated: true, why: 'Runs a tool on a connected server, which can act beyond the owner\'s own things.' },
   tainted_action: { gated: true, why: 'Runs an action that content from outside asked for.' },
+  standing_grant: { gated: false, why: "Lets Waldo change the owner's own things without asking, within the terms shown; revocable any time." },
 };
+// A standing grant that would let Waldo send to other people or act on a site is handed to the app, whatever its row says.
+const REACHING_CLASSES: readonly string[] = ['message.send_to_named', 'errand.run_on_site'];
 export const appApprovalStepUp = (item: Pick<AppApprovalV1, 'kind' | 'exact'>, action: ApprovalActionV1): boolean => {
   if (action !== 'approve') return false;
   const changes = item.exact.changes;
   const shared = item.kind === 'calendar_change' && (changes?.guests !== undefined || changes?.emails_guests !== undefined || changes?.calendar !== undefined);
+  if (item.kind === 'standing_grant' && (item.exact.grant === undefined || REACHING_CLASSES.includes(item.exact.grant.scope.class))) return true;
   return STEP_UP_APPROVALS[shared ? 'calendar_shared' : item.kind]?.gated !== false;
 };
