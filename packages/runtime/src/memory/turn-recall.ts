@@ -25,7 +25,8 @@ export type RecallEpisodes = Readonly<{
 export type RecallLeg = 'claims' | 'episodes' | 'semantic';
 // Claim ids nearest in meaning to the text, best first (semantic-recall.ts).
 export type RecallNear = (text: string) => Promise<readonly number[]>;
-export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[] }>;
+// used: the claims this recall showed in full, which is what the turn had in front of it for this message.
+export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[] }>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 
 export const recallTerms = (question: string, previous?: string): readonly string[] => {
@@ -166,8 +167,8 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   if (episodesFailed) failed.push('episodes');
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. upgrades are a hit's
   // longer lines, longest first, which only take the room left once every line is placed, so they never cost a match its place.
-  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[] }>[] = [
-    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
+  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number }>[] = [
+    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, ...(stubs ? { stub: stubLine(claim) } : {}) })),
     ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
@@ -177,10 +178,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   let used = ['<recalled>', HEADER, '</recalled>'].join('\n').length;
   if (!lines.length || used + reserve > budget) return { text: '', failed };
   // A line that does not fit is skipped, not cut, and a shorter one after it may still fit.
-  const kept: string[] = [], upgradesOfKept: (readonly string[] | undefined)[] = [];
-  for (const { full, stub, upgrades } of lines) {
+  const kept: string[] = [], upgradesOfKept: (readonly string[] | undefined)[] = [], shown: number[] = [];
+  for (const { full, stub, upgrades, claim } of lines) {
     const line = [full, stub].find((text) => text !== undefined && used + text.length + 1 + reserve <= budget);
     if (line === undefined) continue;
+    if (line === full && claim !== undefined) shown.push(claim);
     kept.push(line); upgradesOfKept.push(line === full ? upgrades : undefined); used += line.length + 1;
   }
   kept.forEach((line, index) => {
@@ -189,5 +191,5 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     kept[index] = upgrade; used += upgrade.length - line.length;
   });
   const cut = lines.length - kept.length;
-  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed };
+  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown };
 };
