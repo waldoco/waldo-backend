@@ -29,6 +29,10 @@ type Sql = Pick<SqlStorage, 'exec'>;
 const iso = (ms: number) => new Date(ms).toISOString();
 
 export const watchdogView = (sql: Sql, now: number, enabled: boolean): WatchdogView => {
+  // A read creates nothing: an owner the watchdog never ran for has no tables yet, and that is an empty view.
+  if (!sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watchdog_findings'").toArray().length) {
+    return { version: 1, as_of: iso(now), enabled, last_check_at: null, judgments_last_hour: 0, open: [], counts_24h: {}, recent: [] };
+  }
   const store = watchdogStore(sql);
   const kept = jobsKept(sql);
   const job = (id: string | null) => id === null || !kept ? null

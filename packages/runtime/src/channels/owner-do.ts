@@ -3417,8 +3417,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // proactive work, and leaves its next due time on the wake. The wake is cleared first, so a worker that reports while the
   // lane runs keeps the wake it sets.
   private async drainJobs(channel: ChannelKind, alarmEnd?: number): Promise<void> {
-    const storage = this.ctx.storage, due = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
-    if (due === undefined || due === null || due > Date.now()) return;
+    const storage = this.ctx.storage, due = await storage.get<number | null>(TASK_JOBS_DUE_KEY), started = Date.now();
+    if (due === undefined || due === null || due > started) return;
     await storage.put(TASK_JOBS_DUE_KEY, null);
     let runtime = this.setup(channel);
     let surface: ChannelKind = channel;
@@ -3465,7 +3465,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
       next = ran;
       if (this.env.WALDO_WATCHDOG === '1') {
-        const parked = await this.watchProgress(jobs, runtime, Date.now() - due, alarmEnd);
+        const parked = await this.watchProgress(jobs, runtime, started - due, alarmEnd);
         if (parked !== null) next = next === null ? parked : Math.min(next, parked);
       }
     } finally {

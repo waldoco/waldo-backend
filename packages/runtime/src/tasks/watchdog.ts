@@ -136,6 +136,11 @@ export const watchdogStore = (sql: Sql) => {
     judged(id: string, seq: number, at: number): void {
       sql.exec('UPDATE watchdog_jobs SET judged_seq = ?, judged_at = ? WHERE job_id = ?', seq, at, id);
     },
+    // A judgment that failed or was held keeps its round, so the job stays due, but waits out the interval at the back of the
+    // line: a job whose judge always fails cannot spend the hour's calls.
+    retryLater(id: string, at: number): void {
+      sql.exec('UPDATE watchdog_jobs SET judged_at = ? WHERE job_id = ?', at, id);
+    },
     nudge(id: string, code: NudgeCode): void {
       sql.exec('UPDATE watchdog_jobs SET nudge = ?, nudges = nudges + 1 WHERE job_id = ?', code, id);
     },
@@ -227,7 +232,7 @@ export async function runWatchdog(deps: WatchdogDeps): Promise<number | null> {
 
   // Running tasks and machine jobs only: one waiting on the owner is not expected to move, a queued one is the lane's, and a
   // retried turn or an approved action is the brain's own short step. Least recently judged first. A job whose last judgment
-  // failed or was held stays due: neither moved its judged round.
+  // failed or was held stays due after the interval: neither moved its judged round.
   const due = book.running().filter(row => row.kind === 'task').flatMap(row => {
     const seen = store.seen(row.id)!;
     const ready = row.checkpoint_seq - seen.judged_seq >= JUDGE_MIN_ROUNDS && now - (seen.judged_at ?? row.created_at) >= JUDGE_EVERY_MS;
@@ -245,6 +250,7 @@ export async function runWatchdog(deps: WatchdogDeps): Promise<number | null> {
       verdict = await deps.judge({ jobId: row.id, text: watchdogJudgeText(row, seen, store.findings().filter(finding => finding.job_id === row.id), now) });
     } catch {
       raise(row, 'judge_unavailable', row.checkpoint_seq);
+      store.retryLater(row.id, now);
       continue;
     }
     store.clear(['judge_unavailable'], row.id, now);
@@ -267,8 +273,9 @@ export async function runWatchdog(deps: WatchdogDeps): Promise<number | null> {
         action = 'nudge';
       }
     }
-    // A held park is asked again on the next pass; anything else waits for new rounds.
-    if (action !== 'held') store.judged(row.id, row.checkpoint_seq, now);
+    // A held park is asked again after the interval; anything else also waits for new rounds.
+    if (action === 'held') store.retryLater(row.id, now);
+    else store.judged(row.id, row.checkpoint_seq, now);
     store.record(row.id, kind, verdict.verdict, action, row.checkpoint_seq, now);
     hop(row.id, kind, verdict.verdict, action, verdict.verdict === 'progressing');
   }

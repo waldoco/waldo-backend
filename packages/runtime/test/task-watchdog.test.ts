@@ -13,7 +13,7 @@ import type { TaskHost } from '../src/tasks/brain';
 import { PARK_WORDS } from '../src/prompt/fixed-lines';
 import { taskBriefText } from '../src/tasks/worker-loop';
 import {
-  LANE_LATE_MS, JUDGE_EVERY_MS, JUDGE_MIN_ROUNDS, NUDGE_LINES, runWatchdog, watchdogStore, WATCHDOG_JUDGMENTS_PER_HOUR,
+  LANE_LATE_MS, JUDGE_EVERY_MS, JUDGE_MIN_ROUNDS, NUDGE_LINES, NUDGES_MAX, runWatchdog, STALL_MS, watchdogStore, WATCHDOG_JUDGMENTS_PER_HOUR,
   type WatchdogJudge, type WatchdogStore, type WatchdogVerdict,
 } from '../src/tasks/watchdog';
 import { DASHBOARD_WATCHDOG_PATH, consoleWatchdog, watchdogView, watchdogViewSchema } from '../src/channels/dashboard-watchdog';
@@ -151,18 +151,78 @@ describe('the progress watchdog', () => {
     });
   });
 
-  it('re-checks a judge that could not answer until it answers', async () => {
+  it('re-checks a judge that could not answer until it answers, once an interval, so a failing judge cannot spend the hour', async () => {
     await withWatchdog(async ({ store, asked, verdicts, watch, run, rounds }) => {
       const ticket = run('outage');
       rounds(ticket, JUDGE_EVERY_MS / MIN);
       verdicts.push('throws');
       await watch();
       expect(store.open().map(row => row.code)).toEqual(['judge_unavailable']);
-      // Asked again on the next pass, without waiting for new rounds.
+      // Passes a lease apart, with the worker running on, do not ask again inside the interval.
+      for (let pass = 0; pass < 3; pass += 1) {
+        rounds(ticket, JUDGE_MIN_ROUNDS, TASK_LEASE_MS / JUDGE_MIN_ROUNDS);
+        verdicts.push('throws');
+        await watch();
+      }
+      expect(asked).toEqual([ticket.jobId]);
+      verdicts.length = 0;
+      // Asked again once the interval has passed.
+      rounds(ticket, JUDGE_MIN_ROUNDS);
       verdicts.push({ verdict: 'progressing', action: 'none' });
       await watch();
       expect(asked).toEqual([ticket.jobId, ticket.jobId]);
       expect(store.open()).toEqual([]);
+    });
+  });
+
+  it('records a stall at exactly twenty minutes without a checkpoint on the same attempt, not a millisecond before, and clears it on progress', async () => {
+    await withWatchdog(async ({ book, store, clock, watch, run, rounds }) => {
+      const ticket = run('stalled');
+      rounds(ticket, 1);
+      await watch();
+      const since = clock.at;
+      clock.at = since + STALL_MS - 1;
+      book.touch(ticket, null);
+      await watch();
+      expect(store.open()).toEqual([]);
+      clock.at = since + STALL_MS;
+      await watch();
+      expect(store.open().map(row => [row.job_id, row.code, row.action])).toEqual([[ticket.jobId, 'stalled', 'recheck']]);
+      rounds(ticket, 1);
+      await watch();
+      expect(store.open()).toEqual([]);
+    });
+  });
+
+  it('records provider errors when the deferral count rises, and clears them once the job runs again', async () => {
+    await withWatchdog(async ({ book, store, clock, watch, run, rounds }) => {
+      const ticket = run('deferred');
+      rounds(ticket, 1);
+      await watch();
+      expect(book.defer(ticket, clock.at + MIN, { rounds: 0, costUsd: 0 })).toBe('deferred');
+      await watch();
+      expect(store.open().map(row => [row.job_id, row.code])).toEqual([[ticket.jobId, 'provider_errors']]);
+      // Re-checked, not recorded twice.
+      await watch();
+      expect(findings(store, ticket.jobId).filter(row => row.code === 'provider_errors')).toHaveLength(1);
+      clock.at += MIN;
+      rounds(book.startAttempt(ticket.jobId)!, 1);
+      await watch();
+      expect(store.open()).toEqual([]);
+    });
+  });
+
+  it('gives one job at most NUDGES_MAX nudges; a later nudge verdict changes nothing', async () => {
+    await withWatchdog(async ({ book, store, verdicts, watch, run, rounds }) => {
+      const ticket = run('nudged-out');
+      for (let i = 0; i < NUDGES_MAX + 1; i += 1) {
+        rounds(ticket, JUDGE_EVERY_MS / MIN);
+        verdicts.push({ verdict: 'drifting', action: 'nudge' });
+        await watch();
+        store.nudgeFor(ticket.jobId, book.get(ticket.jobId)!.checkpoint_seq);
+      }
+      expect(findings(store, ticket.jobId).map(row => row.action)).toEqual([...Array<string>(NUDGES_MAX).fill('nudge'), 'none']);
+      expect(store.seen(ticket.jobId)).toMatchObject({ nudges: NUDGES_MAX, nudge: null });
     });
   });
 
@@ -186,7 +246,11 @@ describe('the progress watchdog', () => {
       expect(next).not.toBeNull();
       expect(book.get(ticket.jobId)!.status).toBe('running');
       expect(findings(store, ticket.jobId).at(-1)!.action).toBe('held');
-      // Asked again on the next pass without new rounds; this time a step that cannot be replayed is in flight.
+      // Not asked again inside the interval.
+      await watch();
+      expect(asked).toHaveLength(2);
+      // Asked again after it without new rounds; this time a step that cannot be replayed is in flight.
+      clock.at += JUDGE_EVERY_MS;
       expect(book.beginEffect(next!, { tool: 'browse_act', call_id: 'c-x' })).toBe(true);
       verdicts.push({ verdict: 'looping', action: 'park' });
       await watch();
@@ -212,17 +276,19 @@ describe('the progress watchdog', () => {
   });
 
   it('judges only running tasks: a job waiting on the owner, a queued job and a retried turn are never judged', async () => {
-    await withWatchdog(async ({ book, asked, clock, verdicts, watch, run, rounds }) => {
+    await withWatchdog(async ({ book, store, asked, clock, verdicts, watch, run, rounds }) => {
       const waiting = run('waiting');
       rounds(waiting, JUDGE_EVERY_MS / MIN);
       expect(book.await(waiting, { approval_id: 'appr-1', call: { call_id: 'c-act', name: 'browse_act', arguments: '{}' } })).toBe(true);
       book.create(task('queued', { dueAt: T0 + 24 * 60 * MIN }));
       const { job: retry } = book.create({ kind: 'retry_turn', profile: null, idempotencyKey: 'retry-1', origin: 'tg-1', surface: 'app', brief: { message_ref: 'm1', text: 'hello', conversation_ref: 'main', said_at: clock.at, promised_by: clock.at + 60 * MIN }, dueAt: clock.at, deadlineAt: clock.at + 60 * MIN });
-      book.startAttempt(retry.id);
+      // A retried turn that has taken as many rounds as a task would need to be judged.
+      rounds(book.startAttempt(retry.id)!, JUDGE_EVERY_MS / MIN);
       clock.at += JUDGE_EVERY_MS * 2;
       verdicts.push({ verdict: 'looping', action: 'park' });
       await watch();
       expect(asked).toEqual([]);
+      expect(store.findings()).toEqual([]);
     });
   });
 
@@ -345,6 +411,18 @@ describe('the console watchdog read', () => {
       expect(limited.at).toBe(1);
       expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}?x=1`), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(400);
       expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`, { method: 'POST' }), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(405);
+    });
+  });
+});
+
+describe('the console watchdog read for an owner the watchdog never ran for', () => {
+  it('answers an empty view and creates no tables', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-watchdog-${seq += 1}`)), async (_instance, state) => {
+      const sql = state.storage.sql;
+      const answer = await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`), sql, now: T0, enabled: false, limited: () => null });
+      expect(answer.status).toBe(200);
+      expect(watchdogViewSchema.parse(await answer.json())).toMatchObject({ enabled: false, last_check_at: null, open: [], recent: [], counts_24h: {} });
+      expect(sql.exec("SELECT name FROM sqlite_master WHERE name LIKE 'watchdog%'").toArray()).toEqual([]);
     });
   });
 });
