@@ -172,6 +172,53 @@ describe('the read_thread index on a long thread', () => {
     expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
   });
 
+  it('the last step keeps what makes a message different to read: withheld, quarantined, truncated, attachments', () => {
+    const long = 'x'.repeat(300);
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      id: `m${i}`, from: long, at, subject: long, body: '', recipients_capped: true, body_source: 'snippet',
+      body_withheld: 'scribe_refused', quarantined: ['otp'], body_truncated: true, attachments: [{}, {}],
+    }));
+    const view = spillOf(messages);
+    expect(view.next).toContain('id, sender, time and subject');
+    expect(view.messages[0]).toMatchObject({ recipients_capped: true, body_source: 'snippet', body_withheld: 'scribe_refused', quarantined: ['otp'], body_truncated: true, attachments: 2 });
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('the last step cuts by escaped length, so senders and subjects full of quotes still fit', () => {
+    const quoted = '"'.repeat(400);
+    const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, from: quoted, at, subject: quoted, body: '' }));
+    const view = spillOf(messages);
+    expect(view.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
+    expect(String(view.messages[0]!.from).length).toBeGreaterThan(0);
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('the last step keeps exactly as many quote marks as fit in 120 escaped characters', () => {
+    const view = spillOf([{ id: 'm0', from: '"'.repeat(5_000), at, subject: 'Notes', body: '' }]);
+    expect(view.next).toContain('id, sender, time and subject');
+    expect(String(view.messages[0]!.from)).toBe('"'.repeat(60));
+  });
+
+  it('the last step gives the room short subjects leave to long senders, so a sender keeps its address', () => {
+    const sender = 'Priyanka Ramasubramanian-Venkataraman <priyanka.ramasubramanian@a-long-company-domain.example.test>';
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      id: `m${i}`, from: sender, at, subject: i === 0 ? 'x'.repeat(3_000) : 'Notes', body: '', recipients_capped: true, body_source: 'snippet',
+      body_withheld: 'scribe_refused', quarantined: ['otp'], body_truncated: true, attachments: [{}, {}],
+    }));
+    const view = spillOf(messages);
+    expect(view.next).toContain('id, sender, time and subject');
+    expect(view.messages.map((m) => m.from)).toEqual(messages.map(() => sender));
+    expect(view.messages[1]!.subject).toBe('Notes');
+    expect(JSON.stringify(view).length).toBeLessThanOrEqual(TOOL_SPILL_VIEW_MAX_CHARS);
+  });
+
+  it('an opening never ends inside a character that takes two code units', () => {
+    const view = spillOf([{ id: 'm0', from: 'a@example.test', at, subject: 'Notes', body: `a${'😀'.repeat(1_000)}` }]);
+    const opening = String(view.messages[0]!.opening);
+    expect(opening.length).toBeGreaterThan(0);
+    expect(() => encodeURIComponent(opening)).not.toThrow();
+  });
+
   it('keeps a third page of 20 widely addressed messages whole in the store, so its index names every message', async () => {
     const crowd = (prefix: string) => Array.from({ length: 50 }, (_, k) => `${prefix}-recipient-${k}@example.test`).join(', ');
     const client = thread(Array.from({ length: 60 }, (_, i) =>

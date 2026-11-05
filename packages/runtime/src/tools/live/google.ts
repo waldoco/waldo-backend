@@ -375,22 +375,15 @@ export const threadSpill = (data: unknown) => {
   const detail = (message: ShownMessage, opening: number | null, withRecipients: boolean) => ({
     id: message.id, from: message.from, at: message.at, subject: message.subject,
     ...(withRecipients && message.to ? { to: recipients(message.to) } : {}), ...(withRecipients && message.cc ? { cc: recipients(message.cc) } : {}),
-    ...(opening === null ? {} : { opening: message.body.slice(0, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
+    ...(opening === null ? {} : { opening: escapedCut(message.body, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
     ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
     ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
   });
   const withOpenings = (opening: number) => view('its opening', (message) => detail(message, opening, true));
   const bare = withOpenings(0);
-  if (fitsSpill(bare)) {
-    let opening = Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length)));
-    // JSON escapes can make an opening longer than its characters, so the measured view decides.
-    for (;;) {
-      const shown = withOpenings(opening);
-      if (opening === 0 || fitsSpill(shown)) return shown;
-      opening = Math.floor(opening * 0.8);
-    }
-  }
+  // Each opening is cut to its share as JSON writes it, so together they fill at most the room the bare view leaves.
+  if (fitsSpill(bare)) return withOpenings(Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length))));
   const steps = [
     () => view('its recipients and how much body it holds, without an opening', (message) => detail(message, null, true)),
     () => view('how much body it holds, without recipients or an opening', (message) => detail(message, null, false)),
@@ -399,9 +392,31 @@ export const threadSpill = (data: unknown) => {
     const shown = step();
     if (fitsSpill(shown)) return shown;
   }
-  return view('its id, sender, time and subject only', (message) => ({
-    id: message.id, from: message.from.slice(0, SPILL_HEADER_MAX), at: message.at, subject: message.subject.slice(0, SPILL_HEADER_MAX), ...bodyFlags(message),
+  // Senders and subjects share what is left as JSON writes them: each keeps the same cut, at most SPILL_HEADER_MAX,
+  // and what a shorter field leaves goes to the longer ones.
+  const headersOnly = (chars: number) => view('its id, sender, time and subject only', (message) => ({
+    id: message.id, from: escapedCut(message.from, chars), at: message.at, subject: escapedCut(message.subject, chars), ...bodyFlags(message),
+    ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
   }));
+  const fields = messages.flatMap((message) => [message.from, message.subject]).map((text) => JSON.stringify(text).length - 2).sort((a, b) => a - b);
+  let room = TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(headersOnly(0)).length;
+  for (const [i, length] of fields.entries()) {
+    const share = Math.floor(room / (fields.length - i));
+    if (length > share) return headersOnly(Math.max(0, Math.min(SPILL_HEADER_MAX, share)));
+    room -= length;
+  }
+  return headersOnly(SPILL_HEADER_MAX);
+};
+// The longest start of text whose JSON-escaped form is at most max characters, cut between code points.
+const escapedCut = (text: string, max: number) => {
+  let used = 0, end = 0;
+  for (const char of text) {
+    used += JSON.stringify(char).length - 2;
+    if (used > max) break;
+    end += char.length;
+  }
+  return text.slice(0, end);
 };
 
 // An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can

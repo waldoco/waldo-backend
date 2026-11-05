@@ -113,6 +113,8 @@
     "NEXT_DUE_ALARM": "0",
     "WHY_TRAIL": "0",
     "WALDO_RECALL_CHAIN": "0",
+    "WALDO_ASYNC_TOOLS": "0",
+    "WALDO_LIGHT_CHAT": "0",
     "GOOGLE_REALTIME_TRIAGE": "0",
     "AGENT_MAIL_ZONE_ID": ""
   },
@@ -280,6 +282,8 @@
         "NEXT_DUE_ALARM": "1",
         "WHY_TRAIL": "0",
         "WALDO_RECALL_CHAIN": "0",
+        "WALDO_ASYNC_TOOLS": "1",
+        "WALDO_LIGHT_CHAT": "0",
         "GOOGLE_REALTIME_TRIAGE": "0",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
