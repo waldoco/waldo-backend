@@ -360,6 +360,42 @@ function cloneRegex(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, pattern.flags.replaceAll('g', ''));
 }
 
+// A card candidate is not a card when it sits inside an identifier: a uuid (8-4-4-4-12 hex), whose groups hold sixteen digits
+// across its first three, or a long hex id (a 32-character id, a 40-character SHA). The identifiers are masked before the
+// scan, so a real card next to one is still found, and the masked text keeps every index. A fifteen-digit candidate is an
+// Amex only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
+const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const HEX_ID = /(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])/gi;
+
+function cardMatches(text: string): RegExpMatchArray[] {
+  const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length)).replace(HEX_ID, id => '#'.repeat(id.length));
+  return [...masked.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))].filter(match => {
+    const digits = match[0].replace(/\D/g, '');
+    if (digits.length !== 15) return true;
+    let sum = 0;
+    for (let at = 0; at < 15; at += 1) {
+      let digit = Number(digits[14 - at]);
+      if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+      sum += digit;
+    }
+    return sum % 10 === 0;
+  });
+}
+
+function redactCards(text: string, counts: Map<RedactionKind, number>): string {
+  const found = cardMatches(text);
+  if (found.length === 0) return text;
+  let output = '';
+  let last = 0;
+  for (const match of found) {
+    const at = match.index!;
+    output += text.slice(last, at) + '[REDACTED_CREDIT_CARD]';
+    last = at + match[0].length;
+  }
+  increment(counts, 'credit_card', found.length);
+  return output + text.slice(last);
+}
+
 function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
 }
@@ -1163,7 +1199,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (matches(PII_PATTERNS.cc, view)) return 'credit_card';
+    if (cardMatches(view).length > 0) return 'credit_card';
     if (matches(PII_PATTERNS.phone, view)) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
@@ -1253,21 +1289,14 @@ function redactPiiText(
 ): string {
   // Model/owner-bound workspace references keep their exact bytes for later calls, only under an
   // allowlisted key and in the exact shape the producer emits; a URL must also be clean outside
-  // its uuid slot. Taint is not checked (the provider pass taints a whole batch). Known residual:
-  // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
+  // its uuid slot. Taint is not checked (the provider pass taints a whole batch).
   // Everything else (free text, other keys, other URL shapes) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
     if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
     if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);
-  output = replaceAndCount(
-    output,
-    PII_PATTERNS.cc,
-    '[REDACTED_CREDIT_CARD]',
-    'credit_card',
-    counts,
-  );
+  output = redactCards(output, counts);
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
   if (!ownerReadable(destination, taint, 'phone'))
