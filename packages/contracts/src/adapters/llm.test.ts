@@ -331,4 +331,20 @@ describe('toolParameters', () => {
   it('omits the $schema dialect marker', () => {
     expect(toolParameters(z.strictObject({ q: z.string() }))).not.toHaveProperty('$schema');
   });
+
+  // The format names the shape; the zod schema still validates every call before it runs.
+  it('keeps a format but drops the regex zod writes beside it, at any depth, and keeps a pattern with no format', () => {
+    const schema = z.strictObject({
+      at: z.iso.datetime({ offset: true }),
+      to: z.array(z.email()),
+      range: z.strictObject({ from: z.iso.datetime({ offset: true }) }),
+      code: z.string().regex(/^[a-z]{3}$/),
+    });
+    const params = JSON.stringify(toolParameters(schema));
+    expect(params.match(/"format":"date-time"/g)).toHaveLength(2);
+    expect(params).toContain('"format":"email"');
+    expect(params.match(/"pattern"/g)).toHaveLength(1);
+    expect(params).toContain('"pattern":"^[a-z]{3}$"');
+    expect(schema.safeParse({ at: 'not a time', to: ['x@example.test'], range: { from: '2026-11-04T09:00:00Z' }, code: 'abc' }).success).toBe(false);
+  });
 });

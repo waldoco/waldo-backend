@@ -130,6 +130,9 @@ describe('getHealthArgsSchema', () => {
       signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-01', value: 48 }, { day: '2026-10-02', value: null }] }] };
     expect(getHealthResultSchema.safeParse(available).success).toBe(true);
     expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'no_readings', next: 'Try a wider range once.' }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'no_readings', next: '' }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'no_readings', next: 'x'.repeat(401) }).success).toBe(false);
     expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'lb' }] }).success).toBe(false);
     expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'stale' }).success).toBe(false);
   });

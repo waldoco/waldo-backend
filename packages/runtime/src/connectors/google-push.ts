@@ -3,7 +3,8 @@
 // connector-proxy edge, which starts and stops channels for Vault-backed grants.
 
 export const CALENDAR_PUSH_PATH = '/events/gcal';
-export const CALENDAR_WATCH_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events/watch';
+export const calendarWatchUrl = (calendarId: string): string => `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/watch`;
+export const CALENDAR_WATCH_URL = calendarWatchUrl('primary');
 export const CHANNEL_STOP_URL = 'https://www.googleapis.com/calendar/v3/channels/stop';
 const WATCH_TTL_S = 7 * 24 * 3600;
 const RENEW_BEFORE_MS = 24 * 3_600_000;
@@ -70,11 +71,12 @@ const post = async (fetcher: typeof fetch, bearer: string, url: string, body: un
   return response;
 };
 
-export const startCalendarWatch = async (fetcher: typeof fetch, bearer: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch> => {
+export const startCalendarWatch = async (fetcher: typeof fetch, bearer: string, input: Readonly<{ channelId: string; token: string; address: string }>, calendarId = 'primary'): Promise<CalendarWatch> => {
   let address: URL;
   try { address = new URL(input.address); } catch { throw new GooglePushError(400, 'invalid_request'); }
   if (address.protocol !== 'https:' || address.pathname !== CALENDAR_PUSH_PATH || !/^[A-Za-z0-9_-]{1,64}$/.test(input.channelId) || !input.token || input.token.length > 256) throw new GooglePushError(400, 'invalid_request');
-  const response = await post(fetcher, bearer, CALENDAR_WATCH_URL, { id: input.channelId, type: 'web_hook', address: address.toString(), token: input.token, params: { ttl: String(WATCH_TTL_S) } });
+  if (!calendarId || calendarId.length > 1024 || /[\r\n\0]/.test(calendarId)) throw new GooglePushError(400, 'invalid_request');
+  const response = await post(fetcher, bearer, calendarWatchUrl(calendarId), { id: input.channelId, type: 'web_hook', address: address.toString(), token: input.token, params: { ttl: String(WATCH_TTL_S) } });
   const text = await response.text();
   let data: { id?: unknown; resourceId?: unknown; expiration?: unknown };
   try { data = JSON.parse(text.length <= 4096 ? text : '') as typeof data; } catch { throw new GooglePushError(502, 'malformed'); }

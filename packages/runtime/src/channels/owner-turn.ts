@@ -60,9 +60,11 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { SecondMessageRound } from './second-message';
+import { OWNER_TURN_LONG_TOOLS } from './async-tools';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
+import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
@@ -74,6 +76,7 @@ const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_ou
 // the approval desk and never execute directly), so they pass this gate; execute_action and
 // delete/restore_message still halt. The taint gate still runs before this and blocks
 // external-tainted privileged calls outright.
+const NO_DIRECT: ReadonlySet<string> = new Set();
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
@@ -113,12 +116,14 @@ export class OvertakenTurnError extends Error { constructor() { super('owner tur
 // newerOwnerMessages: the owner's newer messages on this turn's chat, offered to the model at each round of their own turn (second-message.ts).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; the reply
 // as the model reads it back carries modelLine instead. Taken once that reply is saved.
+// asyncTools: the owner's own turn holds no long tool (async-tools.ts); its long work goes to start_task.
+// lightChat: the owner's own reply runs on the auxiliary model, as a chat call (async-tools.ts).
 // skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
 // capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
-export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection }>;
+export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; asyncTools?: boolean; lightChat?: boolean }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -179,6 +184,8 @@ export const createOwnerResponder = (
   privateOwner?: PrivateOwner,
 ): OwnerResponder => {
   const skills = privateOwner?.skills;
+  // The owner's own turn hands long work to start_task; a machine turn keeps its tool list as it was.
+  const asyncTools = () => privateOwner?.asyncTools === true && ownerTurnActive;
   const context = privateOwner?.context;
   const thread = context ? threadOfChain(context.conversationRef) ?? undefined : undefined;
   const conversationStore = context && privateRunScope && privateOwner?.history ? privateOwner.history(context, privateRunScope) : store;
@@ -274,7 +281,9 @@ export const createOwnerResponder = (
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
     let reasoning: string | undefined;
-    const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
+    const lightReply = privateOwner?.lightChat === true && ownerTurnActive && purpose === 'reply' && modelOverride === undefined;
+    const effectivePolicy = lightReply ? ownerRoutePolicy(auxiliaryModel, model, access, true)
+      : modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
     // when one historical entry is unrenderable, the retry carries only the current text instead
     // of the identical joined string. Roles come from the typed entry seam, never guessed here.
@@ -447,7 +456,7 @@ export const createOwnerResponder = (
       // Owner-turn-only tools: a job prompt never decides to bring back an approval, and only the owner's own turn has a chat waiting on a progress note.
       // A job's tool list names what it may reach; choosing a reviewed procedure reaches nothing, so every job may load one.
       const eligibilityStarted = Date.now();
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name) || handler.name === 'skills_load') && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name) || handler.name === 'skills_load') && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
       await assertCurrent();
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
       // The watch fact is a hint, so a failure to build it drops the fact and never fails the owner's turn.
@@ -564,7 +573,7 @@ export const createOwnerResponder = (
           throw error;
         }
       });
-      const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive);
+      const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive && !asyncTools());
       let withheldLogged = false;
       // What this turn appends to the owner's message, built on its first round and resent unchanged: the provider caches the
       // request by its leading bytes, so a remember or open loop mid-turn that rewrote the message re-billed every later round.
@@ -572,13 +581,15 @@ export const createOwnerResponder = (
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
       type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      // The turn's reads, kept only while a proposing tool can take steps behind its card.
+      const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
-        ...(harnessLoader ? { loader: harnessToolLoader } : {}),
+        ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, backgroundDirect) } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
@@ -612,6 +623,7 @@ export const createOwnerResponder = (
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
           const frozen = turnSuffix;
           const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
+          recordSharedHealth(turnReads, admittedHealth, Date.now());
           const generation = forgettingState?.forgetGeneration() ?? 0;
           if (turnSanitise && turnSanitise.forgets !== `${forgetEpoch}:${generation}`) turnSanitise = { forgets: `${forgetEpoch}:${generation}`, memo: new TurnSanitiseMemo() };
           const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
@@ -664,7 +676,7 @@ export const createOwnerResponder = (
             turns: { kind: 'turns', turns },
           }, held, forgetBarrierMode);
           const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, harnessLoader ? 'harness' : providerSearch),
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, harnessLoader ? 'harness' : providerSearch, backgroundDirect, asyncTools() && turnHandlers.some((handler) => handler.name === 'start_task')),
             skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
@@ -745,6 +757,8 @@ export const createOwnerResponder = (
     try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
   };
   let backgroundToolNames: readonly string[] | undefined;
+  // Tools a job's prompt names to be offered directly under the harness loader; none for any other turn.
+  let backgroundDirect: ReadonlySet<string> = NO_DIRECT;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
@@ -989,7 +1003,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -1027,8 +1041,8 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface, CHECK_BACK_TOOLS);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments), conversationRef);
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       backgroundOwnerModel = ownerModel === true;
@@ -1065,9 +1079,10 @@ export const createOwnerResponder = (
           return await time('background_decision', () => ask(id, 'background_decision', system, `${said}\n\n${decisionContext}`, decision, undefined, undefined, undefined, auxiliaryModel));
         }
         promptContext = turnContext ?? '';
+        backgroundDirect = new Set(directTools ?? []);
         // Default-deny for a job over outside text: with no tools named, it gets the read-and-card ceiling, never every tool.
         return await converse(id, conversationRef, said, time, false, surface, toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined));
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; pending = undefined; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; pending = undefined; backgroundDirect = NO_DIRECT; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));

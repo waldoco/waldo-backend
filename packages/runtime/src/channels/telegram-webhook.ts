@@ -55,7 +55,16 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
   // the connector-proxy function must be deployed with restoreEvent first.
   CALENDAR_UNDO_CANCEL?: string;
+  // "1" lets a proposing tool take the steps behind its card ("Why this changed"), kept beside the card and the day card that
+  // raised it and shown to an app reading approvals=8 or controls=14. Off unless "1".
+  WHY_TRAIL?: string;
+  // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
+  // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
+  PLANNING_BRIEF?: string;
   AUTONOMY_OWN_CALENDAR?: string;
+  // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
+  // Off unless "1".
+  NEXT_DUE_ALARM?: string;
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
@@ -114,6 +123,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
   WALDO_SECOND_MESSAGE?: string;
+  // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
+  WALDO_ASYNC_TOOLS?: string;
+  // "1": the owner's own reply runs on the provider's auxiliary model and every task worker on its chat model (async-tools.ts).
+  WALDO_LIGHT_CHAT?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
@@ -152,6 +165,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
   // revise a delivered day card or push. Anything else keeps the update card as it was.
   WALDO_DAY_STATE?: string;
+  // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
+  // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
+  GOOGLE_REALTIME_TRIAGE?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

@@ -249,4 +249,17 @@ describe('use_tool is no second way in', () => {
       expect(toolOfCall(made), args).toBe(route.answer ? USE_TOOL : route.call.name);
     }
   });
+
+  it('offers a turn\'s direct tools in its function list whatever their group, and loads the rest as before', () => {
+    const tool = (name: string): LLMTool => ({ name, description: 'd', parameters: { type: 'object' } });
+    const tools = ['read_memory', 'propose_calendar_change', 'offer_replies', 'track_responsibility', 'close_loop'].map(tool);
+    const plain = harnessToolLoader(tools).offered.map((offered) => offered.name);
+    expect(plain).not.toContain('propose_calendar_change');
+    expect(plain).toContain(FIND_TOOLS);
+    const direct = harnessToolLoader(tools, new Set(['propose_calendar_change', 'offer_replies'])).offered.map((offered) => offered.name);
+    expect(direct).toEqual(expect.arrayContaining(['read_memory', 'propose_calendar_change', 'offer_replies', FIND_TOOLS, USE_TOOL]));
+    expect(direct).not.toContain('track_responsibility');
+    // Every tool direct leaves nothing to load, so the meta tools go too.
+    expect(harnessToolLoader([tool('propose_calendar_change')], new Set(['propose_calendar_change'])).offered.map((offered) => offered.name)).toEqual(['propose_calendar_change']);
+  });
 });
