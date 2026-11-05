@@ -360,41 +360,39 @@ function cloneRegex(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, pattern.flags.replaceAll('g', ''));
 }
 
-// A card candidate is not a card when its digits sit inside a uuid (a hex-and-hyphen token holding an 8-4-4-4-12 id), which
-// is how an id carrying sixteen digits across its first groups looks to the pattern; and a fifteen-digit one is an Amex
-// only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
+// A card candidate is not a card when it sits inside an identifier: a uuid (8-4-4-4-12 hex), whose groups hold sixteen digits
+// across its first three, or a long hex id (a 32-character id, a 40-character SHA). The identifiers are masked before the
+// scan, so a real card next to one is still found, and the masked text keeps every index. A fifteen-digit candidate is an
+// Amex only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
 const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const ID_CHAR = /[0-9a-f-]/i;
+const HEX_ID = /(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])/gi;
 
-function insideUuid(text: string, index: number, length: number): boolean {
-  let start = index;
-  while (start > 0 && ID_CHAR.test(text[start - 1]!)) start -= 1;
-  let end = index + length;
-  while (end < text.length && ID_CHAR.test(text[end]!)) end += 1;
-  for (const found of text.slice(start, end).matchAll(UUID_SHAPE)) {
-    const from = start + found.index;
-    if (from < index + length && from + found[0].length > index) return true;
-  }
-  return false;
-}
-
-function notACard(match: string, _rest: string, index: number, text: string): boolean {
-  const digits = match.replace(/\D/g, '');
-  if (digits.length === 15) {
+function cardMatches(text: string): RegExpMatchArray[] {
+  const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length)).replace(HEX_ID, id => '#'.repeat(id.length));
+  return [...masked.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))].filter(match => {
+    const digits = match[0].replace(/\D/g, '');
+    if (digits.length !== 15) return true;
     let sum = 0;
     for (let at = 0; at < 15; at += 1) {
       let digit = Number(digits[14 - at]);
       if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
       sum += digit;
     }
-    if (sum % 10 !== 0) return true;
-  }
-  return insideUuid(text, index, match.length);
+    return sum % 10 === 0;
+  });
 }
 
-function matchesCard(text: string): boolean {
-  for (const match of text.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))) if (!notACard(match[0], '', match.index, text)) return true;
-  return false;
+function redactCards(text: string, counts: Map<RedactionKind, number>): string {
+  const found = cardMatches(text);
+  if (found.length === 0) return text;
+  let output = '';
+  let last = 0;
+  for (const match of found) {
+    output += text.slice(last, match.index) + '[REDACTED_CREDIT_CARD]';
+    last = match.index + match[0].length;
+  }
+  increment(counts, 'credit_card', found.length);
+  return output + text.slice(last);
 }
 
 function matches(pattern: RegExp, text: string): boolean {
@@ -1162,8 +1160,8 @@ function replaceAndCount(
   replacement: string,
   kind: RedactionKind,
   counts: Map<RedactionKind, number>,
-  // A match it returns true for (given the text after it, and where the match sits) is left as it is and not counted.
-  keep?: (match: string, rest: string, index: number, text: string) => boolean,
+  // A match it returns true for (given the text after it) is left as it is and not counted.
+  keep?: (match: string, rest: string) => boolean,
 ): string {
   if (keep !== undefined) {
     const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
@@ -1172,7 +1170,7 @@ function replaceAndCount(
     let replaced = 0;
     for (const match of text.matchAll(global)) {
       const end = match.index + match[0].length;
-      if (keep(match[0], text.slice(end), match.index, text)) continue;
+      if (keep(match[0], text.slice(end))) continue;
       output += text.slice(last, match.index) + replacement;
       last = end;
       replaced += 1;
@@ -1200,7 +1198,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (matchesCard(view)) return 'credit_card';
+    if (cardMatches(view).length > 0) return 'credit_card';
     if (matches(PII_PATTERNS.phone, view)) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
@@ -1297,14 +1295,7 @@ function redactPiiText(
     if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);
-  output = replaceAndCount(
-    output,
-    PII_PATTERNS.cc,
-    '[REDACTED_CREDIT_CARD]',
-    'credit_card',
-    counts,
-    notACard,
-  );
+  output = redactCards(output, counts);
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
   if (!ownerReadable(destination, taint, 'phone'))

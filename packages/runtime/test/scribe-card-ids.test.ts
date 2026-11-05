@@ -26,6 +26,15 @@ describe('identifiers survive the card rule', () => {
     for (const destination of ['internal_context', 'owner_reply', 'send_message'] as const) expect(textOf(id, destination).text).toBe(id);
   });
 
+  // A dashless id or a git SHA is a run of hex characters; digits inside it are not a card.
+  it('keeps random 32-character hex ids and 40-character SHAs, digit-heavy ones included', () => {
+    const hex = (length: number) => fc.array(fc.oneof({ weight: 3, arbitrary: fc.constantFrom(...'0123456789') }, { weight: 1, arbitrary: fc.constantFrom(...'abcdef') }), { minLength: length, maxLength: length }).map(chars => chars.join(''));
+    fc.assert(fc.property(fc.oneof(hex(32), hex(40)), fc.constantFrom('', 'sha:', 'id_', 'commit '), (id, prefix) => {
+      expect(textOf(`${prefix}${id}`).text).toBe(`${prefix}${id}`);
+      expect(textOf(`see ${prefix}${id}, then ${prefix}${id}.`).text).toBe(`see ${prefix}${id}, then ${prefix}${id}.`);
+    }), { numRuns: 500 });
+  });
+
   it('keeps an id held in a field of a tool result', () => {
     const id = '19043673-2379-4309-be95-0123456789ab';
     const result = clean({ medication_id: id, note: `id ${id}` }, 'internal_context');
@@ -69,6 +78,19 @@ describe('card numbers are still redacted', () => {
   ])('redacts the card in %s', (input, expected) => {
     expect(textOf(input).text).toBe(expected);
     expect(textOf(input, 'owner_reply').text).toBe(expected);
+  });
+
+  // A uuid that ends in four digits looks like the first group of a card to the scan; the card after it is still a card.
+  it.each([[' '], ['-'], ['\n'], ['\t'], [': ']])('redacts a card that follows a uuid ending in four digits, after %j', sep => {
+    const id = '7e2aa0c8-91b3-4c2e-8a11-f0e023af6052';
+    expect(textOf(`task ${id}${sep}5555 5555 5555 4444`)).toEqual({ text: `task ${id}${sep}[REDACTED_CREDIT_CARD]`, cards: 1 });
+    expect(textOf(`task ${id}${sep}4111111111111111 done`)).toEqual({ text: `task ${id}${sep}[REDACTED_CREDIT_CARD] done`, cards: 1 });
+  });
+
+  it('redacts a card after any uuid, and keeps the uuid', () => {
+    fc.assert(fc.property(fc.oneof(fc.uuid(), digitHeavyUuid), fc.constantFrom(' ', '-', '\n'), (uuid, sep) => {
+      expect(textOf(`ref ${uuid}${sep}4111 1111 1111 1111`)).toEqual({ text: `ref ${uuid}${sep}[REDACTED_CREDIT_CARD]`, cards: 1 });
+    }), { numRuns: 500 });
   });
 
   it('redacts a card written against an id with a hyphen, and keeps the id', () => {
