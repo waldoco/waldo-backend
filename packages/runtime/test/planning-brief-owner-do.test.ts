@@ -16,8 +16,9 @@ import { redactConversationEntries } from '../src/channels/conversation-store';
 import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
-import { INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
+import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
 import { loopBook } from '../src/channels/loops';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
@@ -436,6 +437,21 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     await owned('intervention-tick-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
       await tick(state, owner);
       expect(looks(state)).toBe(0);
+    });
+  });
+
+  it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
+    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const every = 180 * 60_000;
+      state.storage.sql.exec('DELETE FROM schedule');
+      await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - every - 1000, every);
+      const sql = state.storage.sql;
+      schedulePreferences(sql, loopBook(sql, { newId: () => 'l', now: () => AT })).set('heartbeat', false);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(looks(state)).toBe(0);
+      expect(sql.exec('SELECT id FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()).toEqual([]);
     });
   });
 });

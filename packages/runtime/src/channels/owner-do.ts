@@ -4610,7 +4610,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => undefined)) : Promise.resolve(),
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
-      interventions && armable('heartbeat') ? armInterventionReview(scheduler, now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN))
+      interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armInterventionReview(scheduler, now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN))
         : scheduler.lookup(INTERVENTION_REVIEW_ID).state === 'absent' ? Promise.resolve() : scheduler.cancelReadable(INTERVENTION_REVIEW_ID).then(() => cancelMachine('intervention')),
     ]);
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
@@ -5760,7 +5760,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // waiting, and the budget with the urgent allowance); otherwise it ends there, at no model cost.
     const interventionReview = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
-      if (!interventions) { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); return; }
+      // The owner's heartbeat preference governs Waldo's own look too: off, the look ends and is not re-armed.
+      if (!interventions || !schedPrefs.enabled('heartbeat')) { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); return; }
       const now = Date.now();
       const closed = interventions.book.hold({ consent: reachesOut(), quiet: quiet(), asks: false, urgent: true, limits: interventions.limits() });
       if (closed !== null) { log({ trace, hop: 'intervention_review', ms: 0, ok: true, code: `held_${closed}` }); return; }
