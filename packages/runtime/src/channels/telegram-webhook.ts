@@ -64,6 +64,14 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
+  // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
+  // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
+  // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
+  WAKE_BRIEF?: string;
+  WAKE_BRIEF_FRESH_MIN?: string;
+  WAKE_BRIEF_TURNS_PER_DAY?: string;
+  // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
+  BRIEF_DAY_PLAN?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;

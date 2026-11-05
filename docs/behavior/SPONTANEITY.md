@@ -1,0 +1,61 @@
+# Spontaneity
+
+Waldo acts on what happens in a person's day, not only on a fixed timetable. This page records the design intent. The code is the source of truth.
+
+## The problem with fixed times
+
+A 07:30 Brief and a 21:00 Close assume a linear day. Real days aren't linear:
+
+- People wake at different times, and night-shift workers wake in the evening.
+- Meetings move, flights slip, and a workout runs long.
+
+A message at the wrong moment is noise. The right moment is usually set by something that happened, not by the clock.
+
+## One proactive layer
+
+Every unasked message goes through the proactive layer and its one set of owner limits:
+
+- `PROACTIVE_GATE` covers consent, quiet hours, one question in flight, the daily budget, the gap, and the day from the Brief to the Close.
+- Triage acts ahead and holds the day shape (`PROACTIVE_ACT_AHEAD`).
+- Waldo's own look (`PROACTIVE_INTERVENTIONS`).
+
+New moments are inputs to that layer, never a second path to the owner.
+
+## Built
+
+- **The Brief arrives when you wake up (`WAKE_BRIEF`).**
+  - An app health upload, or a WHOOP sync, that commits a night whose last asleep interval just ended tells the owner's object `woke: true` and nothing else. The waking time never leaves the health plane (ADR-0081). Source: `health/wake-notice.ts`.
+  - A Brief still to come then gets one model turn. The model reads the time, the weekday, quiet hours, routine and calendar, and decides whether the owner is up for the day or awake at 03:00 or after a nap. It sends the Brief now or earlier, or keeps it. Source: `wakeTarget`, `parseWakeReply` and `applyWake` in `channels/day-cards.ts`.
+  - Code holds only the hard limits:
+    - never later than planned;
+    - only a Brief that is still pending, not pinned, not set by the owner, and not due yet;
+    - the daily Brief on;
+    - model-use health consent live when the notice arrives;
+    - at most `WAKE_BRIEF_TURNS_PER_DAY` turns a day.
+  - No time of day is barred, so a night-shift Brief follows the evening wake.
+  - The new time is written on the plan row. The owner's day for unasked messages (`dayPlanBook.window`) therefore opens at the wake on every surface. The content-free morning push follows the Brief's delivery as before.
+  - With no wearable, health not shared, or consent revoked, the Brief goes at its planned time.
+- **The Brief lays out the day (`BRIEF_DAY_PLAN`).**
+  - After its spoken paragraph, the Brief (recap or planning) adds a "Your day" time-blocked plan.
+  - Calendar events keep their exact times. Open time is filled from goals, open loops, tasks and waiting items.
+  - A dip in shared health gives a lighter plan, paired with one easy step, never a bare warning.
+  - The plan is a suggestion and never claims a calendar change. Source: `SCHEDULE_RULE` in `prompt/day-cards.ts`.
+- **One tap adds the plan to the calendar.** This is the `calendar_plan` approval kind, approvals revision 9. It is built separately; see that PR.
+
+## Not built: follow-ups for the proactive layer's seams
+
+- **Workout ended, and meeting ended or meeting notes ready.** These are inputs to the proactive layer's look (`intervention-review`) or triage, under `PROACTIVE_GATE`. They are not a separate `/signals` route with its own budget.
+- **Arrived or left a place.** This needs device context, which is in scope under consent and an ADR, so it waits for that ADR.
+- **Model-scheduled check-backs.** A "look again at HH:MM" belongs on the look's own one-shot schedule (`nextLookAt`), under the same limits.
+- **Oura and other cloud wearables.** Only the app upload and WHOOP say `woke` today.
+
+## What stays fixed
+
+These are hard rules in code, not judgment calls:
+
+- Each moment is handled once.
+- Quiet hours and the owner's limits apply.
+- Health moments carry no readings or times, and Waldo never quotes measurements or makes clinical calls.
+- A plan never moves or invents calendar events. Only the owner's tap adds blocks.
+
+Everything else is the model's call: whether a moment matters, what to say, and how to lay out the day. Don't add fixed rules such as "always suggest food after a workout". If a moment keeps being handled badly, fix the context or the instruction, and add a scenario test.
