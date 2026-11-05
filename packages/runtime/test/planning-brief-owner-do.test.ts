@@ -441,10 +441,10 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   });
 
   it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
-    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
       await tick(state, owner);
-      expect(armed()).toEqual([{ due_at: AT + 180 * 60_000, recurrence_json: null }]);
+      expect(armed()).toEqual([{ due_at: AT + 120 * 60_000, recurrence_json: null }]);
       const night = Date.parse(`${DAY}T22:00:00Z`), tickAt = Date.now;
       Date.now = () => night;
       try {
