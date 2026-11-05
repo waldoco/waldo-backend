@@ -113,6 +113,7 @@
     "WALDO_PROMPT_V2": "0",
     "NEXT_DUE_ALARM": "0",
     "WHY_TRAIL": "0",
+    "GOOGLE_REALTIME_TRIAGE": "0",
     "AGENT_MAIL_ZONE_ID": ""
   },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
@@ -279,6 +280,7 @@
         "WALDO_PROMPT_V2": "0",
         "NEXT_DUE_ALARM": "1",
         "WHY_TRAIL": "0",
+        "GOOGLE_REALTIME_TRIAGE": "0",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
