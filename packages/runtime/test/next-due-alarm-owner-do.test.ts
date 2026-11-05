@@ -68,7 +68,7 @@ const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at:
     state.storage.kv.put('owner_alarm_full_release_v1', env.WALDO_RELEASE ?? 'unknown');
     if (surface === 'app') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     else state.storage.kv.put('telegram_subject', '7');
-    const make = (switched: '0' | '1') => new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: switched, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const make = (switched: '0' | '1') => new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: switched, PROACTIVE_INTERVENTIONS: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     let owner = make(flag);
     // A deploy that sets the switch the other way: the same storage under a new object.
     const restart = (switched: '0' | '1') => { owner = make(switched); };

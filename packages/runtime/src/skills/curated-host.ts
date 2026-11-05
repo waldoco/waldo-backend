@@ -20,7 +20,7 @@ const LOAD_DESCRIPTION='Load one enabled skill from the reviewed index for this 
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;
  const turnId=turn.turnId;
- const book=new CuratedOwnerSkills(sql,owner,undefined,turn.custodyKey ?? owner);
+ const book=new CuratedOwnerSkills(sql,owner,undefined,turn.custodyKey ?? owner,turn.catalog);
  const allow=(name:ToolName)=>triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes(name));
  const checked=async(ctx:ToolDispatcherContext,work:()=>ToolResult<unknown>,readOnlySelection=false)=>{
   await turn.assertCurrent();
@@ -53,7 +53,7 @@ const procedureCapability=(book:CuratedOwnerSkills,turn:CuratedSkillTurn,handler
 // select a procedure: skills_load, checked against the job's owner, turn and currentness. Lifecycle commands stay with the
 // owner's own words, and a job over outside text may load too, because a procedure carries no tool.
 export function createJobSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn):OwnerSkillCapability {
- const book=new CuratedOwnerSkills(sql,turn.owner,undefined,turn.custodyKey ?? turn.owner);
+ const book=new CuratedOwnerSkills(sql,turn.owner,undefined,turn.custodyKey ?? turn.owner,turn.catalog);
  const load={name:'skills_load' as const,description:LOAD_DESCRIPTION,schema:skillsVersionArgsSchema,
   trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('skills_load')),autonomy_gated:false,mutates_state:true as const,
   handle:async(args:SkillsVersionArgs,ctx:ToolDispatcherContext):Promise<ToolResult<unknown>>=>{

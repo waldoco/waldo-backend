@@ -7,6 +7,9 @@ import type { CalendarChange, GoogleClient, MailItem } from '../src/connectors/g
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
 import { triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
+import { interruptBook, INTERRUPTS_KEY, type InterruptLimits } from '../src/channels/interruptions';
+import { UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../src/prompt/machine-jobs';
+import { channelStyle } from '../src/prompt/update-cards';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { PUSHES } from '../src/channels/expo-push';
 import type { TaskHost } from '../src/tasks/brain';
@@ -554,10 +557,10 @@ describe('applying a sweep job with the day state', () => {
 // GOOGLE_REALTIME_TRIAGE: the apply turn triages each batch. The model chooses act (a card through propose_action), tell (say
 // or revise, with a push), brief (left for the next main card) or silent (noted, not carried). Code holds only quiet hours,
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
-type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number }; goals: { asked: number } }>;
-const applyingTriage = (h: Harness): TriageApply => {
+type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number; whenOffered?: boolean }; goals: { asked: number } }>;
+const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>): TriageApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
-  const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards = { raised: 0 }, goals = { asked: 0 };
+  const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards: TriageApply['cards'] = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
   const handler = updateSweepApplier({
     updates: h.updates, timezone: 'UTC', now: () => h.clock.at, sourceFollowups: () => false, gate: () => h.gate.code,
@@ -565,11 +568,13 @@ const applyingTriage = (h: Harness): TriageApply => {
     context: async () => ({ ledger: '', feedback: '', volume: 'normal' }),
     turn: async (trace, text, current, turnTools) => {
       await current(); turns.push({ trace, text }); tools.push(turnTools);
-      // A turn that offered an action raised its card while it ran.
-      if (cards.raised) raisedAt = h.clock.at;
+      // A turn that offered an action raised its card while it ran; whenOffered raises one only if card tools were offered.
+      if (cards.whenOffered) cards.raised = turnTools?.includes('propose_action') ? 1 : 0;
+      raisedAt = cards.raised ? h.clock.at : Number.POSITIVE_INFINITY;
       return reply.text;
     },
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
+    ...(interruptions ? { interruptions } : {}),
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => card === 'card:brief', revisesCards: true,
       named: () => named.on, chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
@@ -577,6 +582,7 @@ const applyingTriage = (h: Harness): TriageApply => {
     triage: {
       context: async () => { goals.asked += 1; return { goals: '- Ship the Q4 board deck by Friday' }; },
       cardsSince: at => (raisedAt >= at && Number.isFinite(raisedAt) ? cards.raised : 0),
+      ...(actAhead ? { actAhead } : {}),
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
@@ -589,11 +595,11 @@ const applyingTriage = (h: Harness): TriageApply => {
   };
 };
 const unfolded = (h: Harness) => h.updates.unfolded('UTC');
-const triaged = async (h: Harness, reply: unknown, setup: (a: TriageApply) => void = () => undefined): Promise<TriageApply> => {
+const triaged = async (h: Harness, reply: unknown, setup: (a: TriageApply) => void = () => undefined, interruptions?: Parameters<typeof applyingTriage>[1]): Promise<TriageApply> => {
   h.events.push(MOVED);
   await h.check();
   report(h, FOUND);
-  const a = applyingTriage(h);
+  const a = applyingTriage(h, interruptions);
   a.reply.text = typeof reply === 'string' ? reply : JSON.stringify(reply);
   setup(a);
   await a.lane();
@@ -700,5 +706,180 @@ describe('the triage turn', () => {
     expect(triageTools(true, false)).toContain('open_loop');
     expect(triageTools(true, false).filter(name => ['send_email', 'propose_calendar_change', 'propose_action'].includes(name))).toEqual([]);
     expect(triageTools(true, true)).toEqual(expect.arrayContaining(['open_loop', 'send_email', 'propose_calendar_change', 'propose_action']));
+  });
+});
+
+// PROACTIVE_GATE: the owner's own limits replace triage's budget. The model may call a batch urgent to go past the budget from a
+// small allowance, never past quiet hours or a question still waiting; a message that asks sets the one question in flight.
+describe('the triage turn under the owner\'s interruption limits', () => {
+  const limits: InterruptLimits = { perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 };
+  const owned = (h: Harness, spoke = { at: null as number | null }, day = { closed: false }) => ({
+    spoke, day, book: interruptBook(h.storage.kv, { now: () => h.clock.at, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at }), limits: () => limits,
+    closed: () => day.closed,
+  });
+  const TELL = { decision: 'tell', say: 'Your sync with Krati moved to 17:00.' };
+
+  it('golden: a tell within the budget goes out and spends it; triage\'s own counter is not touched', async () => {
+    await withSweep(async (h) => {
+      const own = owned(h);
+      const a = await triaged(h, TELL, undefined, own);
+      expect([a.effects.length, a.chose]).toEqual([1, ['tell']]);
+      expect(own.book.spent()).toMatchObject({ count: 1, urgent: 0 });
+      expect(h.updates.interrupts(DAY).count).toBe(0);
+    });
+  });
+
+  it('budget spent: a tell waits unless the turn calls it urgent; urgent goes once from the allowance, then waits too', async () => {
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.clock.at += 2 * 3_600_000;
+      const held = await triaged(h, TELL, undefined, own);
+      expect([held.effects, held.chose]).toEqual([[], ['held_budget']]);
+      // The urgent allowance is left, so the turn keeps its card tools.
+      expect(held.tools[0]).toContain('propose_action');
+    });
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.clock.at += 2 * 3_600_000;
+      const urgent = await triaged(h, { ...TELL, urgent: true }, undefined, own);
+      expect([urgent.effects.length, urgent.chose]).toEqual([1, ['tell+urgent']]);
+      expect(own.book.spent()).toMatchObject({ count: 1, urgent: 1 });
+    });
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => { own.book.spend(limits, false, 'earlier'); own.book.spend(limits, false, 'urgent'); });
+      h.clock.at += 2 * 3_600_000;
+      const again = await triaged(h, { ...TELL, urgent: true }, undefined, own);
+      expect([again.effects, again.chose]).toEqual([[], ['held_budget']]);
+      expect(again.tools[0]).not.toContain('propose_action');
+    });
+  });
+
+  it('a card raised past the budget draws on the urgent allowance, marked or not; an unmarked one is traced apart', async () => {
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.clock.at += 2 * 3_600_000;
+      const a = await triaged(h, { decision: 'act', urgent: true }, a => { a.cards.raised = 1; }, own);
+      expect(a.chose).toEqual(['act+urgent']);
+      expect(own.book.spent()).toMatchObject({ count: 1, urgent: 1 });
+    });
+    await withSweep(async (h) => {
+      const own = owned(h);
+      h.storage.transactionSync(() => own.book.spend(limits, false, 'earlier'));
+      h.clock.at += 2 * 3_600_000;
+      const a = await triaged(h, { decision: 'act' }, a => { a.cards.raised = 1; }, own);
+      expect(a.chose).toEqual(['act+over_budget']);
+      expect(own.book.spent()).toMatchObject({ count: 1, urgent: 1 });
+    });
+  });
+
+  it('cards raised unmarked on every batch stop at the budget and the allowance: card tools go once both are spent', async () => {
+    // Six triage batches ten minutes apart, each raising a card whenever card tools are offered, none marked urgent.
+    const two: InterruptLimits = { perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 };
+    let ledger: unknown, start: number | undefined;
+    const offered: boolean[] = [];
+    for (let batch = 0; batch < 6; batch += 1) {
+      await withSweep(async (h) => {
+        start ??= h.clock.at;
+        h.clock.at = start + batch * 10 * 60_000;
+        if (ledger !== undefined) h.storage.kv.put(INTERRUPTS_KEY, ledger);
+        const own = { ...owned(h), limits: () => two };
+        const a = await triaged(h, { decision: 'act' }, a => { a.cards.whenOffered = true; }, own);
+        offered.push(a.tools[0]!.includes('propose_action'));
+        ledger = h.storage.kv.get(INTERRUPTS_KEY);
+      });
+    }
+    // One within the budget, one inside the gap from the allowance, then no card tools for the rest of the hour.
+    expect(offered).toEqual([true, true, false, false, false, false]);
+    expect(ledger).toMatchObject({ count: 1, urgent: 1 });
+  });
+
+  it('urgent never passes quiet hours', async () => {
+    await withSweep(async (h) => {
+      const own = owned(h);
+      const a = await triaged(h, { ...TELL, urgent: true }, a => { a.quiet.on = true; }, own);
+      expect([a.effects, a.chose]).toEqual([[], ['held_quiet']]);
+      expect(a.tools[0]).not.toContain('propose_action');
+      expect(own.book.spent()).toMatchObject({ count: 0, urgent: 0 });
+    });
+  });
+
+  it('one question in flight: a second question waits, even urgent, until the owner speaks; a tell that asks nothing still goes', async () => {
+    const roomy: InterruptLimits = { ...limits, perDay: 5, gapMs: 0 };
+    const asked = async (reply: unknown, spokeAfter: boolean) => withSweep(async (h) => {
+      const own = { ...owned(h), limits: () => roomy };
+      h.storage.transactionSync(() => own.book.spend(roomy, true, 'update:earlier'));
+      if (spokeAfter) own.spoke.at = h.clock.at + 1;
+      h.clock.at += 2;
+      const a = await triaged(h, reply, undefined, own);
+      return { chose: a.chose, sent: a.effects.length, open: own.book.question()?.ref ?? null };
+    });
+    expect(await asked({ ...TELL, asks: true, urgent: true }, false)).toEqual({ chose: ['held_question'], sent: 0, open: 'update:earlier' });
+    expect(await asked(TELL, false)).toEqual({ chose: ['tell'], sent: 1, open: 'update:earlier' });
+    expect(await asked({ ...TELL, asks: true }, true)).toEqual({ chose: ['tell'], sent: 1, open: expect.stringMatching(/^update:(?!earlier)/) });
+  });
+
+  it('the turn reads the owner\'s limits, not triage\'s fixed count', async () => {
+    const owners = await withSweep(async (h) => (await triaged(h, { decision: 'silent' }, undefined, owned(h))).turns[0]!.text);
+    const plain = await withSweep(async (h) => (await triaged(h, { decision: 'silent' })).turns[0]!.text);
+    expect([owners.includes('"urgent"'), plain.includes('"urgent"')]).toEqual([true, false]);
+  });
+});
+
+// PROACTIVE_ACT_AHEAD: the worker prepares the move; triage offers it on one card or stays silent. What matters is the model's.
+describe('acting ahead on an update', () => {
+  const INVITE: TaskResult = { status: 'done', summary: 'An invite clashes with the deck block.',
+    findings: [{ text: 'Krati invited the owner to a vendor call at 17:00, over their deck block.', source_ref: 'e-sync' }],
+    proposals: [{ tool: 'send_email', why: 'Keeps the deck block; offers Krati the morning instead.', args: { to: ['krati@client.example'], subject: 'Vendor call', body: 'Could we do 10:00 tomorrow instead? DRAFT-7Q' } }], left: [] };
+  const STYLE = channelStyle('chat');
+  const acting = async (h: Harness, result: TaskResult, reply: unknown, setup: (a: TriageApply) => void = () => undefined) => {
+    h.events.push(MOVED);
+    await h.check({ actAhead: true });
+    report(h, result);
+    const a = applyingTriage(h, undefined, { style: () => STYLE });
+    a.reply.text = JSON.stringify(reply);
+    setup(a);
+    await a.lane();
+    return a;
+  };
+
+  it('the worker is asked to prepare the move as well as judge; without the switch it only judges', async () => {
+    await withSweep(async (h) => {
+      h.events.push(MOVED);
+      await h.check({ actAhead: true });
+      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_ACT_AHEAD_TEXT.goal);
+    });
+    await withSweep(async (h) => {
+      h.events.push(MOVED);
+      await h.check();
+      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_JOB_TEXT.goal);
+    });
+  });
+
+  it('golden: an invite that clashes becomes one card built from the drafted reply, and no message besides', async () => {
+    await withSweep(async (h) => {
+      const a = await acting(h, INVITE, { decision: 'act' }, a => { a.cards.raised = 1; });
+      expect(a.turns[0]!.text).toContain('DRAFT-7Q');
+      expect(a.turns[0]!.text).toContain(STYLE);
+      expect(a.tools[0]).toEqual(expect.arrayContaining(['send_email', 'propose_calendar_change']));
+      expect([a.effects, a.chose]).toEqual([[], ['act']]);
+      expect(h.jobs()[0]!.status).toBe('applied');
+    });
+  });
+
+  it('an update that does not matter: silence, nothing reaches the owner, and nothing spends their budget', async () => {
+    await withSweep(async (h) => {
+      const a = await acting(h, FOUND, { decision: 'silent' });
+      expect([a.effects, a.chose, unfolded(h)]).toEqual([[], ['silent'], '']);
+      expect(h.updates.interrupts(DAY).count).toBe(0);
+    });
+    // The worker found nothing worth hearing: no turn runs at all.
+    await withSweep(async (h) => {
+      const a = await acting(h, NOTHING, { decision: 'tell', say: 'never sent' });
+      expect([a.turns, a.effects]).toEqual([[], []]);
+    });
   });
 });

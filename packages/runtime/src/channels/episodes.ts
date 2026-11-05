@@ -52,6 +52,11 @@ export const ftsQuery = (text: string): string | null => {
   return terms.length ? terms.map((term) => `"${term}"`).join(' OR ') : null;
 };
 
+// Whether the owner said anything, on any surface, after `at`: their next message answers or skips a question Waldo asked.
+// An owner message is stored whole ('owner') or split into their own words and what they quoted; any of its rows counts.
+export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
+  sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, at).toArray().length > 0;
+
 export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   sql.exec("CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5(entry_id UNINDEXED, speaker UNINDEXED, at UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')");
   return {

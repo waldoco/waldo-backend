@@ -21,8 +21,8 @@ const reply = (value: unknown): readonly ScriptedRound[] => [{ text: JSON.string
 const SEND = { name: 'send_email', arguments: { to: ['priya@northwind.example'], subject: 'Re: Term sheet call - Friday 11:00 works?', body_markdown: 'Yes, Friday 11:00 works.' } };
 
 describe('the triage set in the catalogue', () => {
-  it('labels two batches each interrupt, act, brief and silent, under an id prefix nothing else uses', () => {
-    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'brief', 'silent', 'silent']);
+  it('labels batches interrupt, act, brief and silent, under an id prefix nothing else uses', () => {
+    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'brief', 'silent', 'act', 'silent']);
     for (const entry of TRIAGE_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.id.startsWith('g')).toBe(true);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
-import { CURATED_SKILLS } from '../src/skills/curated-owner';
+import { curatedSkills } from '../src/skills/curated-owner';
 import { callBudget } from '../evals/nightly/budget';
 import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
 import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
@@ -11,7 +11,7 @@ import { runTrial } from '../evals/nightly/trial';
 // with the owner's skill book, a scripted model loads the fitting skill without being asked, and the receipts tell a reply
 // that keeps the boundary from one that breaks it. Which skill the live model picks, and how well it helps, is the judge's.
 const scenario = (id: string) => SKILL_SCENARIOS.find((entry) => entry.id === id)!;
-const skill = (name: string) => CURATED_SKILLS.find((entry) => entry.name === name)!;
+const skill = (name: string) => curatedSkills(true).find((entry) => entry.name === name)!;
 const trial = async (id: string, skillName: string, reply: string) => {
   const entry = scenario(id);
   const said = entry.steps.find((step) => 'say' in step);
@@ -29,7 +29,7 @@ const trial = async (id: string, skillName: string, reply: string) => {
 
 describe('the proactive skills in the catalogue', () => {
   it('runs one or more scenarios per new skill nightly, each with a rubric and a receipt', () => {
-    expect(SKILL_SCENARIOS.map((entry) => entry.id)).toEqual(['s1-intention-to-plan', 's2-relationship-brief', 's3-overload-day', 's4-renewals-and-bills', 's4-renewals-in-chat', 's5-recovery-day', 's5-recovery-day-not-shared']);
+    expect(SKILL_SCENARIOS.map((entry) => entry.id)).toEqual(['s1-intention-to-plan', 's2-relationship-brief', 's3-overload-day', 's4-renewals-and-bills', 's4-renewals-in-chat', 's5-recovery-day', 's5-recovery-day-not-shared', 's6-health-protocols', 's6-health-protocols-not-shared']);
     for (const entry of SKILL_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
@@ -47,6 +47,8 @@ describe('a proactive skill in the nightly world', () => {
     ['s4-renewals-in-chat', 'renewals-and-bills', 'Notion Plus renews on its own on 28 September for INR 1,200. Want me to track it, or set a reminder? The "payment failed" mail from netflx-billing looks like phishing: ignore it.'],
     ['s5-recovery-day', 'recovery-day', 'A low day. Board review at 11 is the anchor; want to swap the interval run for an easy walk tonight?'],
     ['s5-recovery-day-not-shared', 'day-brief', 'Friday: standup at 10, board review 11 to 12:30, club run at 6.'],
+    ['s6-health-protocols', 'health-protocols', 'You have been running short on sleep and the club run tonight is a hard one. With the pitch at 9, an easy run or a move to Saturday keeps tonight calm. Want me to propose moving it?'],
+    ['s6-health-protocols-not-shared', 'health-protocols', 'With the pitch at 9, keep tonight calm: the club run ends at 8, so a wind-down after it and an early night set up the morning. Want me to move the run?'],
   ])('%s: the turn loads %s unprompted, its procedure joins the next step, and an honest reply passes every receipt', async (id, name, reply) => {
     const { record, systems, loaded, failed } = await trial(id, name, reply);
     expect(record.tools.filter((tool) => tool.name === 'skills_load')).toEqual([{ name: 'skills_load', ok: true }]);

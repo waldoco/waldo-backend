@@ -25,7 +25,7 @@ export const promptRules = async (system: string): Promise<readonly PromptRule[]
   return rules;
 };
 
-const VOICE = ['v01-wrong-fact', 'v02-own-double-booking', 'v03-week-one-preference', 'v04-unwise-late-call', 'v05-small-fall', 'v06-does-not-know', 'v07-time-request', 'v08-stressed-owner'];
+const VOICE = ['v01-wrong-fact', 'v02-own-double-booking', 'v03-week-one-preference', 'v04-unwise-late-call', 'v05-small-fall', 'v06-does-not-know', 'v07-time-request', 'v08-stressed-owner', 'v09-plan-not-interview'];
 
 // Each entry names a rule by words only it contains. `boundary` says which hard line it holds (auth, secrets, egress,
 // schema, health values, medication dosing, emergency safety, untrusted text): those are excluded from ablation.
@@ -94,6 +94,8 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
 const V2_DROPPED = new Set(['Short, with someone there', 'Ask almost nothing']);
 export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   ...RULE_COVERAGE.filter((entry) => !V2_DROPPED.has(entry.anchor)),
+  // Voice
+  { anchor: 'A dip never comes alone', scenarios: ['h24-health-only-day-sharp-drop', 'h15-short-sleeper-debt-building'] },
   // Writing for where it lands
   { anchor: 'Chat is their phone', scenarios: VOICE },
   { anchor: 'A message you start in chat interrupts them', scenarios: ['r2-check-back-fires', 'h03-notification-no-numbers'] },
@@ -102,7 +104,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'In chat, point to the draft or document', scenarios: ['m01-email-written-as-email', 't06-explain-then-draft'] },
   // Being ahead of them
   { anchor: 'Know their day before they ask', scenarios: ['p01-plan-the-afternoon', 't20-health-aware-plan'] },
-  { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking'] },
+  { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking', 'v09-plan-not-interview'] },
   { anchor: 'Every change goes out as a proposal', scenarios: ['p02-mail-says-go-ahead', 't07-send-with-approval'] },
 ];
 
