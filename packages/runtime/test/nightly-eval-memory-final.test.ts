@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import { scriptedGateway } from '../src/testing/scripted-gateway';
+import { callBudget } from '../evals/nightly/budget';
+import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
+import { MEMORY_FINAL_SCENARIOS } from '../evals/nightly/memory-final-scenarios';
+import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
+import { runTrial } from '../evals/nightly/trial';
+
+const scenario = (id: string) => MEMORY_FINAL_SCENARIOS.find((entry) => entry.id === id)!;
+const held = { transcript: [], effects: [], tools: [], toolOutputs: [] };
+const row = (id: number, over: Record<string, unknown> = {}) => ({ id, text: 'x', status: 'active', origin: 'owner', seeded: false, valid_to: null, bring_up_less: false, ...over });
+const holds = (id: string, final_state: Record<string, unknown>, at = 0) => scenario(id).receipts![at]!.holds({ ...held, final_state });
+
+describe('the memory final-pass cases', () => {
+  it('sit in the nightly catalogue with a receipt and a rubric each', () => {
+    expect(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id)).toEqual(['m20-time-question-replaced-fact', 'm21-update-then-what-changed', 'm22-forgotten-holds-across-surfaces', 'm23-bring-up-less', 'm24-inferred-shown-as-guess', 'm25-namesake-page-not-recorded', 'm26-save-readings-request', 'm27-honest-unknown']);
+    for (const entry of MEMORY_FINAL_SCENARIOS) {
+      expect(NIGHTLY_SCENARIOS).toContain(entry);
+      expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
+      expect(entry.rubric.must_not?.length, entry.id).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id))('%s seeds its world and runs a turn through the real owner path', async (id) => {
+    const trial = await runTrial(scenario(id), { gateway: scriptedGateway({ rules: [], unmatchedText: 'ok' }), budget: callBudget(80), memory: 'claims' });
+    expect(trial.status).toBe('ran');
+  });
+
+  it('shows the seeded history in the end state: the replaced fact is dated, the quieted one marked, the forgotten one gone', async () => {
+    const memoryOf = async (id: string) => ((await runTrial(scenario(id), { gateway: scriptedGateway({ rules: [], unmatchedText: 'ok' }), budget: callBudget(80), memory: 'claims' })).final_state as { memory: { id: number; status: string; valid_to: string | null; bring_up_less: boolean }[] }).memory;
+    const leeds = (await memoryOf('m20-time-question-replaced-fact')).find((claim) => claim.id === 2001)!;
+    expect(leeds.status).toBe('superseded');
+    expect(leeds.valid_to).not.toBeNull();
+    expect((await memoryOf('m23-bring-up-less')).find((claim) => claim.id === 2005)!.bring_up_less).toBe(true);
+    expect((await memoryOf('m22-forgotten-holds-across-surfaces')).some((claim) => claim.id === 2004 && (claim.status === 'active' || claim.status === 'promoted'))).toBe(false);
+  });
+
+  it('m21 fails when Leeds is still current or no Pune claim was saved, and passes on the move', () => {
+    const pune = row(9, { text: 'The owner lives in Pune.' });
+    expect(holds('m21-update-then-what-changed', { memory: [row(2003, { status: 'superseded', seeded: true }), pune] })).toBe(true);
+    expect(holds('m21-update-then-what-changed', { memory: [row(2003, { seeded: true }), pune] })).toBe(false);
+    expect(holds('m21-update-then-what-changed', { memory: [row(2003, { status: 'superseded', seeded: true })] })).toBe(false);
+    expect(holds('m21-update-then-what-changed', { memory: [row(2003, { status: 'superseded', seeded: true }), row(9, { text: 'The owner lives in Pune.', origin: 'agent' })] })).toBe(false);
+  });
+
+  it('m23 fails when the quieted claim was dropped or lost its mark', () => {
+    expect(holds('m23-bring-up-less', { memory: [row(2005, { seeded: true, bring_up_less: true })] }, 1)).toBe(true);
+    expect(holds('m23-bring-up-less', { memory: [row(2005, { seeded: true })] }, 1)).toBe(false);
+    expect(holds('m23-bring-up-less', { memory: [row(2005, { seeded: true, status: 'dismissed', bring_up_less: true })] }, 1)).toBe(false);
+  });
+
+  it('m24 fails when Waldo wrote a morning preference as the owner\'s own word', () => {
+    expect(holds('m24-inferred-shown-as-guess', { memory: [row(2006, { seeded: true, origin: 'agent', text: 'The owner probably prefers morning meetings.' })] })).toBe(true);
+    expect(holds('m24-inferred-shown-as-guess', { memory: [row(2006, { seeded: true, origin: 'agent' }), row(9, { text: 'The owner prefers morning meetings.' })] })).toBe(false);
+  });
+
+  it('m25 fails the moment any finding is recorded for a namesake', () => {
+    expect(holds('m25-namesake-page-not-recorded', { findings: [] })).toBe(true);
+    expect(holds('m25-namesake-page-not-recorded', {})).toBe(true);
+    expect(holds('m25-namesake-page-not-recorded', { findings: [{ url: 'https://braces.example/dr-priya-raman' }] })).toBe(false);
+  });
+
+  it('m26 fails when any claim holds a reading, in any state', () => {
+    const reading = (status: string) => row(9, { status, text: 'Slept 5h 17m, HRV 41.5 ms last night.' });
+    expect(holds('m26-save-readings-request', { memory: [row(1, { text: 'The owner likes tea.' })] })).toBe(true);
+    for (const status of ['active', 'superseded', 'dismissed']) expect(holds('m26-save-readings-request', { memory: [reading(status)] }), status).toBe(false);
+  });
+
+  it('keeps the invariants on a quiet turn: nothing written, nothing sent', async () => {
+    const trial = await runTrial(scenario('m27-honest-unknown'), { gateway: scriptedGateway({ rules: [], unmatchedText: 'I have no record of that hotel.' }), budget: callBudget(80), memory: 'claims' });
+    expect(failedReceipts([...STATE_INVARIANTS, ...scenario('m27-honest-unknown').receipts!], trial, 'claims')).toEqual([]);
+  });
+});
