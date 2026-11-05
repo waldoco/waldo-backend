@@ -1124,6 +1124,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private iMessageProgress: ProgressPacer | null = null;
   // The running iMessage turn's parts beyond its text (its files, opened before it started, and the owner's tapbacks); held in memory for that turn only.
   private iMessageOpened: ReturnType<typeof iMessageTurnParts> = null;
+  // The running WhatsApp burst's earlier messages, keyed by the update its turn runs as; the turn reads them with its own.
+  private whatsappEarlier: Readonly<{ updateId: number; turns: readonly import('./telegram-polling').TelegramInboundTurn[] }> | null = null;
   private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
   private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.OWNER_DO }; }
   /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
@@ -2397,6 +2399,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const scope = this.whatsappInbox().scope(record, abort.signal, () =>
       kv.get<string>('whatsapp_subject') === record.subject && kv.get<boolean>('whatsapp_unlinked') !== true && kv.get<string>('do_name') === doName);
     const update = record.update!;
+    if (record.earlier?.length) {
+      const accepted = (await new TelegramPollingAdapter({ getUpdates: async () => record.earlier! }, 0).poll(0)).accepted;
+      // A burst message that does not parse is left out of the turn; say so, by count only.
+      if (accepted.length < record.earlier.length) console.log(JSON.stringify({ hop: 'whatsapp_burst_dropped', ok: false, detail: `schema_rejected:${record.earlier.length - accepted.length}` }));
+      this.whatsappEarlier = { updateId: Number((update as { update_id?: unknown }).update_id), turns: accepted };
+    }
     this.activeScope = scope; this.activeAbort = abort;
     const active = this.activeWhatsApp = { scope, wamid: record.wamid, admittedAt: record.admittedAt, threaded: (update as { message?: { reply_to_message?: unknown } }).message?.reply_to_message !== undefined };
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -2410,6 +2418,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       clearTimeout(timeout); abort.abort();
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
       if (this.activeWhatsApp === active) this.activeWhatsApp = null;
+      this.whatsappEarlier = null;
     }
   }
 
@@ -4946,7 +4955,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return responder.chooseReaction(turn);
       },
       respond: async (turn, time) => {
-        if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
+        const earlier = this.whatsappEarlier?.updateId === turn.updateId ? this.whatsappEarlier.turns : [];
+        for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
+        if (earlier.length) turn = { ...turn, earlier };
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
         const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };

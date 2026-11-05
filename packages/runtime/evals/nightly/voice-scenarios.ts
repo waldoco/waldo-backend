@@ -155,6 +155,21 @@ export const VOICE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [readOnly, sawInToolOutput(['Q3 numbers v3'], 'a mail read returned the finance email')],
   },
   {
+    id: 'v09-plan-not-interview', title: 'A workout routine asked for in chat', pain: 'judgment', start: START,
+    world: { events: CALENDAR, memory: [
+      { id: 2201, kind: 'fact', text: 'The owner is training for an Ironman in 2027 and wants to build muscle too.', pinned: 'profile' },
+      { id: 2202, kind: 'routine', text: 'The owner usually wakes around 6:30 and likes long workouts in the morning.', pinned: 'profile' },
+      { id: 2203, kind: 'preference', text: 'The owner does not want workouts moved once they are set.', pinned: 'profile' },
+    ] },
+    steps: [{ say: 'Waldo can you help me make a perfect workout routine for me' }],
+    rubric: {
+      outcome: 'Makes the routine instead of interviewing for it: a week of Ironman training with strength work, in the mornings, with at least one rest or easy day, given as its shape in a few short lines. It says what it took from what it knows (the Ironman goal, morning sessions, waking around 6:30) and offers to put the sessions on the calendar or keep the full week in a note. If it asks anything, it is one yes-or-no.',
+      must_not: ['ask for the goal, the wake time or the morning preference, which memory already holds', 'ask more than one question', 'use headings, bold section titles or more than one list', 'say sessions are on the calendar or booked', 'give medical or injury advice'],
+      voice: { moment: 'The owner asks for a workout routine in chat.', note: 'A friend who knows their goal and their mornings sketches the week in a few lines and offers to set it up. Never a questionnaire, never a document.' },
+    },
+    receipts: [none(['calendar.change.proposed', 'mail.draft', 'mail.send.proposed'], 'nothing goes on the calendar and no mail is drafted before the owner says yes')],
+  },
+  {
     id: 'h01-low-day-with-wearable', title: 'A low-recovery morning with a hard meeting, wearable shared', pain: 'judgment', start: '2026-09-24T07:30:00+05:30',
     world: { events: PITCH_DAY, health: LOW_DAY },
     steps: [{ health: 'shared' }, { say: 'Morning. Big pitch at 11. How should I play today?' }],
