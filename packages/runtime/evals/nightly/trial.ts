@@ -18,7 +18,7 @@ import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
 import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
-import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type SeedUpload, type WorldSeed } from './world';
 import { changeLines, type Change } from '../../src/channels/update-cards';
 import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
 import { triagePrompt } from '../../src/prompt/update-cards';
@@ -28,6 +28,8 @@ import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 
 export type Step =
   | Readonly<{ say: string }>
+  // The owner sends a file with these words (world.files): the turn carries the keeper's note beside them.
+  | Readonly<{ say: string; upload: SeedUpload }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
   // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
@@ -146,7 +148,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         turn += 1;
         skills.turn(ownerTurnTrace('app', turn));
         transcript.push({ role: 'owner', text: step.say });
-        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: 'upload' in step ? [...ownerWords(step.say), { authorship: 'media_note', text: await world.upload(step.upload, `trial:${turn}`) }] : ownerWords(step.say) }), time) });
         // The post-reply compaction hook; a store built with compaction off makes it a no-op.
         await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {

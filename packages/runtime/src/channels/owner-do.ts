@@ -98,6 +98,7 @@ import { compactionSettings } from '../conversation/compaction';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
+import { uploadKeeper } from './upload-keeper';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
@@ -1652,7 +1653,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.inPlace || record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
-        try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
+        try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt, record.expiresAt); }
         catch { app.log({ trace: record.trace, hop: `${target}_copy`, ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
       }
     };
@@ -3406,6 +3407,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ownerSubject: String(runtime.owner), doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => this.ctx.storage.transactionSync(() => { work(); commit(); })),
       room: () => this.machineRoom(alarmEnd),
       log: code => console.log(JSON.stringify({ hop: 'agent_mail_turn', code })),
+      ...(this.env.WALDO_FILE_TOOLS === '1' && doName ? { keep: uploadKeeper(() => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), doName), doName, 'provider_import', 'mail') } : {}),
     });
     await this.rearmEveryWake();
   }
@@ -4667,7 +4669,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
     };
     const workspaceLinks = { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) };
-    const workspaceTools = workspaceToolHandlers(openWorkspace, workspaceLinks, effects);
+    const workspaceTools = workspaceToolHandlers(openWorkspace, workspaceLinks, effects, { fileTools: this.env.WALDO_FILE_TOOLS === '1' });
     // Files go out with the reply only where the reply is a direct send that can carry them. Elsewhere the model shares
     // the owner link from the file's receipt.
     const attachmentRoutes: Record<ChannelKind, AttachmentSend | null> = {
@@ -4864,7 +4866,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...standingOrderHandlers(orders), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...standingOrderHandlers(orders), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
