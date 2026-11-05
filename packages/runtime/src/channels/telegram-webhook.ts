@@ -165,6 +165,13 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
   // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
   GOOGLE_REALTIME_TRIAGE?: string;
+  // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
+  // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
+  // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
+  PROACTIVE_GATE?: string;
+  PROACTIVE_INTERRUPTS_PER_DAY?: string;
+  PROACTIVE_URGENT_PER_DAY?: string;
+  PROACTIVE_GAP_MIN?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

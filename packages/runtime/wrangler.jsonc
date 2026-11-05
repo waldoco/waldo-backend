@@ -115,6 +115,10 @@
     "WALDO_ASYNC_TOOLS": "0",
     "WALDO_LIGHT_CHAT": "0",
     "GOOGLE_REALTIME_TRIAGE": "0",
+    "PROACTIVE_GATE": "0",
+    "PROACTIVE_INTERRUPTS_PER_DAY": "2",
+    "PROACTIVE_URGENT_PER_DAY": "1",
+    "PROACTIVE_GAP_MIN": "60",
     "AGENT_MAIL_ZONE_ID": ""
   },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
@@ -283,6 +287,10 @@
         "WALDO_ASYNC_TOOLS": "1",
         "WALDO_LIGHT_CHAT": "0",
         "GOOGLE_REALTIME_TRIAGE": "0",
+        "PROACTIVE_GATE": "1",
+        "PROACTIVE_INTERRUPTS_PER_DAY": "2",
+        "PROACTIVE_URGENT_PER_DAY": "1",
+        "PROACTIVE_GAP_MIN": "60",
         "AGENT_MAIL_ZONE_ID": "17c6baaf587bad024be55ff953a93b4a"
       },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },

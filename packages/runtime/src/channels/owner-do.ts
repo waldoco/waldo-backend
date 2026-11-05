@@ -84,6 +84,7 @@ import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHED
 import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
+import { drawingOn, interruptBook, interruptLimits } from './interruptions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
@@ -4498,6 +4499,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
+    // PROACTIVE_GATE: one set of owner limits on every unasked message. The owner speaking anywhere answers a waiting question.
+    const interrupts = this.env.PROACTIVE_GATE === '1' ? {
+      book: interruptBook(storage.kv, { now: () => Date.now(), timezone: () => clock.timezone,
+        ownerSpokeSince: at => storage.sql.exec("SELECT 1 FROM episodes WHERE speaker = 'owner' AND at > ? LIMIT 1", at).toArray().length > 0 }),
+      limits: () => interruptLimits(this.env, loops.proactivity()),
+    } : null;
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
     const pushDirectory = () => {
       const call = signedRpc(this.env), doName = identity.get<string>('do_name');
@@ -5291,7 +5298,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
-      const budget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
+      const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
+      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits) : gateBudget;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
       let outcome: HealthTriggerOutcome = 'failed';
@@ -5308,7 +5316,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         decide: async (id, prompt, format) => {
           const asked = Date.now();
           let answered = false;
-          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format); answered = true; return said; }
+          try { const said = await responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, format, undefined, undefined, interrupts !== null); answered = true; return said; }
           finally { log({ trace: id, hop: 'machine_turn', ms: Date.now() - asked, ok: answered, detail: 'health_card' }); }
         },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),
@@ -5651,7 +5659,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       transaction: work => storage.transactionSync(work),
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
-        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external')),
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null)),
+      ...(interrupts ? { interruptions: interrupts } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
         context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n') }),

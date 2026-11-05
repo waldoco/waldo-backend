@@ -8,7 +8,7 @@ import { localIso } from './reminders';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
-export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean }>;
+export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; interruptions_per_day?: number }>;
 
 export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
@@ -84,8 +84,9 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
     setProactivity(settings: SetProactivityArgs): Proactivity {
       const quiet: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
       const followups = settings.followups ?? this.proactivity().followups;
-      const { followups: _omit, ...rest } = quiet;
-      const next: Proactivity = followups === undefined ? rest : { ...rest, followups };
+      const interruptions = settings.interruptions_per_day ?? this.proactivity().interruptions_per_day;
+      const { followups: _omit, interruptions_per_day: _kept, ...rest } = quiet;
+      const next: Proactivity = { ...rest, ...(followups === undefined ? {} : { followups }), ...(interruptions === undefined ? {} : { interruptions_per_day: interruptions }) };
       sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(next));
       return next;
     },
@@ -108,7 +109,7 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
 };
 
 export const proactivityLine = (settings: Proactivity): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}`;
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${settings.interruptions_per_day === undefined ? '' : `; ${settings.interruptions_per_day} unasked messages a day`}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();

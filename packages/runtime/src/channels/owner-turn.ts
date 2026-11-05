@@ -1076,7 +1076,7 @@ export const createOwnerResponder = (
           // one with less. The profile is short owner sentences; the owner-direction is full context.
           const recalled = view ? await recallFor(view, said, room - blocks.length - 2) : '';
           const decisionContext = [TURN_CONTEXT_HEADER, clockLine, blocks].filter(Boolean).join('\n\n') + (recalled ? fenced('memory recalled for this message', recalled) : '');
-          return await time('background_decision', () => ask(id, 'background_decision', system, `${said}\n\n${decisionContext}`, decision, undefined, undefined, undefined, auxiliaryModel));
+          return await time('background_decision', () => ask(id, 'background_decision', system, `${said}\n\n${decisionContext}`, decision, undefined, undefined, undefined, backgroundOwnerModel ? undefined : auxiliaryModel));
         }
         promptContext = turnContext ?? '';
         backgroundDirect = new Set(directTools ?? []);
