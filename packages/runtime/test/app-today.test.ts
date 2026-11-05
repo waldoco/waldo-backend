@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { calendarDayV1Schema } from '../../contracts/src/app/calendar-day';
 import { appControlDayDataV1Schema } from '../../contracts/src/app/controls';
+import { appTodayApiErrorV1Schema } from '../../contracts/src/app/today';
 import { linkCodeHash } from '../src/identity/owner-directory';
 import { handleApp } from '../src/channels/app-api';
 import { appToday } from '../src/channels/app-today';
@@ -35,12 +36,17 @@ const dayCard = (id: string, name: string, latest: unknown) => ({ id, name, defa
 const controls = (latest: unknown) => ({ view: 'day', revision: 'r1', data: { timezone: 'Asia/Kolkata', cards: [dayCard('card:brief', 'Brief', latest), dayCard('card:close', 'Close', null)] } });
 const brief = { message_id: 'row-1', delivered_at: 1_762_400_000_000, excerpt: 'A light morning, then the review at ten.' };
 
+const logged: string[] = [];
+beforeEach(() => { logged.length = 0; vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(' ')); }); });
+afterEach(() => { vi.restoreAllMocks(); });
+
 const reader = (answers: Record<string, unknown>) => {
   const asked: string[] = [];
   const read = async (path: string) => {
     asked.push(path);
     const value = answers[path];
-    return value instanceof Error ? Promise.reject(value) : value === undefined ? Response.json({ error: 'unavailable' }, { status: 503 }) : Response.json(value);
+    return value === 'never' ? new Promise<Response>(() => {}) : value instanceof Error ? Promise.reject(value)
+      : value === undefined ? Response.json({ error: 'unavailable' }, { status: 503 }) : Response.json(value);
   };
   return { asked, read };
 };
@@ -78,11 +84,14 @@ describe('today', () => {
     expect(await (await appToday(read, NOW)).json()).toMatchObject({ approvals: { state: 'available', waiting: 1 }, calendar: { state: 'available', next: { category: 'other' } } });
   });
 
-  it('answers each part on its own when another cannot be read', async () => {
+  it('answers each part on its own when another cannot be read, and logs why by a fixed code only', async () => {
     const { read } = reader(all({ '/app/v1/calendar/day': undefined, '/app/v1/approvals': new Error('network'), '/app/v1/controls?view=day': { view: 'day', data: 'garbled' } }));
     expect(await (await appToday(read, NOW)).json()).toMatchObject({
       day: null, timezone: null, calendar: { state: 'unavailable' }, approvals: { state: 'unavailable' }, brief: { state: 'unavailable' },
     });
+    expect(logged.map(line => JSON.parse(line)).sort((a, b) => a.part.localeCompare(b.part))).toEqual([
+      { hop: 'app_today', part: 'approvals', code: 'thrown' }, { hop: 'app_today', part: 'brief', code: 'shape' }, { hop: 'app_today', part: 'calendar', code: 'status_503' },
+    ]);
     const { read: partial } = reader(all({ '/app/v1/approvals': undefined }));
     expect(await (await appToday(partial, NOW)).json()).toMatchObject({ calendar: { state: 'available' }, approvals: { state: 'unavailable' }, brief: { state: 'delivered' } });
   });
@@ -96,9 +105,22 @@ describe('today', () => {
     expect((await (await appToday(evening.read, Date.parse('2026-11-06T08:00:00Z'))).json() as { calendar: unknown }).calendar).toEqual({ state: 'available', now: null, next: null, left: 0 });
   });
 
-  it('never answers a shape outside its contract', async () => {
+  it('a part that reads wrong costs only itself, and never leaves the contract', async () => {
     const { read } = reader(all({ '/app/v1/calendar/day': { ...calendarDay, day: 'tomorrow' } }));
-    expect((await appToday(read, NOW)).status).toBe(503);
+    const response = await appToday(read, NOW);
+    expect([response.status, await response.json()]).toMatchObject([200, { day: null, calendar: { state: 'unavailable' }, approvals: { state: 'available' }, brief: { state: 'delivered' } }]);
+    const long = reader(all({ '/app/v1/controls?view=day': controls({ ...brief, excerpt: 'x'.repeat(281) }) }));
+    expect(await (await appToday(long.read, NOW)).json()).toMatchObject({ calendar: { state: 'available' }, brief: { state: 'unavailable' } });
+    expect(logged.map(line => JSON.parse(line))).toContainEqual({ hop: 'app_today', part: 'brief', code: 'shape' });
+    expect(logged.join(' ')).not.toContain('x'.repeat(20));
+  });
+
+  it('answers within its deadline: a calendar that never answers reads unavailable while the rest answer', async () => {
+    const { read } = reader(all({ '/app/v1/calendar/day': 'never' }));
+    const started = Date.now();
+    expect(await (await appToday(read, NOW, 30)).json()).toMatchObject({ calendar: { state: 'unavailable' }, approvals: { state: 'available' }, brief: { state: 'delivered' } });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(logged.map(line => JSON.parse(line))).toEqual([{ hop: 'app_today', part: 'calendar', code: 'deadline' }]);
   });
 });
 
@@ -121,7 +143,7 @@ describe('the today route', () => {
     forwards.length = 0; keys.length = 0;
     const response = await get('/app/v1/today', { authorization: `Bearer ${CREDENTIAL}`, 'x-waldo-app-contract': 'approvals=3,controls=9' });
     expect([response.status, (await response.json() as { approvals: unknown }).approvals]).toEqual([200, { state: 'available', waiting: 2 }]);
-    expect(keys).toEqual(['app-read:owner-1']);
+    expect(keys).toEqual(['app-today:owner-1']);
     const hash = await linkCodeHash(SESSION);
     expect(forwards.map(r => [r.method, new URL(r.url).pathname + new URL(r.url).search, r.headers.get('x-waldo-do-name'), r.headers.get('x-waldo-app-session-hash'), r.headers.get('x-waldo-app-contract')]).sort())
       .toEqual([
@@ -131,12 +153,13 @@ describe('the today route', () => {
       ]);
   });
 
-  it('needs a credential, takes no query and answers only a read', async () => {
+  it('needs a credential, takes no query and answers only a read, each refusal in the error contract', async () => {
     forwards.length = 0;
-    expect((await get('/app/v1/today', {})).status).toBe(401);
-    expect((await get('/app/v1/today?day=2026-11-07')).status).toBe(400);
-    expect((await get('/app/v1/today', { authorization: `Bearer ${CREDENTIAL}` }, 'POST')).status).toBe(405);
-    expect((await handleApp(new Request('https://w.test/app/v1/today', { headers: { authorization: `Bearer ${CREDENTIAL}` } }), env(true), auth))!.status).toBe(429);
+    const refused = async (response: Promise<Response | null>) => { const answer = (await response)!; return [answer.status, appTodayApiErrorV1Schema.parse(await answer.json()).error, answer.headers.get('retry-after')]; };
+    expect(await refused(get('/app/v1/today', {}))).toEqual([401, 'unavailable', null]);
+    expect(await refused(get('/app/v1/today?day=2026-11-07'))).toEqual([400, 'invalid_request', null]);
+    expect(await refused(get('/app/v1/today', { authorization: `Bearer ${CREDENTIAL}` }, 'POST'))).toEqual([405, 'unavailable', null]);
+    expect(await refused(handleApp(new Request('https://w.test/app/v1/today', { headers: { authorization: `Bearer ${CREDENTIAL}` } }), env(true), auth))).toEqual([429, 'unavailable', '60']);
     expect(forwards).toEqual([]);
   });
 });

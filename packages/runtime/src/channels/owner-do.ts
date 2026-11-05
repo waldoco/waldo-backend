@@ -5199,6 +5199,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           },
           checked: (code, detail) => log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code, detail }),
         })(entry);
+        // An owner who never opens the app's approvals list still has a granted change of unknown outcome settled.
+        await desk.settleUnknownGrants().catch(() => log({ trace, hop: 'grant_settle', ms: 0, ok: false, code: 'failed' }));
         if (queued) {
           log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: queued, job_profile: 'reader' });
           await armTaskJobsWake(storage, Date.now());

@@ -4,6 +4,7 @@ import { callBudget } from '../evals/nightly/budget';
 import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
 import { FILE_SCENARIOS } from '../evals/nightly/file-scenarios';
 import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
+import type { NightlyScenario } from '../evals/nightly/scenarios';
 import { runTrial } from '../evals/nightly/trial';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
 
@@ -43,4 +44,20 @@ it('the next-meeting control passes using no file tool, and a file tool call fai
   const wandered = scriptedGateway({ rules: [{ match: /next meeting/, rounds: [{ toolCalls: [{ name: 'workspace_list', arguments: {} }] }, { text: 'Standup at 10:00.' }] }] });
   const off = await runTrial(scenario('f2-next-meeting-no-files'), { gateway: wandered, budget: callBudget(40), model: WALDO_CHAT_MODEL });
   expect(failedReceipts(scenario('f2-next-meeting-no-files').receipts!, off)).toEqual(['no file tool was called for a question no file answers']);
+});
+
+it("the owner's own unzip holds across the follow-up calls a 30-entry archive needs, in one turn", async () => {
+  const names = Array.from({ length: 30 }, (_, i) => `minutes/week-${String(i + 1).padStart(2, '0')}.md`);
+  const big: NightlyScenario = { ...scenario('f1-whats-in-this-zip'), steps: [{ say: 'Unzip this for me.', upload: { filename: 'minutes.zip', mime: 'application/zip', zip: Object.fromEntries(names.map((name) => [name, `# ${name}`])) } }] };
+  const model = scriptedGateway({ rules: [{ match: /Unzip this/, rounds: [
+    { toolCalls: [{ name: 'extract_archive', arguments: { file_id: UPLOAD, revision: 1 } }] },
+    { toolCalls: [{ name: 'extract_archive', arguments: { file_id: UPLOAD, revision: 1, entries: names.slice(0, 25) } }] },
+    { toolCalls: [{ name: 'extract_archive', arguments: { file_id: UPLOAD, revision: 1, entries: names.slice(25) } }] },
+    { text: 'Unpacked all 30 weekly minutes into minutes/.' },
+  ] }] });
+  const record = await runTrial(big, { gateway: model, budget: callBudget(40), model: WALDO_CHAT_MODEL });
+  expect(record.status).toBe('ran');
+  expect(record.tools.map((tool) => [tool.name, tool.ok])).toEqual([['extract_archive', true], ['extract_archive', true], ['extract_archive', true]]);
+  const kept = (record.final_state as { workspace: { path: string }[] }).workspace.map((file) => file.path).filter((path) => path.includes('/minutes/minutes/'));
+  expect(kept).toHaveLength(30);
 });
