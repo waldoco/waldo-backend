@@ -39,31 +39,27 @@
   </td></tr>
 
   <tr><td align="center">
-    <img src="https://www.heywaldo.in/email/sign-in-hero.png" width="440" alt="" style="display:block;width:100%;max-width:440px;height:auto;border:0;outline:none;border-radius:24px;">
+    <img src="https://www.heywaldo.in/email/sign-in-waldo.png" width="112" height="83" alt="" style="display:block;width:112px;height:auto;border:0;outline:none;">
   </td></tr>
 
-  <tr><td align="center" class="h1 ink" style="padding:28px 12px 12px;font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:32px;line-height:38px;font-weight:600;letter-spacing:-0.02em;color:#1A1A1A;">Here&rsquo;s your<br>sign-in code</td></tr>
-  <tr><td align="center" class="muted" style="padding:0 16px;font-size:16px;line-height:24px;letter-spacing:-0.01em;color:#6B6B68;">Enter it in Waldo to pick up where you left off. It&rsquo;s only good for a little while.</td></tr>
+  <tr><td align="center" class="h1 ink" style="padding:24px 12px 12px;font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:32px;line-height:38px;font-weight:600;letter-spacing:0.01em;color:#1A1A1A;">Here&rsquo;s your<br>sign-in code</td></tr>
+  <tr><td align="center" class="muted" style="padding:0 16px;font-size:16px;line-height:24px;letter-spacing:0.01em;color:#6B6B68;">Enter it in Waldo to pick up where you left off. It&rsquo;s only good for a little while.</td></tr>
 
   <tr><td align="center" style="padding:32px 0 12px;">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td class="pill" align="center" style="padding:14px 28px 14px 36px;border-radius:999px;background:#1A1A1A;">
-        <span class="code" style="font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:34px;line-height:42px;font-weight:600;letter-spacing:0.18em;font-variant-numeric:tabular-nums;color:#FAFAF8;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
+      <td class="pill" align="center" style="padding:14px 32px;border-radius:999px;background:#1A1A1A;">
+        <span class="code" style="font-family:ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:34px;line-height:42px;font-weight:600;letter-spacing:0.01em;font-variant-numeric:tabular-nums;color:#FAFAF8;-webkit-user-select:all;user-select:all;">{{ .Token }}</span>
       </td>
     </tr></table>
   </td></tr>
-  <tr><td align="center" class="muted" style="font-size:14px;line-height:17px;font-weight:500;letter-spacing:-0.01em;color:#6B6B68;">Tap here to copy OTP</td></tr>
+  <tr><td align="center" class="muted" style="font-size:14px;line-height:17px;font-weight:500;letter-spacing:0.01em;color:#6B6B68;">Tap here to copy OTP</td></tr>
 
-  {{ if eq .Token "123456" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:-0.01em;color:#9A9A96;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
+  {{ if eq .Token "123456" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:0.01em;color:#9A9A96;">Yes, really. We double-checked too.</td></tr>{{ else if eq (len .Token) 6 }}{{ if eq (slice .Token 0 3) "007" }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:0.01em;color:#9A9A96;">Licensed to sign in.</td></tr>{{ else if eq (slice .Token 0 3) (slice .Token 3 6) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:0.01em;color:#9A9A96;">A code that says everything twice. Must be important.</td></tr>{{ else if and (eq (index .Token 0) (index .Token 5)) (eq (index .Token 1) (index .Token 4)) (eq (index .Token 2) (index .Token 3)) }}<tr><td align="center" class="faint" style="padding-top:20px;font-size:13px;line-height:17px;font-style:italic;letter-spacing:0.01em;color:#9A9A96;">Reads the same both ways. Like a good plan.</td></tr>{{ end }}{{ end }}
 
   <tr><td align="center" style="padding:48px 0 0;">
     <table role="presentation" width="160" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid rgba(26,26,26,0.08);font-size:0;line-height:0;">&nbsp;</td></tr></table>
   </td></tr>
-  <tr><td align="center" class="faint" style="padding:20px 16px 0;font-size:12px;line-height:18px;letter-spacing:-0.01em;color:#9A9A96;">
-    Didn&rsquo;t ask for this? You can ignore it. Nothing happens without the code.<br>
-    Waldo will never ask you for this code. Not in chat, not by email, not even nicely.<br><br>
-    Sent to {{ .Email }}
-  </td></tr>
+  <tr><td align="center" class="muted" style="padding:20px 24px 0;font-size:13px;line-height:20px;letter-spacing:0.01em;color:#6B6B68;">Didn&rsquo;t ask for this? Ignore this email; nothing happens without the code. Waldo will never ask you for it, not in chat, not by email, not even nicely. This code was sent to {{ .Email }}.</td></tr>
 
 </table>
 </td></tr>

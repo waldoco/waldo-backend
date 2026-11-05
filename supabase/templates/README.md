@@ -18,9 +18,10 @@ to new ones.
 - Variables used: `{{ .Token }}`, `{{ .Email }}`. No links, so the email stays
   code-only and phishing-shaped lookalikes have nothing to imitate.
 - Brand: tokens, type and mascot follow `DESIGN-SYSTEM.md` in `waldo-landing`.
-  SF Pro Rounded (`ui-rounded`) for all text, ink pill as the primary surface,
-  orange only in the dome. The logo PNG keeps its Corben wordmark.
-- Images: upload `assets/*.png` (2x, transparent corners) so they resolve at
+  SF Pro Rounded (`ui-rounded`) for all text at +0.01em tracking, ink pill as
+  the primary surface, the content-pose mascot on a transparent background.
+  The logo PNG keeps its Corben wordmark.
+- Images: upload `assets/*.png` (2x/3x, transparent) so they resolve at
   `https://www.heywaldo.in/email/<name>.png` before pasting the template, or
   change that base URL in the template. Gmail blocks SVG and data URIs.
 - Fonts: no web fonts are loaded. Apple clients render SF Pro Rounded from the
