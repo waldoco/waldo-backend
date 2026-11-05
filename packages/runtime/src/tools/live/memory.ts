@@ -61,9 +61,9 @@ const quotesWords = (part: string, quote: string): boolean => {
 const hallKinds = { facts: ['fact', 'health'], events: ['event', 'followup'], discoveries: ['observation', 'pattern'], preferences: ['preference', 'routine'], advice: ['goal'] } as const;
 const READ_BUDGET_BYTES = 65_536;
 // What a read shows of a claim: the statement and its provenance. Aliases are search keys and stay out.
-const provenance = (claim: Claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, evidence: claim.evidence, source: claim.source, origin: claim.origin,
+const provenance = (claim: Claim, validity: boolean) => ({ id: claim.id, kind: claim.kind, text: claim.text, evidence: claim.evidence, source: claim.source, origin: claim.origin,
   source_ref: claim.source_ref ?? null, verification_status: claim.verification_status ?? 'unverified', supersedes_id: claim.supersedes_id ?? null,
-  last_seen_at: claim.last_seen_at, area: claim.area ?? 'unsorted', valid_from: claim.valid_from ?? null, valid_to: claim.valid_to ?? null });
+  last_seen_at: claim.last_seen_at, area: claim.area ?? 'unsorted', ...(validity ? { valid_from: claim.valid_from ?? null, valid_to: claim.valid_to ?? null } : {}) });
 const overlapsEvidence = (text: string, evidence: string, start: number, end: number): boolean => {
   for (let at = text.indexOf(evidence); at !== -1; at = text.indexOf(evidence, at + 1)) if (at < end && at + evidence.length > start) return true;
   return false;
@@ -142,7 +142,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const rows = ids ? store.recall('', ids.length, ids) : near.length ? fuseRanked([lexical, store.recall('', near.length, near)], (claim) => claim.id) : lexical;
         // What used to be true joins only when the model asks for it, and only where this deployment offers it.
         const past = include_replaced === true && deps.validity === true && !ids ? (query === undefined ? store.replacedClaims(limit) : store.recallReplaced(query, limit)) : [];
-        const selected = [...rows.filter(claim => !claim.valid_to), ...past].filter(claim => claim.origin !== 'untrusted' && !hidden(claim) && (!ctx.memoryOutside || outsideSafe(claim)) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind)) && (!area || (claim.area ?? 'unsorted') === area)).slice(0, ids ? ids.length : limit).map(provenance);
+        const selected = [...rows.filter(claim => !claim.valid_to), ...past].filter(claim => claim.origin !== 'untrusted' && !hidden(claim) && (!ctx.memoryOutside || outsideSafe(claim)) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind)) && (!area || (claim.area ?? 'unsorted') === area)).slice(0, ids ? ids.length : limit).map(claim => provenance(claim, deps.validity === true));
         // Whole claims only: one that would push the result past the budget is named, never cut into partial words.
         const claims: typeof selected = []; const omitted_claim_ids: number[] = []; let bytes = 0;
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }

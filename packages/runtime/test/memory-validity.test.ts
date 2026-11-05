@@ -65,6 +65,25 @@ describe('the nightly retires a contradicted claim', () => {
     expect(ids(store)['Works at Acme']!.status).toBe('dismissed');
   }));
 
+  it('never links an untrusted or agent claim as the replacement of an owner claim, so forgetting it leaves the owner\'s row alone', () => withStore(store => {
+    seed(store);
+    store.add({ ...owned('Works at Globex'), origin: 'untrusted', source: 'inferred', evidence: 'a shared page' }, T1);
+    applyClaimOps(store, ops({ retire: [{ id: 1, replaced_by_text: 'Works at Globex', evidence: 'I left Acme in October' }] }), T2, 'owner, day', undefined, grounding, false, undefined, false, true);
+    const all = ids(store);
+    expect(all['Works at Acme']).toMatchObject({ status: 'superseded', valid_to: T2 });
+    expect(all['Works at Globex']!.supersedes_id).toBeNull();
+    store.purge([all['Works at Globex']!.id], T2);
+    expect(ids(store)['Works at Acme']).toMatchObject({ status: 'superseded' });
+    expect(store.lineage([all['Works at Globex']!.id])).toEqual([all['Works at Globex']!.id]);
+  }));
+
+  it('the store itself refuses the link unless the replacement is the owner\'s', () => withStore(store => {
+    seed(store);
+    store.add({ ...owned('Works at Globex'), origin: 'agent', source: 'inferred' }, T1);
+    store.retire(1, T2, 2);
+    expect(ids(store)['Works at Globex']!.supersedes_id).toBeNull();
+  }));
+
   it('is offered to the model as a schema field and as rules that keep the old claim as history', () => {
     expect(CLAIM_OPS_SCHEMA.required).toContain('retire');
     expect(RETIRE_RULES.join(' ')).toMatch(/never what only a mail/);
@@ -109,6 +128,22 @@ describe('what used to be true', () => {
     expect((await read(true, { query: 'leeds', include_replaced: true })).map(claim => [claim.text, claim.valid_to])).toEqual([['Lives in Leeds', T2]]);
     expect((await read(true, { include_replaced: true })).map(claim => claim.text).sort()).toEqual(['Lives in Leeds', 'Lives in Pune']);
     expect((await read(false, { query: 'leeds', include_replaced: true })).map(claim => claim.text)).toEqual([]);
+    expect(Object.keys((await read(false, { query: 'pune' }))[0]!)).not.toContain('valid_to');
+    expect(Object.keys((await read(true, { query: 'pune' }))[0]!)).toEqual(expect.arrayContaining(['valid_from', 'valid_to']));
+  }));
+});
+
+describe('replaced rows nothing points to are forget leftovers', () => {
+  it('a replaced row whose newer version is gone is never shown as history, while a retired claim with no successor still is', () => withStore((store, sql) => {
+    store.add(owned('Lives in Leeds'), T1);
+    store.correct(1, owned('Lives in Pune'), T2);
+    store.add(owned('Plays squash on Fridays'), T1);
+    store.retire(3, T2);
+    expect(store.recallReplaced('leeds')).toHaveLength(1);
+    sql.exec('DELETE FROM claims WHERE id = 2');
+    expect(store.recallReplaced('leeds')).toEqual([]);
+    expect(store.replacedClaims(5).map(claim => claim.text)).toEqual(['Plays squash on Fridays']);
+    expect(store.recallReplaced('squash').map(claim => claim.text)).toEqual(['Plays squash on Fridays']);
   }));
 });
 
