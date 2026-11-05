@@ -388,8 +388,9 @@ function redactCards(text: string, counts: Map<RedactionKind, number>): string {
   let output = '';
   let last = 0;
   for (const match of found) {
-    output += text.slice(last, match.index) + '[REDACTED_CREDIT_CARD]';
-    last = match.index + match[0].length;
+    const at = match.index!;
+    output += text.slice(last, at) + '[REDACTED_CREDIT_CARD]';
+    last = at + match[0].length;
   }
   increment(counts, 'credit_card', found.length);
   return output + text.slice(last);
