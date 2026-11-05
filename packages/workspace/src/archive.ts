@@ -1,3 +1,4 @@
+import { Inflate } from 'fflate';
 import { LIMITS, validatePath, WorkspaceError, type WorkspaceStore } from './store';
 
 // Hard limits for unpacking an archive inside the Worker. These are safety bounds (zip bombs, memory), not judgment:
@@ -82,7 +83,12 @@ export const readZipDirectory = (bytes: Uint8Array): readonly ArchiveEntry[] => 
 export type EntrySkip = 'symlink' | 'encrypted' | 'unsupported_method' | 'too_large' | 'compression_ratio' | 'corrupt';
 const EntryFailure = class extends Error { constructor(public readonly reason: EntrySkip) { super(reason); } };
 
-// Inflates one entry. Output is capped while it streams: never more than the entry claims, the entry cap, or the ratio,
+// Compressed bytes handed to the inflater at a time. DEFLATE expands at most about 1032:1, so one slice can never become
+// more than about 1 MiB, and inflation stops within one slice of the cap. The platform DecompressionStream is not used:
+// workerd inflates whatever it is handed without backpressure, so a capped reader still lets a bomb fill the isolate.
+export const INFLATE_SLICE_BYTES = 1024;
+
+// Inflates one entry. Output is capped as it is produced: never more than the entry claims, the entry cap, or the ratio,
 // so a header that lies cannot make the Worker hold more than the cap. A checksum mismatch is corruption.
 export const inflateEntry = async (bytes: Uint8Array, entry: ArchiveEntry, budget: number): Promise<Uint8Array> => {
   if (entry.kind === 'symlink') throw new EntryFailure('symlink');
@@ -98,26 +104,24 @@ export const inflateEntry = async (bytes: Uint8Array, entry: ArchiveEntry, budge
     if (entry.compressed_size !== entry.size) throw new EntryFailure('corrupt');
     out = data.slice();
   } else {
-    const stream = new DecompressionStream('deflate-raw');
-    const writer = stream.writable.getWriter();
-    writer.write(data).catch(() => undefined);
-    writer.close().catch(() => undefined);
-    const reader = stream.readable.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
+    let stop: EntrySkip | null = null;
+    const inflater = new Inflate((chunk) => {
+      if (stop) return;
+      total += chunk.byteLength;
+      if (total > limit) stop = total > entry.size ? 'corrupt' : 'too_large';
+      else if (!ratioOk(total)) stop = 'compression_ratio';
+      else chunks.push(chunk);
+    });
     try {
-      for (;;) {
-        const part = await reader.read();
-        if (part.done) break;
-        total += part.value.byteLength;
-        if (total > limit) { await reader.cancel().catch(() => undefined); throw new EntryFailure(total > entry.size ? 'corrupt' : 'too_large'); }
-        if (!ratioOk(total)) { await reader.cancel().catch(() => undefined); throw new EntryFailure('compression_ratio'); }
-        chunks.push(part.value);
+      for (let at = 0; at < data.length && !stop; at += INFLATE_SLICE_BYTES) {
+        const next = Math.min(at + INFLATE_SLICE_BYTES, data.length);
+        inflater.push(data.subarray(at, next), next === data.length);
       }
-    } catch (error) {
-      if (error instanceof EntryFailure) throw error;
-      throw new EntryFailure('corrupt');
-    }
+      if (data.length === 0) inflater.push(new Uint8Array(0), true);
+    } catch { throw new EntryFailure('corrupt'); }
+    if (stop) throw new EntryFailure(stop);
     out = new Uint8Array(total);
     let offset = 0;
     for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
