@@ -1,5 +1,5 @@
 import { LIFE_AREAS } from '@waldo/contracts';
-import { CONSTELLATION_BLOCK_MAX_CHARS, constellationBlock, FACTS_BLOCK_MAX_CHARS, fittingLines, MEMORY_HEADER, pinnedIn, PROFILE_BLOCK_MAX_CHARS, profileClaims, profileLine, statedReading, type Claim, type ClaimStore } from './claims';
+import { CONSTELLATION_BLOCK_MAX_CHARS, constellationBlock, FACTS_BLOCK_MAX_CHARS, fittingLines, MEMORY_HEADER, pinnedIn, PROFILE_BLOCK_MAX_CHARS, profileClaims, profileLine, statedReading, withoutBringUpLess, type Claim, type ClaimStore } from './claims';
 import { EMBED_TIMEOUT_MS } from './semantic-recall';
 import { RECALL_MAX_CHARS, recallForTurn, type RecallEpisodes, type RecallLeg, type RecallNear, type TurnRecall } from './turn-recall';
 
@@ -90,10 +90,11 @@ export const selectMemory = async (input: Readonly<{
   room: Readonly<{ core: number; recalled: number }>; deadlineMs: number; reviewed: Reviewed;
   holds: Holds; episodes?: RecallEpisodes; current?: string; semantic?: RecallNear;
 }>): Promise<Readonly<{ core: string; recalled: string; shown: Readonly<{ claims: readonly number[]; nodes: readonly number[] }>; failed: readonly RecallLeg[]; revision: number }>> => {
-  const core = coreMemory(input.view, input.room.core, input.reviewed);
+  const view = input.turn === 'machine' ? withoutBringUpLess(input.view) : input.view;
+  const core = coreMemory(view, input.room.core, input.reviewed);
   const episodes = input.turn === 'owner' ? input.episodes : undefined;
   const recalled = await recallWithin({
-    claims: input.view, question: input.text, room: input.room.recalled, holds: input.holds, stubs: true,
+    claims: view, question: input.text, room: input.room.recalled, holds: input.holds, stubs: true,
     ...(input.previous === undefined ? {} : { previous: input.previous }),
     ...(episodes ? { episodes, ...(input.current === undefined ? {} : { current: input.current }) } : {}),
     ...(input.semantic ? { semantic: input.semantic } : {}),
@@ -101,6 +102,6 @@ export const selectMemory = async (input: Readonly<{
   return {
     core, recalled: recalled.text,
     shown: { claims: [...new Set([...ids(core, 'c'), ...ids(recalled.text, 'c')])], nodes: ids(core, 'n') },
-    failed: recalled.failed, revision: input.view.revision(),
+    failed: recalled.failed, revision: view.revision(),
   };
 };

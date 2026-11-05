@@ -44,7 +44,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
@@ -418,7 +418,11 @@ export const createOwnerResponder = (
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
   // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
   // any memory block or in recall. Every other turn reads the store as it is.
-  const memoryFor = (store: ClaimStore): ClaimStore => backgroundSourceTaint !== 'external' ? store : outsideView(store);
+  // A turn that speaks unprompted never sees a claim the owner asked Waldo to bring up less; the nightly review reads memory whole.
+  const memoryFor = (store: ClaimStore): ClaimStore => {
+    const read = backgroundSourceTaint !== 'external' ? store : outsideView(store);
+    return ownerTurnActive ? read : withoutBringUpLess(read);
+  };
   // Option B's core, in the same shape as the block it replaces; its room is capped whatever the caller leaves.
   const selectedCore = (view: ClaimStore, _text: string, room: number) => coreMemory(view, Math.min(room, CORE_ROOM), privateOwner!.memorySelection!.reviewed());
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
