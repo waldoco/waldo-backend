@@ -94,6 +94,13 @@ describe('WALDO_RECALL_CHAIN in the Worker config', () => {
   });
 });
 
+describe('WALDO_FILE_TOOLS in the Worker config', () => {
+  it('is off in production and on in staging', () => {
+    expect(parsed.vars.WALDO_FILE_TOOLS).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_FILE_TOOLS).toBe('1');
+  });
+});
+
 describe('PLANNING_BRIEF in the Worker config', () => {
   it('is off in production until a judged planning Brief passes, and on in staging', () => {
     expect(parsed.vars.PLANNING_BRIEF).toBe('0');
