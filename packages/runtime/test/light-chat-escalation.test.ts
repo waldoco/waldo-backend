@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { OPENAI_PROVIDER, OWNER_MODELS, type ErrorCode, type ModelName } from '@waldo/contracts';
+import { ConversationTree, OPENAI_PROVIDER, OWNER_MODELS, type ConversationEntry, type ErrorCode, type ModelName } from '@waldo/contracts';
 import { LIGHT_ROLE_MAX_TOKENS, lightChatRoles, type LightChatRoles } from '../src/channels/async-tools';
 import { toContextHealthMaterial } from '../src/channels/health-context';
 import { createOwnerResponder, type OwnerContextIntegration } from '../src/channels/owner-turn';
@@ -9,6 +9,7 @@ import { STOPPED_REPLY } from '../src/channels/turn-control';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
+import { ownerExchangeHistory } from '../src/conversation/compaction';
 import { createReplyStream, type ReplyDraftSurface } from '../src/conversation/reply-stream';
 import { ownerModels } from '../src/llm/owner-routes';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -178,7 +179,8 @@ it('a stop during the light step ends the turn with no strong call; a steer duri
   expect(next.control.unconsumed()).toEqual([]);
 });
 
-it('a newer owner message waiting on the chat is folded by the strong role, not by the light step', async () => {
+// A message folded into the turn is not stamped as the owner's own words, so a turn with one waiting takes no light step.
+it('a newer owner message waiting on the chat takes the turn to the strong role, which folds it; no light step is taken', async () => {
   const folded: string[] = [];
   const waiting = [{ id: 'msg-2', text: 'and book a table for two', at: Date.parse('2026-10-20T08:19:00Z') }];
   const second = secondMessages({ chat: () => ({ turnId: 'light-second', waiting: () => waiting.filter((message) => !folded.includes(message.id)), fold: (id) => { folded.push(id); return true; } }), timezone: () => clock.timezone });
@@ -187,12 +189,14 @@ it('a newer owner message waiting on the chat is folded by the strong role, not 
     [LIGHT_ROLE]: () => heard,
     [STRONG_ROLE]: (request: LLMGatewayRequest) => request.request.tool_turns?.length ? { text: CHAT_REPLY } : heard,
   });
-  const reply = await responder(gateway, { owner: { lightChat: true, newerOwnerMessages: second.round }, tools: [getContextHandler(clock), second.handler] })
+  const hops: TurnLogEntry[] = [];
+  const reply = await responder(gateway, { owner: { lightChat: true, newerOwnerMessages: second.round }, tools: [getContextHandler(clock), second.handler], log: (entry) => hops.push(entry) })
     .respond(turn('light-second', 'Find somewhere for dinner tonight.'), time);
   expect(reply).toBe(CHAT_REPLY);
   expect(folded).toEqual(['msg-2']);
-  expect(models()).toEqual([LIGHT_ROLE, STRONG_ROLE, STRONG_ROLE]);
-  expect(String(requests[1]!.request.messages.at(-1)?.content)).toContain('msg-2');
+  expect(models()).toEqual([STRONG_ROLE, STRONG_ROLE]);
+  expect(String(requests[0]!.request.messages.at(-1)?.content)).toContain('msg-2');
+  expect(routes(hops)).toEqual([]);
 });
 
 // Synthetic health, distinctive so a leak is found by its words: the energy window line and the driver.
@@ -255,14 +259,57 @@ it('the light step reads the owner\'s own exchange and no machine turn: a Brief 
 });
 
 const BRIEF_TARGET = { surface: 'app', messageId: 'brief-1-reply', conversationRef: 'app-main', authorId: null, authorIsBot: true, text: BRIEF_REPLY, truncated: false, sourceTaint: 'external', provenance: { author: 'waldo', forwarded: false } } as const;
-it.each([
+const OTHERS_WORDS = [
   ['a reply to a Brief', { replyTo: BRIEF_TARGET }],
   ['a forwarded part', { parts: [{ authorship: 'owner', text: 'Thanks, ' }, { authorship: 'forwarded', text: BRIEF_REPLY }] }],
-] as const)('%s takes no light step: the strong role answers it, though the light role would have', async (_kind, extra) => {
+  ['a transcribed recording with no attachment', { parts: [{ authorship: 'media_note', text: '[Owner sent a voice message.]' }, { authorship: 'file_transcript', text: `Thanks. ${BRIEF_REPLY}` }] }],
+] as const;
+it.each(OTHERS_WORDS)('%s takes no light step: the strong role answers it, though the light role would have', async (_kind, extra) => {
   const { gateway, models } = fake({ [LIGHT_ROLE]: () => ({ text: LIGHT_REPLY }), [STRONG_ROLE]: CHAT_SCRIPT });
   const hops: TurnLogEntry[] = [];
   expect(await responder(gateway, { log: (entry) => hops.push(entry) }).respond({ ...turn('light-quoted', 'Thanks'), ...extra }, time)).toBe(CHAT_REPLY);
   expect(models()).toEqual([STRONG_ROLE]);
+  expect(routes(hops)).toEqual([]);
+});
+
+// Words the owner did not write, and Waldo's answer to them, stay out of every later light step too.
+it.each(OTHERS_WORDS)('after %s, a later light step reads neither it nor Waldo\'s answer to it; the strong role reads both', async (_kind, extra) => {
+  const echo: Script = (request) => JSON.stringify(request.request.messages).includes('violet-harbour') ? { text: 'Noted, the violet-harbour review stays at 11:00.' } : { text: CHAT_REPLY };
+  const { gateway, requests, models } = fake({ [LIGHT_ROLE]: LIGHT_SCRIPT, [STRONG_ROLE]: echo });
+  const owner = responder(gateway);
+  await owner.respond({ ...turn('light-others-1', 'Thanks'), ...extra }, time);
+  expect(await owner.respond(turn('light-others-2', 'What is on today?'), time)).toContain('violet-harbour');
+  expect(models()).toEqual([STRONG_ROLE, LIGHT_ROLE, STRONG_ROLE]);
+  expect(requests[1]!.request.messages.map((message) => message.role)).toEqual(['user']);
+  expect(JSON.stringify(requests[1]!.request)).not.toContain('violet-harbour');
+  expect(JSON.stringify(requests[2]!.request.messages.slice(0, -1))).toContain('Noted, the violet-harbour review');
+});
+
+// The chain as the owner DO writes it: a scheduled message and a "did not finish" notice hang under whatever row was last,
+// an owner row in flight included; only the reply the conversation path wrote for an owner input is that input's answer.
+it('the owner\'s own exchange keeps stamped owner inputs and their written replies, and nothing else on the chain', () => {
+  const tree = new ConversationTree();
+  let parentId: string | null = null;
+  const row = (id: string, role: 'user' | 'assistant', extra: Partial<ConversationEntry> = {}, parent = parentId) => {
+    tree.append({ id, ownerId: 'owner', chatId: 'app-main', parentId: parent, threadAnchorId: null, surface: 'app', modelPayload: id, appPayload: id, modelProjection: { mode: 'include' }, role, ...extra });
+    parentId = id;
+  };
+  const typed = { inputOrigin: 'owner', ownerWordsOnly: true } as const;
+  row('o1', 'user', typed); row('o1-reply', 'assistant');
+  row('o2', 'user', typed); row('scheduled-x', 'assistant');
+  row('o3', 'user', typed); row('o3-did-not-finish', 'assistant', { operation: { id: 'o3', state: 'interrupted' } });
+  row('o4', 'user', { inputOrigin: 'owner' }); row('o4-reply', 'assistant');
+  row('m1', 'user', { inputOrigin: 'machine' }); row('m1-reply', 'assistant');
+  row('o5', 'user', typed);
+  expect(ownerExchangeHistory(tree, 'o5').map((message) => message.content)).toEqual(['o1', 'o1-reply', 'o2', 'o3', 'o5']);
+});
+
+it('over the spend ceiling no light step is taken: every call is on the auxiliary route already', async () => {
+  const { gateway, models, tools } = fake({ [LIGHT_ROLE]: LIGHT_SCRIPT, [STRONG_ROLE]: CHAT_SCRIPT });
+  const hops: TurnLogEntry[] = [];
+  await responder(gateway, { owner: { lightChat: true, spend: () => ({ spentUsd: 6, ceilingUsd: 5 }) }, log: (entry) => hops.push(entry) }).respond(turn('light-capped', 'Thanks, that is all.'), time);
+  expect(models()).toEqual([LIGHT_ROLE]);
+  expect(tools(0)).not.toContain('escalate');
   expect(routes(hops)).toEqual([]);
 });
 

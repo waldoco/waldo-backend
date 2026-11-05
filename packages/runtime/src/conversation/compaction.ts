@@ -86,15 +86,16 @@ export const compactedHistory = (tree: ConversationTree, leafId: string, startRe
   return { messages: [summary, ...tail.messages], stats: { ...tail.stats, estimated_tokens: tail.stats.estimated_tokens + estimateMessageTokens(summary), compacted: 1 } };
 };
 
-// The owner's own exchange on a chain: their typed messages and Waldo's direct replies to them, windowed like the chain.
-// Machine turns (Briefs, reminders, cards, reports, health triggers) and their replies are left out, and so is everything a
-// live summary covers, with the summary itself, since it can carry them; a row with no stamped origin is left out too.
+// The owner's own exchange on a chain: inputs entirely in the owner's own words, and Waldo's reply to each (the row the
+// conversation path wrote for it), windowed like the chain. Everything else is left out: machine turns (Briefs, reminders,
+// cards, reports, health triggers), an owner input that carried someone else's words or replied to a message, scheduled
+// rows and notices, rows stored before inputs were stamped, and everything a live summary covers, with the summary itself.
 export const ownerExchangeHistory = (tree: ConversationTree, leafId: string, settings: CompactionSettings = COMPACTION): readonly ConversationModelMessage[] => {
   const entries = chainFrom(tree, leafId);
   const live = settings.enabled ? liveCompaction(tree, leafId) : null;
   const after = live ? entries.slice(entries.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : entries;
-  const owner = new Set(after.filter((entry) => entry.role === 'user' && entry.inputOrigin === 'owner').map((entry) => entry.id));
-  const kept = after.filter((entry) => owner.has(entry.id) || (entry.role === 'assistant' && entry.parentId !== null && owner.has(entry.parentId)));
+  const owner = new Set(after.filter((entry) => entry.role === 'user' && entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true).map((entry) => entry.id));
+  const kept = after.filter((entry) => owner.has(entry.id) || (entry.role === 'assistant' && entry.parentId !== null && owner.has(entry.parentId) && entry.id === `${entry.parentId}-reply`));
   return windowModelMessages(conversationModelMessages(kept), settings.budgetTokens).messages;
 };
 
