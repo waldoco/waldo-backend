@@ -107,7 +107,7 @@ import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type Pi
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
-import { lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
+import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
@@ -1648,7 +1648,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
-      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
+      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX) || record.id.startsWith(LOOKUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
         try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
@@ -1901,7 +1901,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const current=async()=>{await this.appAuthority(name,hash);};
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
-            ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
+            ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
