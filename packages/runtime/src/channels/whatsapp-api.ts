@@ -171,10 +171,19 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       // keeps the text-with-instructions form, which every WhatsApp client shows.
       const interactive = options.replyButtons === true ? replyButtonsBody(b.fallback_text ?? b.text, buttons) : null;
       if (interactive) {
-        const ack = await call({ to, ...(b.quote_message_id ? { context: { message_id: b.quote_message_id } } : {}), ...interactive });
-        const id = ackId(ack);
-        if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, (b.fallback_text ?? b.text).trim());
-        return ack;
+        // Meta refusing the interactive form (a 4xx that is not the window's 131047) falls back to the text form once, so the
+        // owner still gets the card. A timeout or a 5xx may have gone out, and a window refusal must reach the window layer: both propagate.
+        let ack: unknown;
+        try { ack = await call({ to, ...(b.quote_message_id ? { context: { message_id: b.quote_message_id } } : {}), ...interactive }); }
+        catch (error) {
+          if (!(error instanceof WhatsAppApiError) || error.status >= 500 || error.code === 131047) throw error;
+          console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, code: 'interactive_refused_text_fallback', status: error.status }));
+        }
+        if (ack !== undefined) {
+          const id = ackId(ack);
+          if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, (b.fallback_text ?? b.text).trim());
+          return ack;
+        }
       }
       const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
       // A text message carries at most 4,096 characters, so a longer one goes in parts on the same split as the surface adapter.
@@ -462,7 +471,9 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       const tapped = forwarded ? null : waButtonReplySchema.safeParse(message);
       if (tapped?.success) {
         seq += 1;
-        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, message: { message_id: 0, chat: { id: ownerNum } } } });
+        // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that approval.
+        const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? { card_ref: message.context.id } : {};
+        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, ...cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
       } else push({ whatsapp_type: 'interactive' });
       continue;
     }

@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
-import { WHATSAPP_REPLY_BODY_MAX, waButtonReplySchema, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WHATSAPP_REPLY_BODY_MAX, WhatsAppApiError, waButtonReplySchema, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { deliverHeldWhatsApp, whatsappWindowCaller, whatsappWindowOpen } from '../src/channels/whatsapp-window';
 import { sha256Hex } from '../src/connectors/google';
 import { stableJson } from '../src/context-composer/canonical';
@@ -72,11 +72,31 @@ describe('a card sent with reply buttons', () => {
   });
 });
 
+describe('Meta refusing the interactive form', () => {
+  const refusing = (status: number, code: number) => vi.fn(async (_url: string, init?: RequestInit) =>
+    JSON.parse(String(init?.body)).type === 'interactive' ? Response.json({ error: { code } }, { status }) : Response.json({ messages: [{ id: 'wamid.text' }] }));
+  const card = { chat_id: OWNER, text: 'Move the 10:30?', reply_markup: keyboard(['Do it', 'a:p1'], ['Not now', 'd:p1']) };
+  it('falls back to the text form once, with the reply instructions, on a definite refusal', async () => {
+    const fetcher = refusing(400, 131009);
+    const ack = await shim(fetcher as ReturnType<typeof graph>, true)('sendMessage', card);
+    expect(bodies(fetcher as ReturnType<typeof graph>).map(body => body.type)).toEqual(['interactive', 'text']);
+    expect(bodies(fetcher as ReturnType<typeof graph>)[1]!.text.body).toBe('Move the 10:30?\n\n- Do it: reply "a:p1"\n- Not now: reply "d:p1"');
+    expect(ack).toMatchObject({ messages: [{ id: 'wamid.text' }] });
+  });
+  it('does not resend after a server error or a timeout, which may have gone out, nor for the window, which the window layer owns', async () => {
+    for (const [status, code] of [[500, 1], [400, 131047]] as const) {
+      const fetcher = refusing(status, code);
+      await expect(shim(fetcher as ReturnType<typeof graph>, true)('sendMessage', card)).rejects.toBeInstanceOf(WhatsAppApiError);
+      expect(bodies(fetcher as ReturnType<typeof graph>).map(body => body.type)).toEqual(['interactive']);
+    }
+  });
+});
+
 describe('a tap on a reply button', () => {
   const tap = (id: unknown, extra: object = {}) => ({ id: 'wamid.tap', from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id, title: 'Do it' } }, ...extra });
   it('is the callback a typed approval reply is, from the owner, and nothing else', () => {
     const { updates, sources } = whatsappIngressUpdates([tap('a:p12', { context: { from: '15550009999', id: 'wamid.card' } })], SUBJECT, 0);
-    expect(updates).toEqual([{ update_id: expect.any(Number), callback_query: { id: 'wa-wamid.tap', from: { id: OWNER, is_bot: false }, data: 'a:p12', message: { message_id: 0, chat: { id: OWNER } } } }]);
+    expect(updates).toEqual([{ update_id: expect.any(Number), callback_query: { id: 'wa-wamid.tap', from: { id: OWNER, is_bot: false }, data: 'a:p12', card_ref: 'wamid.card', message: { message_id: 0, chat: { id: OWNER } } } }]);
     expect(sources).toEqual(['wamid.tap']);
     expect(whatsappIngressUpdates([{ id: 'wamid.typed', from: SUBJECT, type: 'text', text: { body: 'a:p12' } }], SUBJECT, 0).updates[0]).toMatchObject({ callback_query: { data: 'a:p12' } });
   });
@@ -113,7 +133,7 @@ const tainted = async () => {
   const args = { title: 'Pay the invoice from the email' };
   return { tool: 'create_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The email asked for it.', source: 'external' as const };
 };
-const journey = (name: string, work: (f: { desk: ReturnType<typeof approvalDesk>; fetcher: ReturnType<typeof graph>; tap: (data: string) => Promise<void>; texts: () => string[]; sql: SqlStorage; ran: string[] }) => Promise<void>) =>
+const journey = (name: string, work: (f: { desk: ReturnType<typeof approvalDesk>; fetcher: ReturnType<typeof graph>; tap: (data: string, cardRef?: string) => Promise<void>; texts: () => string[]; sql: SqlStorage; ran: string[] }) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
     const { kv, sql } = state.storage, fetcher = graph(), ran: string[] = [];
     kv.put('wa_last_inbound_ms', NOW - HOUR);
@@ -123,8 +143,9 @@ const journey = (name: string, work: (f: { desk: ReturnType<typeof approvalDesk>
       timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work), appIdentity: () => true,
       replayTaintedAction: async proposal => { ran.push(proposal.tool); return { status: 'done', message: 'Created.' }; } });
     // A tap arrives as the webhook describes it and goes through the same ingress the owner object uses.
-    const tap = async (data: string) => {
-      const { updates } = whatsappIngressUpdates([{ id: `wamid.tap.${data}`, from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: data, title: 'Tap' } } }], SUBJECT, 0);
+    const tap = async (data: string, cardRef?: string) => {
+      const { updates } = whatsappIngressUpdates([{ id: `wamid.tap.${data}`, from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: data, title: 'Tap' } },
+        ...(cardRef ? { context: { from: '15550009999', id: cardRef } } : {}) }], SUBJECT, 0);
       await desk.callback((updates[0] as { callback_query: Parameters<typeof desk.callback>[0] }).callback_query, 'trace');
     };
     await work({ desk, fetcher, tap, texts: () => bodies(fetcher).flatMap(body => body.type === 'text' ? [String(body.text.body)] : []), sql, ran });
@@ -153,6 +174,28 @@ describe('the card journey over WhatsApp reply buttons', () => {
       expect(status()).toBe('skipped');
       expect(texts()).toEqual(['Already handled.', 'Already handled.']);
       expect(ran).toEqual([]);
+    });
+  });
+
+  it('a tap is accepted from the card the owner was shown, and refused from any other message while the approval waits', async () => {
+    await journey('buttons-card-bound', async ({ desk, tap, texts, sql }) => {
+      const id = await desk.proposeTaintedAction(await tainted());
+      const deferred = () => sql.exec<{ deferred_at: number | null }>('SELECT deferred_at FROM ledger WHERE id = ?', id).one().deferred_at;
+      await tap(`d:${id}`, 'wamid.some-other-message');
+      expect(deferred()).toBeNull();
+      expect(texts().at(-1)).toContain('no longer current');
+      await tap(`d:${id}`, 'wamid.out');
+      expect(deferred()).not.toBeNull();
+    });
+  });
+
+  it('an Allow tap on a standing-grant card goes through the desk\'s own rule and makes no grant here', async () => {
+    await journey('buttons-standing-grant', async ({ desk, tap, texts, sql }) => {
+      const id = await desk.proposeStandingGrant({ scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '08:00', to: '19:00' }, weekdays: [1, 2, 3, 4, 5], min_lead_minutes: 30 },
+        limits: { max_per_day: 3, timezone: 'UTC' }, valid_from: NOW, expires_at: NOW + 20 * 24 * HOUR });
+      await tap(`a:${id}`, 'wamid.out');
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('rejected');
+      expect(texts().at(-1)).toContain('no grant was made');
     });
   });
 });
