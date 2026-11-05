@@ -79,6 +79,6 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['raise more than one deep-work block for Friday', 'move or cancel the Board review, the Standup or the Design review', 'say a change is made rather than waiting on their yes', 'ask for an answer tonight', 'quote a score, a number or a reading', 'put a health word in a card title', 'add a protocol or a health routine to the day'],
       voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short: the plan for the morning in a sentence or two with its reason for them, and the card to approve when they like. Not a schedule or a lecture.' },
     },
-    receipts: [sawHealth, noReading, effects('calendar.change.proposed', { max: 2 }, 'at most a couple of cards'), calendarUnchanged(HEAVY_THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Close drafts nothing'), modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
+    receipts: [sawHealth, noReading, effects('calendar.change.proposed', { max: 1 }, 'at most one card'), calendarUnchanged(HEAVY_THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Close drafts nothing'), modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
   },
 ];

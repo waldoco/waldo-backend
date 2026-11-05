@@ -9,7 +9,7 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { NIGHTLY_ID } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { setHealthMemory } from '../src/channels/health-memory';
-import { interruptBook } from '../src/channels/interruptions';
+import { interruptBook, INTERRUPTS_KEY } from '../src/channels/interruptions';
 import { loopBook } from '../src/channels/loops';
 import { standingGrants } from '../src/channels/standing-grants';
 import { ownerSpokeSince } from '../src/channels/episodes';
@@ -325,6 +325,19 @@ describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () =
       expect(model.cards).toEqual([]);
       expect(await approvals()).toEqual([]);
       expect(dayPlanBook(state.storage.sql).read(DAY).find(row => row.card === 'card:close')?.state).toBe('held');
+    });
+  });
+
+  it('with the day\'s interruptions spent and the gap not passed, the Close still goes with its card and is not charged', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
+    await owned('tomorrow-close-spent', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      const spent = { day: book.spent().day, count: 2, urgent: 1, last: Date.now() - 60_000 };
+      state.storage.kv.put(INTERRUPTS_KEY, spent);
+      await card('card:close');
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
+      expect(state.storage.kv.get(INTERRUPTS_KEY)).toEqual(spent);
+      expect(book.question()).toBeNull();
     });
   });
 

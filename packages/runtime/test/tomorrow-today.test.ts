@@ -36,6 +36,10 @@ describe('the owner\'s day around a clock change', () => {
     expect(dayWindow(Date.parse('2027-03-28T10:00:00Z'), 'Europe/London')).toEqual({ from: Date.parse('2027-03-28T00:00:00Z'), to: Date.parse('2027-03-28T23:00:00Z') });
     expect(cardExpiry(Date.parse('2026-10-25T20:30:00Z'), 'Europe/London', [])).toBe(Date.parse('2026-10-26T00:00:00Z'));
   });
+  it('ends at the jump where the clock skips midnight, so a card made late that evening is not already expired', () => {
+    expect(dayWindow(Date.parse('2026-09-06T03:30:00Z'), 'America/Santiago').to).toBe(Date.parse('2026-09-06T04:00:00Z'));
+    expect(cardExpiry(Date.parse('2026-03-08T04:30:00Z'), 'America/Havana', [])).toBe(Date.parse('2026-03-08T05:00:00Z'));
+  });
 });
 
 describe('the Close with TOMORROW_TODAY', () => {
