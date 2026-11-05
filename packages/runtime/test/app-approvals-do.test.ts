@@ -9,10 +9,12 @@ import { sha256Hex } from '../src/connectors/google';
 import { emailProposal } from './fixtures/email-send';
 
 const proof = vi.hoisted(() => ({
-  outputs: [] as any[][], telegram: [] as { method: string; body: any }[], moved: 0, sentRaw: [] as string[], eventTag: 'etag-3pm',
+  outputs: [] as any[][], telegram: [] as { method: string; body: any }[], moved: 0, sentRaw: [] as string[], eventTag: 'etag-3pm', light: 0,
 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
+  // The light step (WALDO_LIGHT_CHAT) is the request that offers escalate; it hands the turn over.
+  if (input.tools?.some((tool: { name?: string }) => tool.name === 'escalate')) { proof.light += 1; return { id: 'approvals-light-step', output: [{ type: 'function_call', call_id: 'light-escalate', name: 'escalate', arguments: '{}' }], output_text: '', usage: { input_tokens: 1, output_tokens: 1 } }; }
   return { id: 'approvals-fixture-reply', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : 'I proposed moving it to 4.', usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, body: any) => {
@@ -29,8 +31,9 @@ vi.mock('../src/connectors/google', async load => {
   }) };
 });
 
-it('approves from the app with exactly one effect, refuses a stale digest, and retires the other surface', async () => {
-  proof.outputs = []; proof.telegram = []; proof.moved = 0; proof.sentRaw = []; proof.eventTag = 'etag-3pm';
+// With WALDO_LIGHT_CHAT on, the owner's turn takes its light step first and hands over; the card is the chat model's, as off.
+it.each(['0', '1'])('approves from the app with exactly one effect, refuses a stale digest, and retires the other surface (WALDO_LIGHT_CHAT %s)', async (lightChat) => {
+  proof.outputs = []; proof.telegram = []; proof.moved = 0; proof.sentRaw = []; proof.eventTag = 'etag-3pm'; proof.light = 0;
   const name = `approvals-app-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const SECRET = 'fictional-approvals-router-secret-0000000000', DIRECTORY = 'https://approvals.fixture.invalid', OWNER = '10000000-0000-0000-0000-0000000000a1', AUTH = '20000000-0000-0000-0000-0000000000a1', EMAIL = 'owner@example.test', TELEGRAM = 424242;
@@ -56,7 +59,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-webhook-secret', WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'approvals-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key',
-      WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined, GOOGLE_CLIENT_ID: 'fictional-client', GOOGLE_CLIENT_SECRET: 'fictional-secret' };
+      WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined, GOOGLE_CLIENT_ID: 'fictional-client', GOOGLE_CLIENT_SECRET: 'fictional-secret', WALDO_LIGHT_CHAT: lightChat };
     const instance = new OwnerDO(state, settings as never);
     state.storage.kv.put('do_name', name); state.storage.kv.put('origin', 'https://app.fixture.invalid'); state.storage.kv.put('telegram_subject', String(TELEGRAM));
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]);
@@ -78,6 +81,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       await vi.waitFor(() => expect(state.storage.kv.get<any>(`app:inbox-record:${sent.message_id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
       expect(state.storage.kv.get('owner_principal_ref')).toBe(`prn_${OWNER.replaceAll('-', '')}`);
       expect(proof.telegram.filter(call => call.method === 'sendMessage')).toEqual([]);
+      expect(proof.light).toBe(lightChat === '1' ? 1 : 0);
 
       const history = appHistoryResultV1Schema.parse(await (await app('/chat/main', undefined, credential)).json());
       const reply = history.messages.find(message => message.role === 'assistant' && message.parent_id === sent.message_id)!;

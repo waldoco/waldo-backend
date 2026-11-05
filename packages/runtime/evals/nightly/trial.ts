@@ -44,14 +44,16 @@ export type Step =
   // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
   | Readonly<{ triage: readonly Change[] }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
-// call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave.
+// call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave. light_steps are the
+// owner turns that took a light step (WALDO_LIGHT_CHAT), light_handovers those the light model handed to the chat model.
 export type TrialMetrics = Readonly<{
-  calls: number; rounds: number; failed_calls: number; fallback_calls: number;
+  calls: number; rounds: number; failed_calls: number; fallback_calls: number; light_steps: number; light_handovers: number;
   find_tools: number; use_tool: number; groups_loaded: number; peak_result_chars: number;
   input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number;
   usd: number; unpriced_calls: number;
 }>;
-export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
+// light_chat: the owner's turns run with WALDO_LIGHT_CHAT on.
+export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed; light_chat?: true }>;
 export type TrialRecord = Readonly<{
   status: 'ran' | 'harness_error' | 'budget_exhausted';
   // The class of the error that stopped a harness_error trial, never its message, so a failed night is diagnosable.
@@ -66,6 +68,8 @@ export type TrialRecord = Readonly<{
   effects: readonly Effect[];
   final_state: unknown;
   metrics: TrialMetrics;
+  // How each light step ended, in turn order ('answered', 'escalated', 'tool', 'truncated', 'failed').
+  light_routes: readonly string[];
 }>;
 
 const groupsOf = (call: Readonly<{ arguments: string }>): readonly string[] => {
@@ -105,7 +109,8 @@ type Meter = { calls: number; rounds: number; failed_calls: number; fallback_cal
   input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number; usd: number; unpriced_calls: number };
 const newMeter = (): Meter => ({ calls: 0, rounds: 0, failed_calls: 0, fallback_calls: 0, find_tools: 0, use_tool: 0, groups: new Set(), peak_result_chars: 0,
   input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, usd: 0, unpriced_calls: 0 });
-const metricsOf = ({ groups, ...meter }: Meter): TrialMetrics => ({ ...meter, groups_loaded: groups.size });
+const metricsOf = ({ groups, ...meter }: Meter, lightRoutes: readonly string[]): TrialMetrics => ({ ...meter, groups_loaded: groups.size,
+  light_steps: lightRoutes.length, light_handovers: lightRoutes.filter((route) => route !== 'answered').length });
 
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
@@ -130,7 +135,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const seededReviewed = (claim: Readonly<{ id: number }>) => seeded.has(claim.id);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability, ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
@@ -217,6 +222,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   }
   const names = new Set([...world.handlers, ...skills.capability.handlers].map((handler) => `tool_${handler.name}`));
   const tools = entries.filter((entry) => names.has(entry.hop));
+  const lightRoutes = entries.filter((entry) => entry.hop === 'light_route').map((entry) => entry.detail ?? '');
   return {
     status, ...(error ? { error } : {}), transcript,
     tools: tools.map((entry) => ({ name: entry.hop.slice(5), ok: entry.ok })),
@@ -224,6 +230,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     model_inputs: modelInputs,
     effects: world.effects(),
     final_state: world.finalState(),
-    metrics: metricsOf(meter),
+    metrics: metricsOf(meter, lightRoutes),
+    light_routes: lightRoutes,
   };
 };
