@@ -32,6 +32,17 @@ const OWN_BLOCK_ORIGINS: readonly RunOrigin[] = ['owner', 'owner_standing', 'wal
 const onPrimary = (calendarId: string | undefined, account: string) =>
   calendarId === undefined || calendarId === 'primary' || calendarId.toLowerCase() === account.toLowerCase();
 
+// The resource a grant is bound to, so a second grant for the same class and resource supersedes the first instead of sitting
+// beside it, and the day's budget is kept per resource whichever grant uses it.
+const resourceOf = (terms: AppAutonomyGrantTermsV1) => terms.scope.class === 'calendar.move_own_block' ? `${terms.scope.class}:${terms.scope.account.toLowerCase()}` : terms.scope.class;
+// The classes this server can run. Every other class reads not_yet, and nothing writes a grant for it.
+export const AVAILABLE_CLASSES: readonly AutonomyClassV1[] = ['calendar.move_own_block'];
+// The contract shows at most this many grants of one class.
+export const GRANTS_PER_CLASS_MAX = 10;
+export class GrantLimitError extends Error {
+  constructor() { super(`at most ${GRANTS_PER_CLASS_MAX} grants of one kind`); }
+}
+
 const localParts = (ms: number, timeZone: string) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' })
     .formatToParts(new Date(ms)).map(part => [part.type, part.value]));
@@ -52,6 +63,12 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
   const holds = (grant: StandingGrantRecord, now: number) => grant.ended === null && grant.terms.valid_from <= now && now < grant.terms.expires_at;
   const list = () => [...storage.kv.list({ prefix: GRANT })].map(([key]) => read(key.slice(GRANT.length))).filter(grant => grant !== null);
   const write = (grant: StandingGrantRecord) => { storage.kv.put(GRANT + grant.grant_id, standingGrantRecordSchema.parse(grant)); return grant; };
+  const active = (now = deps.now()) => list().filter(grant => holds(grant, now));
+  // Not ended and not past its end, whether or not it has started.
+  const standing = (now = deps.now()) => list().filter(grant => grant.ended === null && now < grant.terms.expires_at);
+  // How the day's uses of a grant are counted in the effect ledger: by class and resource on the owner's local day.
+  const usage = (grant: StandingGrantRecord, now: number) => ({ owner_ref: deps.ownerRef(), grant_ref: resourceOf(grant.terms), area: 'calendar', action: 'own_block',
+    local_day: localParts(now, grant.terms.limits.timezone).day, timezone: grant.terms.limits.timezone });
 
   const ownBlock = (change: OwnBlockChange, origin: RunOrigin | undefined): GrantDecision => {
     if (!deps.enabled()) return { refused: 'off' };
@@ -81,8 +98,7 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
     return { use: {
       grant_id, revision, class: 'calendar.move_own_block',
       // Keyed by class and resource, never by grant id, so a changed or re-made grant cannot reset the day's count.
-      quota: { owner_ref: deps.ownerRef(), grant_ref: `calendar.move_own_block:${grant.terms.scope.account.toLowerCase()}`, area: 'calendar', action: 'own_block',
-        local_day: localParts(now, timezone).day, timezone, max_per_day },
+      quota: { ...usage(grant, now), max_per_day },
       authorize: () => {
         const current = read(grant_id);
         return deps.enabled() && paused() === null && current !== null && current.revision === revision && holds(current, deps.now());
@@ -94,10 +110,22 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
     // Whether Waldo marks the events it creates as its own, which only matters while grants can act.
     enabled: deps.enabled,
     list,
+    active,
     paused,
+    usage,
     ownBlock,
+    // A grant for a class and resource that already holds one supersedes it: the same id at the next revision, so anything
+    // evaluated against the old terms is refused at dispatch and the day's count carries over.
     grant(terms: AppAutonomyGrantTermsV1, via: SurfaceNameV1): StandingGrantRecord {
-      return write({ grant_id: deps.newId(), revision: 1, terms: appAutonomyGrantTermsV1Schema.parse(terms), created_at: deps.now(), created_via: via, ended: null });
+      const parsed = appAutonomyGrantTermsV1Schema.parse(terms);
+      if (!AVAILABLE_CLASSES.includes(parsed.scope.class)) throw new Error('that class cannot be granted yet');
+      return storage.transactionSync(() => {
+        const held = standing().filter(grant => grant.terms.scope.class === parsed.scope.class);
+        const current = held.find(grant => resourceOf(grant.terms) === resourceOf(parsed));
+        if (current) return write({ ...current, revision: current.revision + 1, terms: parsed, created_via: via });
+        if (held.length >= GRANTS_PER_CLASS_MAX) throw new GrantLimitError();
+        return write({ grant_id: deps.newId(), revision: 1, terms: parsed, created_at: deps.now(), created_via: via, ended: null });
+      });
     },
     // A wider or renewed grant keeps its id and raises its revision, so anything evaluated against the old terms is refused.
     change(grantId: string, terms: AppAutonomyGrantTermsV1): StandingGrantRecord {
@@ -114,6 +142,14 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
         if (!current || current.ended) return false;
         write({ ...current, ended: { at: deps.now(), reason: 'revoked' } });
         return true;
+      });
+    },
+    // Ends every grant of a class still running, for "stop doing that on your own".
+    revokeClass(cls: AutonomyClassV1): number {
+      return storage.transactionSync(() => {
+        const ending = list().filter(grant => grant.ended === null && grant.terms.scope.class === cls && deps.now() < grant.terms.expires_at);
+        for (const grant of ending) write({ ...grant, ended: { at: deps.now(), reason: 'revoked' } });
+        return ending.length;
       });
     },
     pause(via: SurfaceNameV1): void { if (!paused()) storage.kv.put(PAUSED, { at: deps.now(), via }); },
