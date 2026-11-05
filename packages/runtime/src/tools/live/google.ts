@@ -357,7 +357,7 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
 const SPILL_OPENING_MAX = 300;
 const SPILL_RECIPIENTS = 5;
 const SPILL_HEADER_MAX = 120;
-const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads the full result in order.';
+const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads what was stored, in order.';
 type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; recipients_capped?: true; body_source?: ThreadMessage['body_source']; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
 const recipients = (list: readonly string[] | undefined) => list === undefined ? {} : { addresses: list.slice(0, SPILL_RECIPIENTS), ...(list.length > SPILL_RECIPIENTS ? { more: list.length - SPILL_RECIPIENTS } : {}) };
 const fitsSpill = (view: unknown) => JSON.stringify(view).length <= TOOL_SPILL_VIEW_MAX_CHARS;
