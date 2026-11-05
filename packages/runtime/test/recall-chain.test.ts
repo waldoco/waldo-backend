@@ -303,7 +303,7 @@ describe('the recall chain switched off', () => {
 });
 
 describe('turn recall with the recall chain', () => {
-  it('inlines a hit\'s surface and its links, and falls back to the plain line when the links do not fit', async () => {
+  it('inlines a hit\'s surface and its links, and falls back to the surface alone when the links do not fit', async () => {
     const result = await inOwner(async state => {
       const world = await seed(state);
       const recall = (handler: typeof world.episodes, room: number) => recallForTurn({ claims: { recall: () => [] }, episodes: episodesFromSearchTool(handler as never, OWNER_TURN), question: 'what was the Lisbon flight thing', room, holds: () => false });
@@ -313,9 +313,8 @@ describe('turn recall with the recall chain', () => {
     expect(result.on).toMatch(/→ (c\d+|\d+|background_runs:\S+|task_jobs:\S+) (reply|reply_to|after|before|learned|started)/);
     expect(result.off).not.toMatch(/whatsapp|→/);
     expect(result.tight.length).toBeLessThanOrEqual(520);
-    // The surface comes with the links, in the room left once the plain line is placed.
-    expect(result.tight).toMatch(/, ref \d+\] .*Lisbon/);
-    expect(result.tight).not.toMatch(/whatsapp|→/);
+    expect(result.tight).toMatch(/whatsapp, ref \d+\] .*Lisbon/);
+    expect(result.tight).not.toMatch(/→/);
     // A link to a message that is itself recalled is left out.
     expect(result.on).not.toMatch(/→ \d+ reply_to/);
   });
@@ -347,19 +346,34 @@ describe('turn recall under its budget with the recall chain', () => {
       };
       const sides = { on: await answers(world.episodes), off: await answers(searchEpisodesHandler(world.index)) };
       const recall = async (side: keyof typeof sides, room: number, count: number) => (await recallForTurn({ claims: { recall: () => notes.slice(0, count) }, episodes: sides[side], question: 'the Lisbon flight and offsite agenda', room, holds: () => false, stubs: true })).text;
-      // Eight notes keep the budget bound at every room; two leave room for links at the top of the sweep.
-      const rooms: { room: number; on: string; off: string }[] = [];
-      for (const count of [8, 2]) for (let room = 500; room <= 3_000; room += 1) rooms.push({ room, on: await recall('on', room, count), off: await recall('off', room, count) });
-      return rooms;
+      // Twenty and eight notes keep the budget bound at every room; two leave room for links at the top of the sweep.
+      const rooms: { room: number; count: number; on: string; off: string }[] = [];
+      for (const count of [20, 8, 2]) for (let room = 500; room <= 3_000; room += 1) rooms.push({ room, count, on: await recall('on', room, count), off: await recall('off', room, count) });
+      const hits = await sides.on.search();
+      return { rooms, hits: hits.length, surfaceOf: Object.fromEntries(hits.map(hit => [hit.ref, hit.surface!])) };
     });
+    const { rooms, hits, surfaceOf } = result;
     const refs = (text: string) => [...text.matchAll(/ref (\d+)\]/g)].map(match => match[1]!);
     const notes = (text: string) => [...text.matchAll(/\[c(\d+)/g)].map(match => match[1]!);
     // The budget binds across the sweep, and the chain-on side does show surfaces and links somewhere in it.
-    const short = result.filter(({ on, off }) => !refs(off).every(ref => refs(on).includes(ref)) || !notes(off).every(id => notes(on).includes(id)));
+    const short = rooms.filter(({ on, off }) => !refs(off).every(ref => refs(on).includes(ref)) || !notes(off).every(id => notes(on).includes(id)));
     expect(short.map(({ room }) => room)).toEqual([]);
-    expect(result[2_500]!.off).toMatch(/more matches did not fit/);
-    expect(result.some(({ on }) => /whatsapp, ref \d+\] .* → /.test(on))).toBe(true);
-    expect(result.every(({ room, on }) => on.length <= room)).toBe(true);
+    expect(rooms[2_500]!.off).toMatch(/more matches did not fit/);
+    expect(rooms.some(({ on }) => /whatsapp, ref \d+\] .* → /.test(on))).toBe(true);
+    expect(rooms.every(({ room, on }) => on.length <= room)).toBe(true);
+    // A hit goes without its surface only when the surface alone does not fit in the room left, the cut line's reserve included.
+    const cutText = (count: number) => `(${count} more matches did not fit here; read_memory and search_episodes reach them.)`;
+    const bare = rooms.flatMap(({ room, count, on }) => {
+      if (on === '') return [];
+      const printed = /\n(\(\d+ more matches did not fit[^\n]*\))\n/.exec(on)?.[1];
+      const used = on.length - (printed === undefined ? 0 : printed.length + 1);
+      const reserve = cutText(Math.min(count, 24) + hits).length + 1;
+      return [...on.matchAll(/^- \[[a-z_]+, [\d-]+, ref (\d+)\]/gm)]
+        .filter(([, ref]) => used + `${surfaceOf[ref!]}, `.length + reserve <= Math.min(room, 3_000))
+        .map(([, ref]) => ({ room, count, ref }));
+    });
+    expect(bare).toEqual([]);
+    expect(rooms.some(({ on }) => /whatsapp, ref \d+\] [^→\n]*$/m.test(on))).toBe(true);
   });
 });
 
