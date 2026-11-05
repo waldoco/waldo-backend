@@ -79,6 +79,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
+  WALDO_RECALL_CHAIN?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

@@ -61,6 +61,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it off'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it off'),
+  WALDO_RECALL_CHAIN: gap('the trial\'s search_episodes runs without the recall chain, and its world keeps no runs, tasks or cards to link; test/recall-chain.test.ts measures it; staging has it off'),
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
