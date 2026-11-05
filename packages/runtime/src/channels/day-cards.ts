@@ -76,6 +76,14 @@ export const dayPlanBook = (sql: Sql) => {
         'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
       ).toArray().map(({ card, ...delivery }) => [card, delivery]));
     },
+    // The owner's day for unasked messages, from the Brief to the Close: each at the time it went out, else its planned or
+    // pinned time, else its default. With day cards off the pinned or default times still bound the day.
+    window(day: string, timezone: string): Readonly<{ opens: number; closes: number }> {
+      const rows = this.read(day), went = this.deliveries(day), pins = this.pins();
+      const at = (card: CardId) => went.get(card)?.delivered_at
+        ?? localToEpoch(`${day}T${rows.find(row => row.card === card)?.time ?? pins[card] ?? cardFor(card)!.defaultTime}`, timezone);
+      return { opens: at('card:brief'), closes: at('card:close') };
+    },
     // Whether the card reached the owner today, on any surface, so a change can revise it.
     reached(day: string, card: string): boolean {
       return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');

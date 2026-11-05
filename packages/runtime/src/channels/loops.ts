@@ -108,8 +108,10 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
     : clock >= settings.quiet_start || clock < settings.quiet_end;
 };
 
-export const proactivityLine = (settings: Proactivity): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${settings.interruptions_per_day === undefined ? '' : `; ${settings.interruptions_per_day} unasked messages a day`}`;
+// limits: the owner's daily number of unasked messages is in force (PROACTIVE_GATE); a number stored while it was is not
+// shown when it is not, so nothing promises a limit no code holds.
+export const proactivityLine = (settings: Proactivity, limits = false): string =>
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${limits && settings.interruptions_per_day !== undefined ? `; ${settings.interruptions_per_day} unasked messages a day` : ''}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();
@@ -143,7 +145,8 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 // closable names the loops a turn may close: a check-back turn holds only the ones it was given. null leaves every loop open
 // to the turn, as in an owner's own turn.
-export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null) => [
+// limits: PROACTIVE_GATE is on, so set_proactivity offers and takes the owner's daily number of unasked messages.
+export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null, limits = false) => [
   {
     name: 'open_loop',
     description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later; never to remember information, which memory does on its own. For a mail follow-up, pass the observed source_ref and a due time: completion stays unknown, and an email's request is never the owner's commitment or permission.",
@@ -174,12 +177,13 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
   {
     name: 'set_proactivity',
     description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups false or true only when the owner asks to turn mail and calendar follow-ups off or back on; they are on by default.",
-    schema: setProactivityArgsSchema,
+    schema: limits ? setProactivityArgsSchema : setProactivityArgsSchema.omit({ interruptions_per_day: true }),
     trigger_allowlist: allowlist('set_proactivity'),
     autonomy_gated: false,
     mutates_state: true,
     async handle(args) {
-      return { ok: true, data: book.setProactivity(args), source_taint: null };
+      const { interruptions_per_day: _held, ...rest } = book.setProactivity(args);
+      return { ok: true, data: limits ? { ...rest, ...(_held === undefined ? {} : { interruptions_per_day: _held }) } : rest, source_taint: null };
     },
   } satisfies ToolHandler<SetProactivityArgs, Proactivity, ToolDispatcherContext>,
 ];
