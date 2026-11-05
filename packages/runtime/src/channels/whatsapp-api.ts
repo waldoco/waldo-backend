@@ -469,11 +469,12 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     }
     if (message.type === 'interactive') {
       const tapped = forwarded ? null : waButtonReplySchema.safeParse(message);
-      if (tapped?.success) {
+      // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that
+      // approval. A tap that names no card cannot be checked, so it is not a decision.
+      const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? message.context.id : null;
+      if (tapped?.success && cardRef !== null) {
         seq += 1;
-        // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that approval.
-        const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? { card_ref: message.context.id } : {};
-        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, ...cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
+        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, card_ref: cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
       } else push({ whatsapp_type: 'interactive' });
       continue;
     }

@@ -93,7 +93,7 @@ describe('Meta refusing the interactive form', () => {
 });
 
 describe('a tap on a reply button', () => {
-  const tap = (id: unknown, extra: object = {}) => ({ id: 'wamid.tap', from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id, title: 'Do it' } }, ...extra });
+  const tap = (id: unknown, extra: object = {}) => ({ id: 'wamid.tap', from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id, title: 'Do it' } }, context: { from: '15550009999', id: 'wamid.card' }, ...extra });
   it('is the callback a typed approval reply is, from the owner, and nothing else', () => {
     const { updates, sources } = whatsappIngressUpdates([tap('a:p12', { context: { from: '15550009999', id: 'wamid.card' } })], SUBJECT, 0);
     expect(updates).toEqual([{ update_id: expect.any(Number), callback_query: { id: 'wa-wamid.tap', from: { id: OWNER, is_bot: false }, data: 'a:p12', card_ref: 'wamid.card', message: { message_id: 0, chat: { id: OWNER } } } }]);
@@ -113,6 +113,8 @@ describe('a tap on a reply button', () => {
     ['an id past 256 characters', tap(`a:${'p'.repeat(255)}`)],
     ['a missing id', tap(undefined)],
     ['a list reply', { id: 'wamid.l', from: SUBJECT, type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'a:p1', title: 'x' } } }],
+    ['no card named (no context)', tap('a:p12', { context: undefined })],
+    ['an empty card name', tap('a:p12', { context: { from: '15550009999', id: '' } })],
     ['no button_reply', { id: 'wamid.n', from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply' } }],
   ])('%s is the shared unsupported message, never a decision', (_what, message) => {
     const { updates } = whatsappIngressUpdates([message as never], SUBJECT, 0);
@@ -143,7 +145,7 @@ const journey = (name: string, work: (f: { desk: ReturnType<typeof approvalDesk>
       timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work), appIdentity: () => true,
       replayTaintedAction: async proposal => { ran.push(proposal.tool); return { status: 'done', message: 'Created.' }; } });
     // A tap arrives as the webhook describes it and goes through the same ingress the owner object uses.
-    const tap = async (data: string, cardRef?: string) => {
+    const tap = async (data: string, cardRef: string | undefined = 'wamid.out') => {
       const { updates } = whatsappIngressUpdates([{ id: `wamid.tap.${data}`, from: SUBJECT, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: data, title: 'Tap' } },
         ...(cardRef ? { context: { from: '15550009999', id: cardRef } } : {}) }], SUBJECT, 0);
       await desk.callback((updates[0] as { callback_query: Parameters<typeof desk.callback>[0] }).callback_query, 'trace');

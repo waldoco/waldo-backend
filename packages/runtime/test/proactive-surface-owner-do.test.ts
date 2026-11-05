@@ -371,6 +371,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       await outboxPass(owner, state, ctx);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
       expect(copies(state).map(record => record.id)).toEqual([`${WHATSAPP_COPY_PREFIX}${update.id}`]);
+      // The copy is fresh only as long as the update itself, not a day.
+      expect(copies(state)[0]!.expiresAt).toBe(update.expiresAt);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
     }, { surface: 'both' });
@@ -755,7 +757,7 @@ describe('revisions and quiet hours under both surfaces', { timeout: 20_000 }, (
   const queueUpdate = async (owner: Owner, ctx: Ctx, extra: Partial<FinalRecord>) => {
     const app = (owner as unknown as { setup(channel: 'app'): { finalOutbox: TelegramFinalOutbox } }).setup('app');
     await app.finalOutbox.enqueue({ id: 'update:rev-1', trace: 'update:rev-1', payload: { chat_id: ctx.appSubject, text: UPDATE_TEXT }, ownerSubject: String(ctx.appSubject),
-      doName: ctx.name, expiresAt: ctx.now + 3_600_000, update: { recordId: 1 }, ...extra });
+      doName: ctx.name, expiresAt: ctx.now + 3 * 3_600_000, update: { recordId: 1 }, ...extra });
   };
   const quietNine = (state: DurableObjectState) => loopBook(state.storage.sql, { newId: () => 'q', now: () => AT }).setProactivity({ volume: 'normal', quiet_start: '08:00', quiet_end: '10:00' });
   const interrupts = (state: DurableObjectState) => state.storage.kv.get('proactive_interrupts_v1') ?? null;

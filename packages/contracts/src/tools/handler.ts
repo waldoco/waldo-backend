@@ -125,6 +125,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'workspace_list',
   'workspace_read',
   'workspace_search',
+  // extract_archive: entry names and the listing are the archive's own text.
+  'extract_archive',
   'browse_page',
   'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
