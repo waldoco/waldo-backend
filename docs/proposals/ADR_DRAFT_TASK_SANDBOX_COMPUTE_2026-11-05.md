@@ -117,15 +117,27 @@ What survives a stop:
 - The adapter passes no `env` at all.
 - The image is built with no secrets. A guard test checks that the start call carries no `env`, and that the image definition names no secret.
 - Cloudflare's recommended credential pattern, "The secret lives in the Worker's environment and is never passed into the sandbox" **[verified]** (outbound-traffic URL), is the default here anyway, because a code task needs no secret.
-- Health data never enters a sandbox:
+- Synced health readings never enter a sandbox:
   - The brain stages workspace files only, never a health-plane read.
   - The worker profile holds no health tool (`tasks/profiles.ts`).
+  - This keeps ADR-0081's destination rules: health-plane values reach only the destinations that ADR names, and a sandbox is not one of them.
+- After F1, the workspace can hold health documents the owner sent, such as a lab report. Those are covered by the staging rule in §6.
 
 ### 6. Inputs and outputs are only workspace files
 
 - **Inputs.** The task brief names workspace `file_id`s and revisions. The brain exports those exact revisions and writes them under `/workspace/in/` before the first `exec`.
   - Workspace limits apply: 10 MB per file and the owner quota.
   - A file the brief does not name never enters the sandbox.
+- **Staging rule: owner-selected files only.** These are hard checks in the brain, not the model's judgment.
+  - A file may be staged only if the owner chose it for this task. Either they named or sent it in the owner turn that started the task, or they confirmed it on the task's card. The model cannot add a file it found through `workspace_list`.
+  - A task started from a turn that read outside text cannot stage files without that owner confirmation.
+  - Any task that stages an owner file runs with internet off. A task with an egress grant (§4) cannot stage owner files, so no grant can become a way to send the owner's files out.
+  - Health documents the owner sent (a lab report, for example) follow the same rule and nothing looser:
+    - They are staged only when the owner chose that file for the task.
+    - What the task produces from them goes back only to the owner's workspace, as `sandbox_output`.
+    - That output is never written to memory, logs or traces.
+    - It leaves the workspace only when the owner asks for that specific item.
+  - Waldo does not try to decide which files "contain health information". Owner selection is the boundary, so no classifier or keyword rule is needed.
 - **Outputs.** When the attempt ends, the brain reads `/workspace/out/` and writes each file to the owner's workspace with provenance `sandbox_output`, which `@waldo/workspace` already defines. Each write has an operation id derived from (job, attempt, path).
   - This is the one writer: the brain applies the result once.
   - The quota, the per-file cap and the per-call write cap that `extract_archive` uses all apply.
