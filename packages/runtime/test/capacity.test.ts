@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { CAPACITY_BODY_KEY, CAPACITY_EVIDENCE, CAPACITY_NOTE_KEY, CAPACITY_SET_ASIDE_KEY, calendarShape, capacityDays, capacityNote, cardCapacityNote, keepCapacityNote, runCapacityPass, type CapacityPassDeps } from '../src/channels/capacity';
 import type { CalendarItem, GoogleClient } from '../src/connectors/google';
 import { claimStore } from '../src/memory/claims';
-import { BODY_WITHDRAWN, CAPACITY_LINES, capacityContext, NO_CALENDAR, NO_SHARED_HEALTH } from '../src/prompt/capacity';
+import { BODY_WITHDRAWN, CAPACITY_LINES, capacityContext, capacityInput, NO_CALENDAR, NO_SHARED_HEALTH } from '../src/prompt/capacity';
 import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 import { DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
 
@@ -244,6 +244,13 @@ describe('the note a day card reads', () => {
 });
 
 describe('the note in a trace', () => {
+  it('the pass input withholds its body paragraph whole too', () => {
+    const input = JSON.stringify([{ role: 'user', content: capacityInput({ now: '2026-11-05 03:00', note: NOTE, health: 'Recovery zone: low.\nTrend: declining.', withdrawn: false, calendar: 'Wed 4 Nov (lived): no commitments' }) }]);
+    const scrubbed = JSON.stringify(scrubTraceHealth({ trace: 'nightly:1', hop: 'llm_memory_capacity', ms: 1, ok: true, text: { input, output: '' } }).text);
+    expect(scrubbed).not.toContain('Recovery zone');
+    expect(scrubbed).not.toContain('declining');
+  });
+
   it('is withheld whole by the health scrub when text capture is on', () => {
     const input = JSON.stringify([{ role: 'user', content: `[Scheduled card "The Close"]\n\nTurn context:\n\n${capacityContext(`${NOTE}\n\nA second paragraph about recovery.`, '- none')}` }]);
     const scrubbed = JSON.stringify(scrubTraceHealth({ trace: 'card:close:1', hop: 'llm_reply', ms: 1, ok: true, text: { input, output: '' } }).text);
