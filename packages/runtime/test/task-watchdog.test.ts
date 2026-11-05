@@ -428,9 +428,9 @@ describe('the console watchdog read for an owner the watchdog never ran for', ()
 });
 
 describe('WALDO_WATCHDOG in the Worker config', () => {
-  it('is off in production and in staging', () => {
+  it('is off in production and on in staging', () => {
     const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
     expect(parsed.vars.WALDO_WATCHDOG).toBe('0');
-    expect(parsed.env.staging.vars.WALDO_WATCHDOG).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_WATCHDOG).toBe('1');
   });
 });
