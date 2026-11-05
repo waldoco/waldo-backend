@@ -175,6 +175,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;
+  // '1' has Waldo act ahead: the update sweep's worker prepares the move (a drafted reply, a calendar change) and triage offers
+  // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
+  // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
+  PROACTIVE_ACT_AHEAD?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
