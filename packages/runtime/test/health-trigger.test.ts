@@ -876,9 +876,11 @@ describe('the health-protocols skill', () => {
   });
 
   it('every evidence line carries its grade, so the model can tell science from habit', () => {
-    const evidence = skill!.body_markdown.slice(skill!.body_markdown.indexOf('## Evidence'), skill!.body_markdown.indexOf('## The owner'));
+    const body = skill!.body_markdown, start = body.indexOf('## Evidence'), end = body.indexOf('\nDone:', start);
+    expect([start, end].every(at => at > 0)).toBe(true);
+    const evidence = body.slice(start, end);
     const lines = evidence.split('\n').filter(line => line.startsWith('- '));
     expect(lines.length).toBeGreaterThan(10);
-    for (const line of lines) expect(line, line).toMatch(/\((?:[A-D](?:\/[A-D])?)[;,)]|\((?:[A-D](?:\/[A-D])?), |the owner's notes/);
+    for (const line of lines) expect(line, line).toMatch(/\((?:[A-D](?:\/[A-D])?)[;,)]|\((?:[A-D](?:\/[A-D])?), /);
   });
 });
