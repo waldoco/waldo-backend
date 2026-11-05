@@ -31,6 +31,8 @@ export type OwnerInboundTurn = Readonly<{
   canAttach?: boolean;
   // The channel shows this turn's reply while it is written.
   replyStream?: ReplyStream;
+  // The owner's messages sent just before this one, oldest first, which this turn reads and answers with it as one burst.
+  earlier?: readonly OwnerInboundTurn[];
 }>;
 
 export const inboundTurn = (fields: Omit<OwnerInboundTurn, 'text'>): OwnerInboundTurn =>

@@ -1,6 +1,6 @@
 // WhatsApp messages the owner sends close together get one reply, through the owner object's real admission path: texts in
 // one payload or within the quiet window are one turn, and a reply that newer texts overtook before it did anything is not
-// sent; one turn answers them all. A turn that acted keeps its reply, and a command or forward is never folded in.
+// sent; one turn answers them all. Forwards and files ride in that turn too. A turn that acted keeps its reply.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -32,7 +32,7 @@ type GraphCall = Record<string, unknown> & { type?: string; status?: string; con
 beforeEach(() => { model.requests = []; model.react = null; model.gate = null; model.entered = () => {}; });
 
 type Admit = (...messages: Record<string, unknown>[]) => Promise<void>;
-const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[]) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
+const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[], storage: DurableObjectStorage) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
@@ -51,6 +51,8 @@ const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<vo
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === 'https://graph.facebook.com/v26.0/media-sticker') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=sticker' });
+      if (url === 'https://graph.facebook.com/v26.0/media-notes') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=notes' });
+      if (url.endsWith('mid=notes')) return new Response('# Saved workout references\nMon heavy lift, Fri rest.', { headers: { 'content-type': 'text/markdown' } });
       if (url.startsWith('https://lookaside.fbsbx.com/')) return new Response(webp, { headers: { 'content-type': 'image/webp' } });
       if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
         const body = JSON.parse(String(init?.body)) as GraphCall;
@@ -70,7 +72,7 @@ const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<vo
       }));
       expect(response.status).toBe(200);
     };
-    try { await run(admit, () => drainWhatsAppTurns(instance), graph); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
+    try { await run(admit, () => drainWhatsAppTurns(instance), graph, state.storage); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 
 const replies = (graph: readonly GraphCall[]) => graph.filter(call => call.type === 'text').map(call => call.text!.body);
@@ -127,7 +129,7 @@ it('keeps the reply of a turn that acted, and answers the newer message on its o
   });
 }, 60_000);
 
-it('never folds a reply into a forward that arrives while it is being written', async () => {
+it('a forward that arrives while a reply is being written overtakes it: one reply answers both, the forward still marked as forwarded', async () => {
   await whatsappOwner('wa-merge-forward', async (admit, drain, graph) => {
     const hold = holdReply();
     await admit(text('Hey Waldo', 'wamid.hey'));
@@ -137,7 +139,66 @@ it('never folds a reply into a forward that arrives while it is being written', 
     hold.release();
     await draining;
     await drain();
+    expect(lastMessage()).toContain('Hey Waldo');
+    expect(lastMessage()).toMatch(/[Ff]orwarded[^"]*\\n\\"Meeting moved to 4pm/);
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+it('a forwarded note, a file and a text sent together are one turn: the model reads all three and one reply answers them', async () => {
+  await whatsappOwner('wa-merge-burst', async (admit, drain, graph) => {
+    await admit(
+      text('Found both saved workout references', 'wamid.fwd', { forwarded: true }),
+      { id: 'wamid.file', type: 'document', document: { id: 'media-notes', filename: 'workout-info.md', mime_type: 'text/markdown' }, context: { forwarded: true } },
+      text('i had asked instinct to save this some time back', 'wamid.said'),
+    );
+    await drain();
+    expect(turns()).toHaveLength(1);
+    const input = JSON.stringify(turns()[0]!.input);
+    expect(input).toContain('Found both saved workout references');
+    expect(input).toContain('workout-info.md');
+    expect(input).toContain('i had asked instinct to save this some time back');
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+// A burst holds at most as many files as the model takes; the file past that waits for the next turn, and the turn that is
+// running does not drop its reply for a message it could not have carried.
+it('five files in one burst are a turn of four and a turn of one: two replies, and no turn is dropped for the fifth', async () => {
+  await whatsappOwner('wa-merge-five-files', async (admit, drain, graph) => {
+    const file = (n: number) => ({ id: `wamid.file${n}`, type: 'document', document: { id: 'media-notes', filename: `notes-${n}.md`, mime_type: 'text/markdown' } });
+    await admit(...[1, 2, 3, 4, 5].map(file));
+    // A drain that keeps overtaking its own turn never ends; fail instead of hanging.
+    await Promise.race([drain(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the drain did not settle')), 20_000))]);
+    expect(turns()).toHaveLength(2);
+    const first = JSON.stringify(turns()[0]!.input), second = JSON.stringify(turns()[1]!.input);
+    for (const n of [1, 2, 3, 4]) expect(first).toContain(`notes-${n}.md`);
+    expect(first).not.toContain('notes-5.md');
+    expect(second).toContain('notes-5.md');
     expect(replies(graph)).toHaveLength(2);
+  });
+}, 60_000);
+
+// A burst message that does not parse is left out of the turn, and the owner object says so by count, never by content.
+it('a burst message that fails the schema is left out and logged by count only', async () => {
+  await whatsappOwner('wa-merge-schema-drop', async (admit, drain, graph, storage) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await admit(
+        { id: 'wamid.bad', type: 'document', document: { id: 'media-notes', filename: 'secret-name.md', mime_type: 'text/markdown' } },
+        text('Here is the plan', 'wamid.said'),
+      );
+      for (const [key, row] of storage.kv.list<{ update: { message: { document?: unknown } } | null }>({ prefix: 'whatsapp:inbox-record:' })) {
+        if (row.update?.message.document !== undefined) { row.update.message.document = { file_name: 'secret-name.md' }; storage.kv.put(key, row); }
+      }
+      await drain();
+      const dropped = log.mock.calls.map(call => String(call[0])).filter(line => line.includes('whatsapp_burst_dropped'));
+      expect(dropped).toHaveLength(1);
+      expect(JSON.parse(dropped[0]!)).toMatchObject({ hop: 'whatsapp_burst_dropped', ok: false, detail: 'schema_rejected:1' });
+      expect(dropped[0]).not.toContain('secret-name');
+      expect(lastMessage()).toContain('Here is the plan');
+      expect(replies(graph)).toHaveLength(1);
+    } finally { log.mockRestore(); }
   });
 }, 60_000);
 

@@ -86,6 +86,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // "1" serves /app/v1/device-context: the owner's place consent and the latest coarse place per phone. Off unless "1".
+  DEVICE_PLACE?: string;
   // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
   // Off unless "1".
   BROWSER_FORM_SUBMIT?: string;
