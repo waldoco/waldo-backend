@@ -48,7 +48,7 @@ describe('a "Why this changed" trail', () => {
 
 describe('approvals revision 8 and controls revision 14', () => {
   it('an approval carries its trail, and a build below revision 8 never receives it', () => {
-    expect([APP_APPROVALS_WHY_REVISION, APP_APPROVALS_CONTRACT_REVISION]).toEqual([8, 8]);
+    expect([APP_APPROVALS_WHY_REVISION, APP_APPROVALS_CONTRACT_REVISION]).toEqual([8, 9]);
     const parsed = appApprovalV1Schema.parse({ ...card, why: mockup }) as AppApprovalV1;
     expect(appApprovalAtRevision(parsed, 8)).toBe(parsed);
     for (const revision of [1, 6, 7]) {

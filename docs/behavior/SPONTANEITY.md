@@ -40,7 +40,15 @@ New moments are inputs to that layer, never a second path to the owner.
   - Calendar events keep their exact times. Open time is filled from goals, open loops, tasks and waiting items.
   - A dip in shared health gives a lighter plan, paired with one easy step, never a bare warning.
   - The plan is a suggestion and never claims a calendar change. Source: `SCHEDULE_RULE` in `prompt/day-cards.ts`.
-- **One tap adds the plan to the calendar.** This is the `calendar_plan` approval kind, approvals revision 9. It is built separately; see that PR.
+- **One tap adds the plan to the calendar (`CALENDAR_PLAN`, approvals revision 9).**
+  - `propose_calendar_plan` puts a plan's new blocks on one `calendar_plan` card: 2 to 12 blocks on one local day, on the owner's own primary calendar, with no guests. It only proposes. The planning Brief offers it.
+  - Approving is one tap in chat, like a single block. The add is all or nothing:
+    - each block is its own effect, with a fixed event id;
+    - a block added before another failed is removed again, and the card reads not done;
+    - a block that can't be shown removed leaves the card's outcome unknown, naming it.
+  - Undo removes every block that is still as the plan wrote it.
+  - An app build below revision 9 never gets the card; its chat carries the card's words and asks it to update.
+  - Source: `channels/calendar-plan.ts`; the `calendar_plan` branch of the approval desk.
 
 ## Not built: follow-ups for the proactive layer's seams
 

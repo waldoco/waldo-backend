@@ -72,6 +72,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF_TURNS_PER_DAY?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
+  // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
+  // tap (approvals revision 9). Off unless "1"; a card already raised stays decidable with it off.
+  CALENDAR_PLAN?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;

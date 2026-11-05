@@ -221,7 +221,7 @@ import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
-import { connectServiceHandler, googleHandlers, MAX_ACCOUNTS_PER_READ } from '../tools/live/google';
+import { connectServiceHandler, googleHandlers, calendarPlanHandler, MAX_ACCOUNTS_PER_READ } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
 import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-time';
 import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -1869,7 +1869,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
-      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId));}catch{return fail(503);}
+      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')));}catch{return fail(503);}
     }
     // Main's receipt and Stop read only main's chain; a thread's message answers through its thread's routes.
     const mainRef=ownerChainRef('app',principal);
@@ -1959,20 +1959,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.recoverApp();
       const at={step:'context'},url=new URL(request.url);
       const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
   }
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false) {
+  // approvals: the approvals revision the reading build declares, so a card kind it predates comes as words.
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
     // Only main chat has a rating route, so only main rows are read against the ratings, and only for a build that names them.
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id));
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
@@ -2000,7 +2001,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
-  private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
+  private threadsHost(name: string, hash: string, ownerId: string, approvals = 1): AppThreadsHost {
     const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
@@ -2018,7 +2019,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.appInbox.receipt(name,clientId,ref);
       },
       history:async(thread,cursor,limit)=>{
-        try{return await this.appChatPage(name,hash,thread,cursor,limit,at);}
+        try{return await this.appChatPage(name,hash,thread,cursor,limit,at,false,approvals);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
       // The newest shown text, cut at read time.
@@ -4857,7 +4858,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects, () => ownerName(memory), briefEgress.screen), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
+      }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
@@ -5852,7 +5853,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         google: client, connectable: !client && google.configured(),
         ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
         waiting: waitingSection(waitingApprovals(desk.pending(now))), ...(planning ? { planning } : {}), ...(actAhead ? { dayShape: true } : {}),
-        ...(this.env.BRIEF_DAY_PLAN === '1' ? { layout: true } : {}),
+        ...(this.env.BRIEF_DAY_PLAN === '1' ? { layout: true } : {}), ...(this.env.CALENDAR_PLAN === '1' ? { planCard: true } : {}),
       });
       try {
         // With WHY_TRAIL=1, the steps behind every card this card's turn raises are the card's own "Why this changed".
@@ -5864,7 +5865,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (proposing) briefEgress.open(trace);
         let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
-          const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
+          const proposes = ['propose_calendar_change', ...(planning && this.env.CALENDAR_PLAN === '1' ? ['propose_calendar_plan' as const] : []), 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;

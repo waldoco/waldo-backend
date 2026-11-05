@@ -134,6 +134,8 @@ export const toolNameSchema = z.enum([
   'search_history',
   // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
   'get_screen_time',
+  // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
+  'propose_calendar_plan',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -299,6 +301,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'list_reminders',
     'cancel_reminder',
     'propose_calendar_change',
+    'propose_calendar_plan',
     'propose_google_task_change',
     'open_loop',
     'close_loop',

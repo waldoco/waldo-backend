@@ -16,7 +16,8 @@ import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './s
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
-import { appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { addPlan, planReview, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
 import { appWhy, storedWhy, whyJson, type TrailStep } from '../tools/why-trail';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
@@ -261,6 +262,8 @@ export const OUTSIDE_REASON = 'Closed while Waldo was working with an email or w
 export type RecordedLedgerKind = 'email_draft' | 'browser_action' | 'browser_submit_proposed';
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string, options?: ProposeOptions): Promise<string>;
+  // A day plan, on one card. A standing grant never adds one: only the owner's approval does.
+  proposeCalendarPlan(plan: StoredPlan, options?: Omit<ProposeOptions, 'origin'>): Promise<string>;
   proposeGoogleTaskChange(args: ProposeGoogleTaskChangeArgs, operationRef?: string, ctx?: ToolDispatcherContext): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal, options?: ProposeOptions): Promise<string>;
@@ -308,7 +311,7 @@ export type ApprovalDesk = Readonly<{
 
 const DECISION = { a: 'approve', e: 'edit', s: 'skip' } as const;
 const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; modify: boolean }>>> = {
-  calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
+  calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, calendar_plan: { title: 'Add this day plan?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
   email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
   agent_mail_send: { title: 'Send this email as Waldo?', approve: 'Send it', modify: true },
   browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
@@ -354,7 +357,7 @@ export const DRAFT_SEND_KINDS: readonly string[] = ['email_send', 'message_send'
 // The kinds the owner can approve in words once their card was shown here in full: sends, whose card shows every word and
 // recipient, and changes to the owner's own calendar and tasks. A browser submit, an MCP call and a tainted action carry
 // outside text and stay with the app and its taps.
-const CHAT_APPROVABLE_KINDS: readonly string[] = [...DRAFT_SEND_KINDS, 'calendar_change', 'google_task_change'];
+const CHAT_APPROVABLE_KINDS: readonly string[] = [...DRAFT_SEND_KINDS, 'calendar_change', 'calendar_plan', 'google_task_change'];
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
@@ -363,12 +366,13 @@ const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
   if (entry.kind === 'browser_submit') return p.approvalExpiresAt !== undefined && !Number.isSafeInteger(p.approvalExpiresAt)
     ? entry.created_at : Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
+  if (entry.kind === 'calendar_plan') return Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse((p as unknown as StoredPlan).blocks[0]!.start));
   return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
 };
 // A request closes at expires_at; one with no readable expiry is closed.
 const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
 const undoUntil = (entry: LedgerRow): number | null =>
-  entry.undo_json && entry.decided_at !== null ? (JSON.parse(entry.undo_json) as Undo).until ?? entry.decided_at + UNDO_WINDOW_MS : null;
+  entry.undo_json && entry.decided_at !== null ? (JSON.parse(entry.undo_json) as Undo | PlanUndo).until ?? entry.decided_at + UNDO_WINDOW_MS : null;
 const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
 // The statuses a request can still be decided or edited from, which its expiry closes.
 const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
@@ -437,6 +441,7 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
   if (entry.kind === 'tainted_action') return { scope: `${p.tool} from external content` };
   if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) };
+  if (entry.kind === 'calendar_plan') return { plan: { day: p.day, blocks: p.blocks, time_zone: p.time_zone, ...(p.account ? { account: p.account } : {}) } };
   const guestCount = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
   const first = { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null };
   // Each detail appears exactly when describe() wrote it into the frozen review. A detail that does not fit its
@@ -490,6 +495,7 @@ const NUMBERED_VERBS: Readonly<Record<string, Readonly<Record<string, string>>>>
 };
 const numberedVerb = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json);
+  if (entry.kind === 'calendar_plan') return 'add them';
   return NUMBERED_VERBS[entry.kind]?.[entry.kind === 'google_task_change' ? p.args?.action : p.action] ?? 'do it';
 };
 // The chat surfaces whose sent card cannot be edited once it is closed: a tap or reply on it answers instead.
@@ -733,7 +739,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // A card that waits for the owner's next message is as pending as an open one, so a repeat of its proposal finds it.
   const cardWaits = (entry: LedgerRow) => entry.status === 'card_unconfirmed' && entry.card_waits_on != null;
   // A withdrawn card stays withdrawn: a decision that awaited past its checks while Waldo withdrew it records nothing over it.
-  const setStatus = (id: string, status: DeskStatus, undo: Undo | null = null) =>
+  const setStatus = (id: string, status: DeskStatus, undo: Undo | PlanUndo | null = null) =>
     sql.exec("UPDATE ledger SET status = ?, undo_json = ?, decided_at = ? WHERE id = ? AND status != 'withdrawn'", status, undo ? JSON.stringify(undo) : null, deps.now(), id);
   // Closes a withdrawable card and its cards in one write, so no surface can decide it after; answers the messaging cards
   // whose buttons are cleared once the write has landed. Synchronous, for the commit it runs in.
@@ -1116,6 +1122,49 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: status === 'done', code: status === 'done' ? 'done' : status === 'uncertain' ? 'unknown' : 'not_done' });
     return true;
   };
+  // A day plan, all or nothing. Every block is its own effect, so an approval after an interruption finishes what the first
+  // one started and adds nothing twice. Up to 24 calls to Google run here, none inside a transaction.
+  const plansRunning = new Set<string>();
+  const blocksNamed = (titles: readonly string[]) => titles.map(title => `"${title}"`).join(', ');
+  const decidePlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
+    const plan = JSON.parse(entry.payload_json) as StoredPlan;
+    if (!deps.effects) return { toast: 'Not available', message: 'A day plan cannot be added here. Nothing was changed.' };
+    if (action === 'u' && !(entry.undo_json && entry.decided_at !== null && (recovering || deps.now() <= undoUntil(entry)!)))
+      return entry.undo_json ? { toast: 'Too late to undo', message: 'The 10-minute undo window has passed, so I left the plan on your calendar.' } : { toast: "Can't be undone", message: 'This plan cannot be undone from here. Nothing was removed.' };
+    const client = await deps.google({ id: `approval:${id}:${action === 'u' ? 'undo' : 'apply'}`, requireRoute: action === 'u' }, 'calendar', plan.account);
+    if (client === null || (plan.account && client.account?.email?.toLowerCase() !== plan.account.toLowerCase())) return { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
+    if (action === 'a' && !recovering) {
+      const lost = claimOpen(id);
+      if (lost) return lost;
+    }
+    plansRunning.add(id);
+    const started = deps.now();
+    try {
+      if (action === 'u') {
+        const undone = await undoPlan({ client, effect, operationRef, undo: JSON.parse(entry.undo_json!) as PlanUndo });
+        deps.log({ trace, hop: 'calendar_plan_undo', ms: deps.now() - started, ok: !undone.unknown.length, code: undone.unknown.length ? 'unknown' : undone.kept.length ? 'partial' : 'undone' });
+        if (undone.unknown.length) {
+          sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id);
+          return { toast: 'Outcome unknown', message: `I could not confirm the plan was removed: ${blocksNamed(undone.unknown)} may still be on your calendar. Check it before trying again.` };
+        }
+        if (!undone.kept.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: `Undone: removed all ${undone.removed.length} blocks of the plan.` }; }
+        setStatus(id, 'done');
+        return { toast: 'Partly undone', message: `Removed ${undone.removed.length ? blocksNamed(undone.removed) : 'nothing'}. Left ${blocksNamed(undone.kept)} as it is, because it changed after I added it.` };
+      }
+      const outcome = await addPlan({ client, effect, operationRef, plan, made: deps.grants?.enabled() === true });
+      deps.log({ trace, hop: 'calendar_plan', ms: deps.now() - started, ok: outcome.state === 'done', code: outcome.state });
+      if (outcome.state === 'done') {
+        setStatus(id, 'done', outcome.undo);
+        return { toast: 'Done', message: `Done: added all ${plan.blocks.length} blocks to your calendar. Undo is available for 10 minutes.` };
+      }
+      if (outcome.state === 'not_done') {
+        setStatus(id, 'failed');
+        return { toast: 'Not done', message: `Nothing was added: Google refused part of the plan${outcome.removed ? `, so I removed the ${outcome.removed} block${outcome.removed === 1 ? '' : 's'} already added` : ''}. Your calendar is as it was.` };
+      }
+      setStatus(id, 'uncertain');
+      return { toast: 'Outcome unknown', message: `Part of the plan failed and I could not confirm it was all removed: ${blocksNamed(outcome.left)} may still be on your calendar. Check it before trying again.` };
+    } finally { plansRunning.delete(id); }
+  };
   const CHANGED_SINCE_SHOWN: ApprovalDecision = { toast: 'Card changed', message: 'That card changed after you saw it, so nothing was done.' };
   const replayAccepted = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'Approved', message: `Approved: ${describeAny(entry)}. It runs in the background, and I'll tell you how it went.` });
@@ -1127,9 +1176,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'withdrawn') return withdrawnReply(entry);
     const operationRef = entry ? operationRefOf(entry) : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
-    if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`) || plansRunning.has(id)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
-    const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
+    const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && (entry.kind === 'calendar_change' && !!deps.effects.get(`${operationRef}:undo`)
+      || entry.kind === 'calendar_plan' && !!deps.effects.get(`${operationRef}:undo:0`)) && !!entry.undo_json);
     // An approved card whose call waits for or runs on the jobs lane answers every later decision with its approval's
     // receipt; the owner hears how it ended when it ends.
     if (entry?.status === 'running') return replayAccepted(entry);
@@ -1555,6 +1605,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
           }
         }
+      } else if (entry.kind === 'calendar_plan') {
+        out = await decidePlan(id, entry, action, operationRef, recovering, trace);
       } else {
         const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`,requireRoute:action==='u'||proposal.action!=='create'},'calendar',proposal.account);
         if (client === null || (proposal.account && client.account?.email?.toLowerCase() !== proposal.account.toLowerCase())) {
@@ -1911,6 +1963,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         throw error;
       }
     },
+    async proposeCalendarPlan(plan, options = {}) {
+      assertReplaceable(options.replaces);
+      const id = `p${deps.newId()}`;
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_plan', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, planReview(plan), JSON.stringify(plan), deps.now());
+      bindOrigin(id, deps.currentRunRef?.());
+      bindWhy(id, options.why);
+      bindOptions(id, options);
+      await present(id);
+      return id;
+    },
     record(kind, summary, payload) {
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, ?, 'done', ?, ?, NULL, ?, ?)", `l${deps.newId()}`, kind, summary, JSON.stringify(payload), deps.now(), deps.now());
     },
@@ -2031,7 +2093,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'agent_mail_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'agent_mail_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'calendar_plan', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
@@ -2053,20 +2115,26 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 // assistant reply to that run. Only a live approval (undecided, card not retired) is carried as a
 // part; every card's fallback text stays available so the reply never reads blank. The current
 // state of each approval comes from the approvals list. One row that cannot render drops only its card.
-export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[] }>;
-export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppApprovalCards => {
+// withheld: the text of each live card whose kind the reading build's approvals revision predates. Such a build would drop the
+// part unread, so the card's words go in the message text instead, never a card hidden without a word.
+export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[] }>;
+const UPDATE_TO_REVIEW = 'Update the Waldo app to review and approve it.';
+export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
-  const live: AppApprovalPart[] = [], fallbacks: string[] = [];
+  const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [];
   let dropped = 0;
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
       const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
       if (!part.success) { dropped++; continue; }
-      fallbacks.push(part.data.fallback_text);
-      if (entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only')) live.push(part.data);
+      const waiting = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
+      const unread = waiting && !appApprovalKindShownAt(part.data.kind, approvalsRevision), text = unread ? `${part.data.fallback_text} ${UPDATE_TO_REVIEW}` : part.data.fallback_text;
+      fallbacks.push(text);
+      if (unread) withheld.push(text);
+      else if (waiting) live.push(part.data);
     } catch { dropped++; }
   }
   if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
-  return { live, fallbacks };
+  return withheld.length ? { live, fallbacks, withheld } : { live, fallbacks };
 };

@@ -101,9 +101,9 @@ describe('PLANNING_BRIEF in the Worker config', () => {
   });
 });
 
-describe('WAKE_BRIEF and BRIEF_DAY_PLAN in the Worker config', () => {
+describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', () => {
   it('are off in production and on in staging, with the wake limits declared in both', () => {
-    for (const name of ['WAKE_BRIEF', 'BRIEF_DAY_PLAN']) expect([name, parsed.vars[name], parsed.env.staging.vars[name]]).toEqual([name, '0', '1']);
+    for (const name of ['WAKE_BRIEF', 'BRIEF_DAY_PLAN', 'CALENDAR_PLAN']) expect([name, parsed.vars[name], parsed.env.staging.vars[name]]).toEqual([name, '0', '1']);
     for (const vars of [parsed.vars, parsed.env.staging.vars]) expect([vars.WAKE_BRIEF_FRESH_MIN, vars.WAKE_BRIEF_TURNS_PER_DAY]).toEqual(['180', '3']);
   });
 });
