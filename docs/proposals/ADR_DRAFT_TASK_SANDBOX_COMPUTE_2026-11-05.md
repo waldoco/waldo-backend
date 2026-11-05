@@ -128,16 +128,20 @@ What survives a stop:
 - **Inputs.** The task brief names workspace `file_id`s and revisions. The brain exports those exact revisions and writes them under `/workspace/in/` before the first `exec`.
   - Workspace limits apply: 10 MB per file and the owner quota.
   - A file the brief does not name never enters the sandbox.
-- **Staging rule: owner-selected files only.** These are hard checks in the brain, not the model's judgment.
-  - A file may be staged only if the owner chose it for this task. Either they named or sent it in the owner turn that started the task, or they confirmed it on the task's card. The model cannot add a file it found through `workspace_list`.
-  - A task started from a turn that read outside text cannot stage files without that owner confirmation.
-  - Any task that stages an owner file runs with internet off. A task with an egress grant (§4) cannot stage owner files, so no grant can become a way to send the owner's files out.
-  - Health documents the owner sent (a lab report, for example) follow the same rule and nothing looser:
-    - They are staged only when the owner chose that file for the task.
+- **Staging rule.** These are hard checks in the brain, not the model's judgment.
+  - **By default the model may stage any owner file** the task needs, including one it found through `workspace_list`. On the owner's own turn the model's choice of files is the owner's agent working within their authorization, and a check there would only make Waldo ask more often (the owner's no-over-restriction ruling).
+  - **The check applies when outside content is in play.** Two cases:
+    - the task was started from a turn that read outside text (an email, a web page, or a workspace file's contents);
+    - the task holds an egress grant (§4).
+
+    In either case, only files the owner chose for this task may be staged: files they named or sent in the owner turn that started it, or confirmed on the task's card. A file the model found through `workspace_list` needs that confirmation.
+  - **Internet is off whenever an owner file is staged.** A task with an egress grant can therefore stage owner files only with the owner's confirmation and with the grant's hosts unreachable while those files are present. In practice a task either stages owner files or holds a grant, never both. No grant can become a way to send the owner's files out.
+  - **Synced readings never enter a sandbox** (§5): only workspace files are staged, never a health-plane read.
+  - **Health documents the owner sent** (a lab report, for example) are workspace files under the same rule:
     - What the task produces from them goes back only to the owner's workspace, as `sandbox_output`.
     - That output is never written to memory, logs or traces.
     - It leaves the workspace only when the owner asks for that specific item.
-  - Waldo does not try to decide which files "contain health information". Owner selection is the boundary, so no classifier or keyword rule is needed.
+  - Waldo does not try to decide which files "contain health information", so no classifier or keyword rule is needed. Outside content and egress decide when the owner must choose.
 - **Outputs.** When the attempt ends, the brain reads `/workspace/out/` and writes each file to the owner's workspace with provenance `sandbox_output`, which `@waldo/workspace` already defines. Each write has an operation id derived from (job, attempt, path).
   - This is the one writer: the brain applies the result once.
   - The quota, the per-file cap and the per-call write cap that `extract_archive` uses all apply.
