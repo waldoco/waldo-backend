@@ -270,17 +270,20 @@ describe('B3: the autonomy routes', () => {
     expect((await w.route('POST', '/app/v1/autonomy/changes', { ...pause, change: { op: 'revoke', grant_id: 'g1' } })).status).toBe(409);
   }));
 
-  it('with the switch off, the settings still read, revoke and pause still work, and a new grant is refused', () => inDo('b3-route-off', async state => {
+  it('with the switch off, the class reads not_yet with no grants, revoke and pause still work, and a new grant is refused', () => inDo('b3-route-off', async state => {
     const flags = { on: true };
     const w = world(state, { on: () => flags.on });
     const { grant_id } = w.grants.grant(terms(), 'app');
     flags.on = false;
     const off = await w.settings();
-    expect(off.classes[0]!.grants).toHaveLength(1);
+    expect(off.classes.map(entry => [entry.class, entry.availability, entry.grants.length])).toEqual(off.classes.map(entry => [entry.class, 'not_yet', 0]));
     expect(w.status(await w.propose())).toBe('open');
     const refused = await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0012', expected_revision: off.revision, change: { op: 'grant', terms: { ...terms(), scope: { ...terms().scope, account: 'lee@example.com' } } } });
     expect([refused.status, refused.body.receipt.state]).toEqual([409, 'rejected']);
     expect((await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0013', change: { op: 'pause' } })).status).toBe(200);
+    flags.on = true;
+    expect((await w.settings()).classes[0]).toMatchObject({ availability: 'available', grants: [{ grant_id }] });
+    flags.on = false;
     expect((await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0014', change: { op: 'revoke', grant_id } })).status).toBe(200);
   }));
 });
