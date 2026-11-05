@@ -75,9 +75,13 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
+  // Off unless "1".
+  BROWSER_FORM_SUBMIT?: string;
   // "1" moves history past the hot tables' caps into history_archive instead of deleting it; "dry" moves and deletes nothing
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
+  WALDO_RECALL_CHAIN?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -122,6 +126,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
   WALDO_SECOND_MESSAGE?: string;
+  // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
+  WALDO_ASYNC_TOOLS?: string;
+  // "1": the owner's own reply runs on the provider's auxiliary model and every task worker on its chat model (async-tools.ts).
+  WALDO_LIGHT_CHAT?: string;
   // "1": a WhatsApp message admitted while other work holds the owner's chain gets one line saying it is next (owner-first.ts).
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;

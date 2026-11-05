@@ -50,8 +50,9 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
         ...(tainted ? { outside_text: true as const } : {}), ...(conversationRef ? { conversation_ref: conversationRef } : {}),
       };
-      // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead.
-      if (numericHealthIn(JSON.stringify(brief))) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.', 'invalid_args');
+      // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead. Each
+      // field is read as the model wrote it; in the brief's JSON a quote or a tab before a number is an escape the check misses.
+      if ([args.title, args.goal, args.context, args.done_when].some(numericHealthIn)) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.', 'invalid_args');
       // The job is keyed by the turn and its tool call, so a replayed turn's same call returns the job it already made.
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const key = `${ctx.turnId}:${ctx.toolCallId}`;

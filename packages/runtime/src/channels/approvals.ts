@@ -79,6 +79,8 @@ export type BrowserSubmitProposal = Readonly<{
   binding: Readonly<Record<string, string>>;
   steps: readonly string[];
   continuation?: BrowserTaskContinuation;
+  // A form filled in the owner's live Cloudflare browser: the session and the one-shot permit this approval releases.
+  form?: Readonly<{ taskId: string; sessionId: string; permitId: string }>;
   request?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }>;
   approvalExpiresAt?: number;
   // Binding keys whose values are masked on every surface whatever their name, e.g. fields the page

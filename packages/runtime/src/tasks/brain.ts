@@ -4,7 +4,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic, holdsIn } from '../memory/forget-guard';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthInJsonText, numericHealthInValue } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
 import { argumentDigest, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -80,13 +80,13 @@ const REPLAY_TURN_OUTCOME = { done: 'completed', rejected: 'blocked', failed: 'f
 const failedResult = (code: string): TaskResult => ({ status: 'failed', summary: `The worker stopped with an error (${code}).`, findings: [], proposals: [], left: [] });
 // The worker is asked to put readings in words before it finishes; a result that still carries one (a plain closing reply)
 // is not stored.
-const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.stringify(result))
+const storableResult = (result: TaskResult): TaskResult => numericHealthInValue(result)
   ? { status: result.status === 'done' ? 'partial' : result.status, summary: 'The worker\'s result named health readings with their numbers, which a task never stores, so it was not kept.', findings: [], proposals: [], left: ['The findings themselves: the owner can ask again, and Waldo can read their mail or files directly.'] }
   : result;
 
 // A checkpoint persists in the owner object's storage, where health readings are not stored. What an owner-connected MCP
 // server returns is not known to be free of them (a wearable's server, say), so its output is left out, and so is any other
-// call or output the shared health floor (numericHealthIn) finds a reading in. A reading that check does not recognise (many
+// call or output the shared health floor (numericHealthIn, over each string as written) finds a reading in. A reading that check does not recognise (many
 // lab values) stays in the checkpoint until the job settles or is cancelled. A resumed
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
@@ -97,9 +97,9 @@ export { UNKEPT_EFFECT };
 // emptied when any of them carries a reading: both adapters rebuild that round from its kept records, and an empty list
 // still marks where the round starts.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
-  const readingInCall = numericHealthIn(turn.call.arguments);
-  const readingInItems = turn.prior_items !== undefined && numericHealthIn(JSON.stringify(turn.prior_items));
-  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthIn(turn.output);
+  const readingInCall = numericHealthInJsonText(turn.call.arguments);
+  const readingInItems = turn.prior_items !== undefined && numericHealthInValue(turn.prior_items);
+  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthInJsonText(turn.output);
   if (!unkeptOutput && !readingInItems) return turn;
   return {
     ...turn, call: readingInCall ? { ...turn.call, arguments: '{}' } : turn.call,
