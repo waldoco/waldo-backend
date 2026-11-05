@@ -417,20 +417,38 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both' });
   });
 
-  it('a copy left waiting for WhatsApp\'s closed window expires a day after the app message, so waiting copies cannot fill the outbox', async () => {
+  it('a Brief copy left waiting for WhatsApp\'s closed window expires with the card\'s own day, so waiting copies cannot fill the outbox', async () => {
     await withOwner('surface-both-copy-expires', async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
       await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
       const [copy] = copies(state);
-      expect([copy!.status, copy!.expiresAt]).toEqual(['pending', AT + WHATSAPP_COPY_FRESH_MS]);
+      expect([copy!.status, copy!.expiresAt]).toEqual(['pending', Date.parse('2026-10-04T00:00:00Z')]);
+      expect(copy!.expiresAt!).toBeLessThan(AT + WHATSAPP_COPY_FRESH_MS);
       ctx.now = copy!.expiresAt!;
       for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
       // Expired and settled, the copy is a terminal record the outbox evicts when it needs room; a pending one is never evicted.
       expect(copies(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'expired', true]]);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
+    }, { surface: 'both', window: 'closed' });
+  });
+
+  it('a Brief copy is not replayed when the owner writes that night: it went stale with its day', async () => {
+    await withOwner('surface-both-copy-stale', async (owner, state, ctx) => {
+      await dueBrief(state);
+      // The Check-in is due that afternoon, and covers the same day with newer facts.
+      await scheduler(state).schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: AT + 5 * 3_600_000, dueAt: AT + 5 * 3_600_000, recurrence: null });
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
+      ctx.now = AT + 14 * 60 * 60_000 + 30 * 60_000;
+      state.storage.kv.put('wa_last_inbound_ms', ctx.now);
+      const internal = owner as unknown as { setup(channel: 'whatsapp'): { finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }; outboxRoute(surface: 'whatsapp'): OutboxRoute };
+      await releaseWhatsAppOutbox(internal.setup('whatsapp').finalOutbox, internal.outboxRoute('whatsapp'), internal.setup('whatsapp').settleFinal);
+      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
+      expect(copies(state).map(record => [record.status, record.reason])).toEqual([['blocked', 'expired']]);
     }, { surface: 'both', window: 'closed' });
   });
 
@@ -728,6 +746,51 @@ describe('both surfaces by default (PROACTIVE_BOTH_DEFAULT)', { timeout: 20_000 
       expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBe('app');
       delete (instance as unknown as { env: Record<string, unknown> }).env.PROACTIVE_BOTH_DEFAULT;
     });
+  });
+});
+
+// A revision of a day card is an edit in place in the app: it tells the owner nothing, so it is allowed through quiet hours and
+// charges nothing. WhatsApp has no card to edit, so a copy would arrive as a new message that no limit ever saw.
+describe('revisions and quiet hours under both surfaces', { timeout: 20_000 }, () => {
+  const queueUpdate = async (owner: Owner, ctx: Ctx, extra: Partial<FinalRecord>) => {
+    const app = (owner as unknown as { setup(channel: 'app'): { finalOutbox: TelegramFinalOutbox } }).setup('app');
+    await app.finalOutbox.enqueue({ id: 'update:rev-1', trace: 'update:rev-1', payload: { chat_id: ctx.appSubject, text: UPDATE_TEXT }, ownerSubject: String(ctx.appSubject),
+      doName: ctx.name, expiresAt: ctx.now + 3_600_000, update: { recordId: 1 }, ...extra });
+  };
+  const quietNine = (state: DurableObjectState) => loopBook(state.storage.sql, { newId: () => 'q', now: () => AT }).setProactivity({ volume: 'normal', quiet_start: '08:00', quiet_end: '10:00' });
+  const interrupts = (state: DurableObjectState) => state.storage.kv.get('proactive_interrupts_v1') ?? null;
+
+  it('an in-place revision lands in the app during quiet hours and gets no WhatsApp copy, and the budget is untouched', async () => {
+    await withOwner('revision-quiet-in-place', async (owner, state, ctx) => {
+      quietNine(state);
+      await queueUpdate(owner, ctx, { revision: { day: DAY, card: 'card:brief' }, inPlace: true });
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
+      expect(copies(state)).toEqual([]);
+      expect(wire.whatsapp).toEqual([]);
+      expect(interrupts(state)).toBeNull();
+    }, { env: { PROACTIVE_BOTH_DEFAULT: '1', PROACTIVE_GATE: '1' } });
+  });
+
+  it('a revision that was a message in the app (not in place) is copied, but only once the owner\'s quiet hours end', async () => {
+    await withOwner('revision-quiet-message', async (owner, state, ctx) => {
+      quietNine(state);
+      await queueUpdate(owner, ctx, { revision: { day: DAY, card: 'card:brief' } });
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(copies(state).map(record => record.status)).toEqual(['pending']);
+      expect(wire.whatsapp).toEqual([]);
+      ctx.now = AT + 61 * 60_000;
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
+    }, { env: { PROACTIVE_BOTH_DEFAULT: '1' } });
+  });
+
+  it('with no quiet hours an update message is copied at once, as before', async () => {
+    await withOwner('revision-no-quiet', async (owner, state, ctx) => {
+      await queueUpdate(owner, ctx, {});
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
+    }, { env: { PROACTIVE_BOTH_DEFAULT: '1' } });
   });
 });
 

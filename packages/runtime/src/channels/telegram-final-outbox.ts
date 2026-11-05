@@ -55,6 +55,9 @@ export type FinalRecord = {
   update?: { recordId: number };
   // An update that revises a day card already delivered today: the day plan counts the revision once it is delivered.
   revision?: { day: string; card: CardId };
+  // The revision is an in-place edit of a card the app shows, which tells the owner nothing and charges nothing. A surface
+  // with no such card has nothing to edit, so it gets no copy: the edit would arrive there as a new message the limits never saw.
+  inPlace?: true;
   // The push an update raises once it reaches the app: its checked line, and the day card it revised.
   updatePush?: { line: string; card?: CardId };
   calendarPrep?: CalendarPrepReceipt;

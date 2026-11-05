@@ -69,6 +69,8 @@ describe('the default under PROACTIVE_BOTH_DEFAULT', () => {
     kv.put('whatsapp_subject', '15550001111');
     expect(proactiveReads(kv, true)).toBe('chat');
     expect(proactiveReads(kv, false)).toBe('cards');
+    kv.put(PROACTIVE_SURFACE_KEY, 'both');
+    expect(proactiveReads(kv, false)).toBe('cards');
   });
 });
 
@@ -170,11 +172,13 @@ describe('where proactive work goes', () => {
 });
 
 describe('how the owner reads proactive work', () => {
-  it('beside the cards in the app, alone in a chat, and alone wherever a chat also gets the same message', () => {
+  it('beside the cards in the app and alone in a chat; with the switch on, alone wherever a chat also gets the same message', () => {
     const kv = memoryKv();
     expect(proactiveReads(kv)).toBe('cards');
     const reads = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv); };
-    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'chat', 'chat']);
+    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'cards', 'cards']);
+    const readsWithSwitch = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv, true); };
+    expect(PROACTIVE_SURFACES.map(readsWithSwitch)).toEqual(['cards', 'chat', 'chat', 'chat']);
   });
 });
 
