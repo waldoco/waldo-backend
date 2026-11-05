@@ -88,9 +88,9 @@ describe('BROWSER_FORM_SUBMIT in the Worker config', () => {
 });
 
 describe('WALDO_RECALL_CHAIN in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy', () => {
+  it('is off in production and on in staging', () => {
     expect(parsed.vars.WALDO_RECALL_CHAIN).toBe('0');
-    expect(parsed.env.staging.vars.WALDO_RECALL_CHAIN).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_RECALL_CHAIN).toBe('1');
   });
 });
 
