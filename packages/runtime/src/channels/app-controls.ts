@@ -15,6 +15,7 @@ import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof 
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
+import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
@@ -122,7 +123,7 @@ const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControl
 const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
 // Where a kept look-up finding came from: the page's own address, by the claim it became. The findings table exists once a look-up has run.
 const lookupUrlsOf=(sql:Pick<SqlStorage,'exec'>)=>sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_findings'").toArray().length
-  ?new Map(sql.exec<{claim_id:number;source_url:string}>('SELECT claim_id, source_url FROM owner_findings WHERE claim_id IS NOT NULL').toArray().map(row=>[row.claim_id,row.source_url])):new Map<number,string>();
+  ?new Map(sql.exec<{claim_id:number;source_url:string}>('SELECT claim_id, source_url FROM owner_findings WHERE claim_id IS NOT NULL').toArray().filter(row=>row.source_url.length<=FINDING_URL_MAX).map(row=>[row.claim_id,row.source_url])):new Map<number,string>();
 // What each live claim shows and can be sent under controls revision 15, derived from its stored origin, source and state.
 const claimExtrasOf=(sql:Pick<SqlStorage,'exec'>):ReadonlyMap<number,Item>=>{
   const urls=lookupUrlsOf(sql);

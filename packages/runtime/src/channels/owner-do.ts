@@ -6130,9 +6130,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', evidence: where, source_ref: where }, at)) return 'spot.edit.failed';
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
-          // must be able to select it. Dismiss/confirm stay active-only.
+          // must be able to select it, and a promoted claim can be forgotten like an active one. Dismiss/confirm stay active-only.
           const claim = memory.claims().find((row) => row.id === spotId)
-            ?? (action === 'spot.forget' ? memory.claims('purging').find((row) => row.id === spotId) : undefined);
+            ?? (action === 'spot.forget' ? [...memory.claims('promoted'), ...memory.claims('purging')].find((row) => row.id === spotId) : undefined);
           if (!claim) return false;
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.ownerGround(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console'}`);

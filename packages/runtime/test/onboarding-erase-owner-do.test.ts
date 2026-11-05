@@ -103,6 +103,11 @@ describe('look-up erasure through the owner object', () => {
     expect(task.book.get(task.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
     for (const text of [FOUND.text, FOUND.evidence_quote, PUNE.evidence_quote]) expect(task.columns()).not.toContain(text);
   }));
+  it('keeps no finding whose page address is longer than the app shows', () => owner('onboarding-findings-long-url', async ({ state }) => {
+    const { findings } = seed(state);
+    expect(findings.record({ ...FOUND, text: 'Speaks at Acme Summit', source_url: `https://ashamenon.example/${'a'.repeat(2100)}` }, 'About', Date.now())).toBe('url_too_long');
+    expect(findings.page(10).total).toBe(2);
+  }));
   it('forgetting one finding cancels a task that carries it and leaves no copy in the job book', () => owner('onboarding-erase-one-task', async ({ state, call }) => {
     const { first } = seed(state);
     const task = tasked(state);

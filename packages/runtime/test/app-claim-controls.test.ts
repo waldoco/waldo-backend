@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import { appSubjectFor } from '../src/channels/app-api';
 import { traceBook } from '../src/channels/harness';
-import { claimStore, turnMemoryPrompt, withoutBringUpLess } from '../src/memory/claims';
+import { claimStore, profileClaims, turnMemoryPrompt, withoutBringUpLess } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 const { OwnerDO } = await import('../src/channels/owner-do');
@@ -169,5 +169,47 @@ it('the wish to hear less follows a claim into its corrected wording', async () 
     expect((await act(ctx, { action: 'claim.edit', id: `memory:claim:${id}`, value: 'Has a sore left knee from running', revision: (await detail(ctx, id)).revision })).status).toBe(200);
     expect(claimRows(ctx).filter(row => row.status === 'active')).toMatchObject([{ text: 'Has a sore left knee from running' }]);
     expect(claimRows(ctx).find(row => row.status === 'active')!.bring_up_less_at).not.toBeNull();
+  });
+});
+
+it('forgets a promoted claim the same way: it leaves the constellation, the pinned block and the next turn, whatever its pin', async () => {
+  await appOwner('app-claim-forget-promoted', async ctx => {
+    const id = insert(ctx, 'Allergic to cobalt-11 resin');
+    insert(ctx, 'Lives in Leeds');
+    ctx.state.storage.sql.exec("UPDATE claims SET status = 'promoted', pinned = 'facts', pin_order = 0 WHERE id = ?", id);
+    const before = await detail(ctx, id);
+    expect(before.item.actions).toContain('claim.forget');
+    expect(turnMemoryPrompt(claimStore(ctx.state.storage.sql), '')).toContain('cobalt-11');
+    expect(await act(ctx, { action: 'claim.forget', id: `memory:claim:${id}`, revision: before.revision })).toMatchObject({ status: 200 });
+    expect(claimRows(ctx).some(row => row.text.includes('cobalt-11') && (row.status === 'active' || row.status === 'promoted'))).toBe(false);
+    expect(turnMemoryPrompt(claimStore(ctx.state.storage.sql), '')).not.toContain('cobalt-11');
+    expect(profileClaims(claimStore(ctx.state.storage.sql)).map(row => row.text)).not.toContain('Allergic to cobalt-11 resin');
+  });
+});
+
+it('offers confirm on every claim Waldo only thinks, whoever wrote it, and the owner\'s yes makes it theirs', async () => {
+  await appOwner('app-claim-confirm-untrusted', async ctx => {
+    const web = insert(ctx, 'Speaks at Acme Summit', { source: 'stated', origin: 'untrusted' });
+    const shared = insert(ctx, 'Has a sister in Pune', { source: 'stated', origin: 'shared' });
+    for (const id of [web, shared]) {
+      const shown = (await detail(ctx, id)).item;
+      expect(shown.held_as).toBe('waldo_thinks');
+      expect(shown.actions).toContain('claim.confirm');
+    }
+    expect(await send(ctx, 'claim.confirm', web)).toMatchObject({ status: 200 });
+    expect(claimRows(ctx).find(row => row.id === web)).toMatchObject({ origin: 'owner', verification_status: 'owner-grounded' });
+    const after = (await detail(ctx, web)).item;
+    expect(after.held_as).toBe('owner_said');
+    expect(after.actions).not.toContain('claim.confirm');
+  });
+});
+
+it('shows a kept finding with a page address over the cap as having none, rather than failing the read', async () => {
+  await appOwner('app-claim-long-url', async ctx => {
+    const id = insert(ctx, 'Product manager at Acme');
+    ctx.state.storage.sql.exec("INSERT INTO owner_findings (id, category, text, evidence, source_url, source_title, state, claim_id, found_at, decided_at) VALUES ('fnd_long', 'work', 'Product manager at Acme', 'q', ?, 't', 'kept', ?, 1, 2)", `https://samrivera.dev/${'a'.repeat(2100)}`, id);
+    expect((await detail(ctx, id)).item).toMatchObject({ source_url: null });
+    const listed = await read(ctx, 'memory_view=claims&limit=10', 'controls=15');
+    expect(listed.status).toBe(200);
   });
 });
