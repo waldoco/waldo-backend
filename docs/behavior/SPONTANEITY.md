@@ -32,8 +32,9 @@ New moments are inputs to that layer, never a second path to the owner.
     - the daily Brief on;
     - model-use health consent live when the notice arrives;
     - at most `WAKE_BRIEF_TURNS_PER_DAY` turns a day.
-  - No time of day is barred, so a night-shift Brief follows the evening wake.
-  - The new time is written on the plan row. The owner's day for unasked messages (`dayPlanBook.window`) therefore opens at the wake on every surface. The content-free morning push follows the Brief's delivery as before.
+  - No time of day is barred. An evening wake can bring forward a Brief still to come today, such as one the day plan put in the evening for a night shift. Once today's Brief has gone, a later wake has nothing to move.
+  - The new time is written on the plan row with the reason "moved earlier". The owner's day for unasked messages (`dayPlanBook.window`) therefore opens with it on every surface. The content-free morning push follows the Brief's delivery as before.
+  - What the owner object keeps: when the Brief moves, its new send time, on the plan row and in its delivery, places the wake within `WAKE_BRIEF_FRESH_MIN` before it. Nothing it keeps or logs names a wake: the turn runs and logs as a day re-plan, and logs only a failure.
   - With no wearable, health not shared, or consent revoked, the Brief goes at its planned time.
 - **The Brief lays out the day (`BRIEF_DAY_PLAN`).**
   - After its spoken paragraph, the Brief (recap or planning) adds a "Your day" time-blocked plan.

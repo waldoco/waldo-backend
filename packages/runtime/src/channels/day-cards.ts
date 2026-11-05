@@ -256,10 +256,12 @@ export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timez
   return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
 };
 
-// WAKE_BRIEF: the owner's wearable shows a night that just ended. A Brief still to come may go now, at an earlier time still
-// to come, or at its planned time; it is never moved later, so an owner with no wearable, or whose health is not shared, gets
-// the Brief at its planned time. Whether this wake starts the day (a 03:00 waking, a nap, a night shift) is the model's call.
-export const WOKE_REASON = 'the owner is up';
+// WAKE_BRIEF: the owner's wearable shows a night that just ended. A Brief still to come today may go now, at an earlier time
+// still to come, or at its planned time; it is never moved later, so an owner with no wearable, or whose health is not shared,
+// gets the Brief at its planned time. Whether this wake starts the day (a 03:00 waking, a nap) is the model's call; once
+// today's Brief has gone, a later wake has nothing to move.
+// The plan row says only that the Brief moved earlier: the wake is a health fact, and the row keeps no reason that names it.
+export const MOVED_EARLIER = 'moved earlier';
 export const wakeTarget = (book: DayPlanBook, timezone: string, now: number): MovableCard | 'nothing_to_move' => {
   const brief = movableCards(book, timezone, now).find(entry => entry.card.id === 'card:brief');
   return brief && brief.time !== null ? brief : 'nothing_to_move';
@@ -292,8 +294,8 @@ export const applyWake = async (scheduler: Scheduler, book: DayPlanBook, timezon
   const target = wakeTarget(book, timezone, now);
   if (target === 'nothing_to_move' || scheduler.lookup('card:brief').state === 'unreadable') return false;
   const local = localIso(now, timezone), day = local.slice(0, 10);
-  if (time !== 'now') return (await applyReplan(scheduler, book, timezone, now, [{ card: 'card:brief', time, reason: WOKE_REASON }], [target])).length > 0;
-  book.save(day, { card: 'card:brief', time: local.slice(11, 16), reason: WOKE_REASON });
+  if (time !== 'now') return (await applyReplan(scheduler, book, timezone, now, [{ card: 'card:brief', time, reason: MOVED_EARLIER }], [target])).length > 0;
+  book.save(day, { card: 'card:brief', time: local.slice(11, 16), reason: MOVED_EARLIER });
   await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: now, dueAt: now, recurrence: null });
   return true;
 };
