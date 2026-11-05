@@ -36,7 +36,8 @@ export const capacityInput = (input: Readonly<{ now: string; note: string | null
   `Now: ${input.now} in the owner's local time.`,
   input.note === null ? 'There is no capacity note yet.' : `The current capacity note:\n<capacity_note>\n${fence(input.note)}\n</capacity_note>`,
   ...(input.withdrawn ? [BODY_WITHDRAWN] : []),
-  `Their body today:\n${input.health ?? NO_SHARED_HEALTH}`,
+  // Opens as the trace scrub's shared-health block does, so it is withheld whole wherever this text could be traced.
+  `Shared health today, their body as zone words:\n${input.health ?? NO_SHARED_HEALTH}`,
   `The shape of their calendar, one line per day in their local time, each marked lived, under way or ahead:\n<calendar_shape>\n${input.calendar}\n</calendar_shape>`,
 ].join('\n\n');
 
