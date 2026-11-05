@@ -5,7 +5,7 @@ import type { AppAutonomyGrantTermsV1 } from '../../contracts/src/app/autonomy';
 import type { RunOrigin } from '../../contracts/src/runtime/standing-grant';
 import { approvalDesk, UNDO_WINDOW_MS } from '../src/channels/approvals';
 import { readAccessLog } from '../src/channels/dashboard-access-log';
-import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
+import { ownerEffectLedger, type OwnerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { standingGrants, type OwnBlockChange } from '../src/channels/standing-grants';
 import type { GoogleClient } from '../src/connectors/google';
 import { googleHandlers } from '../src/tools/live/google';
@@ -26,7 +26,7 @@ const focus = (startMs = NOW + 5 * HOUR, over: Record<string, unknown> = {}) =>
 const MARKED = new Set(['e1', 'r1', 'x1']);
 
 type Grants = ReturnType<typeof standingGrants>;
-const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock' | 'enabled'>; createThrows?: boolean; undoCancels?: boolean }> = {}) => {
+const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock' | 'enabled'>; effects?: (real: OwnerEffectLedger) => OwnerEffectLedger; createThrows?: boolean; undoCancels?: boolean }> = {}) => {
   let now = NOW, n = 0, g = 0;
   const writes: unknown[][] = [];
   const cards: string[] = [];
@@ -43,7 +43,8 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
     restoreEvent: async (...args: unknown[]) => { writes.push(['restore', ...args]); return { id: String(args[0]), title: 'Focus', start: '', end: '', all_day: false, etag: 'v5' }; },
   } as unknown as GoogleClient;
   const real = standingGrants(state.storage, { now: () => now, newId: () => `g${++g}`, enabled: () => true, ownerRef: () => 'owner-1' });
-  const effects = ownerEffectLedger(state.storage, () => now);
+  const realEffects = ownerEffectLedger(state.storage, () => now);
+  const effects = options.effects ? options.effects(realEffects) : realEffects;
   const desk = approvalDesk(state.storage.sql, {
     call: async (method, body) => { if (method === 'sendMessage') cards.push(String((body as { text?: string }).text)); return { message_id: cards.length }; },
     owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: entry => logs.push(entry as Record<string, unknown>),
@@ -122,6 +123,51 @@ describe('calendar.move_own_block: Waldo places, moves and removes its own block
     const first = await expiring.propose(focus());
     expect(expiring.status(first)).toBe('open');
     expect(expiring.writes).toEqual([]);
+  }));
+
+  it('a block that comes inside its lead time between evaluation and dispatch cards it', () => inDo('own-lead-mid', async state => {
+    const w = world(state, { grants: real => midway(real, () => w.clock.set(NOW + 5 * HOUR - 10 * MIN)) });
+    w.grants.grant(terms(), 'app');
+    const id = await w.propose(focus(NOW + 5 * HOUR));
+    expect(w.status(id)).toBe('open');
+    expect(w.writes).toEqual([]);
+    expect(w.logs.find(entry => entry.hop === 'grant_use')).toMatchObject({ ok: false, code: 'refused' });
+  }));
+
+  it('a granted change is claimed in the same commit as its reserve, so before it the row is still an ordinary unconfirmed card', () => inDo('own-claim-at-reserve', async state => {
+    const row = () => state.storage.sql.exec<{ status: string; grant_json: string | null }>('SELECT status, grant_json FROM ledger').one();
+    const before: { status: string; grant_json: string | null }[] = [];
+    const w = world(state, { effects: real => ({ ...real, execute: (...args) => { before.push(row()); return real.execute(...args); } }) });
+    w.grants.grant(terms(), 'app');
+    await w.propose(focus());
+    expect(before).toEqual([{ status: 'card_unconfirmed', grant_json: null }]);
+    expect(row()).toMatchObject({ status: 'done', grant_json: expect.stringContaining('"grant_id":"g1"') });
+  }));
+
+  it('a run that stops before its reserve leaves no hidden granted row: the change is an ordinary card the owner sees', () => inDo('own-stop-before-reserve', async state => {
+    const w = world(state, { effects: real => ({ ...real, execute: async () => { throw new Error('evicted'); } }) });
+    w.grants.grant(terms(), 'app');
+    const id = await w.propose(focus());
+    expect(state.storage.sql.exec<{ grant_json: string | null }>('SELECT grant_json FROM ledger WHERE id = ?', id).one().grant_json).toBeNull();
+    expect(w.effects.get('tool:1:apply')).toBeNull();
+    expect(w.writes).toEqual([]);
+    expect((await w.desk.approvals(NOW)).map(item => [item.approval_id, item.state])).toEqual([[id, 'open']]);
+  }));
+
+  it('a granted change whose outcome is unknown is listed as outcome unknown; one that is done stays out of the list', () => inDo('own-unknown-listed', async state => {
+    const unknown = world(state, { createThrows: true });
+    unknown.grants.grant(terms(), 'app');
+    const id = await unknown.propose(focus());
+    const listed = await unknown.desk.approvals(NOW);
+    expect(listed.map(item => [item.approval_id, item.state, item.actions])).toEqual([[id, 'outcome_unknown', []]]);
+    expect(await unknown.desk.approvals(NOW, { state: 'outcome_unknown' })).toHaveLength(1);
+  }));
+
+  it('a granted change that is done is not listed as an approval', () => inDo('own-done-unlisted', async state => {
+    const w = world(state);
+    w.grants.grant(terms(), 'app');
+    expect(w.status(await w.propose(focus()))).toBe('done');
+    expect(await w.desk.approvals(NOW)).toEqual([]);
   }));
 
   it('pausing between evaluation and dispatch cards it', () => inDo('own-pause-mid', async state => {

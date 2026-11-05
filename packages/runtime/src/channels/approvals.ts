@@ -1,4 +1,4 @@
-import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import { EffectNotAppliedError, EffectQuotaError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
@@ -1068,15 +1068,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
-  // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change is
-  // claimed (uncertain) before it gets here, as an owner's approval claims nothing and keeps the row open.
+  // Applies an approved calendar change, or one a standing grant covers, through the effect ledger. A granted change reaches
+  // here unclaimed and is claimed in its reserve; an owner's approval claims nothing and keeps the row open.
   const applyCalendar = async (id: string, proposal: Stored, operationRef: string, client: GoogleClient, trace: string, recovering: boolean, grant?: GrantUse): Promise<ApprovalDecision> => {
     let out: ApprovalDecision;
       const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
       const marker = await sha256Hex(`${operationRef}:apply`);
       // A read may have closed the request during the awaits above. The effect is reserved synchronously
       // from here, so a later read sees it on record and leaves the request open.
-      if (!recovering && row(id)?.status !== (grant ? 'uncertain' : 'open')) return noLongerOpen(id);
+      if (!recovering && row(id)?.status !== (grant ? 'card_unconfirmed' : 'open')) return noLongerOpen(id);
       const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
         const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
         return { provider_id: eventId, result: undo };
@@ -1122,15 +1122,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     deps.log({ trace: id, hop: 'grant_eval', ms: 0, ok: true, detail: 'use' in decision ? 'granted' : decision.refused });
     if (!('use' in decision)) return false;
     const use = decision.use;
-    sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ?, grant_json = ? WHERE id = ? AND status = 'card_unconfirmed'", deps.now(), JSON.stringify({ class: use.class, grant_id: use.grant_id, revision: use.revision }), id);
+    // The row is claimed inside the reserve, in the same commit as the effect's intent, so it is never marked as running
+    // under a grant without that intent on record. Stopped before it, the row is still the card it was raised as.
+    const claim: GrantUse = { ...use, authorize: () => {
+      if (!use.authorize()) return false;
+      sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ?, grant_json = ? WHERE id = ? AND status = 'card_unconfirmed'",
+        deps.now(), JSON.stringify({ class: use.class, grant_id: use.grant_id, revision: use.revision }), id);
+      return sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed === 1;
+    } };
     const started = deps.now();
     try {
-      await applyCalendar(id, stored, operationRefOf(row(id)!), client, id, false, use);
+      await applyCalendar(id, stored, operationRefOf(row(id)!), client, id, false, claim);
     } catch (error) {
-      if (error instanceof EffectRefusedError || error instanceof EffectQuotaError) {
-        sql.exec("UPDATE ledger SET status = 'card_unconfirmed', decided_at = NULL, grant_json = NULL WHERE id = ? AND status = 'uncertain'", id);
+      if (row(id)?.grant_json == null) {
         deps.log({ trace: id, hop: 'grant_use', ms: deps.now() - started, ok: false, code: error instanceof EffectQuotaError ? 'budget' : 'refused' });
-        return false;
+        // A card withdrawn or expired meanwhile is not raised again.
+        return row(id)?.status !== 'card_unconfirmed';
       }
       const known = error instanceof EffectNotAppliedError;
       setStatus(id, known ? 'failed' : 'uncertain');
@@ -2061,8 +2068,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
       // that moves the row ends the deferral.
       const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
-      // A change a standing grant made was never the owner's approval, so the list leaves it out; its receipt is its record.
-      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ['grant_json IS NULL']), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
+      // A change a standing grant made was never the owner's approval, so the list leaves it out, its receipt being its record;
+      // one whose outcome is unknown stays in it until it settles, so the owner is told.
+      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : ["(grant_json IS NULL OR status = 'uncertain')"]), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
         deps.log({ trace: entry.id, hop: 'approval_projection', ms: 0, ok: false, code: 'dropped' });

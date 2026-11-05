@@ -20,7 +20,7 @@ export type GrantRefusal = 'off' | 'paused' | 'origin' | 'no_grant' | 'not_prima
 export type GrantUse = Readonly<{
   grant_id: string; revision: number; class: AutonomyClassV1;
   quota: GrantUsageKey & Readonly<{ max_per_day: number }>;
-  // Rechecked inside the effect ledger's reserve: the switch, the pause, this revision still current, and its time.
+  // Rechecked inside the effect ledger's reserve: the switch, the pause, this revision still current, its time, and the lead.
   authorize(): boolean;
 }>;
 export type GrantDecision = Readonly<{ use: GrantUse }> | Readonly<{ refused: GrantRefusal }>;
@@ -93,15 +93,16 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
     if (from.day !== to.day || !weekdays.includes(from.weekday) || from.time < window.from || to.time > window.to) return { refused: 'outside_bounds' };
     const lead = min_lead_minutes * 60_000;
     const seen = change.seen_start === undefined ? null : Date.parse(change.seen_start);
-    if (start - now < lead || (seen !== null && !(seen - now >= lead))) return { refused: 'lead' };
+    const ahead = (at: number) => start - at >= lead && (seen === null || seen - at >= lead);
+    if (!ahead(now)) return { refused: 'lead' };
     const { grant_id, revision } = grant;
     return { use: {
       grant_id, revision, class: 'calendar.move_own_block',
       // Keyed by class and resource, never by grant id, so a changed or re-made grant cannot reset the day's count.
       quota: { ...usage(grant, now), max_per_day },
       authorize: () => {
-        const current = read(grant_id);
-        return deps.enabled() && paused() === null && current !== null && current.revision === revision && holds(current, deps.now());
+        const current = read(grant_id), at = deps.now();
+        return deps.enabled() && paused() === null && current !== null && current.revision === revision && holds(current, at) && ahead(at);
       },
     } };
   };

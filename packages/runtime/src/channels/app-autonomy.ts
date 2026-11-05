@@ -34,11 +34,13 @@ export const declaresAutonomy = (request: Request): boolean => {
 const authorityState = (grants: AppAutonomyHost['grants']) => stableJson({ grants: grants.list(), paused: grants.paused() });
 const revisionOf = async (state: string) => sha256Hex(state);
 
+// A class runs only where this server has it and the switch is on; with the switch off every class reads not_yet, and its
+// stored grants, which authorize nothing then, are not shown until it is back on.
 const view = async (host: AppAutonomyHost): Promise<AppAutonomyV1> => {
-  const now = host.now(), active = host.grants.active(now);
+  const now = host.now(), active = host.grants.active(now), runs = (cls: AutonomyClassV1) => host.grants.enabled() && AVAILABLE.includes(cls);
   const classes = await Promise.all(autonomyClassV1Schema.options.map(async cls => ({
-    class: cls, availability: AVAILABLE.includes(cls) ? 'available' as const : 'not_yet' as const, step_up: STEP_UP.includes(cls),
-    grants: await Promise.all(active.filter(grant => grant.terms.scope.class === cls).map(async ({ grant_id, revision, terms, created_at, created_via }) =>
+    class: cls, availability: runs(cls) ? 'available' as const : 'not_yet' as const, step_up: STEP_UP.includes(cls),
+    grants: !runs(cls) ? [] : await Promise.all(active.filter(grant => grant.terms.scope.class === cls).map(async ({ grant_id, revision, terms, created_at, created_via }) =>
       ({ grant_id, revision, terms, created_at, created_via, uses_today: await host.usesToday({ grant_id, revision, terms, created_at, created_via, ended: null }) }))),
   })));
   return appAutonomyV1Schema.parse({ version: 1, revision: await revisionOf(authorityState(host.grants)), paused: host.grants.paused(), classes });
