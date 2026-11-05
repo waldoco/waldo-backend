@@ -16,6 +16,10 @@ const event = z.strictObject({
   category: calendarEventCategoryV1Schema,
 }).refine(item => Date.parse(item.end) > Date.parse(item.start), 'event ends before it starts');
 
+// The server answers within about this long: a part still unread by then answers unavailable. A caller (widget, intent,
+// AppFunction) should allow at least this plus its own network time before giving up.
+export const APP_TODAY_DEADLINE_MS_V1 = 4_000;
+
 export const appTodayV1Schema = z.strictObject({
   compiled_at: healthInstantV1Schema,
   // The owner's local day and zone, as the calendar day names them; null when the calendar day could not be read.
@@ -42,6 +46,8 @@ export const appTodayV1Schema = z.strictObject({
   ]),
 }).refine(today => (today.day === null) === (today.timezone === null), { error: 'day and timezone come together', path: ['day'] });
 
+// 400 invalid_request for any query; 401, 405, 429 (with retry-after) and 503 answer unavailable. The route has its own
+// per-owner budget, apart from the app's other reads, so a widget refreshing often cannot starve the app's screens.
 // The runtime may attach a short message; a client acts on `error` only.
 export const appTodayApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'unavailable']),
