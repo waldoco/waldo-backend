@@ -366,7 +366,7 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
 
   it('with the switch off the Brief opens no question', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
-    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1' }, async ({ state, brief }) => {
+    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
     });
@@ -387,7 +387,7 @@ describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
     });
     const on = model.briefModels[0];
     model.briefTools = []; model.briefModels = []; model.brief = [{ text: 'SKIP' }];
-    await owned('day-shape-midday-off', {}, async ({ card, approvals }) => {
+    await owned('day-shape-midday-off', { PROACTIVE_ACT_AHEAD: '0' }, async ({ card, approvals }) => {
       await card('card:midday');
       expect(model.briefTools[0]).not.toContain('propose_calendar_change');
       expect(await approvals()).toEqual([]);
