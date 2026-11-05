@@ -20,9 +20,10 @@ it('registers the files set in the full catalogue, outside the capped live subse
   for (const entry of FILE_SCENARIOS) { expect(NIGHTLY_SCENARIOS).toContain(entry); expect(entry.live_subset).toBeUndefined(); }
 });
 
-it("what's in this zip: kept, noted, unpacked and read through the production tools", async () => {
+it("what's in this zip, on the app surface: kept, noted, unpacked, listed and read through the production tools", async () => {
   const model = scriptedGateway({ rules: [{ match: /in this zip/, rounds: [
     { toolCalls: [{ name: 'extract_archive', arguments: { file_id: UPLOAD, revision: 1 } }] },
+    { toolCalls: [{ name: 'workspace_list', arguments: { prefix: 'uploads/' } }] },
     { toolCalls: [{ name: 'workspace_read', arguments: { file_id: AGENDA, revision: 1 } }] },
     { text: 'It holds the offsite agenda (roadmap review at 10:00, hiring plan at 14:00, dinner at Olive at 16:30) and a budget sheet.' },
   ] }] });
@@ -30,7 +31,7 @@ it("what's in this zip: kept, noted, unpacked and read through the production to
   expect(record.status).toBe('ran');
   const said = JSON.stringify(model.requests().find((request) => request.request.tools?.length)?.request.messages);
   expect(said).toContain(`offsite.zip (file_id ${UPLOAD}, revision 1). It is not attached here; open it with the workspace tools.`);
-  expect(record.tools.map((tool) => [tool.name, tool.ok])).toEqual([['extract_archive', true], ['workspace_read', true]]);
+  expect(record.tools.map((tool) => [tool.name, tool.ok])).toEqual([['extract_archive', true], ['workspace_list', true], ['workspace_read', true]]);
   expect((record.final_state as { workspace: { path: string }[] }).workspace.map((file) => file.path)).toEqual(expect.arrayContaining([expect.stringMatching(/^uploads\/[0-9a-f]{8}\/offsite\/agenda\.md$/)]));
   expect(failedReceipts([...STATE_INVARIANTS, ...scenario('f1-whats-in-this-zip').receipts!], record)).toEqual([]);
 });
