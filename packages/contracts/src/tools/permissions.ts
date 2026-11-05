@@ -101,6 +101,8 @@ export const toolNameSchema = z.enum([
   'workspace_search',
   'workspace_write',
   'workspace_render',
+  // extract_archive: unpack a workspace zip into a folder beside it (WALDO_FILE_TOOLS).
+  'extract_archive',
   'skills_list',
   'skills_install',
   'skills_disable',
@@ -324,6 +326,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'workspace_search',
     'workspace_write',
     'workspace_render',
+    'extract_archive',
     'skills_list',
     'skills_install',
     'skills_disable',
