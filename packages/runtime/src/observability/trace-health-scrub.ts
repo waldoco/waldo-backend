@@ -7,7 +7,8 @@ import { toolsWhere } from '../tools/records';
 // readings anywhere else.
 export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 
-// get_health sits in the core brain; the rest of the owner's health reads and logs, get_screen_time included, sit in the health brain.
+// get_health sits in the core brain; the rest of the owner's health reads and logs sit in the health brain, and so do get_screen_time
+// and get_device_context, whose output (screen time, the phones' zones and cities) is withheld from diagnostics the same way.
 const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', ...toolsWhere((record) => record.brain === 'health')]);
 // Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
