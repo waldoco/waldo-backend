@@ -1,3 +1,4 @@
+import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { OPENAI_PROVIDER, OWNER_MODELS, type ErrorCode, type ModelName } from '@waldo/contracts';
 import { LIGHT_ROLE_MAX_TOKENS, lightChatRoles, type LightChatRoles } from '../src/channels/async-tools';
@@ -6,9 +7,13 @@ import { createOwnerResponder, type OwnerContextIntegration } from '../src/chann
 import { secondMessages } from '../src/channels/second-message';
 import { STOPPED_REPLY } from '../src/channels/turn-control';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
+import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { createReplyStream, type ReplyDraftSurface } from '../src/conversation/reply-stream';
 import { ownerModels } from '../src/llm/owner-routes';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
+import { claimStore } from '../src/memory/claims';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { ownerTyped } from './helpers/owner-typed';
 
@@ -225,6 +230,79 @@ it('a turn that carries an attachment takes no light step', async () => {
   expect(await responder(gateway, { log: (entry) => hops.push(entry) }).respond(turn('light-file', 'Thanks, what is this?', { attachments: [image] }), time)).toBe(CHAT_REPLY);
   expect(models()).toEqual([STRONG_ROLE]);
   expect(routes(hops)).toEqual([]);
+});
+
+// A Brief, a reminder or a card is a machine turn on the same chat. The light step reads only the owner's own exchange, so
+// it cannot answer "what's on today?" from a Brief's plan wording; the strong role reads the whole chat.
+const BRIEF_JOB = 'Write the Brief: the violet-harbour review sits at 11:00.';
+const BRIEF_REPLY = 'Brief: the violet-harbour review at 11:00 is the anchor today.';
+const onLight = (light: Script): Script => (request, said) => request.request.tools?.some((tool) => tool.name === 'escalate') ? light(request, said) : { text: BRIEF_REPLY };
+
+it('the light step reads the owner\'s own exchange and no machine turn: a Brief on the same chat reaches only the strong role', async () => {
+  const { gateway, requests, models } = fake({ [LIGHT_ROLE]: onLight(LIGHT_SCRIPT), [STRONG_ROLE]: CHAT_SCRIPT });
+  const hops: TurnLogEntry[] = [];
+  const owner = responder(gateway, { log: (entry) => hops.push(entry) });
+  expect(await owner.respond(turn('light-own-1', 'Thanks for the kiwi-lantern tip.'), time)).toBe(LIGHT_REPLY);
+  expect(await owner.prompt('brief-1', 'app-main', BRIEF_JOB, time, 'app')).toBe(BRIEF_REPLY);
+  expect(await owner.respond(turn('light-own-2', 'What is on today?'), time)).toBe(CHAT_REPLY);
+  expect(models()).toEqual([LIGHT_ROLE, LIGHT_ROLE, LIGHT_ROLE, STRONG_ROLE]);
+  const light = requests[2]!.request.messages, strong = requests[3]!.request.messages;
+  expect(light.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+  expect(light.slice(0, 2).map((message) => message.content)).toEqual(['Thanks for the kiwi-lantern tip.', LIGHT_REPLY]);
+  expect(JSON.stringify(light)).not.toContain('violet-harbour');
+  for (const marker of ['kiwi-lantern', LIGHT_REPLY, BRIEF_JOB, BRIEF_REPLY]) expect(JSON.stringify(strong)).toContain(marker);
+  expect(routes(hops)).toEqual(['answered', 'escalated']);
+});
+
+const BRIEF_TARGET = { surface: 'app', messageId: 'brief-1-reply', conversationRef: 'app-main', authorId: null, authorIsBot: true, text: BRIEF_REPLY, truncated: false, sourceTaint: 'external', provenance: { author: 'waldo', forwarded: false } } as const;
+it.each([
+  ['a reply to a Brief', { replyTo: BRIEF_TARGET }],
+  ['a forwarded part', { parts: [{ authorship: 'owner', text: 'Thanks, ' }, { authorship: 'forwarded', text: BRIEF_REPLY }] }],
+] as const)('%s takes no light step: the strong role answers it, though the light role would have', async (_kind, extra) => {
+  const { gateway, models } = fake({ [LIGHT_ROLE]: () => ({ text: LIGHT_REPLY }), [STRONG_ROLE]: CHAT_SCRIPT });
+  const hops: TurnLogEntry[] = [];
+  expect(await responder(gateway, { log: (entry) => hops.push(entry) }).respond({ ...turn('light-quoted', 'Thanks'), ...extra }, time)).toBe(CHAT_REPLY);
+  expect(models()).toEqual([STRONG_ROLE]);
+  expect(routes(hops)).toEqual([]);
+});
+
+// The composer's operations material (workspace, tool results, health) and owner memory and recall, each with a marker the
+// strong request must carry, so a light request without them is a real absence.
+const OPERATIONS_MARKERS = ['saffron-ledger', 'cobalt-receipt', 'Keeps a copper lantern in the shed'] as const;
+it('the light step reads none of the composed operations material, owner memory or recall; the strong role reads them all', async () => {
+  const principal = '10000000-0000-0000-0000-000000000001';
+  const scope = (): RunEffectScope => ({ runId: 'run-light', attempt: 'attempt-one', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: () => undefined, commit: (work) => work() });
+  const text = 'Thanks, where did I leave the copper lantern?';
+  const admission = await ownerMessageAdmission({
+    lookup: async () => ({ owner_id: principal, do_name: 'owner-demo', state_version: 0, admission_revision: '1', presence_id: '20000000-0000-0000-0000-000000000001', provider: 'telegram', subject: '1001' }),
+    scope: scope(), locator: { environment: 'staging', namespace: 'owner-staging', doName: 'owner-demo', doId: 'actual-do' },
+    actualDoId: 'actual-do', expectedDoId: (name: string) => name === 'owner-demo' ? 'actual-do' : 'other-do',
+    allowedDoNames: ['owner-demo'], provider: 'telegram' as const, subject: '1001', text, occurrenceKey: 'light-composed', occurredAt: Date.now() - 1, now: Date.now,
+  });
+  const at = Date.now() - 1_000;
+  const workspace = { text: 'saffron-ledger draft, edited this morning', source: { source_key: 'ws-light', source_kind: 'workspace_snapshot' as const, scope: 'principal' as const, source_taint: 'external' as const, produced_at: at } };
+  const toolOutput = { text: 'cobalt-receipt filed for the owner', source: { source_key: 'tool-light', source_kind: 'tool_result' as const, scope: 'principal' as const, source_taint: null, produced_at: at } };
+  const context = createOwnerTurnContext(admission, { health: sharedHealth, workspace: async () => [workspace], toolOutputs: async () => [toolOutput] });
+  const { gateway, requests, models } = fake({ [LIGHT_ROLE]: () => ({ tool: 'escalate' }), [STRONG_ROLE]: CHAT_SCRIPT });
+  const hops: TurnLogEntry[] = [];
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('light-composed')), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'fact', text: 'Keeps a copper lantern in the shed', source: 'stated', evidence: '"copper lantern"', origin: 'owner', source_ref: 'owner, fixture-1' }, '2026-10-13T00:00:00.000Z');
+    const args: Parameters<typeof createOwnerResponder> = [ACCESS];
+    args[2] = memory; args[3] = (entry) => hops.push(entry); args[4] = clock; args[5] = [getContextHandler(clock)]; args[10] = gateway; args[18] = ['👌']; args[19] = scope();
+    args[21] = { context, lightChat: true };
+    expect(await createOwnerResponder(...args).respond(turn('light-composed', text, { conversationRef: context.conversationRef }), time)).toBe(CHAT_REPLY);
+  });
+  expect(models()).toEqual([LIGHT_ROLE, STRONG_ROLE]);
+  const light = JSON.stringify(requests[0]!.request), strong = JSON.stringify(requests[1]!.request);
+  for (const marker of [...OPERATIONS_MARKERS, ...HEALTH_MARKERS]) {
+    expect(strong, marker).toContain(marker);
+    expect(light, marker).not.toContain(marker);
+  }
+  // The light call's trace sizes the context it was sent, the clock alone, not the strong step's.
+  const shape = (hop: string) => hops.find((entry) => entry.hop === hop)?.shape?.context?.context_sections;
+  expect(Object.keys(shape('llm_reply_light') ?? {})).toEqual(['clock']);
+  expect(Object.keys(shape('llm_reply') ?? {})).toEqual(expect.arrayContaining(['clock', 'memory', 'reasons']));
 });
 
 // Guards, which hold on the code before this change too: off, and on machine turns, no light step is taken.

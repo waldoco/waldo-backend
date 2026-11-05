@@ -86,6 +86,18 @@ export const compactedHistory = (tree: ConversationTree, leafId: string, startRe
   return { messages: [summary, ...tail.messages], stats: { ...tail.stats, estimated_tokens: tail.stats.estimated_tokens + estimateMessageTokens(summary), compacted: 1 } };
 };
 
+// The owner's own exchange on a chain: their typed messages and Waldo's direct replies to them, windowed like the chain.
+// Machine turns (Briefs, reminders, cards, reports, health triggers) and their replies are left out, and so is everything a
+// live summary covers, with the summary itself, since it can carry them; a row with no stamped origin is left out too.
+export const ownerExchangeHistory = (tree: ConversationTree, leafId: string, settings: CompactionSettings = COMPACTION): readonly ConversationModelMessage[] => {
+  const entries = chainFrom(tree, leafId);
+  const live = settings.enabled ? liveCompaction(tree, leafId) : null;
+  const after = live ? entries.slice(entries.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : entries;
+  const owner = new Set(after.filter((entry) => entry.role === 'user' && entry.inputOrigin === 'owner').map((entry) => entry.id));
+  const kept = after.filter((entry) => owner.has(entry.id) || (entry.role === 'assistant' && entry.parentId !== null && owner.has(entry.parentId)));
+  return windowModelMessages(conversationModelMessages(kept), settings.budgetTokens).messages;
+};
+
 // Owner rows on the chain written after the live compaction row (all of them when there is none).
 export const ownerRowsSince = (tree: ConversationTree, leafId: string, since: number | null): number =>
   tree.path(leafId).filter((entry) => entry.role === 'user' && entry.inputOrigin === 'owner' && (since === null || (entry.createdAt ?? 0) > since)).length;

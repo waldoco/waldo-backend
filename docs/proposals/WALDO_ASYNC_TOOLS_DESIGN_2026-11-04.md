@@ -61,7 +61,7 @@ Other properties:
 
 ### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [built; switch "0"]
 
-- The owner's own reply takes its **first step** on the **light role**, with the system prompt and the conversation and one tool, `escalate`. The light role answers quick, simple chat itself. Anything else hands the turn to the **strong role**, which takes the same step and writes the turn's one reply. Side jobs are unchanged.
+- The owner's own reply takes its **first step** on the **light role**, with the system prompt, the owner's own exchange and one tool, `escalate`. The light role answers quick, simple chat itself. Anything else hands the turn to the **strong role**, which takes the same step and writes the turn's one reply. Side jobs are unchanged.
 - **Roles, not models.** The escalation path names no model. Each environment can set:
   - `WALDO_LIGHT_ROLE_MODEL`, which takes the light step;
   - `WALDO_STRONG_ROLE_MODEL`, which takes a handed-over turn;
@@ -69,10 +69,14 @@ Other properties:
 
   Each must be a roster model on an owner-path provider, and a strong role is never an auxiliary model (`lightChatRoles`, validated). A refused value is logged once by variable name and keeps its default. Unset, the roles are the deploy provider's own (`OWNER_MODELS`): its auxiliary model, its chat model, and the other provider's chat model. Today that is Haiku 5.5 → Sonnet 5.5 → Terra on Anthropic, and Luna → Terra → Sonnet 5.5 on OpenAI. Swapping a model is a config change.
 - **The owner's 5 Nov rule:** hard asks, every day plan and every health-aware answer are written by the strong role.
-  - **Kept by construction, at the capability and context boundary, not by keyword rules.** The light step reads the system prompt, the conversation, the owner's message and the clock. It reads nothing this turn admitted: no health block, no day plan or day cards, no memory or recall, no earlier tool results, no attachment. It is offered no tool but `escalate`.
+  - **Kept by construction, at the capability and context boundary, not by keyword rules.** The light step reads the system prompt, the owner's own exchange, the owner's message and the clock.
+    - **The owner's own exchange** is their typed messages and Waldo's direct replies to them (`ownerExchangeHistory`). Machine turns on the same chat (the Brief, reminders, cards, reports, health triggers) and their replies are left out, and so is anything a live compaction summary covers, with the summary itself. A row with no stamped origin is left out too.
+    - It reads nothing this turn admitted: no health block, no day plan or day cards, none of the composer's operations material (workspace, tool results), no memory or recall, no earlier tool results.
+    - A turn with an attachment, a reply target, or a quoted or forwarded part takes no light step: the strong role takes it from the start. A reply target cannot be told apart as a Brief or an ordinary answer, so every reply goes to the strong role.
+    - It is offered no tool but `escalate`. Its system prompt is the strong step's: behaviour, skill catalogue, standing orders, the composer's fixed layers and any loaded skill procedure. That is instructions, not admitted material.
   - So an answer that draws on the owner's shared health, today's plan or any tool can only come from the strong role. The light role's judgment (the `escalate` description) only decides whether a conversational reply is enough.
   - The nightly `lc-` scenarios measure how often it hands over.
-  - The conversation history itself still reaches the light step. An earlier reply's zone words are conversation, not admitted health.
+  - What still reaches the light step: Waldo's earlier replies to the owner's own messages. A day plan or health answer the strong role wrote earlier is in that text, so a follow-up the light role answers could repeat it. The `escalate` description tells it to hand plans and health over.
 - **What counts as the reply.** The light step is the reply only as plain, whole text. A tool call, a cut-off reply or a failure is discarded unseen, and the strong role takes the step with its full context and tools. So the light role never runs a tool, raises a card or takes an action, and at most one call per turn is spent before the hand-over.
 - **The light step's limits.**
   - It streams nothing and has no floor line.
@@ -84,7 +88,7 @@ Other properties:
 - **Fallback.** A failed light step hands over, and the strong role's route keeps its fallback, so an outage never lands on a second light model.
 - Task workers run every task on the chat model (Sonnet 5.5 / Terra), not only `effort: 'deep'` ones. Today `standard` effort runs on auxiliary (`tasks/worker-loop.ts:230`). This is a real cost increase per task.
 - **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The switch stays "0" in staging and production until the owner decides; the 5 Nov rule is what makes it safe to try.
-- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`. The light step (`lightRoutePolicy`) and the strong role (`strongRoutePolicy`, which is the chat route itself when no role is set) keep both. Each model keeps its own cache.
+- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`. The strong role (`strongRoutePolicy`, which is the chat route itself when no role is set) keeps both. The light step (`lightRoutePolicy`) keeps the cache, and its route carries the light role's own cap (`LIGHT_ROLE_MAX_TOKENS` or `WALDO_LIGHT_ROLE_MAX_TOKENS`), which is what it sends. Each model keeps its own cache.
 
 ### What the owner sees
 
