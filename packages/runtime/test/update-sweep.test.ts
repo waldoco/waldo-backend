@@ -834,7 +834,7 @@ describe('acting ahead on an update', () => {
   const INVITE: TaskResult = { status: 'done', summary: 'An invite clashes with the deck block.',
     findings: [{ text: 'Krati invited the owner to a vendor call at 17:00, over their deck block.', source_ref: 'e-sync' }],
     proposals: [{ tool: 'send_email', why: 'Keeps the deck block; offers Krati the morning instead.', args: { to: ['krati@client.example'], subject: 'Vendor call', body: 'Could we do 10:00 tomorrow instead? DRAFT-7Q' } }], left: [] };
-  const STYLE = channelStyle('whatsapp');
+  const STYLE = channelStyle('chat');
   const acting = async (h: Harness, result: TaskResult, reply: unknown, setup: (a: TriageApply) => void = () => undefined) => {
     h.events.push(MOVED);
     await h.check({ actAhead: true });
