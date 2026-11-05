@@ -66,7 +66,9 @@ export const schedulePreferencesLine = (prefs: SchedulePreferences, healthMode: 
 
 // `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
 // `cancelMachine` stops the open background jobs of a kind the owner turned off, so no worker keeps reading for it.
-export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void }>;
+// alongHeartbeat: work that follows the owner's heartbeat preference (Waldo's own look), armed or dropped with it.
+export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void;
+  alongHeartbeat?: (on: boolean) => Promise<void> }>;
 
 // The brief sweep runs both update cards and meeting prep, so turning it off stops the open jobs of both.
 const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine?.('update_sweep'); ctx.cancelMachine?.('meeting_prep'); };
@@ -76,7 +78,7 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
   const { scheduler, plans, timezone, now } = ctx;
   const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
   if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await scheduler.cancelReadable(id); }
-  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } }
+  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } await ctx.alongHeartbeat?.(prefs.heartbeat); }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else { await scheduler.cancelReadable(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); } }
   // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
   if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
@@ -101,7 +103,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
   const { scheduler } = ctx;
   const cancelIf = (id: string) => scheduler.cancelReadable(id);
   if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await cancelIf(id);
-  if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); }
+  if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); await ctx.alongHeartbeat?.(false); }
   if (!prefs.event_briefs) { await cancelIf(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); }
   if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);

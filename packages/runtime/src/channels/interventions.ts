@@ -5,26 +5,37 @@ import { fenced } from '../prompt/turn-prompt';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { taskBrief } from '../tasks/jobs';
 import type { MachineHandler, MachineSpec } from '../tasks/machine';
-import type { InterruptBook, InterruptHold, InterruptLimits, InterruptSpend } from './interruptions';
+import { spendOf, type InterruptBook, type InterruptHold, type InterruptLimits } from './interruptions';
 import { localIso } from './reminders';
 import { triageTools } from './update-sweep';
 
 // PROACTIVE_INTERVENTIONS: beyond the day cards and the events that arrive, Waldo looks across the owner's plate on its own
 // cadence and may raise something it noticed: drift, an anomaly, a change in health, work, commitments, tasks or backlog. A
 // reader worker finds what is drifting; the brain judges, in the chat role, whether any of it is worth one message or one
-// card. Code holds only the owner's limits (interruptions.ts): consent, quiet hours, one question waiting, the budget and the
-// gap, with the model's urgent going past the budget from a small allowance. Most looks end in nothing.
+// card. Code holds only the owner's limits (interruptions.ts): consent, quiet hours, the owner's day (from the Brief to the
+// Close), one question waiting, the budget and the gap. The look itself is never urgent: it runs only while the budget lasts,
+// and only what the model marks urgent goes past it, from a small allowance. Most looks end in nothing.
 export const INTERVENTION_REVIEW_ID = 'intervention-review';
 export const interventionEveryMs = (raw: string | undefined): number => {
   const minutes = Number(raw);
   return (raw !== undefined && Number.isInteger(minutes) && minutes >= 30 ? minutes : 180) * 60_000;
 };
 
-export const armInterventionReview = async (scheduler: Scheduler, now: number, everyMs: number): Promise<void> => {
+export type DayWindow = (day: string) => Readonly<{ opens: number; closes: number }>;
+const nextDay = (day: string): string => new Date(Date.parse(`${day}T12:00:00Z`) + 24 * 3_600_000).toISOString().slice(0, 10);
+// When the next look runs: `everyMs` on, while that is still inside the owner's day; otherwise when their next day opens.
+// No look runs, and no wake is armed for one, between the Close and the next Brief.
+export const nextLookAt = (now: number, everyMs: number, timezone: string, window: DayWindow): number => {
+  const at = now + everyMs, day = localIso(at, timezone).slice(0, 10), { opens, closes } = window(day);
+  if (at < opens) return opens;
+  if (at < closes) return at;
+  return window(nextDay(day)).opens;
+};
+// One look at a time, each arming the next when it runs (as the health trigger does); an entry already armed stays.
+export const armInterventionReview = async (scheduler: Scheduler, at: number, again = false): Promise<void> => {
   const found = scheduler.lookup(INTERVENTION_REVIEW_ID);
-  if (found.state === 'entry' && found.entry.recurrence?.type === 'interval' && found.entry.recurrence.every_ms === everyMs) return;
-  await scheduler.schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID },
-    occurrenceAt: now + everyMs, dueAt: now + everyMs, recurrence: { type: 'interval', every_ms: everyMs, phase_ms: 0 } });
+  if (!again && found.state === 'entry' && found.entry.recurrence === null) return;
+  await scheduler.schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
 };
 
 export const INTERVENTION_DEADLINE_MS = 30 * 60_000;
@@ -67,12 +78,13 @@ export const interventionPrompt = (localNow: string, context: Readonly<{ goals: 
 ].join('\n\n');
 
 // What a look delivered, as a bounded code for traces and the eval: never a word of it.
-export type InterventionCode = 'act' | 'act+urgent' | 'act_without_card' | 'say' | 'say+urgent' | 'none' | 'invalid' | `held_${InterruptHold}`;
+export type InterventionCode = 'act' | 'act+urgent' | 'act+over_budget' | 'act_without_card' | 'say' | 'say+urgent' | 'none' | 'invalid' | `held_${InterruptHold}`;
 
 export type InterventionApplyDeps = Readonly<{
   book: InterruptBook; limits(): InterruptLimits; timezone(): string; now(): number;
-  // The owner wants Waldo to reach out unasked at all, and whether it is their quiet hours now.
-  consent(): boolean; quiet(): boolean;
+  // The owner wants Waldo to reach out unasked at all, whether it is their quiet hours now, and whether their day is over or
+  // not yet begun (outside the Brief to the Close).
+  consent(): boolean; quiet(): boolean; closed(): boolean;
   transaction(work: () => void): void;
   context(): Promise<Readonly<{ goals: string; cards: string; style: string }>>;
   // The look's turn on the owner's chain, in the chat role, tainted: its raw reply.
@@ -87,26 +99,27 @@ export type InterventionApplyDeps = Readonly<{
 export const interventionApplier = (deps: InterventionApplyDeps): MachineHandler => ({
   apply: async (row, result, io) => {
     const limits = deps.limits();
-    const hold = (urgent: boolean, asks: boolean) => deps.book.hold({ consent: deps.consent(), quiet: deps.quiet(), asks, urgent, limits });
-    const settle = (code: InterventionCode, work: () => void = () => undefined) => { deps.transaction(() => { work(); io.settle(); }); deps.chose(io.trace, code); };
-    // Nothing can reach the owner now, even urgent: the look ends before a model is asked.
-    const closed = hold(true, false);
-    if (closed !== null) { settle(`held_${closed}`); return 'skipped'; }
+    const hold = (urgent: boolean, asks: boolean) => deps.book.hold({ consent: deps.consent(), quiet: deps.quiet(), closed: deps.closed(), asks, urgent, limits });
+    const settle = (code: InterventionCode, work: () => void = () => undefined) => { deps.chose(io.trace, code); deps.transaction(() => { work(); io.settle(); }); };
+    // Nothing unasked could go now: the look ends before a model is asked. The look is not urgent; what it finds may be.
+    const before = hold(false, false);
+    if (before !== null) { settle(`held_${before}`); return 'skipped'; }
     const started = deps.now();
     const prompt = interventionPrompt(localIso(started, deps.timezone()), { ...await deps.context(), limits: deps.book.line(limits) });
     const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, taskBrief(row).machine?.withheld)}`, io.current, triageTools(false, true));
     const chosen = parseIntervention(reply);
-    const asks = chosen !== 'invalid' && chosen.asks === true;
-    let charged = 'counted' as InterruptSpend;
-    const spend = () => { charged = deps.book.spend(limits, asks, `intervention:${row.id}`); };
-    if (deps.cardsSince(started) > 0) { settle('act', spend); if (charged === 'urgent') deps.chose(io.trace, 'act+urgent'); return 'skipped'; }
+    const asks = chosen !== 'invalid' && chosen.asks === true, urgent = chosen !== 'invalid' && chosen.urgent === true;
+    const spend = () => { deps.book.spend(limits, asks, `intervention:${row.id}`, urgent); };
+    const charge = () => spendOf(deps.book.spent(), limits, deps.now(), urgent);
+    if (deps.cardsSince(started) > 0) { settle(hold(false, false) === null ? 'act' : charge() === 'urgent' ? 'act+urgent' : 'act+over_budget', spend); return 'skipped'; }
     if (chosen === 'invalid') { settle('invalid'); return 'skipped'; }
     if (chosen.decision === 'none') { settle('none'); return 'skipped'; }
     if (chosen.decision === 'act') { settle('act_without_card'); return 'skipped'; }
-    const held = hold(chosen.urgent === true, asks);
+    // Checked again at delivery: the day may have closed, or a question opened, while the worker and the turn ran.
+    const held = hold(urgent, asks);
     if (held !== null) { settle(`held_${held}`); return 'skipped'; }
+    deps.chose(io.trace, charge() === 'urgent' ? 'say+urgent' : 'say');
     await deps.deliver(`intervention:${row.id}`, io.trace, chosen.say!, () => { spend(); io.settle(); });
-    deps.chose(io.trace, charged === 'urgent' ? 'say+urgent' : 'say');
     return 'delivered';
   },
   // Health drift is visible only to the brain (the worker is never shown health), so a quiet worker still leaves a judgment.

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { interruptBook, type InterruptLimits } from '../src/channels/interruptions';
-import { interventionApplier, interventionEveryMs, interventionSpec, parseIntervention, type InterventionCode } from '../src/channels/interventions';
+import { interventionApplier, interventionEveryMs, interventionSpec, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
 import { jobBook } from '../src/tasks/jobs';
 import { enqueueMachine } from '../src/tasks/machine';
 
@@ -16,7 +16,7 @@ const NUDGE = { decision: 'say', say: 'The deck block slipped this morning, and 
 
 type Look = Readonly<{ codes: InterventionCode[]; delivered: string[]; turns: number; tools: (readonly string[])[]; prompts: string[]; spent: ReturnType<ReturnType<typeof interruptBook>['spent']>; settled: number }>;
 let seq = 0;
-const look = (reply: unknown, setup: Readonly<{ quiet?: boolean; consent?: boolean; cards?: number; before?: (book: ReturnType<typeof interruptBook>) => void; result?: TaskResult }> = {}) =>
+const look = (reply: unknown, setup: Readonly<{ quiet?: boolean; consent?: boolean; closes?: 'before' | 'during'; cards?: number; before?: (book: ReturnType<typeof interruptBook>) => void; during?: (book: ReturnType<typeof interruptBook>) => void; result?: TaskResult }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`interventions-${seq += 1}`)), async (_instance, state): Promise<Look> => {
     const sql = state.storage.sql;
     let n = 0;
@@ -28,9 +28,10 @@ const look = (reply: unknown, setup: Readonly<{ quiet?: boolean; consent?: boole
     const out = { codes: [] as InterventionCode[], delivered: [] as string[], turns: 0, tools: [] as (readonly string[])[], prompts: [] as string[], settled: 0 };
     const handler = interventionApplier({
       book, limits: () => LIMITS, timezone: () => 'UTC', now: () => NOW, consent: () => setup.consent ?? true, quiet: () => setup.quiet ?? false,
+      closed: () => setup.closes === 'before' || (setup.closes === 'during' && out.turns > 0),
       transaction: work => state.storage.transactionSync(work),
       context: async () => ({ goals: '- Get the Q4 board deck to the board by Friday', cards: 'The Brief reached them at 08:00.', style: 'chat' }),
-      turn: async (_trace, text, _current, tools) => { out.turns += 1; out.prompts.push(text); out.tools.push(tools); return JSON.stringify(reply); },
+      turn: async (_trace, text, _current, tools) => { out.turns += 1; out.prompts.push(text); out.tools.push(tools); setup.during?.(book); return JSON.stringify(reply); },
       cardsSince: () => setup.cards ?? 0,
       deliver: async (id, _trace, text, commit) => { state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       chose: (_trace, code) => { out.codes.push(code); },
@@ -58,18 +59,24 @@ describe('Waldo\'s own look across the day', () => {
     expect([out.codes, out.delivered, out.spent.count]).toEqual([['act'], [], 1]);
   });
 
-  it('budget spent: held unless the model calls it urgent, and urgent is charged to the allowance', async () => {
-    const spend = (book: ReturnType<typeof interruptBook>) => { book.spend(LIMITS, false, 'earlier'); };
-    const held = await look(NUDGE, { before: spend });
-    expect([held.codes, held.delivered]).toEqual([['held_budget'], []]);
-    const urgent = await look({ ...NUDGE, urgent: true }, { before: spend });
-    expect([urgent.codes, urgent.delivered.length]).toEqual([['say+urgent'], 1]);
-    expect(urgent.spent).toMatchObject({ count: 1, urgent: 1 });
+  it('the look itself is never urgent: with the budget spent it ends before any model is asked, allowance or not', async () => {
+    const out = await look({ ...NUDGE, urgent: true }, { before: book => { book.spend(LIMITS, false, 'earlier', false); } });
+    expect([out.turns, out.codes, out.delivered, out.settled, out.spent.urgent]).toEqual([0, ['held_budget'], [], 1, 0]);
   });
 
-  it('budget and urgent allowance both spent: the look ends before any model is asked', async () => {
-    const out = await look(NUDGE, { before: book => { book.spend(LIMITS, false, 'a'); book.spend(LIMITS, false, 'b'); } });
-    expect([out.turns, out.codes, out.delivered, out.settled]).toEqual([0, ['held_budget'], [], 1]);
+  it('a card that lands past the budget is charged to the allowance only when the turn called it urgent', async () => {
+    // Another message spends the budget while the turn runs, so the card lands past it.
+    const late = (urgent: boolean) => look({ decision: 'act', ...(urgent ? { urgent: true } : {}) }, { cards: 1, during: book => { book.spend(LIMITS, false, 'other', false); } });
+    const marked = await late(true), unmarked = await late(false);
+    expect([marked.codes, marked.spent]).toEqual([['act+urgent'], expect.objectContaining({ count: 1, urgent: 1 })]);
+    expect([unmarked.codes, unmarked.spent]).toEqual([['act+over_budget'], expect.objectContaining({ count: 2, urgent: 0 })]);
+  });
+
+  it('outside the owner\'s day nothing runs, and a day that closes while the turn runs holds the message', async () => {
+    const night = await look({ ...NUDGE, urgent: true }, { closes: 'before' });
+    expect([night.turns, night.codes]).toEqual([0, ['held_closed']]);
+    const closing = await look({ ...NUDGE, urgent: true }, { closes: 'during' });
+    expect([closing.turns, closing.codes, closing.delivered, closing.spent.count]).toEqual([1, ['held_closed'], [], 0]);
   });
 
   it('quiet hours and the owner\'s no hold it before any model is asked, urgent or not', async () => {
@@ -105,6 +112,15 @@ describe('the look\'s contract', () => {
 
   it('the cadence comes from config, never under half an hour', () => {
     expect([interventionEveryMs('240'), interventionEveryMs(undefined), interventionEveryMs('5'), interventionEveryMs('soon')]).toEqual([240, 180, 180, 180].map(minutes => minutes * 60_000));
+  });
+
+  it('the next look stays inside the owner\'s day: on its cadence until the Close, then at the next Brief', () => {
+    const window = (day: string) => ({ opens: Date.parse(`${day}T08:00:00Z`), closes: Date.parse(`${day}T21:30:00Z`) });
+    const every = 180 * 60_000;
+    expect(nextLookAt(NOW, every, 'UTC', window)).toBe(NOW + every);
+    expect(nextLookAt(Date.parse('2026-11-05T20:00:00Z'), every, 'UTC', window)).toBe(Date.parse('2026-11-06T08:00:00Z'));
+    expect(nextLookAt(Date.parse('2026-11-05T02:00:00Z'), every, 'UTC', window)).toBe(Date.parse('2026-11-05T08:00:00Z'));
+    expect(nextLookAt(Date.parse('2026-11-05T23:00:00Z'), every, 'UTC', window)).toBe(Date.parse('2026-11-06T08:00:00Z'));
   });
 
   it('one look an hour at most: a second in the same owner-local hour is the same job', () => {

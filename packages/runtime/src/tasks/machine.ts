@@ -153,7 +153,8 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
   };
   // A job that stopped tells the owner when this deploy says so; otherwise it settles silently, as one that found nothing.
   const stopped = async (name: string, fields: Partial<TurnLogEntry>, why: string) => {
-    if (!deps.note) return quietly(name, fields);
+    // Waldo's own look is unasked by nature: a stopped one is not worth a message outside the owner's limits.
+    if (!deps.note || job === 'intervention') return quietly(name, fields);
     try { await deps.note(`machine:${job}:stopped:${Math.floor(deps.now() / DAY_MS)}`, machineStoppedNote(job, why), settle); }
     catch (error) { if (error instanceof ClosedRunError) return; throw error; }
     done(name, { ...fields, detail: 'noted' });

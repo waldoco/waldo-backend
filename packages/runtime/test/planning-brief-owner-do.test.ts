@@ -440,11 +440,38 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
+    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
+      await tick(state, owner);
+      expect(armed()).toEqual([{ due_at: AT + 180 * 60_000, recurrence_json: null }]);
+      const night = Date.parse(`${DAY}T22:00:00Z`), tickAt = Date.now;
+      Date.now = () => night;
+      try {
+        state.storage.sql.exec('DELETE FROM task_jobs');
+        await tick(state, owner);
+        expect(looks(state)).toBe(0);
+        expect(armed().map(row => row.due_at)).toEqual([AT + 24 * 3_600_000]);
+      } finally { Date.now = tickAt; }
+    });
+  });
+
+  it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
+    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+      const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
+      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<boolean> }).act({ action: 'schedule.set', id: 'heartbeat', value });
+      expect(armed()).toBe(1);
+      expect(await set('off')).toBe(true);
+      expect(armed()).toBe(0);
+      expect(await set('on')).toBe(true);
+      expect(armed()).toBe(1);
+    });
+  });
+
   it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
     await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
-      const every = 180 * 60_000;
       state.storage.sql.exec('DELETE FROM schedule');
-      await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - every - 1000, every);
+      await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - 1000);
       const sql = state.storage.sql;
       schedulePreferences(sql, loopBook(sql, { newId: () => 'l', now: () => AT })).set('heartbeat', false);
       state.storage.kv.put('owner_alarm_last_v1', 1);
