@@ -1,5 +1,5 @@
 import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
-import { GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
+import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
@@ -1199,7 +1199,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const write = deps.grants?.grant;
           if (!entry.proposal_digest || await sha256Hex(stableJson(terms)) !== entry.proposal_digest) { setStatus(id, 'failed'); throw new Error('standing grant terms changed'); }
           // Rechecked at the tap, not only when it was raised: the switch, and terms still running.
-          if (!write || !deps.grants!.enabled()) { setStatus(id, 'rejected'); out = { toast: 'Not available', message: 'Waldo cannot act on its own here yet, so no grant was made. Nothing changed.' }; }
+          if (!write || !deps.grants!.enabled() || !AVAILABLE_CLASSES.includes(terms.scope.class)) { setStatus(id, 'rejected'); out = { toast: 'Not available', message: 'Waldo cannot act on its own here yet, so no grant was made. Nothing changed.' }; }
           else if (!(deps.now() < terms.expires_at)) { setStatus(id, 'rejected'); out = { toast: 'Expired', message: 'Those terms have already ended, so no grant was made. Ask me again for fresh ones.' }; }
           else {
             // The claim and the grant land in one commit, with no I/O, so two taps never make two grants.
@@ -1921,6 +1921,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     async proposeStandingGrant(terms, options = {}) {
       const parsed = appAutonomyGrantTermsV1Schema.parse(terms);
+      if (!AVAILABLE_CLASSES.includes(parsed.scope.class)) throw new Error('that class cannot be granted yet');
       const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'standing_grant', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)",

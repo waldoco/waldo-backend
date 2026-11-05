@@ -8,6 +8,7 @@ import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { appTranscriptPage } from '../src/channels/app-api';
 import { appAutonomyRequest, type AppAutonomyHost } from '../src/channels/app-autonomy';
 import { appApprovalParts, approvalDesk } from '../src/channels/approvals';
+import { appApprovalStepUp } from '../src/channels/approval-step-up';
 import { autonomyHandlers } from '../src/channels/autonomy-tools';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { standingGrants } from '../src/channels/standing-grants';
@@ -155,6 +156,16 @@ describe('B3: the owner creates a standing grant in chat, and only their yes wri
     }));
   }
 
+  it('a grant over the owner\'s own blocks is one tap; one that would reach other people or a site goes to the app, and no class not yet available can be carded', () => inDo('b3-step-up', async state => {
+    const w = world(state);
+    expect(appApprovalStepUp({ kind: 'standing_grant', exact: { grant: terms() } }, 'approve')).toBe(false);
+    expect(appApprovalStepUp({ kind: 'standing_grant', exact: { grant: { ...terms(), scope: { class: 'errand.run_on_site', sites: ['https://airline.example'], purpose: 'Check me in', spend: null } } } }, 'approve')).toBe(true);
+    expect(appApprovalStepUp({ kind: 'standing_grant', exact: {} }, 'approve')).toBe(true);
+    await expect(w.desk.proposeStandingGrant({ ...terms(), scope: { class: 'followup.close_on_reply' } })).rejects.toThrow(/cannot be granted yet/);
+    expect(() => w.grants.grant({ ...terms(), scope: { class: 'backlog.add_inferred' } }, 'app')).toThrow(/cannot be granted yet/);
+    expect(w.cards).toEqual([]);
+  }));
+
   it('with the switch off, asking is refused and nothing is written', () => inDo('b3-tool-off', async state => {
     const w = world(state, { on: () => false });
     expect(await w.tool('propose_standing_grant').handle(ask as never, w.turn('owner'))).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/cannot act on its own here yet/) });
@@ -267,7 +278,7 @@ describe('B3: the autonomy routes', () => {
     const off = await w.settings();
     expect(off.classes[0]!.grants).toHaveLength(1);
     expect(w.status(await w.propose())).toBe('open');
-    const refused = await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0012', expected_revision: off.revision, change: { op: 'grant', terms: terms({ scope: { ...terms().scope, account: 'lee@example.com' } }) } });
+    const refused = await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0012', expected_revision: off.revision, change: { op: 'grant', terms: { ...terms(), scope: { ...terms().scope, account: 'lee@example.com' } } } });
     expect([refused.status, refused.body.receipt.state]).toEqual([409, 'rejected']);
     expect((await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0013', change: { op: 'pause' } })).status).toBe(200);
     expect((await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0014', change: { op: 'revoke', grant_id } })).status).toBe(200);

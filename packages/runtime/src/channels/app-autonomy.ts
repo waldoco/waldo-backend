@@ -4,16 +4,13 @@ import { APP_CONTRACT_HEADER, appContractHeaderV1Schema } from '../../../contrac
 import { sha256Hex } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
 import { signedInRecently } from '../identity/console-auth';
+import { APP_AUTONOMY_CHANGES_PATH, APP_AUTONOMY_PATH } from './app-api';
 import { appStepUpRefusal } from './console-step-up';
 import { controlRevision, loadReceiptBook, receiptCapacityReached, type ControlReceipt } from './dashboard-control-actions';
-import { GrantLimitError, type StandingGrants } from './standing-grants';
+import { AVAILABLE_CLASSES as AVAILABLE, GrantLimitError, type StandingGrants } from './standing-grants';
 
-export const APP_AUTONOMY_PATH = '/app/v1/autonomy';
-export const APP_AUTONOMY_CHANGES_PATH = '/app/v1/autonomy/changes';
 // The owner's changes keep their own receipt book, so a request id here never answers for one on another route.
 const AUTONOMY_RECEIPT_BOOK_KEY = 'app:autonomy-receipts';
-// The classes this server can run. Every other class reads not_yet and takes no grant.
-const AVAILABLE: readonly AutonomyClassV1[] = ['calendar.move_own_block'];
 // Turning these on lets Waldo reach other people or act on a site, so it needs a recent sign-in.
 const STEP_UP: readonly AutonomyClassV1[] = ['message.send_to_named', 'errand.run_on_site'];
 

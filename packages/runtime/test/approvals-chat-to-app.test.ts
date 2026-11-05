@@ -79,7 +79,6 @@ const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDe
   mcp_call: desk => desk.proposeMcpCall({ server: 'crm', tool: 'update_deal', args: { id: 1 } }),
   tainted_action: async desk => desk.proposeTaintedAction(await tainted()),
   standing_grant: desk => desk.proposeStandingGrant(GRANT),
-  standing_grant_reaching: desk => desk.proposeStandingGrant({ ...GRANT, scope: { class: 'message.send_to_named', channel: 'slack', account: 'team', recipients: ['#updates'], purpose: 'My Friday update' } }),
 };
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';

@@ -35,6 +35,8 @@ const onPrimary = (calendarId: string | undefined, account: string) =>
 // The resource a grant is bound to, so a second grant for the same class and resource supersedes the first instead of sitting
 // beside it, and the day's budget is kept per resource whichever grant uses it.
 const resourceOf = (terms: AppAutonomyGrantTermsV1) => terms.scope.class === 'calendar.move_own_block' ? `${terms.scope.class}:${terms.scope.account.toLowerCase()}` : terms.scope.class;
+// The classes this server can run. Every other class reads not_yet, and nothing writes a grant for it.
+export const AVAILABLE_CLASSES: readonly AutonomyClassV1[] = ['calendar.move_own_block'];
 // The contract shows at most this many grants of one class.
 export const GRANTS_PER_CLASS_MAX = 10;
 export class GrantLimitError extends Error {
@@ -62,6 +64,8 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
   const list = () => [...storage.kv.list({ prefix: GRANT })].map(([key]) => read(key.slice(GRANT.length))).filter(grant => grant !== null);
   const write = (grant: StandingGrantRecord) => { storage.kv.put(GRANT + grant.grant_id, standingGrantRecordSchema.parse(grant)); return grant; };
   const active = (now = deps.now()) => list().filter(grant => holds(grant, now));
+  // Not ended and not past its end, whether or not it has started.
+  const standing = (now = deps.now()) => list().filter(grant => grant.ended === null && now < grant.terms.expires_at);
   // How the day's uses of a grant are counted in the effect ledger: by class and resource on the owner's local day.
   const usage = (grant: StandingGrantRecord, now: number) => ({ owner_ref: deps.ownerRef(), grant_ref: resourceOf(grant.terms), area: 'calendar', action: 'own_block',
     local_day: localParts(now, grant.terms.limits.timezone).day, timezone: grant.terms.limits.timezone });
@@ -114,8 +118,9 @@ export const standingGrants = (storage: DurableObjectStorage, deps: Readonly<{
     // evaluated against the old terms is refused at dispatch and the day's count carries over.
     grant(terms: AppAutonomyGrantTermsV1, via: SurfaceNameV1): StandingGrantRecord {
       const parsed = appAutonomyGrantTermsV1Schema.parse(terms);
+      if (!AVAILABLE_CLASSES.includes(parsed.scope.class)) throw new Error('that class cannot be granted yet');
       return storage.transactionSync(() => {
-        const held = active().filter(grant => grant.terms.scope.class === parsed.scope.class);
+        const held = standing().filter(grant => grant.terms.scope.class === parsed.scope.class);
         const current = held.find(grant => resourceOf(grant.terms) === resourceOf(parsed));
         if (current) return write({ ...current, revision: current.revision + 1, terms: parsed, created_via: via });
         if (held.length >= GRANTS_PER_CLASS_MAX) throw new GrantLimitError();
