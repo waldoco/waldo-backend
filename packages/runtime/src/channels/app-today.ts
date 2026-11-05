@@ -8,7 +8,7 @@ import { APP_TODAY_DEADLINE_MS_V1, appTodayV1Schema, type AppTodayV1 } from '../
 // header, and keeps only what a glance needs. Each answer is read for the few fields it needs and nothing stricter, so a later
 // revision of those contracts does not break this one. A part that cannot be read in time, or reads wrong, is answered
 // unavailable on its own and logged by a fixed code, never its content; the rest still answer.
-type Read = (pathAndQuery: string) => Promise<Response>;
+type Read = (pathAndQuery: string, signal: AbortSignal) => Promise<Response>;
 
 export const APP_TODAY_PATH = '/app/v1/today';
 
@@ -28,9 +28,9 @@ type Part = 'calendar' | 'approvals' | 'brief';
 const fault = (part: Part, code: string) => console.error(JSON.stringify({ hop: 'app_today', part, code }));
 const LATE = Symbol('late');
 
-const answer = async <T>(read: Read, part: Part, path: string, schema: z.ZodType<T>, deadline: Promise<typeof LATE>): Promise<T | null> => {
+const answer = async <T>(read: Read, part: Part, path: string, schema: z.ZodType<T>, deadline: Promise<typeof LATE>, signal: AbortSignal): Promise<T | null> => {
   const asked = (async (): Promise<{ data: T } | { code: string }> => {
-    const response = await read(path);
+    const response = await read(path, signal);
     if (!response.ok) return { code: `status_${response.status}` };
     const parsed = schema.safeParse(await response.json());
     return parsed.success ? { data: parsed.data } : { code: 'shape' };
@@ -72,14 +72,15 @@ const briefPart = (day: z.infer<typeof dayAnswer> | null): AppTodayV1['brief'] =
 };
 
 // The three reads share one deadline: a slow calendar (Google, several accounts) answers unavailable while the rest answer.
-// What is still in flight when the Worker answers ends with the request.
+// When it passes, the reads still in flight are aborted, so the Durable Object's request for them is cancelled too.
 export const appToday = async (read: Read, now = Date.now(), deadlineMs = APP_TODAY_DEADLINE_MS_V1): Promise<Response> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<typeof LATE>(resolve => { timer = setTimeout(() => resolve(LATE), deadlineMs); });
+  const abort = new AbortController();
+  const deadline = new Promise<typeof LATE>(resolve => { timer = setTimeout(() => { resolve(LATE); abort.abort(); }, deadlineMs); });
   const [day, approvals, controls] = await Promise.all([
-    answer(read, 'calendar', '/app/v1/calendar/day', calendarAnswer, deadline),
-    answer(read, 'approvals', '/app/v1/approvals', approvalsAnswer, deadline),
-    answer(read, 'brief', '/app/v1/controls?view=day', dayAnswer, deadline),
+    answer(read, 'calendar', '/app/v1/calendar/day', calendarAnswer, deadline, abort.signal),
+    answer(read, 'approvals', '/app/v1/approvals', approvalsAnswer, deadline, abort.signal),
+    answer(read, 'brief', '/app/v1/controls?view=day', dayAnswer, deadline, abort.signal),
   ]).finally(() => clearTimeout(timer));
   const today: AppTodayV1 = {
     compiled_at: new Date(now).toISOString(),

@@ -42,13 +42,14 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 const reader = (answers: Record<string, unknown>) => {
   const asked: string[] = [];
-  const read = async (path: string) => {
-    asked.push(path);
+  const signals: AbortSignal[] = [];
+  const read = async (path: string, signal: AbortSignal) => {
+    asked.push(path); signals.push(signal);
     const value = answers[path];
     return value === 'never' ? new Promise<Response>(() => {}) : value instanceof Error ? Promise.reject(value)
       : value === undefined ? Response.json({ error: 'unavailable' }, { status: 503 }) : Response.json(value);
   };
-  return { asked, read };
+  return { asked, read, signals };
 };
 const all = (over: Record<string, unknown> = {}) => ({
   '/app/v1/calendar/day': calendarDay, '/app/v1/approvals': approvals, '/app/v1/controls?view=day': controls(brief), ...over,
@@ -116,11 +117,19 @@ describe('today', () => {
   });
 
   it('answers within its deadline: a calendar that never answers reads unavailable while the rest answer', async () => {
-    const { read } = reader(all({ '/app/v1/calendar/day': 'never' }));
+    const { read, signals } = reader(all({ '/app/v1/calendar/day': 'never' }));
     const started = Date.now();
     expect(await (await appToday(read, NOW, 30)).json()).toMatchObject({ calendar: { state: 'unavailable' }, approvals: { state: 'available' }, brief: { state: 'delivered' } });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(logged.map(line => JSON.parse(line))).toEqual([{ hop: 'app_today', part: 'calendar', code: 'deadline' }]);
+    expect(signals.length).toBe(3);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  });
+
+  it('aborts nothing when every read answers in time', async () => {
+    const { read, signals } = reader(all());
+    await appToday(read, NOW);
+    expect(signals.some(signal => signal.aborted)).toBe(false);
   });
 });
 

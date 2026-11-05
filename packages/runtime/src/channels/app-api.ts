@@ -335,7 +335,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const contract = request.headers.get(APP_CONTRACT_HEADER), owner = owners.get(owners.idFromName(who.doName));
     const headers = { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': publicOrigin(env, url),
       ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) };
-    return appToday(path => owner.fetch(new Request(`https://telegram-owner${path}`, { headers })));
+    return appToday((path, signal) => owner.fetch(new Request(`https://telegram-owner${path}`, { headers, signal })));
   }
 
   if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
