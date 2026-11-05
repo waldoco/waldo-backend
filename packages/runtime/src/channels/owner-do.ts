@@ -148,7 +148,7 @@ import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
-import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, scrubEpisodeTexts, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, scrubEpisodeTexts, transcript , ownerSpokeSince } from './episodes';
 import { consolidateSources, type SourcesDeps } from './nightly-sources';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
@@ -4502,7 +4502,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // PROACTIVE_GATE: one set of owner limits on every unasked message. The owner speaking anywhere answers a waiting question.
     const interrupts = this.env.PROACTIVE_GATE === '1' ? {
       book: interruptBook(storage.kv, { now: () => Date.now(), timezone: () => clock.timezone,
-        ownerSpokeSince: at => storage.sql.exec("SELECT 1 FROM episodes WHERE speaker = 'owner' AND at > ? LIMIT 1", at).toArray().length > 0 }),
+        ownerSpokeSince: at => ownerSpokeSince(storage.sql, at) }),
       limits: () => interruptLimits(this.env, loops.proactivity()),
     } : null;
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
@@ -5753,6 +5753,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let appRow: string | undefined;
         if (!skipped) {
           const receipt = await sentOrThrow(replies.length ? routedCall('sendMessage', { chat_id: owner, text, [APP_REPLIES]: replies }) : api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
+          // The Brief's answers to tap are the day's question: nothing else asks one until the owner answers.
+          if (replies.length) interrupts?.book.ask(`${card.id}:${day}`);
           if (typeof receipt.app_row_id === 'string') {
             appRow = receipt.app_row_id; plans.delivered(day, card.id, appRow, Date.now());
             if (otlp) rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now());

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { setProactivityArgsSchema } from '@waldo/contracts';
 import { drawingOn, interruptBook, interruptHold, interruptLimits, spendOf, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
 import { loopBook } from '../src/channels/loops';
+import { episodeIndex, ownerSpokeSince, OWNER_SAID } from '../src/channels/episodes';
 
 // The owner's limits on unasked messages. Code holds consent, quiet hours, one question waiting, the day's budget and the gap;
 // the model's urgent goes past the budget and the gap from a small allowance, and never past the rest.
@@ -147,6 +148,28 @@ describe('drawingOn: a health card under the owner\'s limits', () => {
     await withKv((state) => {
       const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
       expect(drawingOn({ admit: () => ({ verdict: 'spent' }), charge: () => undefined }, book, () => LIMITS).admit('x')).toEqual({ verdict: 'spent' });
+    });
+  });
+});
+
+describe('ownerSpokeSince, on the real episode index', () => {
+  it('golden: an owner row after the question counts; Waldo\'s and the system\'s rows, and earlier owner rows, do not', async () => {
+    await withKv((state) => {
+      const index = episodeIndex(state.storage.sql);
+      index.add('tg-1', 'owner', 'earlier words', NOW - 10);
+      index.add('r-1-reply', 'waldo', 'Waldo asks something', NOW);
+      index.add('sys-1', 'system', 'a job ran', NOW + 5);
+      expect(ownerSpokeSince(state.storage.sql, NOW)).toBe(false);
+      index.add('tg-2', OWNER_SAID as never, 'yes, do it', NOW + 10);
+      expect(ownerSpokeSince(state.storage.sql, NOW)).toBe(true);
+      expect(ownerSpokeSince(state.storage.sql, NOW + 10)).toBe(false);
+    });
+  });
+
+  it('a message that is only a quote the owner pasted still counts as them speaking', async () => {
+    await withKv((state) => {
+      episodeIndex(state.storage.sql).add('tg-3', 'quoted', '> the line they pasted', NOW + 1);
+      expect(ownerSpokeSince(state.storage.sql, NOW)).toBe(true);
     });
   });
 });

@@ -76,6 +76,10 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
       if (asks) kv.put(QUESTION_KEY, { ref, at: now, day: state.day });
       return kind;
     },
+    // A question asked at a fixed moment (the planning Brief's answers to tap): it waits like any other, and costs no budget.
+    ask(ref: string): void {
+      kv.put(QUESTION_KEY, { ref, at: deps.now(), day: today() });
+    },
     // A line for the turn deciding whether to reach out: what is left today, and whether a question is waiting.
     line(limits: InterruptLimits): string {
       const state = spent(), left = Math.max(0, limits.perDay - state.count), urgentLeft = Math.max(0, limits.urgentPerDay - state.urgent);
