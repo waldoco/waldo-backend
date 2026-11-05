@@ -76,6 +76,14 @@ export const dayPlanBook = (sql: Sql) => {
         'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
       ).toArray().map(({ card, ...delivery }) => [card, delivery]));
     },
+    // The owner's day for unasked messages, from the Brief to the Close: each at the time it went out, else its planned or
+    // pinned time, else its default. With day cards off the pinned or default times still bound the day.
+    window(day: string, timezone: string): Readonly<{ opens: number; closes: number }> {
+      const rows = this.read(day), went = this.deliveries(day), pins = this.pins();
+      const at = (card: CardId) => went.get(card)?.delivered_at
+        ?? localToEpoch(`${day}T${rows.find(row => row.card === card)?.time ?? pins[card] ?? cardFor(card)!.defaultTime}`, timezone);
+      return { opens: at('card:brief'), closes: at('card:close') };
+    },
     // Whether the card reached the owner today, on any surface, so a change can revise it.
     reached(day: string, card: string): boolean {
       return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
@@ -466,13 +474,13 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean; dayShape?: boolean }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
-  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true);
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true, sources.dayShape === true);
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
   if (wireSize(build(whole)) <= cap) return build(whole);
   const wanted = [

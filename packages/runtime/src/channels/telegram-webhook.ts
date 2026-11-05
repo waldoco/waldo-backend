@@ -48,6 +48,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
+  // owner's next day, in the chat role. Anything else keeps the decision as it was.
+  HEALTH_ACTIONS?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
@@ -180,6 +183,21 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
   // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
   GOOGLE_REALTIME_TRIAGE?: string;
+  // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
+  // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
+  // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
+  PROACTIVE_GATE?: string;
+  PROACTIVE_INTERRUPTS_PER_DAY?: string;
+  PROACTIVE_URGENT_PER_DAY?: string;
+  PROACTIVE_GAP_MIN?: string;
+  // '1' has Waldo act ahead: the update sweep's worker prepares the move (a drafted reply, a calendar change) and triage offers
+  // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
+  // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
+  PROACTIVE_ACT_AHEAD?: string;
+  // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
+  // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
+  PROACTIVE_INTERVENTIONS?: string;
+  PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
