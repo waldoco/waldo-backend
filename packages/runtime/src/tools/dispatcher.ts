@@ -949,6 +949,12 @@ const guardedView = (view: unknown, ctx: ToolDispatcherContext): unknown => {
   try { return JSON.parse(guarded.payload); } catch { return undefined; }
 };
 
+// The stored text's first characters, never ending in half of a character that takes two code units.
+const headOf = (text: string) => {
+  const last = text.charCodeAt(3_999);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? 3_999 : 4_000);
+};
+
 const offloadResult = (
   callId: string,
   tool: ToolName,
@@ -983,15 +989,16 @@ const offloadResult = (
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
   const stored = store.put(text, { call_id: callId });
-  // A view of a cut store would name items read_tool_output cannot reach.
-  const inline = view === undefined || stored.truncated ? undefined : guardedView(view, ctx);
+  // A cut store still shows the view: it is built from the whole result, so it keeps every item's flags, and next says
+  // what read_tool_output cannot reach.
+  const inline = view === undefined ? undefined : guardedView(view, ctx);
   const withheld = guarded.redactions.find((redaction) => redaction.kind === 'deep_encoding')?.count;
   return {
     ok: true,
     // total_chars is the full guarded length; stored_chars + truncated say what is actually
     // retrievable - the receipt never claims retrievable output the store did not keep
     data: {
-      stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, ...(inline === undefined ? { head: text.slice(0, 4_000) } : { inline }), read_with: 'read_tool_output',
+      stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, ...(inline === undefined ? { head: headOf(text) } : { inline }), read_with: 'read_tool_output',
       ...(stored.truncated ? { next: `Only the first ${stored.stored_chars} characters were kept, so read_tool_output cannot reach the rest. Make the same call asking for less (a smaller limit, a narrower range, or one item) to see what was cut.` } : {}),
       ...(withheld === undefined ? {} : { withheld: { count: withheld, note: `${withheld === 1 ? 'One value was' : `${withheld} values were`} withheld in place as ${DEEP_ENCODING_MARKER}, because the content was encoded too deeply to check. Nothing else in the result was withheld for this.` } }),
     },
