@@ -179,6 +179,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
   // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
   PROACTIVE_ACT_AHEAD?: string;
+  // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
+  // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
+  PROACTIVE_INTERVENTIONS?: string;
+  PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

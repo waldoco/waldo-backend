@@ -49,6 +49,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   PROACTIVE_URGENT_PER_DAY: gap('the default urgent allowance past that budget; no trial runs an unasked message'),
   PROACTIVE_GAP_MIN: gap('the default gap between two unasked messages; no trial runs an unasked message'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
+  PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
+  PROACTIVE_REVIEW_EVERY_MIN: inert('how often the look is scheduled; a trial turn is not an alarm pass'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),

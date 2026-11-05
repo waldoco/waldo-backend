@@ -100,7 +100,7 @@ export const APPLY_RETRY_MS = 60 * 60_000;
 export type MachineNote = (key: string, text: string, settle: () => void) => Promise<void>;
 const MACHINE_WORK: Readonly<Record<MachineJob, string>> = {
   heartbeat: 'check-back on your open loops', update_sweep: 'scan of your mail and calendar for updates',
-  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile',
+  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile', intervention: 'look across your day',
 };
 export const machineStoppedNote = (job: MachineJob, why: string): string => `My background ${MACHINE_WORK[job]} stopped before it finished, because ${why}. I'll try it again on its next run.`;
 const DAY_MS = 24 * 60 * 60_000;

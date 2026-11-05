@@ -22,7 +22,8 @@ export type CancelReason = 'owner' | 'forgotten';
 
 // Reader jobs the brain starts on its own schedule, not because the owner asked. Their origin names the job.
 // owner_lookup is the one the owner's consent starts, not a schedule: it looks the owner up on the public web once per yes.
-export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep' | 'owner_lookup';
+// intervention is Waldo's own look across the owner's plate (PROACTIVE_INTERVENTIONS).
+export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep' | 'owner_lookup' | 'intervention';
 export const MACHINE_ORIGIN = 'machine:';
 export const isMachine = (row: Pick<JobRow, 'origin'>): boolean => row.origin.startsWith(MACHINE_ORIGIN);
 // What a machine job was started on: a digest of its inputs, the scope it holds open (one open job per job and scope), the
