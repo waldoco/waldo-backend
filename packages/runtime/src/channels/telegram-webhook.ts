@@ -64,6 +64,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
+  // "1" keeps a nightly capacity note in memory (how much real work the owner sustains, and when they think best) and has the
+  // Brief and the Close plan deep work and a weekly reset from it. Off unless "1".
+  CAPACITY_PLAN?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;
@@ -81,6 +84,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // "1" serves /app/v1/device-context: the owner's place consent and the latest coarse place per phone. Off unless "1".
+  DEVICE_PLACE?: string;
   // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
   // Off unless "1".
   BROWSER_FORM_SUBMIT?: string;
@@ -88,6 +93,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
   WALDO_RECALL_CHAIN?: string;
+  // '1': every owner upload is kept in the workspace, and extract_archive is offered.
+  WALDO_FILE_TOOLS?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

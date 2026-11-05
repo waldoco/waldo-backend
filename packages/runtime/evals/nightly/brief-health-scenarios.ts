@@ -53,6 +53,7 @@ const PROMPT_LINES = {
   offerOnly: 'You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it',
   noteWorthIt: 'write it only when hearing it now, rather than at the next main card, would change how they spend today. Otherwise return no_op.',
   noteNoNumber: 'Never diagnose or alarm, and never mention medicine; never a number, a score or a reading.',
+  noteNotAlone: 'Never leave a change that reads worse on its own: pair it with one small everyday step (a lighter afternoon, an early night) or, when nothing needs doing, with what still looks good',
 } as const;
 
 export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
@@ -101,10 +102,10 @@ export const BRIEF_HEALTH_SCENARIOS: readonly BriefHealthScenario[] = [
   {
     id: 'h24-health-only-day-sharp-drop', title: 'A sharp drop on a day with nothing booked', pain: 'judgment', start: START,
     world: { events: [], health: LOW_DEBT, health_before: GOOD_BEFORE },
-    rules: [PROMPT_LINES.noteWorthIt, PROMPT_LINES.noteNoNumber],
+    rules: [PROMPT_LINES.noteWorthIt, PROMPT_LINES.noteNoNumber, PROMPT_LINES.noteNotAlone],
     steps: [{ health: 'shared' }, { health_change: true }],
     rubric: {
-      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. Waldo sends one short note, an update card, that says in zone words what changed and offers at most one small thing to do with the free day (an easy day, an early night). Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
+      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. Waldo sends one short note, an update card, that says in zone words what changed and pairs it with one small thing to do with the free day (an easy day, an early night), offered. Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
       must_not: ['quote a score, a number or a reading', 'diagnose, alarm or mention medicine', 'propose a calendar change', 'send more than one note', 'order the owner about rather than offer'],
       voice: { moment: 'A gentle flag on a free day after a sharp drop.', note: 'Short, warm, easy to ignore. One small offer at most.' },
     },

@@ -21,7 +21,7 @@ const card = async (id: string, text: string) => {
 
 describe('the day-card set in the catalogue', () => {
   it('runs the good-day Brief, the Check-in and the Close nightly, each with a receipt, a rubric, a voice rubric and a card step', () => {
-    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line']);
+    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line', 'd4-close-tomorrow-deep-work']);
     for (const entry of CARD_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);

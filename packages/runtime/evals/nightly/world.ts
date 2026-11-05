@@ -34,6 +34,10 @@ import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '.
 import { evalConversation, type ConversationSeed } from './conversation-world';
 import { approvalDesk } from '../../src/channels/approvals';
 import { approvalHandlers } from '../../src/tools/live/raise-approval';
+import { workspaceToolHandlers } from '../../src/tools/live/workspace';
+import { keptNote, uploadKeeper } from '../../src/channels/upload-keeper';
+import { workspaceStore, type WorkspaceState } from '@waldo/workspace';
+import JSZip from 'jszip';
 import { proposeActionHandler, replayHost } from '../../src/tools/live/propose-action';
 
 export const OWNER = 'eval-owner';
@@ -80,7 +84,12 @@ export type WorldSeed = Readonly<{
   approvals?: readonly SeedApproval[];
   // propose_action is offered, as in a job that read outside text: each card it raises is recorded, never run.
   actions?: true;
+  // The owner's private workspace, in memory, with the production workspace tools and WALDO_FILE_TOOLS on. An upload step
+  // keeps its file here through the production keeper.
+  files?: true;
 }> & ConversationSeed;
+// A file the owner sends with a step: text, or a zip of named text entries.
+export type SeedUpload = Readonly<{ filename: string; mime: string; text?: string; zip?: Readonly<Record<string, string>> }>;
 export type SeedApproval = Readonly<{ at: string; to: readonly string[]; cc?: readonly string[]; subject: string; body: string }>;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
@@ -347,7 +356,17 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     if (connected.kind !== 'connected') throw new Error('the seeded MCP server did not connect');
     for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
   })();
+  // Ids are a counter, so a recorded script can name the first uploaded file: file_id ...0001.
+  let workspace: WorkspaceState = { binding: null, files: [], bodies: [], operations: [] };
+  const blobs = new Map<string, Uint8Array>();
+  let fileIds = 0;
+  const store = seed.files ? workspaceStore({ binding: { ownerId: '00000000-0000-4000-8000-00000000eeee', environment: 'eval', namespace: 'eval', doName: OWNER, doId: OWNER, stateVersion: 1, mappingVersion: 1 },
+    admit: async () => ({ status: 'ok' }), metadata: { transaction(work) { const next = structuredClone(workspace); const result = work(next); workspace = next; return result; } },
+    bodies: { put: async (body, bytes) => { blobs.set(body.blob_id, bytes.slice()); }, get: async (body) => blobs.get(body.blob_id)?.slice() ?? null, remove: async (body) => { blobs.delete(body.blob_id); } },
+    now, newId: () => `f17e0000-f17e-4f17-8f17-${String(++fileIds).padStart(12, '0')}` }) : null;
+  const keepUpload = store ? uploadKeeper(() => store, OWNER) : null;
   const offered = [
+    ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
@@ -412,8 +431,15 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange, sql, semantic,
+    // The owner sends a file: kept through the production keeper, and the note the turn carries, as the surfaces write it.
+    upload: async (file: SeedUpload, key: string): Promise<string> => {
+      if (!keepUpload) throw new Error('an upload step needs world.files');
+      let bytes = new TextEncoder().encode(file.text ?? '');
+      if (file.zip) { const zip = new JSZip(); for (const [name, text] of Object.entries(file.zip)) zip.file(name, text); bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }); }
+      return keptNote(`file "${file.filename}"`, await keepUpload({ bytes, filename: file.filename, mime: file.mime, key }), false);
+    },
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
-    dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
+    dayCard: (id: CardId, capacity = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}) }),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
     ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync(), cardsReady]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
@@ -441,6 +467,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      ...(store ? { workspace: workspace.files.filter((file) => file.state === 'ready').map(({ path, mime, provenance }) => ({ path, mime, provenance })) } : {}),
       ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
       ...(cards ? { approvals: sql.exec<{ id: string; status: string; summary: string; withdrawn_reason: string | null; replaced_by: string | null }>(
         'SELECT id, status, summary, withdrawn_reason, replaced_by FROM ledger ORDER BY created_at, id').toArray() } : {}),
