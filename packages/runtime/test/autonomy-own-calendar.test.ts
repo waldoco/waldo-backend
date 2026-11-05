@@ -26,7 +26,7 @@ const focus = (startMs = NOW + 5 * HOUR, over: Record<string, unknown> = {}) =>
 const MARKED = new Set(['e1', 'r1', 'x1']);
 
 type Grants = ReturnType<typeof standingGrants>;
-const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock' | 'enabled'>; effects?: (real: OwnerEffectLedger) => OwnerEffectLedger; createThrows?: boolean; undoCancels?: boolean }> = {}) => {
+const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Grants) => Pick<Grants, 'ownBlock' | 'enabled'>; effects?: (real: OwnerEffectLedger) => OwnerEffectLedger; googleDown?: () => boolean; createThrows?: boolean; undoCancels?: boolean }> = {}) => {
   let now = NOW, n = 0, g = 0;
   const writes: unknown[][] = [];
   const cards: string[] = [];
@@ -35,9 +35,10 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
   const versions = new Map<string, string>();
   // Creates Waldo asked for, and the ones a readback finds on the calendar after the create's answer was lost.
   const created = new Map<string, Record<string, unknown>>(), landed = new Set<string>();
+  let reads = 0;
   const client = {
     account: { connection_id: `local:${ACCOUNT}`, email: ACCOUNT },
-    event: async (id: string, calendarId?: string) => landed.has(id) ? { id, title: created.get(id)!.title, start: created.get(id)!.start, end: created.get(id)!.end, all_day: false, etag: 'v2', status: 'confirmed', operation_marker: created.get(id)!.operationMarker } : ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: versions.get(id) ?? (id === 'e1' || id === 'r1' || id === 'u1' ? 'v1' : 'v2'), calendar: calendarId,
+    event: async (id: string, calendarId?: string) => ++reads && landed.has(id) ? { id, title: created.get(id)!.title, start: created.get(id)!.start, end: created.get(id)!.end, all_day: false, etag: 'v2', status: 'confirmed', operation_marker: created.get(id)!.operationMarker } : ({ id, title: 'Focus', start: iso(NOW + 5 * HOUR), end: iso(NOW + 6 * HOUR), all_day: false, etag: versions.get(id) ?? (id === 'e1' || id === 'r1' || id === 'u1' ? 'v1' : 'v2'), calendar: calendarId,
       ...(id === 'r1' ? { recurring_event_id: 'series' } : {}), ...(MARKED.has(id) ? { waldo_made: true } : {}), ...(id === 'x1' ? { attendees: 1 } : {}) }),
     createEvent: async (input: Record<string, unknown>) => { writes.push(['create', input]); created.set(String(input.id), input); if (options.createThrows) throw new Error('socket closed'); return { id: String(input.id), title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
     moveEvent: async (...args: unknown[]) => { writes.push(['move', ...args]); return { id: 'e1', title: 'Focus', start: '', end: '', all_day: false, etag: 'v3' }; },
@@ -49,12 +50,12 @@ const world = (state: DurableObjectState, options: Readonly<{ grants?: (real: Gr
   const effects = options.effects ? options.effects(realEffects) : realEffects;
   const desk = approvalDesk(state.storage.sql, {
     call: async (method, body) => { if (method === 'sendMessage') cards.push(String((body as { text?: string }).text)); return { message_id: cards.length }; },
-    owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: entry => logs.push(entry as Record<string, unknown>),
+    owner: 42, google: async () => { if (options.googleDown?.()) throw new Error('intent_unavailable'); return client; }, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: entry => logs.push(entry as Record<string, unknown>),
     effects, ownerRef: () => 'owner-1', grants: options.grants ? options.grants(real) : real, ...(options.undoCancels ? { undoCancels: true } : {}),
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
   const propose = (p: ReturnType<typeof focus>, ...origin: [RunOrigin | undefined] | []) => desk.propose(p, 'turn-1', `tool:${n + 1}`, { origin: origin.length ? origin[0] : 'owner' });
-  return { desk, client, grants: real, writes, cards, logs, status, propose, effects, land: (id: string) => landed.add(id), clock: { set: (ms: number) => { now = ms; } } };
+  return { desk, client, grants: real, writes, cards, logs, status, propose, effects, land: (id: string) => landed.add(id), reads: () => reads, clock: { set: (ms: number) => { now = ms; } } };
 };
 const inDo = (name: string, run: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => run(state));
@@ -238,7 +239,8 @@ describe('calendar.move_own_block: Waldo places, moves and removes its own block
       const id = await w.propose(focus());
       expect((await w.desk.approvals(NOW)).map(item => item.state)).toEqual(['outcome_unknown']);
       w.land(String((w.writes[0]![1] as { id: string }).id));
-      expect(await w.desk.approvals(NOW)).toEqual([]);
+      w.clock.set(NOW + 6 * MIN);
+      expect(await w.desk.approvals(NOW + 6 * MIN)).toEqual([]);
       expect(row(state)).toMatchObject({ id, status: 'done', undo_json: null });
       expect(w.desk.grantOutcome(id)).toMatchObject({ state: 'done' });
       expect(w.writes).toHaveLength(1);
@@ -263,6 +265,78 @@ describe('calendar.move_own_block: Waldo places, moves and removes its own block
       expect(await w.desk.approvals(NOW)).toEqual([]);
       expect(row(state)).toMatchObject({ status: 'done', undo_json: expect.stringContaining('"op":"cancel"') });
       expect(w.writes).toHaveLength(1);
+    }));
+
+    it('with Google unavailable, a settle answers outcome unknown and never rejects', () => inDo('settle-google-down', async state => {
+      const down = { now: false };
+      const w = world(state, { createThrows: true, googleDown: () => down.now });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      down.now = true;
+      expect((await w.desk.decide(id, 'a', 'retap')).toast).toBe('Outcome unknown');
+      expect(await w.desk.approvals(NOW)).toHaveLength(1);
+      expect(w.status(id)).toBe('uncertain');
+    }));
+
+    it('a lookup of one approval by id, as each turn makes, never settles and never reads Google', () => inDo('settle-not-by-id', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      const before = w.reads();
+      w.land(String((w.writes[0]![1] as { id: string }).id));
+      expect((await w.desk.approvals(NOW, { id })).map(item => item.state)).toEqual(['outcome_unknown']);
+      expect([w.status(id), w.reads()]).toEqual(['uncertain', before]);
+    }));
+
+    it('one still unknown after a readback is read again only after a wait that grows', () => inDo('settle-backoff', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      await w.propose(focus());
+      const at = w.reads();
+      await w.desk.approvals(NOW);
+      expect(w.reads()).toBe(at + 1);
+      await w.desk.approvals(NOW);
+      expect(w.reads()).toBe(at + 1);
+      w.clock.set(NOW + 6 * MIN);
+      await w.desk.approvals(NOW + 6 * MIN);
+      expect(w.reads()).toBe(at + 2);
+      w.clock.set(NOW + 12 * MIN);
+      await w.desk.approvals(NOW + 12 * MIN);
+      expect(w.reads()).toBe(at + 2);
+      w.clock.set(NOW + 17 * MIN);
+      await w.desk.approvals(NOW + 17 * MIN);
+      expect(w.reads()).toBe(at + 3);
+    }));
+
+    it('a record that is not a grant\'s (no quota) is never settled as not done, and is logged as such', () => inDo('settle-no-quota', async state => {
+      const w = world(state);
+      const id = await w.propose(focus());
+      state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', grant_json = ? WHERE id = ?", JSON.stringify({ class: 'calendar.move_own_block', grant_id: 'g1', revision: 1 }), id);
+      w.effects.reserve({ operationId: 'tool:1:apply', owner_ref: 'owner-1', tool: 'calendar_change', payload: {} });
+      await w.desk.approvals(NOW);
+      expect(w.status(id)).toBe('uncertain');
+      expect(w.logs.find(entry => entry.hop === 'grant_settle')).toMatchObject({ ok: false, code: 'not_a_grant' });
+    }));
+
+    it('settled after the block has started, it offers no undo and names no time already past', () => inDo('settle-late', async state => {
+      const w = world(state, { effects: stoppedOnce('after_done') });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus(NOW + 5 * HOUR));
+      w.clock.set(NOW + 6 * HOUR);
+      const out = await w.desk.decide(id, 'a', 'retap');
+      expect(out.toast).toBe('Done');
+      expect(out.message).not.toMatch(/until/);
+      expect(w.desk.grantOutcome(id)!.message).not.toMatch(/until/);
+    }));
+
+    it('a grant revoked since still has its outcome settled, and nothing runs again', () => inDo('settle-revoked', async state => {
+      const w = world(state, { createThrows: true });
+      w.grants.grant(terms(), 'app');
+      const id = await w.propose(focus());
+      w.grants.revoke('g1');
+      w.land(String((w.writes[0]![1] as { id: string }).id));
+      expect(await w.desk.approvals(NOW)).toEqual([]);
+      expect([w.status(id), w.writes.length]).toEqual(['done', 1]);
     }));
 
     it('a row claimed with no effect record never reached Google, so it settles not done', () => inDo('settle-no-record', async state => {
