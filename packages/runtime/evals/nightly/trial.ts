@@ -5,6 +5,7 @@ import { OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, 
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { isSkip } from '../../src/channels/day-cards';
 import type { CardId } from '../../src/prompt/day-cards';
+import { capacityContext } from '../../src/prompt/capacity';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -18,7 +19,7 @@ import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
 import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
-import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type SeedUpload, type WorldSeed } from './world';
 import { changeLines, type Change } from '../../src/channels/update-cards';
 import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
 import { triagePrompt } from '../../src/prompt/update-cards';
@@ -28,6 +29,8 @@ import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 
 export type Step =
   | Readonly<{ say: string }>
+  // The owner sends a file with these words (world.files): the turn carries the keeper's note beside them.
+  | Readonly<{ say: string; upload: SeedUpload }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
   // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
@@ -36,7 +39,8 @@ export type Step =
   // The owner's derived health moves zone and the health trigger runs, with one structured model call.
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
-  | Readonly<{ card: CardId }>
+  // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
+  | Readonly<{ card: CardId; capacity?: string }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
   | Readonly<{ outside_job: string }>
@@ -146,7 +150,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         turn += 1;
         skills.turn(ownerTurnTrace('app', turn));
         transcript.push({ role: 'owner', text: step.say });
-        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: 'upload' in step ? [...ownerWords(step.say), { authorship: 'media_note', text: await world.upload(step.upload, `trial:${turn}`) }] : ownerWords(step.say) }), time) });
         // The post-reply compaction hook; a store built with compaction off makes it a no-op.
         await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
@@ -208,7 +212,8 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('card' in step) {
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
         skills.turn(`${scenario.id}-${step.card}`);
-        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card), time, undefined, undefined, undefined, undefined, 'external');
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined), time, undefined, undefined, undefined,
+          step.capacity === undefined ? undefined : capacityContext(step.capacity, ''), 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
         world.shareHealth(step.health === 'shared');

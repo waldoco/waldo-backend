@@ -24,6 +24,17 @@ const FRIDAY: readonly SeedEvent[] = [
   event('cd-sat', 'Breakfast with Mira', '26', '09:00', '10:00'),
 ];
 
+// CAPACITY_PLAN: Thursday's Close after a heavy day, with what Waldo has learned of the owner's capacity, and Friday ahead.
+const HEAVY_THURSDAY: readonly SeedEvent[] = [
+  event('cp-sync', 'Leads sync', '24', '09:00', '10:30'),
+  event('cp-hiring', 'Hiring panel', '24', '11:00', '13:00'),
+  event('cp-review', 'Quarterly review', '24', '14:00', '17:30'),
+  event('cp-standup', 'Standup', '25', '10:00', '10:15'),
+  event('cp-board', 'Board review', '25', '11:00', '13:00'),
+  event('cp-design', 'Design review', '25', '15:00', '16:30'),
+];
+const CAPACITY_NOTE = 'Owner does their best focused work early, before the first meeting of the day. Across recent weeks one long focus block a day has held; a second block after a day of back-to-back meetings has not.';
+
 const sawHealth = modelSaw(['Form zone:'], 'the card request carried the shared health context');
 const noReading = repliesOmit(READINGS, 'no score or reading appears on a card');
 
@@ -57,5 +68,15 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
       voice: { moment: 'The evening Close after a long, low day with a board review in it.', note: 'Gentle and short, with no wit on a hard day. Nothing empty is listed ("Carried over: nothing"). The body gets one line at most.' },
     },
     receipts: [sawHealth, noReading, readOnly],
+  },
+  {
+    id: 'd4-close-tomorrow-deep-work', title: 'The Close shapes tomorrow\'s deep work from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
+    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE }],
+    rubric: {
+      outcome: "The Close wraps the heavy Thursday gently and says, in a sentence, the shape of Friday's deep work: one focus block early, before Standup at 10:00, not a second one around the Board review or the Design review, and why for this owner (their best hours come early, one block is what has held after a day of back-to-back meetings, and today ran low). It is a plan for the morning, not a question for tonight.",
+      must_not: ['propose more than one deep-work block for Friday', 'put deep work over the Board review, the Standup or the Design review', 'quote a score, a number or a reading', 'say a change is made or a card is raised', 'ask for an answer tonight', 'add a protocol or a health routine to the day'],
+      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short. Tomorrow\'s shape is one plain sentence with its reason for them, not a schedule or a lecture.' },
+    },
+    receipts: [sawHealth, noReading, readOnly, modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
   },
 ];

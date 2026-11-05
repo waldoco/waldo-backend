@@ -167,6 +167,21 @@ describe('openIMessageMedia', () => {
     expect(d.source).not.toHaveBeenCalled();
   });
 
+  it('with WALDO_FILE_TOOLS on, keeps every file, attaches the readable ones and names the saved path for the rest', async () => {
+    const kept: { filename: string; key: string }[] = [];
+    const keep = vi.fn(async (file: { filename: string; key: string }) => { kept.push(file); return { status: 'saved' as const, path: `uploads/f/${file.filename}`, file_id: `id-${kept.length}`, revision: 1 }; });
+    const zip = { id: 'att-zip', name: 'notes.zip', mimeType: 'application/zip', size: 4 };
+    const d = { ...deps(opened([PNG, new Uint8Array([0x50, 0x4b, 3, 4])])), keep };
+    const result = await openIMessageMedia(media(photo, zip), d);
+    expect(result).toEqual({ kind: 'opened',
+      parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached. Saved in their workspace as uploads/f/IMG_0001.png (file_id id-1, revision 1).]' },
+        { authorship: 'media_note', text: '[Owner sent a file "notes.zip". Saved in their workspace as uploads/f/notes.zip (file_id id-2, revision 1). It is not attached here; open it with the workspace tools.]' }],
+      attachments: [{ kind: 'image', mime_type: 'image/png', filename: 'IMG_0001.png', data_base64: btoa(String.fromCharCode(...PNG)) }] });
+    expect(kept.map(file => file.key)).toEqual(['imessage:msg-1:0', 'imessage:msg-1:1']);
+    // Off: the same zip is still the honest format reply.
+    expect(await openIMessageMedia(media(zip), deps(opened([PNG])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
+  });
+
   it('a voice note stays refused with the flag off', async () => {
     expect(await openIMessageMedia(media({ ...photo, mimeType: 'audio/mp4', name: 'voice.m4a' }), deps(null, false))).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
   });

@@ -6,6 +6,7 @@ import { BodyWithheld, omitLongRuns, READ_BODY_BUDGET, scribedExternal } from '.
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../check-back';
 import { ClosedRunError } from '../run-effect-scope';
 import { readableFile, TELEGRAM_DOWNLOAD_LIMIT_BYTES, toBase64 } from '../telegram-media';
+import type { KeptUpload, UploadKeeper } from '../upload-keeper';
 import type { AgentMailInbox, AgentMailRow } from './inbox';
 import { messageIds } from './ingress';
 
@@ -34,7 +35,12 @@ type Address = Readonly<{ name?: string; address?: string }>;
 const named = (list: readonly Address[] | Address | undefined): string[] =>
   (Array.isArray(list) ? list : list ? [list] : []).map((entry: Address) => cleaned(entry.name ? `${entry.name} <${entry.address ?? ''}>` : entry.address ?? '')).filter(Boolean);
 
-export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'basis'>, address: string, canaries: readonly string[]): Promise<MailForModel> => {
+const where = (kept: KeptUpload): string => kept.status === 'saved' ? `${kept.path} (file_id ${kept.file_id}, revision ${kept.revision})` : '';
+
+// keep: present with WALDO_FILE_TOOLS on. Every attached file (not a part the mail shows inline, such as a signature logo)
+// is then kept in the owner's workspace, so a later turn can open the ones this turn could not. Files are kept only after the
+// scribe passes the mail: a withheld mail keeps nothing.
+export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id' | 'basis'>, address: string, canaries: readonly string[], keep?: UploadKeeper): Promise<MailForModel> => {
   const mail = await PostalMime.parse(raw, { attachmentEncoding: 'arraybuffer' });
   const text = mail.text?.trim() ? mail.text : mail.html ? htmlText(mail.html).text : '';
   // Files listed as attachments come before parts the mail shows inline (a signature logo), so the files the sender
@@ -42,17 +48,19 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'bas
   const files = [...mail.attachments].sort((a, b) => Number(a.disposition === 'inline') - Number(b.disposition === 'inline'));
   const opened: { readable: Omit<LLMAttachment, 'data_base64'>; bytes: Uint8Array }[] = [];
   const unopened: string[] = [];
-  for (const file of files) {
+  const keepable: { bytes: Uint8Array; filename: string; mime: string; key: string }[] = [];
+  for (const [index, file] of files.entries()) {
     const filename = cleaned((file.filename ?? 'attachment').slice(0, 256)) || 'attachment';
     const readable = readableFile(file.mimeType, filename);
     const bytes = new Uint8Array(file.content as ArrayBuffer);
+    if (keep && bytes.byteLength > 0 && file.disposition !== 'inline') keepable.push({ bytes, filename, mime: file.mimeType, key: `mail:${row.id}:${index}` });
     if (!readable || opened.length >= LLM_ATTACHMENTS_MAX || bytes.byteLength === 0 || bytes.byteLength > TELEGRAM_DOWNLOAD_LIMIT_BYTES) {
-      unopened.push(`${filename} (${file.mimeType}${readable ? '' : ', a type Waldo cannot read'})`);
+      unopened.push(`${filename} (${file.mimeType}${readable || keep ? '' : ', a type Waldo cannot read'})`);
       continue;
     }
     opened.push({ readable, bytes });
   }
-  let view: Readonly<{ from: string[]; to: string[]; cc: string[]; date: string | null; message_id: string | null; subject: string; body: string; attached_and_opened: string[]; attached_not_opened: string[] }>;
+  let view: Readonly<{ from: string[]; to: string[]; cc: string[]; date: string | null; message_id: string | null; subject: string; body: string; attached_and_opened: string[]; attached_not_opened: string[]; saved_to_workspace?: string[] }>;
   try {
     view = scribedExternal({
       // Kept whole, so a reply can name it in in_reply_to.
@@ -63,6 +71,12 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'bas
   } catch (error) {
     if (error instanceof BodyWithheld) return { text: WITHHELD_MAIL, attachments: [] };
     throw error;
+  }
+  if (keep) {
+    const saved: string[] = [];
+    for (const file of keepable) { const kept = where(await keep(file)); if (kept) saved.push(`${file.filename}: ${kept}`); }
+    // The names already passed the scribe in the view; this applies the same redaction to the lines that repeat them.
+    try { view = { ...view, saved_to_workspace: scribedExternal({ saved }, canaries).saved }; } catch (error) { if (!(error instanceof BodyWithheld)) throw error; }
   }
   const cut = view.body.length > READ_BODY_BUDGET;
   const shown = {
@@ -100,6 +114,8 @@ export type AgentMailDrainDeps = Readonly<{
   // Whether this alarm still has time for a model turn.
   room(): boolean;
   log(code: AgentMailTurnCode): void;
+  // With WALDO_FILE_TOOLS on: keeps each attachment in the owner's workspace as a provider import.
+  keep?: UploadKeeper;
 }>;
 
 export const AGENT_MAIL_DIRECTORY_RETRY_MS = 60_000;
@@ -119,7 +135,7 @@ export async function drainAgentMail(deps: AgentMailDrainDeps): Promise<void> {
     deps.live.add(claimed.attempt!);
     try {
       const current = async () => { const now = inbox.get(claimed.id); if (now?.state !== 'running' || now.attempt !== claimed.attempt) throw new ClosedRunError(); };
-      const mail = await mailForModel(inbox.raw(claimed.id), claimed, deps.address(claimed.handle), deps.canaries());
+      const mail = await mailForModel(inbox.raw(claimed.id), claimed, deps.address(claimed.handle), deps.canaries(), deps.keep);
       const reply = checkBackReply(await deps.turn(claimed, mail, current));
       await current();
       if (reply === null) { inbox.end(claimed, 'completed'); deps.log('skipped'); }
