@@ -20,7 +20,8 @@ import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
-const KNOCK = 'template:waldo_update_ready';
+const KNOCK = 'template:waldo_proactive_update';
+const REPLY_KNOCK = 'template:waldo_update_ready';
 const model = vi.hoisted(() => ({ card: null as string | null }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -36,7 +37,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '7b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d';
 const SUBJECT = '15550003333';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 const HOUR = 60 * 60_000;
 const today = () => new Date().toISOString().slice(0, 10);
 const CARD_ID = () => `day-card:${today()}:card:brief`;
@@ -269,7 +270,7 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       await status('refused', ids());
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
       await reply();
-      expect(wire.events).toEqual([`text:${REPORT}`, KNOCK, `text:${REPORT}`, 'turn']);
+      expect(wire.events).toEqual([`text:${REPORT}`, REPLY_KNOCK, `text:${REPORT}`, 'turn']);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
 
       await status('delivered', ids());

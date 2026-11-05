@@ -172,6 +172,8 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
 // What the owner object hands the first run. Built per request from storage, so the tables exist whenever a route is served.
 export type OwnerOnboardingDeps = Readonly<{
   storage: DurableObjectStorage; doName: string; now(): number;
+  // PROACTIVE_BOTH_DEFAULT: what the channel step shows as the owner's setting while they have chosen nothing.
+  bothDefault?: boolean;
   // The health plane's signed RPC; null where no directory backs this deploy.
   rpc: ((fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>) | null;
   // The owner runtime's settings action (timezone.set, proactivity.set, card.pin).
@@ -238,7 +240,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     googleConnected: async () => (storage.kv.get<unknown[]>('google:accounts') ?? []).length > 0,
     healthConnected,
     timezoneConfirmed: () => storage.kv.get<boolean>('timezone_confirmed') === true,
-    proactiveSurface: () => proactiveSurface(storage.kv),
+    proactiveSurface: () => proactiveSurface(storage.kv, deps.bothDefault),
     setProactiveSurface: surface => setProactiveSurface(storage.kv, surface),
     chatLink: async provider => {
       const offered = await deps.chat.offered(provider).catch(() => null);
