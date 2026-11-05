@@ -29,7 +29,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -233,7 +233,8 @@ export const createOwnerResponder = (
   const policy = ownerRoutePolicy(model, model, access);
   // WALDO_LIGHT_CHAT: the light step's route and the strong role's, which is the chat route unless the environment sets it.
   const lightRoles = privateOwner?.lightRoles ?? {};
-  const lightPolicy = lightRoutePolicy(lightRoles.light ?? auxiliaryModel);
+  const lightCap = lightRoles.lightMaxTokens ?? LIGHT_ROLE_MAX_TOKENS;
+  const lightPolicy = lightRoutePolicy(lightRoles.light ?? auxiliaryModel, lightCap);
   const strongPolicy = lightRoles.strong === undefined && lightRoles.strongFallback === undefined ? policy : strongRoutePolicy(lightRoles.strong ?? model, lightRoles.strongFallback, access);
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
@@ -335,7 +336,7 @@ export const createOwnerResponder = (
         const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
         return {
           cache_key: cacheKey,
-          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: light ? lightRoles.lightMaxTokens ?? LIGHT_ROLE_MAX_TOKENS : outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: light ? lightCap : outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
           ...(tools ? brainTools(tools, providerSearch && purpose === 'reply' && !light) : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
@@ -680,6 +681,8 @@ export const createOwnerResponder = (
           // Everything this call shows the model crosses the forget barrier here, once.
           const cut = applyForgetBarrier({
             history: { kind: 'messages', messages: request.messages },
+            // The light step's own view of the chat (WALDO_LIGHT_CHAT), read only when this step may take it.
+            exchange: { kind: 'messages', messages: lightFirst ? ownerExchangeHistory(tree, trace, compaction) : [] },
             replyQuote: { kind: 'text', origin: 'external', text: turnReplyContext },
             jobContext: { kind: 'text', origin: 'external', text: promptContext },
             orders: { kind: 'lines', origin: 'owner_record', text: standingOrders?.() ?? '' },
@@ -736,17 +739,20 @@ export const createOwnerResponder = (
           const attachments = [...(pending ?? []), ...browserImages];
           const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };
           const files = attachments.length ? attachments : undefined;
-          // WALDO_LIGHT_CHAT: the turn's first step runs on the light role. It reads the system prompt, the conversation and the
-          // clock, and nothing this turn admitted: no health, day plan, memory, recall or tool results, no attachment, and no tool
-          // but escalate. Its plain, whole text is the reply; anything else (escalate, a cut-off reply, a failure) is dropped
-          // unseen and the strong role takes this step with everything. A stop or steer that came meanwhile runs the step again.
-          const lightNow = lightFirst && !files;
+          // WALDO_LIGHT_CHAT: the turn's first step runs on the light role. It reads the system prompt, the owner's own exchange
+          // (ownerExchangeHistory: never a machine turn such as a Brief, card or report, nor anything someone else wrote) and the
+          // clock, and nothing this turn admitted: no health, day plan, memory, recall or tool results, and no tool but escalate.
+          // Only a message entirely in the owner's own words takes it, with no attachment and nothing folded in yet. Its plain,
+          // whole text is the reply; anything else (escalate, a cut-off reply, a failure) is dropped unseen and the strong role
+          // takes this step with everything. A stop or steer that came meanwhile runs the step again.
+          const lightNow = lightFirst && !files && !added;
           lightFirst = false;
           if (lightNow) {
             const started = Date.now();
-            const lightContext = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }).turnContext;
-            const lightEntries = [...entries.slice(0, -1), { ...current, content: `${ownTail}\n\n${lightContext}` }];
-            const light = await complete(trace, 'reply', system, lightEntries, undefined, undefined, [LIGHT_ESCALATE], undefined, undefined, undefined, true)
+            const lightPrompt = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom });
+            const lightEntries = [...cut.exchange.slice(0, -1), { ...current, content: `${ownTail}\n\n${lightPrompt.turnContext}` }];
+            const lightSystem = { text: lightPrompt.system, sections: lightPrompt.sections, contextSections: lightPrompt.contextSections };
+            const light = await complete(trace, 'reply', lightSystem, lightEntries, undefined, undefined, [LIGHT_ESCALATE], undefined, undefined, undefined, true)
               .catch((error: unknown) => { if (error instanceof LightStepFailed) return undefined; throw error; });
             const route = light === undefined ? 'failed' : light.tool_calls?.length ? (light.tool_calls.some((call) => call.name === LIGHT_ESCALATE.name) ? 'escalated' : 'tool')
               : light.truncated ? 'truncated' : 'answered';
@@ -799,6 +805,9 @@ export const createOwnerResponder = (
   let turnReplyContext = '';
   let promptContext = '';
   let turnReplyOwnAuthored = false;
+  // The owner's message is entirely their own words, as the transport marked its parts, and replies to no message. Its
+  // conversation row is stamped so, and only such a turn takes a light step (WALDO_LIGHT_CHAT).
+  let turnOwnWordsOnly = false;
   // Whether this turn starts out having read text someone else wrote: a job over outside data, a reply to another
   // person's message, or a quote or forward the transport marked in the owner's own message (a forwarded recording's
   // transcript included). The owner's own voice note is not counted: it is how owners speak.
@@ -886,14 +895,15 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
-    lightFirst = fromOwner && privateOwner?.lightChat === true;
     turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
+    // Past the spend ceiling every call already runs on the auxiliary route, so a light step would only add a call.
+    lightFirst = fromOwner && privateOwner?.lightChat === true && turnOwnWordsOnly && !turnCapped();
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
-      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, ...(fromOwner && turnOwnWordsOnly ? { ownerWordsOnly: true as const } : {}), createdAt: Date.now() };
       // Once stored, the row is the input's record: a forget in this turn rewrites it and its witness in place, so the turn
       // publishes its reply alone, never its own copy of the input.
       const inputStored = fromOwner && context !== undefined && privateRunScope !== undefined && conversationStore?.persistOwnerInput !== undefined;
@@ -1059,6 +1069,7 @@ export const createOwnerResponder = (
         ownerTurnStartedAt = Date.now();
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
+        turnOwnWordsOnly = turn.replyTo === undefined && turn.parts.every((part) => part.authorship === 'owner');
         const received = receivedView(turn.parts);
         conversationStore?.noteQuoteRanges?.(id, received.text, received.foreignRanges);
         return await converse(id, turn.conversationRef, renderForModel(turn.parts).text, time, true, turn.surface, undefined, received.text);
@@ -1067,6 +1078,7 @@ export const createOwnerResponder = (
         activeOwnerTurn = undefined;
         turnReplyContext = '';
         turnReplyOwnAuthored = false;
+        turnOwnWordsOnly = false;
       }
     },
     async remind(id, conversationRef, note, time, surface, timing) {

@@ -99,11 +99,11 @@ export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, acces
   });
 };
 
-// The light model's first step of the owner's reply (WALDO_LIGHT_CHAT): one attempt, with the reply's cache and output room
-// and no fallback of its own. A light step that fails hands the turn to the chat route, whose fallback is the other
+// The light model's first step of the owner's reply (WALDO_LIGHT_CHAT): one attempt, with the reply's cache, output capped at
+// maxTokens (thinking included), and no fallback of its own. A light step that fails hands the turn to the chat route, whose fallback is the other
 // provider's chat model, so an outage never answers the owner on a second light model.
-export const lightRoutePolicy = (light: ModelName): RoutingPolicy => routingPolicySchema.parse({
-  routes: [{ trigger: 'user_message', primary: ownerStep(light, true), fallback: [], floor: 'template' }],
+export const lightRoutePolicy = (light: ModelName, maxTokens: number): RoutingPolicy => routingPolicySchema.parse({
+  routes: [{ trigger: 'user_message', primary: { ...ownerStep(light, true), max_tokens: maxTokens }, fallback: [], floor: 'template' }],
   escalation: [],
   template_fallback: true,
 });

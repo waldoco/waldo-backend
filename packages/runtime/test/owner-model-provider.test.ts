@@ -8,6 +8,7 @@ import {
   OPENAI_PROVIDER,
   OWNER_MODELS,
 } from '@waldo/contracts';
+import { LIGHT_ROLE_MAX_TOKENS } from '../src/channels/async-tools';
 import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy, strongRoutePolicy } from '../src/llm/owner-routes';
 
 // Which provider runs the owner path is one deploy setting, Claude unless it says openai. A provider whose key is not
@@ -89,9 +90,11 @@ it('builds the strong role\'s route as the chat route when no fallback is set, a
   expect(strongRoutePolicy(strong, fallback, { openaiApiKey: 'fixture-openai' }).routes[0]!.fallback).toEqual([]);
 });
 
-it('routes the light role\'s step as a chat call with no fallback: the cache and output room, alone', () => {
+it('routes the light role\'s step as a chat call with no fallback: the provider cache and the role\'s output cap, alone', () => {
   const light = ownerModels({ ...both, primary: 'anthropic' }).auxiliary;
-  const [route] = lightRoutePolicy(light).routes;
-  expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: light, cache: 'anthropic_native', max_tokens: 16_000 });
-  expect(route!.fallback).toEqual([]);
+  for (const cap of [LIGHT_ROLE_MAX_TOKENS, 512]) {
+    const [route] = lightRoutePolicy(light, cap).routes;
+    expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: light, cache: 'anthropic_native', max_tokens: cap });
+    expect(route!.fallback).toEqual([]);
+  }
 });

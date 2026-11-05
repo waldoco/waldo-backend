@@ -32,6 +32,9 @@ export type ConversationEntry = Readonly<{
   covers?: ConversationCovers;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
+  // An owner input whose every part the owner wrote, as the transport marked it, with no reply target: nothing quoted,
+  // forwarded, transcribed or noted by the host. Absent on any other row, and on rows stored before it was kept.
+  ownerWordsOnly?: true;
   // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
   createdAt?: number;
   // A row Waldo writes about one of the owner's app messages rather than in reply to it: that message's id, and what became of it.

@@ -9,8 +9,8 @@ export const OWNER_TURN_LONG_TOOLS: ReadonlySet<string> = toolsWhere((record) =>
 
 // With WALDO_LIGHT_CHAT=1 the first step of the owner's own reply runs on the light role, and every task worker on the chat
 // model. The light step answers quick, simple chat itself; for anything else it calls LIGHT_ESCALATE and the strong role
-// writes the turn's one reply. The light step is offered no other tool and reads no health, plan, memory or tool results
-// (owner-turn.ts), so any answer drawn from those, and any action, is the strong role's. Off unless "1".
+// writes the turn's one reply. The light step is offered no other tool and reads no health, plan, memory, tool results or
+// machine turn such as a Brief (owner-turn.ts), so any answer drawn from those, and any action, is the strong role's. Off unless "1".
 export const lightChatEnabled = (env: Readonly<{ WALDO_LIGHT_CHAT?: string }>): boolean => env.WALDO_LIGHT_CHAT === '1';
 
 // The light chat roles, set per environment. WALDO_LIGHT_ROLE_MODEL takes the light step; WALDO_STRONG_ROLE_MODEL takes the
