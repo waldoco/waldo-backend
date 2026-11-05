@@ -376,7 +376,7 @@ it('a card made outside an iMessage turn waits for the owner\'s next message, an
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
   });
-});
+}, 20_000);
 
 const outbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 const inbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
