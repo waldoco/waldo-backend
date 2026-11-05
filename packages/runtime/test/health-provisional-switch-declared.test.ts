@@ -94,6 +94,13 @@ describe('WALDO_RECALL_CHAIN in the Worker config', () => {
   });
 });
 
+describe('WALDO_FILE_TOOLS in the Worker config', () => {
+  it('is off in production and on in staging', () => {
+    expect(parsed.vars.WALDO_FILE_TOOLS).toBe('0');
+    expect(parsed.env.staging.vars.WALDO_FILE_TOOLS).toBe('1');
+  });
+});
+
 describe('PLANNING_BRIEF in the Worker config', () => {
   it('is off in production until a judged planning Brief passes, and on in staging', () => {
     expect(parsed.vars.PLANNING_BRIEF).toBe('0');
@@ -119,5 +126,12 @@ describe('DEVICE_PLACE in the Worker config', () => {
   it('is off in production and on in staging, where the deploy applies migration 20261105180000 first', () => {
     expect(parsed.vars.DEVICE_PLACE).toBe('0');
     expect(parsed.env.staging.vars.DEVICE_PLACE).toBe('1');
+  });
+});
+
+describe('CAPACITY_PLAN in the Worker config', () => {
+  it('is on for staging and off for production', () => {
+    expect(parsed.vars.CAPACITY_PLAN).toBe('0');
+    expect(parsed.env.staging.vars.CAPACITY_PLAN).toBe('1');
   });
 });

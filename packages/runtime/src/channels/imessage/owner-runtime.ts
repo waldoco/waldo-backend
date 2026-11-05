@@ -9,6 +9,8 @@ import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord 
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { IMESSAGE_MEDIA_REPLIES, iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
+import { uploadKeeper } from '../upload-keeper';
+import { workspaceOwnerHost } from '../workspace-host';
 import type { TapbackPort } from '../../tools/live/react-to-message';
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 import { STANDARD_REACTION_EMOJI } from '../reactions';
@@ -127,8 +129,10 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
     return { kind: 'answered' };
   }
   if (!record.media) return { kind: 'text' };
+  const keep = host.env.WALDO_FILE_TOOLS === '1'
+    ? uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName) : undefined;
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
-    sender: record.binding.subject, signal: scope.signal, admit: scope.admit });
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}) });
   if (opened.kind === 'opened') return opened;
   scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
   return { kind: 'answered' };

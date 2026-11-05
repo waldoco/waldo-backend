@@ -14,7 +14,9 @@ describe('retained byte store',()=>{
  const f=fixture(),s=await workspaceStore(f.host);const m=await s.write(args());const next=await workspaceStore(f.host);
  expect((await next.read(m.file_id,1,0,8192)).text).toBe('hello');expect((await next.list()).files).toHaveLength(1);
  const bin=await next.write(args(11,'a.pdf',new Uint8Array([0,255,100])));expect((await next.export(bin.file_id,1)).bytes).toEqual(new Uint8Array([0,255,100]));
- await expect(next.read(bin.file_id,1,0,10)).rejects.toThrow('workspace_invalid');
+ expect(await next.read(bin.file_id,1,0,10)).toEqual({file_id:bin.file_id,revision:1,text:null,binary:{mime:'text/plain',detected:null},total_bytes:3,next_offset:null,source_taint:'external'});
+ const zip=await next.write({...args(12,'a.zip',new Uint8Array([0x50,0x4b,3,4,0xff,0xfe])),mime:'application/zip'});
+ expect((await next.read(zip.file_id,1,0,10)).binary).toEqual({mime:'application/zip',detected:'zip archive'});
  });
  it('atomically prevents duplicate body writes, stale revisions and changed operation replay',async()=>{
  const f=fixture(),s=await workspaceStore(f.host);const m=await s.write(args());expect(await s.write(args())).toEqual(m);expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
