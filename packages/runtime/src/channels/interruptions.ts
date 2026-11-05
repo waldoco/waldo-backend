@@ -48,12 +48,22 @@ export const interruptHold = (input: HoldInput): InterruptHold | null => {
   const gap = input.spent.last !== null && input.now - input.spent.last < input.limits.gapMs;
   return gap && !urgentLeft ? 'cooldown' : null;
 };
-// What an interruption that went is charged as: the budget while it lasts and the gap has passed; past them, the urgent
-// allowance only when the model called it urgent and some is left. Anything else is counted, over the budget if need be,
-// so the record says what went.
-export const spendOf = (spent: InterruptState, limits: InterruptLimits, now: number, urgent: boolean): InterruptSpend =>
-  spent.count < limits.perDay && (spent.last === null || now - spent.last >= limits.gapMs) ? 'counted'
-    : urgent && spent.urgent < limits.urgentPerDay ? 'urgent' : 'counted';
+// What an interruption that went is charged as: the budget while it lasts and the gap has passed; past either, the urgent
+// allowance, whether or not the model marked it (a card raised unmarked still went), so the allowance runs out and the card
+// tools with it. Only with none left is it counted over the budget, so the record still says what went.
+export const withinBudget = (spent: InterruptState, limits: InterruptLimits, now: number): boolean =>
+  spent.count < limits.perDay && (spent.last === null || now - spent.last >= limits.gapMs);
+export const spendOf = (spent: InterruptState, limits: InterruptLimits, now: number): InterruptSpend =>
+  withinBudget(spent, limits, now) || spent.urgent >= limits.urgentPerDay ? 'counted' : 'urgent';
+
+// The owner's day for unasked messages, from their Brief to their Close on their own calendar day (dayPlanBook.window).
+export type DayWindow = (day: string) => Readonly<{ opens: number; closes: number }>;
+export const nextDay = (day: string): string => new Date(Date.parse(`${day}T12:00:00Z`) + 24 * 3_600_000).toISOString().slice(0, 10);
+// When the owner's day opens again, or null inside it: nothing unasked goes before their Brief or from their Close on.
+export const reopensAt = (now: number, timezone: string, window: DayWindow): number | null => {
+  const day = localIso(now, timezone).slice(0, 10), { opens, closes } = window(day);
+  return now < opens ? opens : now >= closes ? window(nextDay(day)).opens : null;
+};
 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): boolean }>;
 export const interruptBook = (kv: Kv, deps: Readonly<{
@@ -77,8 +87,8 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
       interruptHold({ ...input, open: question(), spent: spent(), now: deps.now() }),
     // Charges one interruption that went; run it in the transaction that records the delivery. ref names what went (a job,
     // a card), so the open question can be traced to it.
-    spend(limits: InterruptLimits, asks: boolean, ref: string, urgent: boolean): InterruptSpend {
-      const now = deps.now(), state = spent(), kind = spendOf(state, limits, now, urgent);
+    spend(limits: InterruptLimits, asks: boolean, ref: string): InterruptSpend {
+      const now = deps.now(), state = spent(), kind = spendOf(state, limits, now);
       kv.put(INTERRUPTS_KEY, { ...state, count: state.count + (kind === 'counted' ? 1 : 0), urgent: state.urgent + (kind === 'urgent' ? 1 : 0), last: now });
       if (asks) kv.put(QUESTION_KEY, { ref, at: now, day: state.day });
       return kind;
@@ -101,13 +111,16 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
 export type InterruptBook = ReturnType<typeof interruptBook>;
 
 // A card budget of its own (the delivery gate's for health proposals) that also draws on the owner's limits: a health card
-// waits out the gap and stops at the day's budget like any other unasked message. Quiet hours and consent stay with the caller.
-export const drawingOn = (inner: Readonly<{ admit(id: string): HealthCardAdmission; charge(id: string): void }>, book: InterruptBook, limits: () => InterruptLimits) => ({
+// waits out the gap, stops at the day's budget and holds outside the owner's day like any other unasked message. Quiet hours
+// and consent stay with the caller.
+export const drawingOn = (inner: Readonly<{ admit(id: string): HealthCardAdmission; charge(id: string): void }>, book: InterruptBook, limits: () => InterruptLimits, reopens: () => number | null) => ({
   admit: (id: string): HealthCardAdmission => {
+    const until = reopens();
+    if (until !== null) return { verdict: 'wait', until };
     const now = limits(), held = book.hold({ consent: true, quiet: false, asks: false, urgent: false, limits: now });
     if (held === 'budget') return { verdict: 'spent' };
     if (held === 'cooldown') return { verdict: 'wait', until: book.spent().last! + now.gapMs };
     return inner.admit(id);
   },
-  charge: (id: string): void => { inner.charge(id); book.spend(limits(), false, id, false); },
+  charge: (id: string): void => { inner.charge(id); book.spend(limits(), false, id); },
 });

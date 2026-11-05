@@ -5,7 +5,7 @@ import { fenced } from '../prompt/turn-prompt';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { taskBrief } from '../tasks/jobs';
 import type { MachineHandler, MachineSpec } from '../tasks/machine';
-import { spendOf, type InterruptBook, type InterruptHold, type InterruptLimits } from './interruptions';
+import { nextDay, withinBudget, type DayWindow, type InterruptBook, type InterruptHold, type InterruptLimits } from './interruptions';
 import { localIso } from './reminders';
 import { triageTools } from './update-sweep';
 
@@ -21,8 +21,6 @@ export const interventionEveryMs = (raw: string | undefined): number => {
   return (raw !== undefined && Number.isInteger(minutes) && minutes >= 30 ? minutes : 180) * 60_000;
 };
 
-export type DayWindow = (day: string) => Readonly<{ opens: number; closes: number }>;
-const nextDay = (day: string): string => new Date(Date.parse(`${day}T12:00:00Z`) + 24 * 3_600_000).toISOString().slice(0, 10);
 // When the next look runs: `everyMs` on, while that is still inside the owner's day; otherwise when their next day opens.
 // No look runs, and no wake is armed for one, between the Close and the next Brief.
 export const nextLookAt = (now: number, everyMs: number, timezone: string, window: DayWindow): number => {
@@ -109,16 +107,16 @@ export const interventionApplier = (deps: InterventionApplyDeps): MachineHandler
     const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, taskBrief(row).machine?.withheld)}`, io.current, triageTools(false, true));
     const chosen = parseIntervention(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true, urgent = chosen !== 'invalid' && chosen.urgent === true;
-    const spend = () => { deps.book.spend(limits, asks, `intervention:${row.id}`, urgent); };
-    const charge = () => spendOf(deps.book.spent(), limits, deps.now(), urgent);
-    if (deps.cardsSince(started) > 0) { settle(hold(false, false) === null ? 'act' : charge() === 'urgent' ? 'act+urgent' : 'act+over_budget', spend); return 'skipped'; }
+    const spend = () => { deps.book.spend(limits, asks, `intervention:${row.id}`); };
+    const within = () => withinBudget(deps.book.spent(), limits, deps.now());
+    if (deps.cardsSince(started) > 0) { settle(within() ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend); return 'skipped'; }
     if (chosen === 'invalid') { settle('invalid'); return 'skipped'; }
     if (chosen.decision === 'none') { settle('none'); return 'skipped'; }
     if (chosen.decision === 'act') { settle('act_without_card'); return 'skipped'; }
     // Checked again at delivery: the day may have closed, or a question opened, while the worker and the turn ran.
     const held = hold(urgent, asks);
     if (held !== null) { settle(`held_${held}`); return 'skipped'; }
-    deps.chose(io.trace, charge() === 'urgent' ? 'say+urgent' : 'say');
+    deps.chose(io.trace, within() ? 'say' : 'say+urgent');
     await deps.deliver(`intervention:${row.id}`, io.trace, chosen.say!, () => { spend(); io.settle(); });
     return 'delivered';
   },

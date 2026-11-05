@@ -60,16 +60,16 @@ describe('Waldo\'s own look across the day', () => {
   });
 
   it('the look itself is never urgent: with the budget spent it ends before any model is asked, allowance or not', async () => {
-    const out = await look({ ...NUDGE, urgent: true }, { before: book => { book.spend(LIMITS, false, 'earlier', false); } });
+    const out = await look({ ...NUDGE, urgent: true }, { before: book => { book.spend(LIMITS, false, 'earlier'); } });
     expect([out.turns, out.codes, out.delivered, out.settled, out.spent.urgent]).toEqual([0, ['held_budget'], [], 1, 0]);
   });
 
-  it('a card that lands past the budget is charged to the allowance only when the turn called it urgent', async () => {
+  it('a card that lands past the budget draws on the allowance, marked or not; an unmarked one is traced apart', async () => {
     // Another message spends the budget while the turn runs, so the card lands past it.
-    const late = (urgent: boolean) => look({ decision: 'act', ...(urgent ? { urgent: true } : {}) }, { cards: 1, during: book => { book.spend(LIMITS, false, 'other', false); } });
+    const late = (urgent: boolean) => look({ decision: 'act', ...(urgent ? { urgent: true } : {}) }, { cards: 1, during: book => { book.spend(LIMITS, false, 'other'); } });
     const marked = await late(true), unmarked = await late(false);
     expect([marked.codes, marked.spent]).toEqual([['act+urgent'], expect.objectContaining({ count: 1, urgent: 1 })]);
-    expect([unmarked.codes, unmarked.spent]).toEqual([['act+over_budget'], expect.objectContaining({ count: 2, urgent: 0 })]);
+    expect([unmarked.codes, unmarked.spent]).toEqual([['act+over_budget'], expect.objectContaining({ count: 1, urgent: 1 })]);
   });
 
   it('outside the owner\'s day nothing runs, and a day that closes while the turn runs holds the message', async () => {

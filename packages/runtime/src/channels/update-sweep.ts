@@ -9,7 +9,7 @@ import { PUSHES, pushTitle } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS } from './check-back';
 import { localIso } from './reminders';
-import { spendOf, type InterruptBook, type InterruptHold, type InterruptLimits, type InterruptSpend } from './interruptions';
+import { spendOf, withinBudget, type InterruptBook, type InterruptHold, type InterruptLimits, type InterruptSpend } from './interruptions';
 import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, readChanges, touchesDay, writeChanges, type Change, type DeltaCode, type DeltaSource, type TitleDigest, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
@@ -223,7 +223,7 @@ export const parseTriage = (reply: string): Triage | 'invalid' => {
 export type TriageCode = 'act' | 'act_without_card' | 'tell' | 'tell+push' | 'revise' | 'brief' | 'silent' | 'invalid' | 'revise_undelivered' | `held_${TriageHold | InterruptHold}`
   // An interruption charged to the urgent allowance, past the day's budget or the gap.
   | 'act+urgent' | 'tell+urgent'
-  // A card the turn raised past the budget or the gap without calling it urgent: charged to the budget, for the eval to see.
+  // A card the turn raised past the budget or the gap without calling it urgent: charged like an urgent one, traced apart.
   | 'act+over_budget';
 // The owner's daily interrupt budget for triage: act, and a tell that messages or pushes, each spend one.
 export const TRIAGE_INTERRUPTS_PER_DAY = 2;
@@ -257,7 +257,7 @@ export type UpdateSweepApplyDeps = Readonly<{
     settled(): void;
   }>;
   // PROACTIVE_GATE: the owner's interruption limits, shared with every unasked message, replace triage's own budget.
-  // closed: the owner's day has ended (the Close's time has passed), which, like quiet hours, nothing unasked goes past.
+  // closed: outside the owner's day (before their Brief or from their Close on), which, like quiet hours, nothing unasked goes past.
   interruptions?: Readonly<{ book: InterruptBook; limits(): InterruptLimits; closed(): boolean }>;
   // GOOGLE_REALTIME_TRIAGE, with the day state: the apply turn triages the batch.
   triage?: Readonly<{
@@ -320,7 +320,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const limits = deps.interruptions?.limits();
     const own = deps.interruptions && limits ? { book: deps.interruptions.book, limits, closed: deps.interruptions.closed() } : null;
     // With the owner's limits the turn may act or tell past the budget when it judges the batch urgent, so it keeps its card
-    // tools while some urgent allowance is left; what a card or message is charged to follows whether the turn called it urgent.
+    // tools while some urgent allowance is left; any card past the budget or the gap draws on that allowance, marked or not.
     const ownHold = (urgent: boolean, asks: boolean) => own!.book.hold({ consent: true, quiet: day.quiet(), closed: own!.closed, asks, urgent, limits: own!.limits });
     const hold = own ? (day.quiet() ? 'quiet' : null) : triageHold(deps.updates.interrupts(localDay), started, day.quiet());
     const canAct = own ? ownHold(true, false) === null : hold === null;
@@ -332,13 +332,10 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const asks = chosen !== 'invalid' && chosen.asks === true;
     const urgent = chosen !== 'invalid' && chosen.urgent === true;
     // What a delivery will be charged to, known before it goes so the trace code survives a failed delivery.
-    const charge = (): InterruptSpend | null => own ? spendOf(own.book.spent(), own.limits, deps.now(), urgent) : null;
-    const spend = () => { if (own) own.book.spend(own.limits, asks, `update:${row.id}`, urgent); else deps.updates.interrupted(localDay, deps.now()); };
-    const settle = (code: TriageCode, work: () => void = () => undefined) => { deps.transaction(() => { work(); commit(); }); day.chose(io.trace, code); return 'skipped' as const; };
-    if (sense.cardsSince(started) > 0) {
-      const within = own === null || ownHold(false, false) === null;
-      return settle(within ? 'act' : charge() === 'urgent' ? 'act+urgent' : 'act+over_budget', spend);
-    }
+    const charge = (): InterruptSpend | null => own ? spendOf(own.book.spent(), own.limits, deps.now()) : null;
+    const spend = () => { if (own) own.book.spend(own.limits, asks, `update:${row.id}`); else deps.updates.interrupted(localDay, deps.now()); };
+    const settle = (code: TriageCode, work: () => void = () => undefined) => { day.chose(io.trace, code); deps.transaction(() => { work(); commit(); }); return 'skipped' as const; };
+    if (sense.cardsSince(started) > 0) return settle(own === null || withinBudget(own.book.spent(), own.limits, deps.now()) ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend);
     if (chosen === 'invalid') return settle('invalid');
     if (chosen.decision === 'act') return settle('act_without_card');
     if (chosen.decision === 'brief') return settle('brief');

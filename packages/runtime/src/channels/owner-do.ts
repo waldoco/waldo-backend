@@ -84,7 +84,7 @@ import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHED
 import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
-import { drawingOn, interruptBook, interruptLimits } from './interruptions';
+import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -4545,17 +4545,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       book: interruptBook(storage.kv, { now: () => Date.now(), timezone: () => clock.timezone,
         ownerSpokeSince: at => ownerSpokeSince(storage.sql, at) }),
       limits: () => interruptLimits(this.env, loops.proactivity()),
-      // The owner's day ended at the Close: nothing unasked goes until the next one's Brief.
-      closed: () => { const now = Date.now(); return now >= plans.window(localIso(now, clock.timezone).slice(0, 10), clock.timezone).closes; },
+      // Outside the owner's day (before their Brief, or from their Close on), nothing unasked goes; reopens says when it may.
+      reopens: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)),
+      closed: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)) !== null,
     } : null;
     // PROACTIVE_INTERVENTIONS (with the owner's limits): Waldo's own look across the owner's plate, on its cadence. The owner
     // turning follow-ups off or volume to low is their no to unasked messages.
     const interventions = this.env.PROACTIVE_INTERVENTIONS === '1' ? interrupts : null;
     const reachesOut = () => { const { followups, volume } = loops.proactivity(); return followups !== false && volume !== 'low'; };
-    // The look runs only inside the owner's day, from the Brief to the Close; its next run is armed there.
-    const lookWindow = (day: string) => plans.window(day, clock.timezone);
-    const outsideDay = () => { const now = Date.now(), { opens, closes } = lookWindow(localIso(now, clock.timezone).slice(0, 10)); return now < opens || now >= closes; };
-    const armLook = (now: number, again = false) => armInterventionReview(scheduler, nextLookAt(now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN), clock.timezone, lookWindow), again);
+    // The look runs only inside the owner's day, from the Brief to the Close (interrupts.closed); its next run is armed there.
+    const armLook = (now: number, again = false) => armInterventionReview(scheduler,
+      nextLookAt(now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN), clock.timezone, day => plans.window(day, clock.timezone)), again);
     const lookFollows = async (on: boolean) => { if (interventions && on && armable('heartbeat')) await armLook(Date.now()); else await dropLook(); };
     const dropLook = async () => { if (scheduler.lookup(INTERVENTION_REVIEW_ID).state !== 'absent') { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); cancelMachine('intervention'); } };
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
@@ -5355,7 +5355,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
-      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits) : gateBudget;
+      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens) : gateBudget;
       const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
@@ -5750,7 +5750,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // message goes out like an update card, under the owner's limits.
     const interventionApply = interventions ? interventionApplier({
       book: interventions.book, limits: interventions.limits, timezone: () => clock.timezone, now: () => Date.now(),
-      consent: reachesOut, quiet, closed: outsideDay, transaction: work => storage.transactionSync(work),
+      consent: reachesOut, quiet, closed: interventions.closed, transaction: work => storage.transactionSync(work),
       context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
         cards: dayCards(), style: channelStyle(channel === 'app' ? wantedTargets(proactiveSurface(storage.kv))[0] ?? 'app' : channel) }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
@@ -5771,7 +5771,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!interventions || !schedPrefs.enabled('heartbeat')) { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); return; }
       const now = Date.now();
       await armLook(now, true);
-      const closed = interventions.book.hold({ consent: reachesOut(), quiet: quiet(), closed: outsideDay(), asks: false, urgent: false, limits: interventions.limits() });
+      const closed = interventions.book.hold({ consent: reachesOut(), quiet: quiet(), closed: interventions.closed(), asks: false, urgent: false, limits: interventions.limits() });
       if (closed !== null) { log({ trace, hop: 'intervention_review', ms: 0, ok: true, code: `held_${closed}` }); return; }
       const made = storage.transactionSync(() => {
         if (workerRouteDown(modelAccess)) return 'held_breaker' as const;
