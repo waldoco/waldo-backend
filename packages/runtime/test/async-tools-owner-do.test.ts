@@ -194,11 +194,15 @@ it('with the harness tool loader, the owner turn\'s catalogue names no long tool
   });
 }, 60_000);
 
-it('with WALDO_LIGHT_CHAT on, the owner\'s reply runs on the auxiliary model and a standard task on the chat model', async () => {
+// The light step's start_task is a tool call, so it hands the turn over unrun: the chat model starts the task, once.
+it('with WALDO_LIGHT_CHAT on, the owner\'s reply takes its light step on the auxiliary model, the chat model starts the task, and a standard task runs on the chat model', async () => {
   await withOwner({ WALDO_ASYNC_TOOLS: '1', WALDO_LIGHT_CHAT: '1' }, async (owner, state, name) => {
     await send(owner, name, 'light-a-0001', 'Find me three hotels near the venue with prices');
     await completed(owner, name, 'light-a-0001');
-    expect(new Set(seen.state.models)).toEqual(new Set([OPENAI_GPT_6_LUNA_MODEL]));
+    expect(seen.state.models).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
+    expect(seen.state.ownerTools[0]).toContain('escalate');
+    expect(seen.state.ownerTools[1]).not.toContain('escalate');
+    expect(jobs(state.storage.sql)).toHaveLength(1);
     const [job] = jobs(state.storage.sql);
     expect(JSON.parse(job!.brief_json)).toMatchObject({ effort: 'standard' });
     seen.state.release();

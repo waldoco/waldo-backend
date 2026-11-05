@@ -59,12 +59,15 @@ Other properties:
 - With the switch on, an errand's chain step can also wait, while it holds the chain, for an unrelated reader's page on the lane. An owner message that arrives then waits for both: worse than switch-off for that one case. Chain-then-lane is still the right order, because lane-then-chain would let an erase, which runs on the chain and waits for the lane, deadlock.
 - The real-browse test (a reader's `browse_page` holding the lane while an errand's step queues) shows both finish in order, with no deadlock. Lifting that needs cards and effects filed under the calling run instead of a global current run. That is a change to the approval desk and the effect ledger, so it is a follow-up.
 
-### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [proposed]
+### 3. Light chat model, strong workers (`WALDO_LIGHT_CHAT`) [built; switch "0"]
 
-- The owner's own reply runs on the provider's auxiliary model (Haiku 5.5 on Anthropic, Luna on OpenAI). The fallback stays the other provider's chat model, so an outage does not drop quality twice. Side jobs are unchanged.
+- The owner's own reply takes its **first step** on the provider's auxiliary model (Haiku 5.5 on Anthropic, Luna on OpenAI), with the chat step's own request plus one tool, `escalate`. The light model answers quick, simple chat itself. Anything else hands the turn to the chat model (Sonnet 5.5 / Terra), which takes the same step and writes the turn's one reply. Side jobs are unchanged.
+- **The owner's 5 Nov rule:** hard asks, every day plan and every health-aware answer are written by the chat model. Which turns those are is the light model's judgment, stated in the `escalate` description (`channels/async-tools.ts`); no keyword rule decides it. The nightly `lc-` scenarios measure how often it hands over.
+- **Capability boundary, not judgment:** the light step is the reply only as plain, whole text. Any tool call (`escalate` or another), a cut-off reply, or a failure discards the step unseen and the chat model takes it. So the light model never runs a tool, raises a card or takes an action, and at most one call per turn is spent before the hand-over.
+- The light step streams nothing, has no floor line and no hosted web search, runs one attempt with no fallback and a 30 s bound, and reads the provider breaker without moving it. A failed light step hands over; the chat route keeps its fallback to the other provider's chat model, so an outage never lands on a second light model.
 - Task workers run every task on the chat model (Sonnet 5.5 / Terra), not only `effort: 'deep'` ones. Today `standard` effort runs on auxiliary (`tasks/worker-loop.ts:230`). This is a real cost increase per task.
-- **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The 4 Nov adoption of the Super-agent design asks for a lighter router; the switch keeps both reachable, and it stays "0" in staging until the owner decides. A light router may delegate less well: the eval reports delegation rate, not only latency.
-- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`; the light reply keeps both.
+- **This conflicts with the 27 Oct ruling** that owner turns run on Terra. The switch stays "0" in staging and production until the owner decides; the 5 Nov rule is what makes it safe to try.
+- Anthropic native prompt caching and the 16k output room follow "is this the chat call" in `ownerRoutePolicy`; the light step (`lightRoutePolicy`) keeps both. Each model keeps its own cache.
 
 ### What the owner sees
 
@@ -128,7 +131,7 @@ Time to first reply = owner app message admitted → its reply in the chat (the 
 - Harness overhead (tens of ms) does not scale with the model, so multiplying by 100 overstates both columns. Read the ratios, not ×100.
 
 **Not measured:**
-- `WALDO_LIGHT_CHAT` latency: a fake model has no speed difference.
+- `WALDO_LIGHT_CHAT` latency: a fake model has no speed difference. After a deploy with the switch on, read `light_route` (outcome and the light step's ms) and `llm_reply_light` beside `llm_reply`.
 - Staging and Langfuse p50/p95: NOT RUN, because there are no credentials here. After the bundled deploy, read them from the `llm_reply` and app receipt hops, together with the delegation rate (owner turns that call `start_task`).
 
 ## Rollback

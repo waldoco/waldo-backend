@@ -7,7 +7,7 @@ import {
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
 } from '@waldo/contracts';
-import { modelProviderSetting, ownerModels, ownerRoutePolicy } from '../src/llm/owner-routes';
+import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy } from '../src/llm/owner-routes';
 
 // Which provider runs the owner path is one deploy setting, Claude unless it says openai. A provider whose key is not
 // deployed cannot run it, so the other one does; with both keys, each route falls to the other provider.
@@ -77,8 +77,8 @@ it('logs each unrecognised value once, so a mistyped rollback is seen without a 
   }
 });
 
-it('routes the owner\'s reply on the lighter model (WALDO_LIGHT_CHAT) as a chat call: Haiku with the cache and output room, then Terra', () => {
-  const [route] = ownerRoutePolicy(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, both, true).routes;
+it('routes the light step of the owner\'s reply (WALDO_LIGHT_CHAT) as a chat call with no fallback: Haiku with the cache and output room, alone', () => {
+  const [route] = lightRoutePolicy(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL).routes;
   expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 });
-  expect(route!.fallback).toEqual([{ provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_1_TERRA_MODEL, cache: 'none', max_tokens: 4096 }]);
+  expect(route!.fallback).toEqual([]);
 });

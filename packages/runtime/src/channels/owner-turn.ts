@@ -31,8 +31,8 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
-import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
-import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
@@ -60,7 +60,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { SecondMessageRound } from './second-message';
-import { OWNER_TURN_LONG_TOOLS } from './async-tools';
+import { LIGHT_ESCALATE, OWNER_TURN_LONG_TOOLS } from './async-tools';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
@@ -112,6 +112,8 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
 // dayCards: where today's Brief, Check-in and Close stand, for the owner's own turns ('' when none is planned).
 export class OvertakenTurnError extends Error { constructor() { super('owner turn overtaken by newer owner messages'); this.name = 'OvertakenTurnError'; } }
+// The light step got no answer; the turn goes on to the chat model.
+class LightStepFailed extends Error {}
 // newerOwnerInput: the owner has sent more since this turn (its run scope) began, so a reply that did nothing yet is dropped for one that answers it all.
 // newerOwnerMessages: the owner's newer messages on this turn's chat, offered to the model at each round of their own turn (second-message.ts).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; the reply
@@ -273,7 +275,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false) => {
     await assertCurrent();
     if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
@@ -281,8 +283,7 @@ export const createOwnerResponder = (
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
     let reasoning: string | undefined;
-    const lightReply = privateOwner?.lightChat === true && ownerTurnActive && purpose === 'reply' && modelOverride === undefined;
-    const effectivePolicy = lightReply ? ownerRoutePolicy(auxiliaryModel, model, access, true)
+    const effectivePolicy = light ? lightRoutePolicy(auxiliaryModel)
       : modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
     // when one historical entry is unrenderable, the retry carries only the current text instead
@@ -294,9 +295,13 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const streamed = ownerCall && purpose === 'reply' ? activeOwnerTurn?.replyStream : undefined;
-    const adapter = withReplyStream(gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } }),
-      streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
+    // The light step streams nothing: the owner sees no word of a step that may hand the turn over.
+    const streamed = ownerCall && purpose === 'reply' && !light ? activeOwnerTurn?.replyStream : undefined;
+    const timeoutMs = light ? MODEL_CALL_TIMEOUT_MS : ownerCall ? OWNER_TURN_CALL_TIMEOUT_MS : undefined;
+    const routed = gateway ?? ownerModelGateway(access, { ...(timeoutMs ? { timeoutMs } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    // One attempt: a failed light step is not sent again, it hands over.
+    const once: LLMGatewayAdapter = light ? { complete: async (request) => { const result = await routed.complete(request); return result.ok ? result : { ...result, retry: { allowed: false } }; } } : routed;
+    const adapter = withReplyStream(once, streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -310,7 +315,10 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
-    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })), ...(turnSanitise ? { sanitiseMemo: turnSanitise.memo } : {}) }).complete({
+    // The light step reads the owner's provider breaker and never moves it: a slow light model must not push the chat model off its provider.
+    const breaker = light ? { isOpen: (provider: Parameters<typeof circuitBreaker.isOpen>[0]) => circuitBreaker.isOpen(provider), recordSuccess: () => {}, recordFailure: () => {} }
+      : observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider }));
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: breaker, ...(turnSanitise ? { sanitiseMemo: turnSanitise.memo } : {}) }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
@@ -323,12 +331,12 @@ export const createOwnerResponder = (
           system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? brainTools(tools, providerSearch && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
-          ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
+          ...(tools ? brainTools(light ? [...tools, LIGHT_ESCALATE] : tools, providerSearch && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools && ownerTurnActive && purpose === 'reply' && !light ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
-      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' && !light ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
     access.onAttempts?.(result.attempts);
     await assertCurrent();
@@ -358,9 +366,9 @@ export const createOwnerResponder = (
     const routing = floor
       ? { fallback_fired: true, ...(lastFailure?.outcome === 'failure' ? { error_code: lastFailure.code } : {}) }
       : served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ...costKind, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
+    if (!result.ok) log({ trace, hop: `llm_${light ? 'reply_light' : purpose}`, ...costKind, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ...costKind, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
+      trace, hop: `llm_${light ? 'reply_light' : purpose}`, ...costKind, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
       ...(result.tool_search_degraded ? { tool_search_degraded: true, ...(result.tool_search_rejection ? { tool_search_rejection: result.tool_search_rejection } : {}) } : {}),
       ...(response?.ttft_ms === undefined ? {} : { ttft_ms: response.ttft_ms }),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
@@ -371,17 +379,18 @@ export const createOwnerResponder = (
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
-    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${purpose}_attempt`, ...costKind })) log(entry);
+    for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${light ? 'reply_light' : purpose}_attempt`, ...costKind })) log(entry);
     if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
       log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
     }
+    if (!result.ok && light) throw new LightStepFailed();
     if (!result.ok) {
       const message = `live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason, result.scribe_stage].filter(Boolean).join(': ') || result.reason})`;
       const down = modelDownReason(result);
       throw down ? new ModelUnavailableError(down, message) : new Error(message);
     }
     // A reply cut off by the model's length limit would otherwise read as a finished thought.
-    if (purpose === 'reply' && response!.truncated && !response!.tool_calls?.length) return { ...response!, text: `${response!.text}\n\n(I stopped early: that reply hit my length limit. Ask me to continue.)` };
+    if (purpose === 'reply' && !light && response!.truncated && !response!.tool_calls?.length) return { ...response!, text: `${response!.text}\n\n(I stopped early: that reply hit my length limit. Ask me to continue.)` };
     return response!;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
@@ -596,7 +605,7 @@ export const createOwnerResponder = (
         // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
         onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
-        step: async (tools, turns) => {
+        step: async function turnStep(tools, turns) {
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
@@ -714,17 +723,25 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
+          const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };
+          const files = attachments.length ? attachments : undefined;
+          // WALDO_LIGHT_CHAT: the turn's first step runs on the light model, with this step's request and the escalate tool. It
+          // is the reply only as plain, whole text; anything else (escalate, any other tool call, a cut-off reply, a failure) is
+          // dropped unseen and the chat model takes this same step. A stop or steer that came meanwhile runs the step again.
+          if (lightFirst) {
+            lightFirst = false;
+            const started = Date.now();
+            const light = await complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, undefined, undefined, true)
+              .catch((error: unknown) => { if (error instanceof LightStepFailed) return undefined; throw error; });
+            const route = light === undefined ? 'failed' : light.tool_calls?.length ? (light.tool_calls.some((call) => call.name === LIGHT_ESCALATE.name) ? 'escalated' : 'tool')
+              : light.truncated ? 'truncated' : 'answered';
+            log({ trace, hop: 'light_route', ms: Date.now() - started, ok: true, detail: route });
+            if (route === 'answered') return light!;
+            if (control.revision() !== contextSteering) return turnStep(tools, turns);
+          }
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
           // to it, gets the chat model.
-          return complete(trace, 'reply',
-          { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections },
-          entries,
-          undefined,
-          attachments.length ? attachments : undefined,
-          tools,
-          cut.turns,
-          ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel,
-          );
+          return complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel);
         },
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
@@ -745,6 +762,8 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  // The owner's own turn has not yet taken its light step (WALDO_LIGHT_CHAT).
+  let lightFirst = false;
   // Read once when a turn starts, so a turn that crosses the ceiling mid-flight finishes on the model it began with. Past the
   // ceiling the provider clamps every call to the auxiliary route, which is where machine turns already run.
   let turnSpend: RouteSpendState | undefined;
@@ -852,6 +871,7 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
+    lightFirst = fromOwner && privateOwner?.lightChat === true;
     turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
@@ -870,7 +890,7 @@ export const createOwnerResponder = (
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; lightFirst = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
       // A reply the owner's newer messages overtook, from a turn that called no tool, is neither saved nor sent: the host runs
