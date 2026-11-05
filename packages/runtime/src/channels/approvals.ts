@@ -1145,7 +1145,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         deps.log({ trace, hop: 'calendar_plan_undo', ms: deps.now() - started, ok: !undone.unknown.length, code: undone.unknown.length ? 'unknown' : undone.kept.length ? 'partial' : 'undone' });
         if (undone.unknown.length) {
           sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id);
-          return { toast: 'Outcome unknown', message: `I could not confirm the plan was removed: ${blocksNamed(undone.unknown)} may still be on your calendar. Check it before trying again.` };
+          return { toast: 'Outcome unknown', message: `I could not confirm the plan was removed: ${blocksNamed(undone.unknown)} may still be on your calendar. Check your calendar and remove any you don't want.` };
         }
         if (!undone.kept.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: `Undone: removed all ${undone.removed.length} blocks of the plan.` }; }
         setStatus(id, 'done');
@@ -1162,7 +1162,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         return { toast: 'Not done', message: `Nothing was added: Google refused part of the plan${outcome.removed ? `, so I removed the ${outcome.removed} block${outcome.removed === 1 ? '' : 's'} already added` : ''}. Your calendar is as it was.` };
       }
       setStatus(id, 'uncertain');
-      return { toast: 'Outcome unknown', message: `Part of the plan failed and I could not confirm it was all removed: ${blocksNamed(outcome.left)} may still be on your calendar. Check it before trying again.` };
+      return { toast: 'Outcome unknown', message: `Part of the plan failed and I could not confirm it was all removed: ${blocksNamed(outcome.left)} may still be on your calendar. Check your calendar and remove any you don't want; approving again won't redo this.` };
     } finally { plansRunning.delete(id); }
   };
   const CHANGED_SINCE_SHOWN: ApprovalDecision = { toast: 'Card changed', message: 'That card changed after you saw it, so nothing was done.' };

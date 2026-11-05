@@ -215,6 +215,28 @@ describe('the day plan card', () => {
   });
 });
 
+describe('the largest plan the contract allows', () => {
+  it('twelve blocks with 200-character titles and a 300-character reason still make a whole card in chat and in the app', async () => {
+    await owner(async state => {
+      const fake = calendar();
+      const blocks = Array.from({ length: 12 }, (_, i) => ({ title: `${String.fromCharCode(65 + i)}${'x'.repeat(199)}`,
+        start: `2026-11-05T${String(i + 8).padStart(2, '0')}:00:00+05:30`, end: `2026-11-05T${String(i + 8).padStart(2, '0')}:45:00+05:30`, block: 'deep_work' as const }));
+      const big: StoredPlan = { ...PLAN, blocks, reason: 'r'.repeat(300) };
+      const h = harness(state, fake);
+      const id = await h.desk.proposeCalendarPlan(big);
+      expect(h.cards[0]).toContain(blocks[11]!.title);
+      expect(h.desk.placement(id).hereApprovable).toBe(true);
+      const [item] = await h.desk.approvals(NOW, { id });
+      expect(item).toMatchObject({ kind: 'calendar_plan', state: 'open', actions: ['approve', 'edit', 'skip', 'defer'] });
+      let n = 0;
+      const app = approvalDesk(state.storage.sql, { owner: OWNER, surface: 'app', appIdentity: () => true, call: async () => true, google: async () => fake.client, newId: () => `a${++n}`, now: () => NOW,
+        timezone: 'Asia/Kolkata', log: () => undefined, commit: work => state.storage.transactionSync(work), effects: ownerEffectLedger(state.storage, () => NOW), currentRunRef: () => 'r9' });
+      await app.proposeCalendarPlan(big);
+      expect(appApprovalParts(state.storage.sql, 9)('r9').live.map(part => [part.kind, part.actions])).toEqual([['calendar_plan', ['approve', 'edit', 'skip', 'defer']]]);
+    });
+  });
+});
+
 describe('an app build older than approvals revision 9', () => {
   it('never gets the card: its chat carries the card\'s words and asks it to update, while a revision 9 build gets the card', async () => {
     await owner(async state => {
