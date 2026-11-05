@@ -75,6 +75,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
   // tap (approvals revision 9). Off unless "1"; a card already raised stays decidable with it off.
   CALENDAR_PLAN?: string;
+  // "1" keeps a nightly capacity note in memory (how much real work the owner sustains, and when they think best) and has the
+  // Brief and the Close plan deep work and a weekly reset from it. Off unless "1".
+  CAPACITY_PLAN?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;

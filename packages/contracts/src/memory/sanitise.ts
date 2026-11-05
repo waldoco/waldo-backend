@@ -404,7 +404,10 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
 export const PII_PATTERNS = {
   email: /\b[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
-  cc: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
+  // A card candidate: sixteen digits in four groups of four, or an Amex 4-6-5, with a space, dot or hyphen between groups or
+  // none, and no digit on either side. The runtime keeps the candidates that sit inside a uuid and holds a fifteen-digit
+  // one to its check digit, so no part of an identifier is read as a card number.
+  cc: /(?<!\d)(?:\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}|3[47]\d{2}[\s.-]?\d{6}[\s.-]?\d{5})(?!\d)/g,
   ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
   ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
