@@ -84,7 +84,7 @@ import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHED
 import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
-import { drawingOn, interruptBook, interruptLimits } from './interruptions';
+import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
@@ -4537,8 +4537,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       book: interruptBook(storage.kv, { now: () => Date.now(), timezone: () => clock.timezone,
         ownerSpokeSince: at => ownerSpokeSince(storage.sql, at) }),
       limits: () => interruptLimits(this.env, loops.proactivity()),
-      // The owner's day ended at the Close: nothing unasked goes until the next one's Brief.
-      closed: () => { const now = Date.now(); return now >= plans.window(localIso(now, clock.timezone).slice(0, 10), clock.timezone).closes; },
+      // Outside the owner's day (before their Brief, or from their Close on), nothing unasked goes; reopens says when it may.
+      reopens: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)),
+      closed: () => reopensAt(Date.now(), clock.timezone, day => plans.window(day, clock.timezone)) !== null,
     } : null;
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
     const pushDirectory = () => {
@@ -5334,7 +5335,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
-      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits) : gateBudget;
+      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens) : gateBudget;
       const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();

@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { setProactivityArgsSchema } from '@waldo/contracts';
-import { drawingOn, interruptBook, interruptHold, interruptLimits, spendOf, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
+import { drawingOn, interruptBook, interruptHold, interruptLimits, reopensAt, spendOf, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
 import { loopBook, loopHandlers, proactivityLine } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { episodeIndex, ownerSpokeSince, OWNER_SAID } from '../src/channels/episodes';
@@ -43,12 +43,12 @@ describe('interruptHold', () => {
     expect(interruptHold({ ...base, urgent: true, asks: true, open })).toBe('question');
   });
 
-  it('past the budget a charge is urgent only when the model said so and the allowance lasts; otherwise it is counted', () => {
+  it('past the budget or the gap a charge draws on the urgent allowance while it lasts, then is counted over the budget', () => {
     const over = { day: '2026-11-05', count: 2, urgent: 0, last: NOW - 1 };
-    expect(spendOf(base.spent, LIMITS, NOW, true)).toBe('counted');
-    expect(spendOf(over, LIMITS, NOW, true)).toBe('urgent');
-    expect(spendOf(over, LIMITS, NOW, false)).toBe('counted');
-    expect(spendOf({ ...over, urgent: 1 }, LIMITS, NOW, true)).toBe('counted');
+    expect(spendOf(base.spent, LIMITS, NOW)).toBe('counted');
+    expect(spendOf(over, LIMITS, NOW)).toBe('urgent');
+    expect(spendOf({ ...over, count: 1 }, LIMITS, NOW)).toBe('urgent');
+    expect(spendOf({ ...over, urgent: 1 }, LIMITS, NOW)).toBe('counted');
   });
 });
 
@@ -131,12 +131,12 @@ describe('interruptBook', () => {
     await withKv((state) => {
       const clock = { at: NOW };
       const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => 'UTC', ownerSpokeSince: () => false });
-      expect(book.spend(LIMITS, false, 'a', false)).toBe('counted');
+      expect(book.spend(LIMITS, false, 'a')).toBe('counted');
       clock.at += LIMITS.gapMs;
-      expect(book.spend(LIMITS, false, 'b', false)).toBe('counted');
+      expect(book.spend(LIMITS, false, 'b')).toBe('counted');
       clock.at += 1;
-      expect(book.spend(LIMITS, false, 'c', true)).toBe('urgent');
-      expect(book.spend(LIMITS, false, 'd', false)).toBe('counted');
+      expect(book.spend(LIMITS, false, 'c')).toBe('urgent');
+      expect(book.spend(LIMITS, false, 'd')).toBe('counted');
       expect(book.spent()).toMatchObject({ count: 3, urgent: 1 });
       clock.at = Date.parse('2026-11-06T00:00:01Z');
       expect(book.spent()).toMatchObject({ day: '2026-11-06', count: 0, urgent: 0 });
@@ -148,7 +148,7 @@ describe('interruptBook', () => {
       // New York leaves daylight saving at 06:00Z on 1 Nov 2026: 03:30Z is still 31 Oct there, 05:30Z on 2 Nov is 1 Nov.
       const clock = { at: Date.parse('2026-11-01T03:30:00Z') };
       const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => 'America/New_York', ownerSpokeSince: () => false });
-      book.spend(LIMITS, true, 'q', false);
+      book.spend(LIMITS, true, 'q');
       expect(book.spent().day).toBe('2026-10-31');
       expect(book.question()).not.toBeNull();
       clock.at = Date.parse('2026-11-01T04:30:00Z');
@@ -164,8 +164,8 @@ describe('interruptBook', () => {
     await withKv((state) => {
       const spoke = { at: null as number | null };
       const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at });
-      book.spend(LIMITS, true, 'q', false);
-      book.spend({ ...LIMITS, gapMs: 0 }, false, 'note', false);
+      book.spend(LIMITS, true, 'q');
+      book.spend({ ...LIMITS, gapMs: 0 }, false, 'note');
       expect(book.question()).toMatchObject({ ref: 'q' });
       expect(book.hold({ consent: true, quiet: false, asks: true, urgent: true, limits: LIMITS })).toBe('question');
       spoke.at = NOW + 1;
@@ -179,7 +179,7 @@ describe('drawingOn: a health card under the owner\'s limits', () => {
     await withKv((state) => {
       const clock = { at: NOW }, charged: string[] = [];
       const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => 'UTC', ownerSpokeSince: () => false });
-      const budget = drawingOn({ admit: () => ({ verdict: 'send' }), charge: id => { charged.push(id); } }, book, () => LIMITS);
+      const budget = drawingOn({ admit: () => ({ verdict: 'send' }), charge: id => { charged.push(id); } }, book, () => LIMITS, () => null);
       expect(budget.admit('health:2026-11-05')).toEqual({ verdict: 'send' });
       budget.charge('health:2026-11-05');
       expect([charged, book.spent().count]).toEqual([['health:2026-11-05'], 1]);
@@ -194,8 +194,45 @@ describe('drawingOn: a health card under the owner\'s limits', () => {
   it('the delivery gate\'s own answer still holds when the owner has budget left', async () => {
     await withKv((state) => {
       const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
-      expect(drawingOn({ admit: () => ({ verdict: 'spent' }), charge: () => undefined }, book, () => LIMITS).admit('x')).toEqual({ verdict: 'spent' });
+      expect(drawingOn({ admit: () => ({ verdict: 'spent' }), charge: () => undefined }, book, () => LIMITS, () => null).admit('x')).toEqual({ verdict: 'spent' });
     });
+  });
+
+  it('outside the owner\'s day a health card waits for their next Brief, before either budget is asked', async () => {
+    await withKv((state) => {
+      const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
+      let asked = 0;
+      const budget = drawingOn({ admit: () => { asked += 1; return { verdict: 'send' }; }, charge: () => undefined }, book, () => LIMITS, () => NOW + 3_600_000);
+      expect([budget.admit('health:2026-11-05'), asked]).toEqual([{ verdict: 'wait', until: NOW + 3_600_000 }, 0]);
+    });
+  });
+});
+
+// The owner's day is two-sided: nothing unasked before their Brief or from their Close on, on their own calendar day.
+describe('reopensAt: the owner\'s day, from the Brief to the Close', () => {
+  const open = (now: string, zone: string) => withKv((state) => {
+    const plans = dayPlanBook(state.storage.sql);
+    const at = reopensAt(Date.parse(now), zone, day => plans.window(day, zone));
+    return at === null ? null : new Date(at).toISOString();
+  });
+  it('inside the day it is open; before the Brief it opens at the Brief; from the Close it opens at the next Brief', async () => {
+    expect(await open('2026-11-05T12:00:00Z', 'UTC')).toBeNull();
+    expect(await open('2026-11-05T02:00:00Z', 'UTC')).toBe('2026-11-05T08:00:00.000Z');
+    expect(await open('2026-11-05T21:30:00Z', 'UTC')).toBe('2026-11-06T08:00:00.000Z');
+  });
+
+  it('follows the owner\'s own calendar day: 02:00 in Kolkata is before that day\'s Brief, not after the evening\'s Close', async () => {
+    // 20:30Z on 5 Nov is 02:00 on 6 Nov in Kolkata; that day's Brief is 08:00 IST, 02:30Z.
+    expect(await open('2026-11-05T20:30:00Z', 'Asia/Kolkata')).toBe('2026-11-06T02:30:00.000Z');
+    expect(await open('2026-11-05T10:00:00Z', 'Asia/Kolkata')).toBeNull();
+  });
+
+  it('across the end of daylight saving in New York the next Brief keeps its local time', async () => {
+    // 22:00 EDT on 31 Oct (02:00Z on 1 Nov) is after the Close; the next Brief is 08:00 EST on 1 Nov, 13:00Z.
+    expect(await open('2026-11-01T02:00:00Z', 'America/New_York')).toBe('2026-11-01T13:00:00.000Z');
+    // 07:30 EST on 1 Nov (12:30Z) is still before it; 21:00 EST (02:00Z on 2 Nov) is inside the day.
+    expect(await open('2026-11-01T12:30:00Z', 'America/New_York')).toBe('2026-11-01T13:00:00.000Z');
+    expect(await open('2026-11-02T02:00:00Z', 'America/New_York')).toBeNull();
   });
 });
 
