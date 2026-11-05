@@ -239,7 +239,7 @@
         "IMESSAGE_ONBOARDING_URL": "https://www.heywaldo.in/waitlist",
         "IMESSAGE_WALDO_ADDRESS": "woof@heywaldo.in",
         "IMESSAGE_MEDIA": "1",
-        "WALDO_IMESSAGE_PROGRESS": "1",
+        "WALDO_IMESSAGE_PROGRESS": "0",
         "PHOTON_PROJECT_ID": "0e647a94-db69-4259-81b9-e1695e0b1af3",
         "WHATSAPP_REENGAGE_TEMPLATE": "",
         "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE": "",
