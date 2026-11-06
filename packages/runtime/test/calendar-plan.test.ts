@@ -94,6 +94,11 @@ describe('a plan\'s blocks from the model\'s local times', () => {
   it('reads as a card: the day, then each block at its own time, and no one invited', () => {
     expect(planReview(PLAN)).toBe('Add 3 blocks to your calendar on Thu 5 Nov:\n9:30–11:30am Write the board memo (deep work)\n1–2pm Lunch and a walk (rest)\n2–2:30pm Reply to Priya\n\nNo one is invited. your day, laid out');
   });
+
+  it('names both halves of the day when a block runs across noon', () => {
+    const across = { ...PLAN, blocks: [{ title: 'Offsite prep', start: '2026-11-05T11:00:00+05:30', end: '2026-11-05T13:00:00+05:30' }] };
+    expect(planReview(across)).toContain('\n11am–1pm Offsite prep\n');
+  });
 });
 
 describe('the day plan card', () => {
