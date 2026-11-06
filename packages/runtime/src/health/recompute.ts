@@ -27,9 +27,9 @@ export type HealthRecomputeDeps = Readonly<{
     enabled(): boolean;
     readContext(): Promise<unknown>;
     woken(day: string, reasons: readonly HealthWakeReason[]): Promise<void>;
-    // Reasons an upload named for the owner's day rather than the rows (a workout that just ended). They go to the trigger
-    // with the run's own, once today's row is there to read, even when the run changed no row.
-    noted?(day: string): readonly HealthWakeReason[];
+    // Reasons an upload named rather than the rows (a workout that just ended), for a run that started at runStartedAt. They
+    // go to the trigger with the run's own, once today's row is there to read, even when the run changed no row.
+    noted?(runStartedAt: number): readonly HealthWakeReason[];
   }>;
 }>;
 
@@ -39,14 +39,14 @@ const read = async (readContext: () => Promise<unknown>): Promise<HealthSnapshot
 
 export const healthRecompute = (deps: HealthRecomputeDeps) => {
   // A wake that cannot be read or noted never fails the recompute: a retry would only run the producer again.
-  const wake = async (wakes: NonNullable<HealthRecomputeDeps['wakes']>, before: HealthSnapshot | null, today: string): Promise<void> => {
+  const wake = async (wakes: NonNullable<HealthRecomputeDeps['wakes']>, before: HealthSnapshot | null, today: string, startedAt: number): Promise<void> => {
     try {
       const after = await read(wakes.readContext);
       if (!after || after.day !== today) return;
       const { readSettings } = deps.producer;
       const stated = readSettings ? statedNeedOf(await readSettings().catch(() => null)) : null;
       const needChangedAt = readSettings ? stated?.changedAt ?? (stated ? null : 'unknown') : null;
-      const reasons = [...await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day), needChangedAt }), ...(wakes.noted?.(today) ?? [])];
+      const reasons = [...await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day), needChangedAt }), ...(wakes.noted?.(startedAt) ?? [])];
       if (reasons.length) await wakes.woken(today, reasons);
     } catch { console.error('health wake check failed'); }
   };
@@ -77,7 +77,7 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
       const before = wakes ? await read(wakes.readContext).catch((): null => null) : null;
       const outcome = await produceHealthScores(deps.producer, { now, timezone });
       if (outcome === 'failed') throw new Error('health recompute failed');
-      if (wakes && (outcome === 'written' || (wakes.noted?.(today).length ?? 0) > 0)) await wake(wakes, before, today);
+      if (wakes && (outcome === 'written' || (wakes.noted?.(now).length ?? 0) > 0)) await wake(wakes, before, today, now);
       return outcome;
     },
   };

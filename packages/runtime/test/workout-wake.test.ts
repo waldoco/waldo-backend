@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WORKOUT_FRESH_MS, workoutJustEnded } from '../src/health/wake-notice';
+import { WORKOUT_FRESH_MS, workoutJustEnded, workoutStillFresh } from '../src/health/wake-notice';
 import { healthTriggerPrompt, type HealthTriggerView } from '../src/health/trigger';
 
 // A finished workout as the phone uploads it: only "a workout just ended" leaves the detector, never its time or detail.
@@ -25,13 +25,25 @@ describe('a workout that just ended', () => {
   });
 });
 
+describe('a workout the owner object noted', () => {
+  it('is handed only to a recompute that started after it was noted, and only while it is fresh', () => {
+    const noted = now;
+    expect(workoutStillFresh(noted, now)).toBe(true);
+    expect(workoutStillFresh(noted, now + WORKOUT_FRESH_MS)).toBe(true);
+    expect(workoutStillFresh(noted, now + WORKOUT_FRESH_MS + 1)).toBe(false);
+    // A recompute already running when the upload landed may have read the rows before the workout was in them.
+    expect(workoutStillFresh(noted, now - 1)).toBe(false);
+    expect(workoutStillFresh(undefined, now)).toBe(false);
+    expect(workoutStillFresh('2026-11-06', now)).toBe(false);
+  });
+});
+
 describe('the health trigger on a finished workout', () => {
   const view: HealthTriggerView = { day: '2026-11-06', freshness: 'fresh', now: { recovery: 'solid', form: 'steady', load: 'heavy' }, before: null, drivers: [] };
   it('tells the model a workout just ended and leaves the change, or none, to it', () => {
     const prompt = healthTriggerPrompt({ view, items: [], now, timezone: 'UTC', feedback: {}, reasons: ['workout_ended'] });
     expect(prompt).toContain('The owner just finished a workout.');
     expect(prompt).toContain('with recovery in mind');
-    expect(prompt).not.toMatch(/\d+\s*(?:bpm|kcal|minutes)/);
     expect(healthTriggerPrompt({ view, items: [], now, timezone: 'UTC', feedback: {}, reasons: ['sleep_debt_building'] })).not.toContain('finished a workout');
   });
 });

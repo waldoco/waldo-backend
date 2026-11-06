@@ -13,10 +13,13 @@ const world = vi.hoisted(() => ({
   contextFails: false,
   debts: new Map<string, unknown>(),
   order: [] as string[],
+  // How long the producer's reads take, on the harness clock.
+  produceMs: 0, clock: null as { at: number } | null,
 }));
 vi.mock('../src/health/producer', () => ({
   produceHealthScores: async () => {
     world.order.push('produce');
+    if (world.clock) world.clock.at += world.produceMs;
     if (world.produceFails) return 'failed';
     world.stage = 'after';
     return world.outcome;
@@ -31,10 +34,11 @@ const row = (day: string, drivers: unknown = [], over: Record<string, unknown> =
 const debtRow = (day: string, minutes: number) => ({ scores: { day, sleep_debt: { state: 'available', debt_minutes: minutes, need_basis: 'own_average', algorithm_version: 'sleep-debt.v1', activation: 'candidate_unaccepted' } } });
 const NEW_DRIVER = ['wrist temperature above usual'];
 
-type Harness = Readonly<{ recompute: ReturnType<typeof healthRecompute>; woken: [string, readonly HealthWakeReason[]][]; contextReads: () => number; scoreReads: string[]; zone: { name: string }; clock: { at: number } }>;
+type Harness = Readonly<{ recompute: ReturnType<typeof healthRecompute>; woken: [string, readonly HealthWakeReason[]][]; contextReads: () => number; scoreReads: string[]; zone: { name: string }; clock: { at: number }; notedAt: number[] }>;
 const harness = (over: { enabled?: boolean; noted?: readonly HealthWakeReason[] } = {}): Harness => {
   const woken: [string, readonly HealthWakeReason[]][] = [], scoreReads: string[] = [], zone = { name: 'Asia/Kolkata' }, clock = { at: Date.parse('2026-10-21T08:00:00Z') };
   let reads = 0;
+  const notedAt: number[] = [];
   const deps: HealthRecomputeDeps = {
     scheduler: { lookup: () => ({ state: 'absent' }), schedule: async () => null as never },
     now: () => clock.at, ownerZone: () => zone.name,
@@ -46,14 +50,14 @@ const harness = (over: { enabled?: boolean; noted?: readonly HealthWakeReason[] 
       enabled: () => over.enabled ?? true,
       readContext: async () => { reads += 1; world.order.push(`read:${world.stage}`); if (world.contextFails) throw new Error('read failed'); return world.context[world.stage]; },
       woken: async (day, reasons) => { world.order.push('woken'); woken.push([day, reasons]); },
-      ...(over.noted ? { noted: (day: string) => (day === '2026-10-21' ? over.noted! : []) } : {}),
+      ...(over.noted ? { noted: (startedAt: number) => { notedAt.push(startedAt); return over.noted!; } } : {}),
     },
   };
-  return { recompute: healthRecompute(deps), woken, contextReads: () => reads, scoreReads, zone, clock };
+  return { recompute: healthRecompute(deps), woken, contextReads: () => reads, scoreReads, zone, clock, notedAt };
 };
 
 beforeEach(() => {
-  world.stage = 'before'; world.outcome = 'written'; world.produceFails = false; world.contextFails = false; world.debts = new Map(); world.order = [];
+  world.stage = 'before'; world.outcome = 'written'; world.produceFails = false; world.contextFails = false; world.debts = new Map(); world.order = []; world.produceMs = 0; world.clock = null;
   world.context = { before: row('2026-10-21'), after: row('2026-10-21') };
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -92,6 +96,17 @@ describe('the wake check after a recompute', () => {
     await noToday.recompute.run();
     expect(noToday.woken).toEqual([]);
     expect((await (async () => { const off = harness(); await off.recompute.run(); return off.woken; })())).toEqual([]);
+  });
+
+  it('asks for the upload\'s reasons by the time the run started, not when its reads came back', async () => {
+    world.context = { before: row('2026-10-21'), after: row('2026-10-21') };
+    world.outcome = 'stale';
+    const named = harness({ noted: ['workout_ended'] });
+    const started = named.clock.at;
+    world.clock = named.clock; world.produceMs = 30_000;
+    await named.recompute.run();
+    expect(named.notedAt.length).toBeGreaterThan(0);
+    expect(new Set(named.notedAt)).toEqual(new Set([started]));
   });
 
   it('does not wake when nothing changed', async () => {

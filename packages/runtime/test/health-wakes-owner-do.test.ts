@@ -223,6 +223,8 @@ describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
       vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
       await pass();
       expect(wakes(state)).toEqual([{ day: TODAY, reason: 'workout_ended', taken: 0 }]);
+      // Handed to the trigger once, so no later recompute today hands it again.
+      expect(state.storage.kv.get('health_workout_noted_v1')).toBeUndefined();
       await pass();
       expect(evaluations()).toHaveLength(1);
       const sent = JSON.stringify(evaluations()[0]!.request);
@@ -236,6 +238,22 @@ describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
       expect(triggerEntry(state)).toEqual([]);
       expect(evaluations()).toHaveLength(1);
       for (const leak of LEAKS) expect(dump(state), leak).not.toContain(leak);
+    }, ON);
+  });
+
+  it('never calls a workout "just finished" hours later, when the wake could not read the row at the time', async () => {
+    await withOwner(async ({ state, pass, finished, recompute }) => {
+      plane.consent = false;
+      await finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      expect(wakes(state)).toEqual([]);
+      plane.consent = true;
+      vi.setSystemTime(Date.now() + 4 * 60 * 60_000);
+      await recompute();
+      expect(wakes(state).filter(wake => wake.reason === 'workout_ended')).toEqual([]);
+      await pass();
+      for (const request of evaluations()) expect(JSON.stringify(request.request)).not.toContain(WORDS);
     }, ON);
   });
 

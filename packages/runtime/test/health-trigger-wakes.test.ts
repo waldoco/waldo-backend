@@ -7,6 +7,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import { healthCardBudget, healthTriggerBook, healthTriggerPrompt, healthTriggerView, runHealthTrigger, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_PENDING_TTL_MS, type ComingItem, type HealthTriggerDeps } from '../src/health/trigger';
 import type { HealthWakeReason } from '../src/health/wakes';
+import { WORKOUT_FRESH_MS } from '../src/health/wake-notice';
 
 // The wake reasons beyond a zone change, through the one trigger path: the model still answers propose or no_op, and the
 // consent read, quiet hours, cooldown, budget, same-day duplicate refusal and egress check still decide whether a card
@@ -116,7 +117,9 @@ describe('what the model is told', () => {
         deps().book.markOnce(DAY, NOW - 60_000, reason as HealthWakeReason);
         await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }));
         expect(prompts[0], reason).toContain(sentence);
-        expect(prompts[0], reason).toContain(`The owner's derived health state for ${DAY} (owner-local day) changed since the last reading.`);
+        expect(prompts[0], reason).toContain(reason === 'workout_ended'
+          ? `The owner's derived health state for ${DAY} (owner-local day) is as below; no reading changed it.`
+          : `The owner's derived health state for ${DAY} (owner-local day) changed since the last reading.`);
         expect(prompts[0], reason).not.toContain('moved zone');
         expect(prompts[0], reason).toContain('Now (2026-10-21, fresh): recovery compromised, form depleted, load peak.');
         for (const leak of LEAKS) expect(prompts[0], reason).not.toContain(leak);
@@ -323,6 +326,35 @@ describe('the same gates as a zone change', () => {
       deps().book.markOnce(DAY, NOW - 60_000, 'sleep_debt_building');
       expect(await runHealthTrigger(deps({ modeSetting: () => 'shadow' }))).toBe('shadow_proposed');
       expect([proposals.length, charged.length]).toEqual([0, 0]);
+    });
+  });
+});
+
+describe('a finished workout at the trigger', () => {
+  it('is no longer "just finished" once it is older than the workout window, as after quiet hours held it', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.markOnce(DAY, NOW - WORKOUT_FRESH_MS - 60_000, 'workout_ended');
+      expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }))).toBe('stale_day');
+      expect(prompts).toEqual([]);
+      expect(deps().book.pending(NOW)).toBeNull();
+    });
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.markOnce(DAY, NOW - WORKOUT_FRESH_MS - 60_000, 'workout_ended');
+      deps().book.markOnce(DAY, NOW - 60_000, 'sleep_debt_building');
+      await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }));
+      expect(prompts[0]).toContain(SENTENCES.sleep_debt_building);
+      expect(prompts[0]).not.toContain(SENTENCES.workout_ended);
+    });
+  });
+
+  it('writes no note on a day with nothing coming, since there is nothing left to reshape', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const delivered: string[] = [];
+      const soloNotice = { enabled: () => true, held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
+      deps().book.markOnce(DAY, NOW - 60_000, 'workout_ended');
+      const run = await runHealthTrigger(deps({ comingItems: async () => [], soloNotice, decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notice', text: 'Easy evening.' }); } }));
+      expect([run, prompts, delivered]).toEqual(['nothing_coming', [], []]);
+      expect(deps().book.pending(NOW)).toBeNull();
     });
   });
 });

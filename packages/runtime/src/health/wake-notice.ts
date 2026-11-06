@@ -31,3 +31,7 @@ export const workoutJustEnded = (samples: readonly unknown[], now: number): bool
   const end = Date.parse(sample.data.end_at);
   return end >= now - WORKOUT_FRESH_MS && end <= now + CLOCK_SKEW_MS;
 });
+// Whether the workout an upload noted at notedAt is still "just finished" for a recompute that started at runStartedAt. A
+// run that started before the upload may have read the rows before the workout was in them, so it never takes it.
+export const workoutStillFresh = (notedAt: unknown, runStartedAt: number): boolean =>
+  typeof notedAt === 'number' && notedAt <= runStartedAt && runStartedAt - notedAt <= WORKOUT_FRESH_MS;
