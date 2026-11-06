@@ -1,7 +1,8 @@
 import { applyClaimOps, type ClaimStore } from '../memory/claims';
 import { localDayWindow, shiftDay } from '../health/scores/time';
 import type { CalendarItem, GoogleClient } from '../connectors/google';
-import { capacityInput, NO_CALENDAR } from '../prompt/capacity';
+import { budgetContext, capacityInput, NO_CALENDAR } from '../prompt/capacity';
+import { readCalendar } from './day-cards';
 import { localIso } from './reminders';
 
 // CAPACITY_PLAN: one capacity note per owner, kept in memory as a health claim so the owner's health-notes setting, the
@@ -85,6 +86,17 @@ export const capacityDays = (now: number, timezone: string): readonly string[] =
   const today = localIso(now, timezone).slice(0, 10);
   return Array.from({ length: CAPACITY_PAST_DAYS + 1 }, (_, index) => shiftDay(today, index - CAPACITY_PAST_DAYS + 1));
 };
+
+// CAPACITY_BUDGET: the rest of the owner's week after today, whole local days, for a lighter day to move something to.
+const WEEK_AHEAD_DAYS = 6;
+const WEEK_AHEAD_EVENTS = 100;
+export const weekAhead = (now: number, timezone: string): Readonly<{ from: number; to: number }> => {
+  const today = localIso(now, timezone).slice(0, 10);
+  return { from: localDayWindow(shiftDay(today, 1), timezone).start, to: localDayWindow(shiftDay(today, WEEK_AHEAD_DAYS), timezone).end };
+};
+// What the planning Brief reads beside the capacity note: a failed read says so, and the model then moves nothing.
+export const capacityBudgetContext = async (now: number, timezone: string, google: GoogleClient | null): Promise<string> =>
+  budgetContext(await readCalendar(weekAhead(now, timezone), timezone, google, false, WEEK_AHEAD_EVENTS));
 
 // The protected blocks Waldo proposed lately, as kind, day and what became of each: no title or time leaves the ledger.
 export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14): string => {

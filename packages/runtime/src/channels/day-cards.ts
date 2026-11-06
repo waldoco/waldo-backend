@@ -485,11 +485,11 @@ const eventLine = (event: CalendarItem, timezone: string) =>
   JSON.stringify({ ...calendarPromptProjection(event), start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
 export const readCalendar = async (
-  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean,
+  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean, max = 25,
 ): Promise<string> => {
   if (!google) return connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.';
   try {
-    const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), 25, false);
+    const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), max, false);
     return events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.';
   } catch (error) {
     return `Calendar could not be read right now (${error instanceof Error ? error.message : String(error)}). Say so briefly; do not guess the schedule.`;
