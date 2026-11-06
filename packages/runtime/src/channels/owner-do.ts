@@ -4540,8 +4540,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), kv: storage.kv, defer: (work) => this.ctx.waitUntil(work),
       log: (event) => log(semanticTraceEntry(event)) });
     semantic?.kick();
-    // A forget left pending by an earlier build, or a claim marked for removal, gets the purge job; an armed job keeps its time.
-    if ((memory.pendingTopics().length || memory.claims('purging').length) && scheduler.lookup(FORGET_PURGE_ID).state === 'absent') this.ctx.waitUntil(this.forgetPurgeJob().track([]));
+    // A forget left pending by an earlier build, a claim marked for removal, or a pending row whose claim is gone gets the purge job; an armed job keeps its time.
+    if ((memory.pendingTopics().length || memory.claims('purging').length || memory.orphanPurgeRows()) && scheduler.lookup(FORGET_PURGE_ID).state === 'absent') this.ctx.waitUntil(this.forgetPurgeJob().track([]));
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);

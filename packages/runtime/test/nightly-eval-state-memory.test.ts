@@ -28,7 +28,7 @@ describe('state and memory cases in the catalogue', () => {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
     }
-    expect(rawHistoryScenarios(NIGHTLY_SCENARIOS).map((entry) => entry.id)).toEqual(['t19-correct-memory', 'r1-recall-across-day', 'm02-knowledge-update', 'h04-health-memory']);
+    expect(rawHistoryScenarios(NIGHTLY_SCENARIOS).map((entry) => entry.id)).toEqual(['t19-correct-memory', 'r1-recall-across-day', 'm02-knowledge-update', 'h04-health-memory', 'm26-save-readings-request']);
   });
 });
 
