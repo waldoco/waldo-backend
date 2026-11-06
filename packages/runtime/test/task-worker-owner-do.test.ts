@@ -286,7 +286,7 @@ it('R-4: when no model answers the owner, the floor reply promises a time and th
     expect(job!.due_at).toBeGreaterThan(Date.now());
     // The floor reply the owner gets names the promised time; the job holding that promise was written first.
     const queued = (state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
-    expect(queued.some(text => /^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/.test(text))).toBe(true);
+    expect(queued.some(text => /^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d\d)?[ap]m\.$/.test(text))).toBe(true);
     // The first try is due; the owner's alarm runs it.
     state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), job!.id);
     await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
