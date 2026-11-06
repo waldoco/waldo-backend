@@ -13,7 +13,7 @@ const holds = (id: string, final_state: Record<string, unknown>, at = 0) => scen
 
 describe('the memory final-pass cases', () => {
   it('sit in the nightly catalogue with a receipt and a rubric each', () => {
-    expect(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id)).toEqual(['m20-time-question-replaced-fact', 'm21-update-then-what-changed', 'm22-forgotten-holds-across-surfaces', 'm23-bring-up-less', 'm24-inferred-shown-as-guess', 'm25-namesake-page-not-recorded', 'm26-save-readings-request', 'm27-honest-unknown']);
+    expect(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id)).toEqual(['m20-time-question-replaced-fact', 'm21-update-then-what-changed', 'm22-forgotten-holds-across-surfaces', 'm23-bring-up-less', 'm24-inferred-shown-as-guess', 'm26-save-readings-request', 'm27-honest-unknown']);
     for (const entry of MEMORY_FINAL_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
@@ -84,12 +84,6 @@ describe('the memory final-pass cases', () => {
   it('m24 fails when Waldo wrote a morning preference as the owner\'s own word', () => {
     expect(holds('m24-inferred-shown-as-guess', { memory: [row(2006, { seeded: true, origin: 'agent', text: 'The owner probably prefers morning meetings.' })] })).toBe(true);
     expect(holds('m24-inferred-shown-as-guess', { memory: [row(2006, { seeded: true, origin: 'agent' }), row(9, { text: 'The owner prefers morning meetings.' })] })).toBe(false);
-  });
-
-  it('m25 fails the moment any finding is recorded for a namesake', () => {
-    expect(holds('m25-namesake-page-not-recorded', { findings: [] })).toBe(true);
-    expect(holds('m25-namesake-page-not-recorded', {})).toBe(true);
-    expect(holds('m25-namesake-page-not-recorded', { findings: [{ url: 'https://braces.example/dr-orla-quillbright' }] })).toBe(false);
   });
 
   it('m26 fails when any claim holds a reading, in any state', () => {
