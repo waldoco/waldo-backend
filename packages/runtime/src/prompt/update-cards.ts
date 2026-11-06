@@ -1,7 +1,8 @@
+import { SKIP_UPDATE } from './skip-update';
 import { fenced } from './turn-prompt';
 // In-between update cards (owner ask 2026-09-23): short, change-driven notes between the
 // main day cards. What they surface also feeds the next main card.
-export const SKIP_UPDATE = 'SKIP';
+export { SKIP_UPDATE };
 
 const VOLUME: Readonly<Record<string, string>> = {
   normal: 'The owner wants updates only when they change the day.',

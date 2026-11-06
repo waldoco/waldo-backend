@@ -71,7 +71,6 @@ export type ParseToolCallsResult =
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   assertTaskSourceCurrent?: () => Promise<void>;
-  ownerInitiated?: boolean;
   // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
   runOrigin?: RunOrigin;
   // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
@@ -93,6 +92,8 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   // "Why this changed": the turn's successful reads, which the tool loop records while the trail is on, and the steps a
   // proposing call claimed (its `why`, taken off its arguments).
   turnReads?: TrailRead[];
+  // Set by the tool loop once a request has shown the model the owner's health readings (conversation/health-fence).
+  healthShown?: boolean;
   claimedWhy?: unknown;
   whySteps?: readonly TrailStep[];
 };
