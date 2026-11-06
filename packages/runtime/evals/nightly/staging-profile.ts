@@ -87,6 +87,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
+  DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
   DEVICE_WEATHER: gap('the world serves no weather and the trial offers no get_weather; staging has it on once the WeatherKit secrets are set'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),
   WELCOME_V2: gap('one trial asks a single second-build stage (w1); the build\'s order, admission and caps are held by their own tests; staging has it on'),
