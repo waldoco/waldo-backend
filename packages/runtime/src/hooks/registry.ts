@@ -83,7 +83,7 @@ import {
   searchToolsArgsSchema,
   sendMessageArgsSchema,
   useMacArgsSchema,
-  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema, checkTaskArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema, checkTaskArgsSchema, steerTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   cancelStandingOrderArgsSchema,
@@ -301,6 +301,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   start_task: startTaskArgsSchema,
   cancel_task: cancelTaskArgsSchema,
   check_task: checkTaskArgsSchema,
+  steer_task: steerTaskArgsSchema,
   record_owner_finding: recordOwnerFindingArgsSchema,
   list_owner_findings: listOwnerFindingsArgsSchema,
 });

@@ -193,6 +193,16 @@ export const taskHost = (deps: TaskHostDeps) => {
     return (await eligibleHandlers(own)).handlers;
   };
 
+  // A change ended the attempt (its next checkpoint for a correction, its report otherwise): the worker is told it was fenced
+  // and stops, and the jobs lane starts the attempt that resumes with the change.
+  const steered = async (ticket: TaskTicket, at: 'checkpoint' | 'report', outcomes: readonly ProviderOutcome[]): Promise<'fenced'> => {
+    replay(outcomes);
+    fence(ticket.jobId);
+    hop(deps.book.get(ticket.jobId)!, 'task_attempt_steered', { code: at, detail: `attempt=${ticket.attempt}` });
+    await deps.wake(deps.now());
+    return 'fenced';
+  };
+
   const stopLapsed = (row: JobRow): boolean => {
     if (!deps.lapsed?.(row)) return false;
     deps.book.cancel(row.id, 'owner');
@@ -410,6 +420,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const spend = ownerSpend();
       const { conversation_ref: _replyChain, ...brief } = taskBrief(resumed);
       const nudge = deps.nudge?.(row.id, resumed.checkpoint_seq) ?? null;
+      const { steers, draft } = jobCheckpoint(resumed);
       return {
         jobId: row.id, profile: row.profile, brief, tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
@@ -418,6 +429,8 @@ export const taskHost = (deps: TaskHostDeps) => {
         ...(spend ? { spend } : {}),
         ...(deps.providerHealth ? { providerHealth: deps.providerHealth.snapshot() } : {}),
         ...(nudge ? { nudge } : {}),
+        ...(steers?.length ? { steers: steers.map(({ text, mode, at }) => ({ text, mode, at })) } : {}),
+        ...(draft ? { draft } : {}),
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted
@@ -504,6 +517,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       }
       const written = deps.book.checkpoint(ticket, seq, { turns: kept }, spend);
       if (written === 'fenced') { fence(ticket.jobId); return written; }
+      if (written === 'steered') return steered(ticket, 'checkpoint', outcomes);
       if (written === 'ok') replay(outcomes);
       const row = deps.book.get(ticket.jobId)!;
       hop(row, 'task_checkpoint', { detail: `seq=${seq}:turns=${turns.length}` });
@@ -519,6 +533,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         ? deps.book.defer(ticket, deps.now() + deferDelay(row.deferrals), spend)
         : deps.book.report(ticket, outcome.kind === 'result' ? storableResult(outcome.result) : failedResult(outcome.code), spend);
       if (written === 'fenced' || written === 'duplicate') { if (written === 'fenced') fence(ticket.jobId); return written; }
+      if (written === 'steered') return steered(ticket, 'report', outcomes);
       replay(outcomes);
       fence(ticket.jobId);
       const after = deps.book.get(ticket.jobId)!;

@@ -60,7 +60,13 @@ export type ReplayOutcome = TaintedActionOutcome;
 // the owner has decided, the decision the next attempt resumes with.
 // An approved step runs once as the card's own replay job; its outcome is what the job resumes with.
 export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id: string; name: string; arguments: string }>; decision?: 'approved' | 'declined' }>;
-export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep }>;
+// A change the owner's turn made to a task's work after it started (steer_task). It rides with the checkpoint, the state every
+// later attempt resumes from, so the brief and its digest stay frozen and the job keeps its id. key: the turn and tool call
+// that made it, so a replayed call adds nothing. shown: the attempt whose claim first showed it to a worker; until then an
+// interrupt ends the running attempt at its next checkpoint, and either kind turns its report into a new attempt.
+export type Steer = Readonly<{ key: string; text: string; mode: 'interrupt' | 'enqueue'; at: number; shown?: number }>;
+// draft: the result an attempt reported while a change waited for it, which the next attempt finishes from.
+export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep; steers?: readonly Steer[]; draft?: TaskResult }>;
 
 export type JobRow = Readonly<{
   id: string; kind: JobKind; profile: TaskProfile | null; idempotency_key: string; origin: string; surface: string;
@@ -95,6 +101,9 @@ export const REPLAY_DEADLINE_MS = 30 * 60_000;
 // cap start_task refuses and says what to do instead; the brain's own retries of owner messages are not counted.
 export const TASK_MAX_OPEN = 10;
 export const TASK_MAX_PER_TURN = 3;
+// Changes one task takes. Each can end a worker's attempt and adds words every later attempt reads, so a turn that keeps
+// changing a task is told to cancel it and start one with the whole brief instead.
+export const TASK_MAX_STEERS = 5;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
@@ -116,6 +125,8 @@ export type CreateJob = Readonly<{
 export type Fenced = 'fenced';
 
 const OPEN: readonly JobStatus[] = ['queued', 'running', 'awaiting_owner', 'reported'];
+const STEERABLE: readonly JobStatus[] = ['queued', 'running', 'awaiting_owner'];
+const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
 const SETTLED = "status IN ('applied', 'cancelled', 'parked')";
 const MACHINE_ROW = `origin LIKE '${MACHINE_ORIGIN}%'`;
 // What a settled row keeps of its brief: a task's title (cancel_task names it) and start time, a retry's references and
@@ -170,6 +181,13 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     `UPDATE task_jobs SET lease_until = ?, updated_at = ?${extra} WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
     deps.now() + TASK_LEASE_MS, deps.now(), ...values, ticket.jobId, ticket.attempt, ticket.token,
   ).rowsWritten > 0;
+  // A claim hands the worker every change the job holds; the ones it had not shown yet are marked shown by this attempt.
+  const showSteers = (ticket: TaskTicket, row: JobRow): JobRow => {
+    const checkpoint = jobCheckpoint(row);
+    if (!checkpoint.steers?.some(steer => steer.shown === undefined)) return row;
+    renew(ticket, ', checkpoint_json = ?', JSON.stringify({ ...checkpoint, steers: checkpoint.steers.map(steer => ({ ...steer, shown: steer.shown ?? ticket.attempt })) }));
+    return get(ticket.jobId)!;
+  };
   // An attempt lost while an effect that cannot be replayed was in flight parks at once: the effect may or may not have
   // happened, and running it again blind could do it twice. Answers whether the job parked.
   const endAttempt = ({ id, crashes, deadline_at, inflight_json }: LostAttempt, now: number): boolean => {
@@ -188,6 +206,17 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       `UPDATE task_jobs SET status = 'reported', outcome = ?, park_reason = ?, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ?
        WHERE id = ? AND status IN ('queued', 'running', 'awaiting_owner')`, outcome, reason, now, now, id,
     ).rowsWritten > 0;
+  };
+
+  // The attempt ends for a change the owner's turn made, as a provider outage ends one: no crash counted, the checkpoint kept,
+  // and the job due now for the next attempt, which the jobs lane starts.
+  const requeue = (ticket: TaskTicket, spend: Readonly<{ rounds: number; costUsd: number }>, checkpoint?: Checkpoint): 'steered' | Fenced => {
+    const now = deps.now();
+    return sql.exec(
+      `UPDATE task_jobs SET status = 'queued', lease_token = NULL, lease_until = NULL, inflight_json = NULL, due_at = ?, rounds = rounds + ?, cost_usd = cost_usd + ?, updated_at = ?,
+         checkpoint_json = COALESCE(?, checkpoint_json) WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
+      now, spend.rounds, spend.costUsd, now, checkpoint ? JSON.stringify(checkpoint) : null, ticket.jobId, ticket.attempt, ticket.token,
+    ).rowsWritten > 0 ? 'steered' : 'fenced';
   };
 
   const byKey = (key: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', key).toArray()[0] ?? null;
@@ -264,7 +293,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       if (!renew(ticket)) return 'fenced';
       const row = get(ticket.jobId)!;
       const reason: ParkReason | null = row.inflight_json !== null ? 'uncertain_effect' : deps.now() > row.deadline_at + JOB_START_GRACE_MS ? 'deadline' : null;
-      if (reason === null) return row;
+      if (reason === null) return showSteers(ticket, row);
       return park(row.id, reason) ? 'parked' : 'fenced';
     },
     // Every brain-side tool call renews the lease and records whether the job has read external content.
@@ -272,14 +301,37 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return taint === 'external' ? renew(ticket, ", taint = 'external'") : renew(ticket);
     },
     // A checkpoint lands only in order: a stale or repeated sequence number (a worker replaying its alarm) is a no-op.
-    checkpoint(ticket: TaskTicket, seq: number, checkpoint: Checkpoint, spend: Readonly<{ rounds: number; costUsd: number }>): 'ok' | 'stale' | Fenced {
+    // The worker sends its turns; the changes and draft the job holds stay with them. A correction not yet shown to a worker
+    // ends this attempt here, between rounds, where nothing is in flight: the job queues to resume from this checkpoint with it.
+    checkpoint(ticket: TaskTicket, seq: number, checkpoint: Checkpoint, spend: Readonly<{ rounds: number; costUsd: number }>): 'ok' | 'stale' | 'steered' | Fenced {
       const row = current(ticket);
       if (!row) return 'fenced';
       if (seq <= row.checkpoint_seq) return renew(ticket) ? 'stale' : 'fenced';
-      return renew(ticket, ', checkpoint_seq = ?, checkpoint_json = ?, inflight_json = NULL, rounds = rounds + ?, cost_usd = cost_usd + ?', seq, JSON.stringify(checkpoint), spend.rounds, spend.costUsd) ? 'ok' : 'fenced';
+      const { steers, draft } = jobCheckpoint(row);
+      const kept = { ...checkpoint, ...(steers ? { steers } : {}), ...(draft ? { draft } : {}) };
+      if (!renew(ticket, ', checkpoint_seq = ?, checkpoint_json = ?, inflight_json = NULL, rounds = rounds + ?, cost_usd = cost_usd + ?', seq, JSON.stringify(kept), spend.rounds, spend.costUsd)) return 'fenced';
+      return steers?.some(steer => steer.mode === 'interrupt' && steer.shown === undefined) ? requeue(ticket, NO_SPEND) : 'ok';
     },
-    report(ticket: TaskTicket, result: TaskResult, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | Fenced {
+    // A report while a change waits for a worker is not the task's answer yet: the job queues for an attempt that sees the change
+    // and this result as its draft, and only that attempt's report is applied.
+    report(ticket: TaskTicket, result: TaskResult, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | 'steered' | Fenced {
+      const row = current(ticket);
+      const checkpoint = row ? jobCheckpoint(row) : null;
+      if (row && checkpoint?.steers?.some(steer => steer.shown === undefined)) return requeue(ticket, spend, { ...checkpoint, ...(result.status === 'failed' ? {} : { draft: result }) });
       return finish(ticket, JSON.stringify(result), result.status, spend);
+    },
+    // A change to a task that has not finished (steer_task). A finished, cancelled or settled job takes none. The job's taint only
+    // ever rises: a change written in a turn that read outside text makes the report apply as tainted.
+    steer(id: string, steer: Omit<Steer, 'shown'>, taint: 'external' | null): 'steered' | 'duplicate' | 'closed' | 'full' {
+      const row = get(id);
+      if (!row || !STEERABLE.includes(row.status)) return 'closed';
+      const checkpoint = jobCheckpoint(row), steers = checkpoint.steers ?? [];
+      if (steers.some(held => held.key === steer.key)) return 'duplicate';
+      if (steers.length >= TASK_MAX_STEERS) return 'full';
+      return sql.exec(
+        `UPDATE task_jobs SET checkpoint_json = ?, taint = COALESCE(?, taint), updated_at = ? WHERE id = ? AND status IN (${placeholders(STEERABLE)})`,
+        JSON.stringify({ ...checkpoint, steers: [...steers, steer] }), taint, deps.now(), id, ...STEERABLE,
+      ).rowsWritten > 0 ? 'steered' : 'closed';
     },
     // An approved action's attempt ends with what its replay established. The intent marker is cleared in the same write,
     // so the job is never both reported and in flight.
@@ -340,7 +392,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return sql.exec(
         `UPDATE task_jobs SET status = 'awaiting_owner', lease_token = NULL, lease_until = NULL, inflight_json = NULL, due_at = deadline_at, checkpoint_json = ?, updated_at = ?
          WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
-        JSON.stringify({ turns: jobCheckpoint(row).turns, asked: step }), now, ticket.jobId, ticket.attempt, ticket.token,
+        JSON.stringify({ ...jobCheckpoint(row), asked: step }), now, ticket.jobId, ticket.attempt, ticket.token,
       ).rowsWritten > 0;
     },
     // The job waiting on card `approvalId`, if any.

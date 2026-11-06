@@ -156,6 +156,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_REPLY_MERGE?: string;
   // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
   WALDO_TASK_ASK?: string;
+  WALDO_TASK_STEER?: string;
   // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
   WALDO_TASK_NOTES?: string;
   // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
