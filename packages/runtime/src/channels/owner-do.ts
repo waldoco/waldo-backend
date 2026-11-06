@@ -4565,7 +4565,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const grants = standingGrants(storage, { now: () => deps.now(), newId: () => `g${deps.newRunId().replaceAll('-', '').slice(0, 24)}`,
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1', marksBlocks: () => this.env.BLOCK_LIFECYCLE === '1',
+      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1',
       approvesInChat: () => this.env.APPROVE_IN_CHAT === '1', conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
@@ -4756,7 +4756,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // BLOCK_LIFECYCLE: Waldo's own blocks from yesterday to two days ahead, and how to look after them (and, at the Close, learn
       // from them).
       const lifecycle = this.env.BLOCK_LIFECYCLE === '1' ? (() => {
-        const now = Date.now(), blocks = blocksSection(waldoBlocks(storage.sql, now - 24 * 3_600_000, now + 2 * 24 * 3_600_000), clock.timezone);
+        const now = Date.now(), blocks = blocksSection(waldoBlocks(storage.sql, now - 24 * 3_600_000, now + 2 * 24 * 3_600_000).filter(block => card !== 'close' || !block.owner_edited), clock.timezone);
         return blocks ? [blocks, card === 'close' ? CLOSE_CALIBRATION_INSTRUCTION : BLOCK_LIFECYCLE_INSTRUCTION].join('\n\n') : '';
       })() : '';
       if (card === 'close' || (!coverage && !offers)) return lifecycle;
