@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_MEMORY_USED_MAX_V1, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -256,5 +256,22 @@ describe('chat revision 6: a history row carries its rating', () => {
   });
   it('refuses any other rating, and a cleared rating as null (an unrated row leaves the key out)', () => {
     for (const rating of ['sideways', '', null, 1]) expect(appMessageV1Schema.safeParse({ ...row, rating }).success).toBe(false);
+  });
+});
+
+describe('memory_used, chat revision 7', () => {
+  const base = { id: 'm1', role: 'assistant' as const, text: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }], channel: 'app', parent_id: 'm0' };
+  it('is revision 7 and absent from older headers', () => {
+    expect(APP_CHAT_MEMORY_USED_REVISION).toBe(7);
+    expect(appContractRevision('chat=7', 'chat')).toBe(7);
+    for (const header of [null, 'chat=6', 'chat=3']) expect(appContractRevision(header, 'chat')).toBeLessThan(7);
+  });
+  it('lists notes by claim id with plain text, within the cap, or not at all', () => {
+    expect(appMessageV1Schema.safeParse(base).success).toBe(true);
+    expect(appMessageV1Schema.safeParse({ ...base, memory_used: [{ id: 'memory:claim:4', text: 'Lives in Leeds' }] }).success).toBe(true);
+    const many = Array.from({ length: APP_CHAT_MEMORY_USED_MAX_V1 }, (_, index) => ({ id: `memory:claim:${index + 1}`, text: 'x' }));
+    expect(appMessageV1Schema.safeParse({ ...base, memory_used: many }).success).toBe(true);
+    for (const memory_used of [[], [...many, { id: 'memory:claim:99', text: 'x' }], [{ id: 'memory:node:4', text: 'x' }], [{ id: 'memory:claim:4', text: '' }], [{ id: 'memory:claim:4', text: 'x'.repeat(301) }], [{ id: 'memory:claim:4', text: 'x', extra: 1 }]])
+      expect(appMessageV1Schema.safeParse({ ...base, memory_used }).success, JSON.stringify(memory_used).slice(0, 60)).toBe(false);
   });
 });

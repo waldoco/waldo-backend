@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
-import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappHeld, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
 import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
@@ -246,6 +246,38 @@ describe('whatsapp 24-hour window', () => {
     expect(whatsappTemplateConfig({ WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en_US' })).toEqual({ name: 'waldo_update_ready', language: 'en_US' });
     for (const bad of [{}, { WHATSAPP_REENGAGE_TEMPLATE: 'Has Spaces', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' }, { WHATSAPP_REENGAGE_TEMPLATE: 'ok_name', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'english' }])
       expect(whatsappTemplateConfig(bad)).toBeNull();
+  });
+
+  it('a send marked as Waldo\'s own initiative knocks with the proactive template, and is held without it when none is configured', async () => {
+    const proactive = { name: 'waldo_proactive_update', language: 'en' };
+    const knocks = async (template: typeof proactive | null, proactiveTemplate: typeof proactive | null, extra: object = {}) => {
+      const graph = graphOk(), map = new Map<string, unknown>();
+      const kv = { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key), list: <T>({ prefix }: { prefix: string }) => [...map].filter(([key]) => key.startsWith(prefix)) as unknown as Iterable<[string, T]> };
+      const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
+      const call = whatsappWindowCaller(shim, { kv, template, proactiveTemplate, now: () => T0, log: () => undefined });
+      await call('sendMessage', { chat_id: 1, text: 'Your morning is clear.', ...extra });
+      return sentBodies(graph).map(body => (body.template as { name: string } | undefined)?.name ?? body.type);
+    };
+    const reply = { name: 'waldo_update_ready', language: 'en' };
+    expect(await knocks(reply, proactive, { [SEND_UNASKED]: true })).toEqual(['waldo_proactive_update']);
+    expect(await knocks(reply, null, { [SEND_UNASKED]: true })).toEqual([]);
+    expect(await knocks(reply, proactive)).toEqual(['waldo_update_ready']);
+    expect(await knocks(null, proactive)).toEqual(['waldo_proactive_update']);
+  });
+
+  it('picks the knock by whether the owner asked: a reply may use either template, Waldo\'s own initiative only the proactive one', () => {
+    const reply = { name: 'waldo_update_ready', language: 'en' }, proactive = { name: 'waldo_proactive_update', language: 'en' };
+    expect(templateFor({ reply, proactive }, false)).toBe(reply);
+    expect(templateFor({ reply, proactive }, true)).toBe(proactive);
+    expect(templateFor({ reply, proactive: null }, true)).toBeNull();
+    expect(templateFor({ reply: null, proactive }, false)).toBe(proactive);
+    expect(templateFor({ reply: null, proactive: null }, false)).toBeNull();
+  });
+
+  it('reads the proactive template from its own config under the same name and language rules, and never from the reply template\'s', () => {
+    expect(whatsappProactiveTemplateConfig({ WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' })).toEqual({ name: 'waldo_proactive_update', language: 'en' });
+    for (const bad of [{}, { WHATSAPP_PROACTIVE_TEMPLATE: 'Has Spaces', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' }, { WHATSAPP_PROACTIVE_TEMPLATE: 'ok_name', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '' },
+      { WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' }]) expect(whatsappProactiveTemplateConfig(bad)).toBeNull();
   });
 
   it('a 131047 refusal inside our window holds, knocks and closes the window until the owner writes; any other refusal propagates and holds nothing', async () => {

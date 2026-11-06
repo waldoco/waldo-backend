@@ -13,10 +13,23 @@ export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup',
 // stays Waldo's read until the owner confirms it.
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferred'] as const;
 // What the owner may still confirm as theirs.
+// A claim and every earlier version each one replaced.
+// A replaced row is history only while something still stands for its end: a newer version that points at it, or the owner's own
+// retirement of it. A replaced row nothing points to is what an earlier forget of its newer version left behind.
+const HISTORY_KEPT = "(claims.retired_at IS NOT NULL OR EXISTS (SELECT 1 FROM claims later WHERE later.supersedes_id = claims.id))";
+const lineageOf = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): number[] => {
+  const all = new Set(from);
+  for (let frontier = [...from]; frontier.length;) {
+    frontier = sql.exec<{ id: number }>(`SELECT supersedes_id AS id FROM claims WHERE id IN (${frontier.map(() => '?').join(',')}) AND supersedes_id IS NOT NULL`, ...frontier).toArray()
+      .map((row) => row.id).filter((id) => !all.has(id));
+    for (const id of frontier) all.add(id);
+  }
+  return [...all];
+};
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
 // claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row.
@@ -397,7 +410,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
   // Additive migration: old claims have no verifiable source reference, never invent one.
   for (const [column, definition] of [
     ['source_ref', 'TEXT'], ['learned_at', 'TEXT'], ['valid_from', 'TEXT'],
-    ['valid_to', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
+    ['valid_to', 'TEXT'], ['retired_at', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
     ['pinned', 'TEXT'], ['pin_order', 'INTEGER'],
     // area_by: who filed it, model or owner. The owner's choice stands against the model's later passes.
     ['area', 'TEXT'], ['area_by', 'TEXT'],
@@ -539,13 +552,41 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         match, cap).toArray() : [];
       return near.length ? fuseRanked([lexical, nearClaims(near)], (claim) => claim.id).slice(0, cap) : lexical;
     },
+    // Earlier versions of what Waldo knows: claims a later fact replaced, newest replacement first. For a question about the
+    // past or about what changed; never current. Same words-only search as recall, and an untrusted note never comes back.
+    recallReplaced(query: string, limit = 3): Claim[] {
+      const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
+      if (!Number.isFinite(limit) || limit < 1 || !words.length) return [];
+      return sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid
+        WHERE claim_recall MATCH ? AND claims.status = 'superseded' AND claims.valid_to IS NOT NULL AND COALESCE(claims.origin, '') != 'untrusted' AND claims.kind != '${NODE_STATEMENT}'
+        AND ${HISTORY_KEPT}
+        ORDER BY bm25(claim_recall), claims.valid_to DESC, claims.id DESC LIMIT ?`, words.map((word) => `"${word}"`).join(' OR '), Math.min(RECALL_CAP, Math.trunc(limit))).toArray();
+    },
+    // These claims and every earlier version each one replaced, oldest last. Read before a claim is deleted, since a deleted
+    // row no longer says what it replaced.
+    lineage: (from: readonly number[]): number[] => lineageOf(sql, from),
+    // The most recently replaced claims, for a question about what changed.
+    replacedClaims(limit = 5): Claim[] {
+      if (!Number.isFinite(limit) || limit < 1) return [];
+      return sql.exec<Claim>(`SELECT * FROM claims WHERE status = 'superseded' AND valid_to IS NOT NULL AND COALESCE(origin, '') != 'untrusted' AND kind != '${NODE_STATEMENT}' AND ${HISTORY_KEPT} ORDER BY valid_to DESC, id DESC LIMIT ?`, Math.min(RECALL_CAP, Math.trunc(limit))).toArray();
+    },
+    // A live claim the day showed is no longer true: it ends at this time and stays as history, never deleted. replacedBy is
+    // the claim that now holds the fact, when there is one.
+    retire(id: number, at: string, replacedBy?: number): boolean {
+      if (!transaction) return false;
+      return transaction(() => {
+        const ended = sql.exec(`UPDATE claims SET status = 'superseded', valid_to = ?, retired_at = ? WHERE id = ? AND status = 'active' AND kind != '${NODE_STATEMENT}' AND id != ? RETURNING id`, at, at, id, replacedBy ?? 0).toArray().length === 1;
+        if (ended && replacedBy !== undefined) sql.exec('UPDATE claims SET supersedes_id = ? WHERE id = ? AND status IN (\'active\', \'promoted\') AND supersedes_id IS NULL AND origin = \'owner\'', id, replacedBy);
+        return ended;
+      });
+    },
     barriers: () => sql.exec<ForgetBarrier>('SELECT * FROM forget_barriers ORDER BY id').toArray(),
     forgetGeneration: (): number => sql.exec<{ value: number }>('SELECT value FROM forget_generation WHERE id = 1').toArray()[0]?.value ?? 0,
     nodes: () => sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes ORDER BY strength DESC').toArray(),
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),
     add(claim: NewClaim, at: string, id?: number): void {
       const area = filedArea(claim.area);
-      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, null, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), area, area ? 'model' : null);
+      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, at, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), area, area ? 'model' : null);
     },
     seen(id: number, at: string): void {
       db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
@@ -625,7 +666,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         const kept = claim.area === undefined || old.area_by === 'owner' || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
         const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
         const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
+          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, at, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
         // The owner's wish about raising a fact follows the fact into its corrected wording.
         if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ?', old.bring_up_less_at, replacement);
         retire();
@@ -734,6 +775,9 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> }; deletedClaims: readonly number[] } {
       // Before anything is removed: if the count cannot move, nothing is forgotten either.
       forgetLanded();
+      // An earlier version of a forgotten claim goes with it: what it replaced would otherwise stay as history that says the
+      // same thing in older words.
+      ids = lineageOf(sql, ids);
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -845,7 +889,11 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         // claim and redacts the forgotten sentence or quote where one repeats it.
         attempt('surviving_claims', () => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray()) {
-            if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); deletedClaims.push(row.rid); continue; }
+            if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) {
+              // The earlier versions it replaced go with it, read before the row is deleted: a deleted row no longer says what it replaced.
+              for (const id of lineageOf(sql, [row.rid])) if (sql.exec('DELETE FROM claims WHERE id = ? RETURNING id', id).toArray().length) { tally('deleted', 'claims'); deletedClaims.push(id); }
+              continue;
+            }
             const redacted = [ci(row.text), ci(row.evidence), row.aliases === null ? null : ci(row.aliases), row.source_ref === null ? null : ci(row.source_ref)] as const;
             if (redacted[0] !== row.text || redacted[1] !== row.evidence || redacted[2] !== row.aliases || redacted[3] !== row.source_ref) { sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ?, source_ref = ? WHERE id = ?', ...redacted, row.rid); tally('redacted', 'claims'); }
           }
@@ -1229,6 +1277,8 @@ export const withoutBringUpLess = (store: ClaimStore): ClaimStore => {
     ...store,
     claims: (status) => store.claims(status).filter((claim) => !claim.bring_up_less_at),
     recall: (query, limit, near) => store.recall(query, limit, near).filter((claim) => !claim.bring_up_less_at),
+    recallReplaced: (query, limit) => store.recallReplaced(query, limit).filter((claim) => !claim.bring_up_less_at),
+    replacedClaims: (limit) => store.replacedClaims(limit).filter((claim) => !claim.bring_up_less_at),
     nodes,
     edges: () => { const kept = new Set(nodes().map((node) => node.id)); return store.edges().filter((edge) => kept.has(edge.from_id) && kept.has(edge.to_id)); },
     statements: () => { const statements = store.statements(), kept = new Set(nodes().flatMap((node) => nodeStatementIds(statements, node.id))); return statements.filter((claim) => kept.has(claim.id)); },
@@ -1342,6 +1392,12 @@ const PIN_RULES = [
   'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. Waldo shows the newest unpinned claims in whatever room the pins leave.',
 ];
 
+// MEMORY_VALIDITY: what the nightly does when the day shows a claim is no longer true. The model judges it; code only checks
+// the quote is the owner's and keeps the old claim as dated history.
+export const RETIRE_RULES = [
+  'When what the owner said today contradicts a claim, or shows it has stopped being true, do not leave both standing and do not delete the old one. If they stated a new version, use corrections with the old claim id; if the old claim is simply over (a job left, a habit dropped), list it in retire with a quote of the owner\'s words in evidence, and in replaced_by_text the exact text of the claim you add for what is true now, or null when nothing replaces it.',
+  'A retired claim stays as dated history so Waldo can say what used to be true. Retire only what the owner\'s own words show is over, never what only a mail, a calendar or a file suggests.',
+];
 export const NIGHTLY_MEMORY_INSTRUCTION = [
   'It is night. Review the last day of conversation between the owner and Waldo and bring the claims up to date.',
   'Add what the day showed that is still missing, mark claims the day repeated as seen, and dismiss follow-ups that are settled.',
@@ -1368,7 +1424,7 @@ export const sourceUpdatesInput = (store: ClaimStore, updates: string, health = 
 // forgets or pins anything.
 export const sourceClaimOps = (raw: string): string => {
   const reply = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { add?: unknown };
-  return JSON.stringify({ add: Array.isArray(reply.add) ? reply.add : [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, pin: [], unpin: [] });
+  return JSON.stringify({ add: Array.isArray(reply.add) ? reply.add : [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, pin: [], unpin: [], retire: [] });
 };
 
 // Older conversation is about to leave Waldo's view (compaction): what the owner said there that should stay true is saved
@@ -1392,12 +1448,13 @@ export const MIGRATION_INSTRUCTION = [
 ].join('\n');
 
 export const CLAIM_OPS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin', 'areas'],
+  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'retire', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin', 'areas'],
   properties: {
     add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten', 'area'],
       properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
     areas: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'area'], properties: { id: { type: 'integer' }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
     corrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['old_id', 'kind', 'text', 'evidence'], properties: { old_id: { type: 'integer' }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, evidence: { type: 'string' } } } },
+    retire: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'replaced_by_text', 'evidence'], properties: { id: { type: 'integer' }, replaced_by_text: { type: ['string', 'null'] }, evidence: { type: 'string' } } } },
     seen: { type: 'array', items: { type: 'integer' } },
     confirm: { type: 'array', items: { type: 'integer' } },
     dismiss: { type: 'array', items: { type: 'integer' } },
@@ -1494,15 +1551,15 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
 };
 
 // pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; retire?: readonly { id: number; replaced_by_text: string | null; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
 const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
   const op = value as { id?: unknown; block?: unknown; order?: unknown } | null;
   return typeof op === 'object' && op !== null && Number.isSafeInteger(op.id) && PIN_BLOCKS.includes(op.block as PinBlock) && Number.isSafeInteger(op.order);
 };
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void, pinsAllowed?: boolean): string => {
+export type ClaimOutcome = Readonly<{ retired?: number; written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void, pinsAllowed?: boolean, retireAllowed?: boolean): string => {
   // Background extraction does not infer permission for destructive effects.
   const forgetsAllowed = forgetAllowed === true;
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
@@ -1601,6 +1658,17 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     const sourceRef = origin !== 'owner' ? undefined : ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence);
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef, area: claim.area }, at);
     written += 1;
+  }
+  // A fact the day showed is no longer true ends here, on the owner's own words: it stays as dated history and is never
+  // deleted. Waldo does not end a claim on an outside reader's say-so, or on a quote that is not the owner's.
+  let retired = 0;
+  if (retireAllowed === true && grounding?.owner !== undefined) {
+    for (const op of ops.retire ?? []) {
+      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner') continue;
+      const next = typeof op.replaced_by_text === 'string' && op.replaced_by_text.trim()
+        ? store.claims().find((claim) => claim.id !== op.id && claim.origin === 'owner' && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
+      if (store.retire(op.id, at, next)) retired += 1;
+    }
   }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   let filed = 0;

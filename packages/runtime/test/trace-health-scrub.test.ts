@@ -121,6 +121,14 @@ describe('trace health scrub at the gate, capture on', () => {
     expect(console).not.toContain('61.7');
   });
 
+  it('withholds a device-context or weather tool hop whole: no phone zone, city or forecast reaches a trace', () => {
+    const output = '{"state":"available","devices":[{"device":1,"timezone":"Asia/Dubai","place":{"locality":"Testville"}}]}';
+    for (const hop of ['tool_get_device_context', 'task_tool_get_device_context', 'tool_get_weather', 'task_tool_get_weather']) {
+      const gated = gateTraceEntry({ trace: 'tg-3', hop, ms: 1, ok: true, text: { input: '{}', output } }, true);
+      expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+    }
+  });
+
   it('withholds health tool turns and health context blocks inside a model call input, keeping the conversation', async () => {
     const block = `Shared health today (derived by the app from the owner's own wearable data):\n${renderHealth(material)}`;
     const ledger = healthSection([{ id: 1, kind: 'meal', logged_at: '2026-10-12T08:00:00Z', payload: { description: 'poha', calories_estimate: 487 } }] as never, 'Asia/Kolkata');

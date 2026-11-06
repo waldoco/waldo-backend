@@ -25,6 +25,7 @@ const TABLES: Record<string, Row> = {
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('a forgotten topic in custody until the forget purge job settles it, then deleted: the one place a forgotten text stays on purpose, so the job can clean it'),
   forget_purge_steps: exempt('fingerprint hash, store name, state, attempt count, a content-free code and a time'),
+  reply_memory_used: exempt('a turn id, the claim ids the reply looked at and a time; the notes themselves are read from the claims table when the app asks, so a forgotten claim is gone from the answer'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   memory_revision: exempt('one counter of how many times the owner\'s memory changed; no owner text'),
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),

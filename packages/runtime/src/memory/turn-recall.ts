@@ -12,6 +12,7 @@ export const RECALL_MAX_CHARS = 3_000;
 const RECALL_CLAIMS = 12;
 // With stubs on, the matches after the first RECALL_CLAIMS come as stubs, as does a full line that does not fit.
 const RECALL_STUBS = 12;
+const RECALL_REPLACED = 3;
 const STUB_CHARS = 60;
 const RECALL_EPISODES = 8;
 // A follow-up as short as "and that?" has too few words to match on, so the previous owner message's words join it.
@@ -25,7 +26,8 @@ export type RecallEpisodes = Readonly<{
 export type RecallLeg = 'claims' | 'episodes' | 'semantic';
 // Claim ids nearest in meaning to the text, best first (semantic-recall.ts).
 export type RecallNear = (text: string) => Promise<readonly number[]>;
-export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[] }>;
+// used: the claims this recall showed in full, which is what the turn had in front of it for this message.
+export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[] }>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 
 export const recallTerms = (question: string, previous?: string): readonly string[] => {
@@ -83,6 +85,8 @@ const header = (meaning: boolean) => `Matched to this message by shared words${m
 const STUB_NOTE = ' A stub (c12 stub) shows only how a note starts; read it whole with read_memory and its ids.';
 const cutLine = (count: number) => `(${count} more matches did not fit here; read_memory and search_episodes reach them.)`;
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
+// An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
+const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
 const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
 // word longer than the stub keeps what precedes its digits.
@@ -111,8 +115,8 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 // turn goes on with what the other leg found, and failed names the leg; a row that cannot be read back is left out. The
 // block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits. With stubs,
 // recall reaches further: matches past the full lines, and a full line that does not fit, come as stubs the model can open.
-export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false }: Readonly<{
-  claims: Pick<ClaimStore, 'recall'>;
+export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false }: Readonly<{
+  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced'>>;
   episodes?: RecallEpisodes;
   question: string;
   previous?: string;
@@ -123,6 +127,8 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // The meaning leg for claims, when semantic recall is on. It ranks; claims.recall still decides what may be returned.
   semantic?: RecallNear;
   stubs?: boolean;
+  // MEMORY_VALIDITY: facts a later one replaced that match these words join, dated and marked as no longer true.
+  replaced?: boolean;
 }>): Promise<TurnRecall> => {
   const followed = previous !== undefined && !holds(previous) ? previous : undefined;
   const terms = recallTerms(question, followed);
@@ -140,6 +146,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     recalled = claims.recall(query, stubs ? RECALL_CLAIMS + RECALL_STUBS : RECALL_CLAIMS, near).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases));
   } catch {
     failed.push('claims');
+  }
+  // What used to be true, only as a few extra lines the model weighs for questions about the past; each says it is over.
+  let past: readonly Claim[] = [];
+  if (replaced) {
+    try { past = (claims.recallReplaced?.(query, RECALL_REPLACED) ?? []).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases)); } catch { failed.push('claims'); }
   }
   // A claim and the message it was learned from count once: the claim wins.
   const sources = new Set(recalled.map(sourceEntry));
@@ -166,9 +177,10 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   if (episodesFailed) failed.push('episodes');
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. upgrades are a hit's
   // longer lines, longest first, which only take the room left once every line is placed, so they never cost a match its place.
-  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[] }>[] = [
-    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
+  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number }>[] = [
+    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, ...(stubs ? { stub: stubLine(claim) } : {}) })),
     ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit) })),
+    ...past.map((claim) => ({ full: replacedLine(claim) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
@@ -177,10 +189,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   let used = ['<recalled>', HEADER, '</recalled>'].join('\n').length;
   if (!lines.length || used + reserve > budget) return { text: '', failed };
   // A line that does not fit is skipped, not cut, and a shorter one after it may still fit.
-  const kept: string[] = [], upgradesOfKept: (readonly string[] | undefined)[] = [];
-  for (const { full, stub, upgrades } of lines) {
+  const kept: string[] = [], upgradesOfKept: (readonly string[] | undefined)[] = [], shown: number[] = [];
+  for (const { full, stub, upgrades, claim } of lines) {
     const line = [full, stub].find((text) => text !== undefined && used + text.length + 1 + reserve <= budget);
     if (line === undefined) continue;
+    if (line === full && claim !== undefined) shown.push(claim);
     kept.push(line); upgradesOfKept.push(line === full ? upgrades : undefined); used += line.length + 1;
   }
   kept.forEach((line, index) => {
@@ -189,5 +202,5 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     kept[index] = upgrade; used += upgrade.length - line.length;
   });
   const cut = lines.length - kept.length;
-  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed };
+  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown };
 };

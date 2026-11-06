@@ -2222,6 +2222,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const [action = '', id] = (query.data ?? '').split(':');
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
       if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u', 'd'].includes(action)) return void (await answer('Not available.'));
+      // A tap on a button names the card message it was tapped on. While the approval still waits, only a card this desk still
+      // shows for it counts: a button from a card since replaced, or one that names another approval's card, decides nothing.
+      const tappedCard = (query as { card_ref?: unknown }).card_ref;
+      if (typeof tappedCard === 'string') {
+        const waiting = row(id);
+        if (waiting && waitingRow(waiting) && sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = ? AND message_ref = ? AND retired_at IS NULL', id, surface, tappedCard).toArray().length === 0) {
+          deps.log({ trace, hop: 'approval_tap_stale_card', ms: 0, ok: false, code: 'card_not_current' });
+          return void (await say('That button is from a card that is no longer current, so nothing was done. Use the latest card, or ask me again.'));
+        }
+      }
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
       const messageRef = query.message ? `${query.message.chat.id}:${query.message.message_id}` : undefined;
       const out = await decideOnce(id, action as DeskAction, trace, { surface, ...(messageRef ? { messageRef } : {}) });
