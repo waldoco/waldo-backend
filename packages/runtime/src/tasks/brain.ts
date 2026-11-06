@@ -360,8 +360,12 @@ export const taskHost = (deps: TaskHostDeps) => {
       if (result.error_code !== 'approval_denied') deps.settleAsk?.(row, asked.approval_id, result.ok ? 'done' : result.code === 'rejected' || result.error_code === 'taint_needs_approval' ? 'rejected' : 'failed');
       turn = { call: asked.call, output: JSON.stringify(result), prior_items: [], ...(result.source_taint === 'external' ? { source_taint: 'external' as const } : {}) };
     }
-    if (deps.book.checkpoint(ticket, row.checkpoint_seq + 1, { turns: [...jobCheckpoint(row).turns, turn] }, { rounds: 0, costUsd: 0 }) !== 'ok') { fence(row.id); return 'fenced'; }
+    // The taint first: a correction that landed during the step ends the attempt at this checkpoint, and the step's outside
+    // output is in the checkpoint the next attempt resumes from.
     if (turn.source_taint === 'external') deps.book.touch(ticket, 'external');
+    const written = deps.book.checkpoint(ticket, row.checkpoint_seq + 1, { turns: [...jobCheckpoint(row).turns, turn] }, { rounds: 0, costUsd: 0 });
+    if (written === 'steered') return steered(ticket, 'checkpoint', []);
+    if (written !== 'ok') { fence(row.id); return 'fenced'; }
     hop(row, 'task_resumed', { code: asked.decision ?? 'declined', detail: asked.call.name });
     return 'ok';
   };

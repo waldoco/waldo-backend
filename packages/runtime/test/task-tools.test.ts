@@ -345,6 +345,10 @@ describe('steer_task', () => {
       expect(await h.steer.handle(correction(replay.id), ctx({ toolCallId: 's3' }))).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/as the owner approved it.*cancel_task/) });
       expect(await h.steer.handle(correction('job_00000000beef'), ctx({ toolCallId: 's4' }))).toMatchObject({ ok: false, code: 'not_found' });
       for (const job of [finished, cancelled]) expect(h.book.get(job)!.checkpoint_json ?? '').not.toContain('.in domain');
+      const stopped = await startedId(h, 'c');
+      h.book.startAttempt(stopped);
+      h.book.park(stopped, 'deadline');
+      expect(await h.steer.handle(correction(stopped), ctx({ toolCallId: 's5' }))).toMatchObject({ ok: false, error: expect.stringMatching(/already stopped.*start_task/) });
     });
   });
 

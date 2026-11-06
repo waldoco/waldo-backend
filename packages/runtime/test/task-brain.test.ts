@@ -13,6 +13,8 @@ import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-
 import { jobBook, jobCheckpoint, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
+import { parkedApplyText } from '../src/tasks/lane';
+import { watchdogJudgeText } from '../src/tasks/watchdog';
 import { MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
 import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
 import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
@@ -1037,6 +1039,65 @@ describe('a steered task', () => {
       expect(book.resume('appr-1', 'declined')).toBe(true);
       const claim = await host.claim(book.startAttempt(t.jobId)!);
       expect(claim === 'fenced' ? [] : claim.steers?.map(change => change.text)).toEqual(['Book for three, not two.', 'Skip the rooftop place.']);
+    });
+  });
+
+  it('the draft is not lost: a later attempt that fails, or a job that stops, keeps what the earlier attempt found', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const failed = ticket();
+      steer(book, failed.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
+      expect(book.report(failed, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      const next = book.startAttempt(failed.jobId)!;
+      expect(book.claim(next)).not.toBe('fenced');
+      expect(book.report(next, { status: 'failed', summary: 'The worker stopped with an error (x).', findings: [], proposals: [], left: [] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(failed.jobId)!.result_json!)).toMatchObject({ status: 'partial', summary: 'Two tables found.', left: [expect.stringMatching(/change made after it first finished/)] });
+
+      const stopped = ticket();
+      steer(book, stopped.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
+      expect(book.report(stopped, result('Three tables found.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      expect(book.park(stopped.jobId, 'deadline')).toBe(true);
+      expect(parkedApplyText(book.get(stopped.jobId)!)).toContain('Three tables found.');
+    });
+  });
+
+  it('a report at or past the deadline, or with a step still recorded in flight, is accepted: a new attempt could not use the change, or could run the step again', async () => {
+    await withHost(async ({ book, ticket, clock }) => {
+      const late = ticket();
+      steer(book, late.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
+      clock.at = book.get(late.jobId)!.deadline_at;
+      book.touch(late, null);
+      expect(book.report(late, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      clock.at = T0;
+      const acting = ticket('errand');
+      steer(book, acting.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
+      expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
+      expect(book.report(acting, result('Booked view of the form.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null });
+    });
+  });
+
+  it('a correction that lands while an approved step resumes ends the attempt with the step kept, raises the taint, and wakes the lane', async () => {
+    await withHost(async ({ host, book, ticket, log, handler }) => {
+      const t = ticket();
+      const step = call('search_communication');
+      expect(book.await(t, { approval_id: 'appr-1', call: step })).toBe(true);
+      expect(book.resume('appr-1', 'approved')).toBe(true);
+      handler.search = async () => { steer(book, t.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1'); return { hits: 1 }; };
+      expect(await host.claim(book.startAttempt(t.jobId)!)).toBe('fenced');
+      const row = book.get(t.jobId)!;
+      expect(row).toMatchObject({ status: 'queued', taint: 'external' });
+      expect(jobCheckpoint(row).turns.map(turn => turn.call.name)).toEqual(['search_communication']);
+      expect(log.filter(entry => entry.hop === 'task_attempt_steered')).toHaveLength(1);
+    });
+  });
+
+  it('the progress watchdog judges a changed task against its changes, not only the goal it started with', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', 'Rome instead of Paris.', 'turn-2:s1');
+      const text = watchdogJudgeText(book.get(t.jobId)!, null, [], T0);
+      expect(text).toContain('Rome instead of Paris.');
+      expect(text.indexOf('Rome instead of Paris.')).toBeGreaterThan(text.indexOf('Goal:'));
     });
   });
 

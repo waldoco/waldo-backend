@@ -313,12 +313,18 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return steers?.some(steer => steer.mode === 'interrupt' && steer.shown === undefined) ? requeue(ticket, NO_SPEND) : 'ok';
     },
     // A report while a change waits for a worker is not the task's answer yet: the job queues for an attempt that sees the change
-    // and this result as its draft, and only that attempt's report is applied.
+    // and this result as its draft, and only that attempt's report is applied. Not past the deadline, where no attempt could take
+    // the change, and not with a step recorded in flight: the final round is never checkpointed, so a new attempt could run it
+    // again. A later attempt that ends with nothing of its own reports the draft, so a change never costs what was found.
     report(ticket: TaskTicket, result: TaskResult, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | 'steered' | Fenced {
       const row = current(ticket);
       const checkpoint = row ? jobCheckpoint(row) : null;
-      if (row && checkpoint?.steers?.some(steer => steer.shown === undefined)) return requeue(ticket, spend, { ...checkpoint, ...(result.status === 'failed' ? {} : { draft: result }) });
-      return finish(ticket, JSON.stringify(result), result.status, spend);
+      if (row && checkpoint?.steers?.some(steer => steer.shown === undefined) && row.inflight_json === null && deps.now() < row.deadline_at) {
+        return requeue(ticket, spend, { ...checkpoint, ...(result.status === 'failed' ? {} : { draft: result }) });
+      }
+      const draft = checkpoint?.draft;
+      const kept = draft && result.status !== 'done' && !result.findings.length && !result.proposals.length ? fromDraft(draft) : result;
+      return finish(ticket, JSON.stringify(kept), kept.status, spend);
     },
     // A change to a task that has not finished (steer_task). A finished, cancelled or settled job takes none. The job's taint only
     // ever rises: a change written in a turn that read outside text makes the report apply as tainted.
@@ -620,6 +626,8 @@ export const replayOutcome = (row: JobRow): ReplayOutcome | null => row.result_j
 const REPLAY_JOB_OUTCOME = { done: 'done', rejected: 'blocked', failed: 'failed', uncertain: 'failed' } as const satisfies Record<ReplayOutcome['status'], JobOutcome>;
 // The key an approval's replay job is written under: one job per card, whatever decides it how often.
 export const replayKey = (approvalId: string): string => `approval:${approvalId}`;
+// What an earlier attempt found, reported when the attempt that was to add a change ended with nothing of its own.
+const fromDraft = (draft: TaskResult): TaskResult => ({ ...draft, status: draft.status === 'done' ? 'partial' : draft.status, left: [...draft.left, 'A change made after it first finished was not done.'] });
 export const jobCheckpoint = (row: JobRow): Checkpoint => row.checkpoint_json === null ? { turns: [] } : JSON.parse(row.checkpoint_json) as Checkpoint;
 // A reported row's intent is its apply turn's (a worker's in-flight step, kept on a parked row, names a tool instead).
 export const applyInterrupted = (row: Pick<JobRow, 'status' | 'inflight_json'>): boolean =>

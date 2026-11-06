@@ -143,7 +143,10 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const title = titleOf(row), now = deps.now();
       const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now }, ctx.toolArgSourceTaint === 'external' ? 'external' : null);
-      if (written === 'closed') return refusal(`"${title}" already ${deps.book.get(job_id)?.status === 'cancelled' ? 'was cancelled' : 'finished'}, so it cannot change. For more work, call start_task with a brief that says all of it.`);
+      if (written === 'closed') {
+        const after = deps.book.get(job_id);
+        return refusal(`"${title}" ${after?.status === 'cancelled' ? 'was cancelled' : after?.park_reason ? 'already stopped' : 'already finished'}, so it cannot change. For more work, call start_task with a brief that says all of it.`);
+      }
       if (written === 'full') return refusal(`"${title}" was already changed ${TASK_MAX_STEERS} times, the most one task takes. Stop it with cancel_task and call start_task with one brief that says all of it.`, 'rate_limited');
       if (written === 'steered') {
         deps.log({ trace: `task:${job_id}`, hop: 'task_steered', ms: 0, ok: true, job_id, ...(row.profile ? { job_profile: row.profile } : {}), code: mode });

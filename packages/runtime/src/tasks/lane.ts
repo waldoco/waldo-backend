@@ -85,10 +85,11 @@ export const resultApplyText = (row: JobRow): string => {
 
 export const parkedApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
-  const done = jobCheckpoint(row).turns.map((turn) => ({ tool: turn.call.name, args: turn.call.arguments }));
+  const { turns, draft } = jobCheckpoint(row);
+  const done = turns.map((turn) => ({ tool: turn.call.name, args: turn.call.arguments }));
   return [
     `[A background task you started stopped before it finished: ${quoted(brief.title)} (${row.profile} worker, ${row.id}), because ${PARK_WORDS[row.park_reason!]}. The steps it finished, as data:]`,
-    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) })}\n</task_progress>`,
+    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) ?? draft ?? null })}\n</task_progress>`,
     'Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way. Do not start it again yourself.',
   ].join('\n\n');
 };
