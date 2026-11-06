@@ -465,6 +465,16 @@ const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindow
 // Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
 // as a new message, which is itself the notification, so quiet hours hold it there.
 const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
+// How a surface takes a notice outside any turn. The app's caller acknowledges nothing outside a turn, so the notice is
+// written into the transcript of the owner the directory admits. iMessage takes none: its caller acknowledges a send it only
+// drops while an iMessage turn runs. A chat surface sends, and its ack proves the send in the surface's own shape.
+type OutsideTurnNotice = Readonly<{ by: 'transcript' } | { by: 'none' } | { by: 'send'; acknowledged(ack: unknown): boolean }>;
+const OUTSIDE_TURN_NOTICE: Readonly<Record<ChannelKind, OutsideTurnNotice>> = {
+  telegram: { by: 'send', acknowledged: ack => { const id = (ack as { message_id?: unknown } | null | undefined)?.message_id; return Number.isSafeInteger(id) && Number(id) > 0; } },
+  whatsapp: { by: 'send', acknowledged: ack => whatsappAckId(ack) !== null },
+  app: { by: 'transcript' },
+  imessage: { by: 'none' },
+};
 // How the owner reads the proactive work a surface's runtime sends: the app's goes where they chose (proactiveReads); a chat
 // runtime's stays in its chat.
 const PROACTIVE_READS: Readonly<Record<ChannelKind, (kv: Pick<SyncKvStorage, 'get'>, bothDefault: boolean) => ReadsAs>> = { app: proactiveReads, telegram: () => 'chat', whatsapp: () => 'chat', imessage: () => 'chat' };
@@ -772,15 +782,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ?? (bound.app ? 'app' : bound.whatsapp ? 'whatsapp' : bound.imessage ? 'imessage' : 'app');
   }
   private surfaceRouting(): boolean { return this.env.OWNER_SURFACE_DEFAULT === '1'; }
-  // A notice outside any turn, on `surface` through its runtime. The app has no caller that delivers outside a turn, so the
-  // notice is written into the transcript of the owner the directory admits; the caller holds the turn queue for that write,
-  // as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused, or the directory
-  // does not admit the owner or cannot say); 'unroutable': iMessage takes no send outside its own turn, and its caller would
-  // acknowledge one it only drops while a turn runs; 'held': WhatsApp keeps it until it can deliver. A throw is an outcome
-  // nobody can know.
+  // A notice outside any turn, on `surface` as OUTSIDE_TURN_NOTICE declares. A transcript write is made under the turn queue
+  // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,
+  // or the directory does not admit the owner or cannot say); 'unroutable': the surface takes no notice outside a turn;
+  // 'held': WhatsApp keeps it until it can deliver. A throw is an outcome nobody can know.
   private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string): Promise<'sent' | 'held' | 'blocked' | 'unroutable'> {
-    if (surface === 'imessage') return 'unroutable';
-    if (surface === 'app') {
+    const route = OUTSIDE_TURN_NOTICE[surface];
+    if (route.by === 'none') return 'unroutable';
+    if (route.by === 'transcript') {
       const found = await this.appOwnerLookup();
       if (found.kind !== 'admitted') return 'blocked';
       await this.appDeliveryFor(found.authority)(text);
@@ -789,8 +798,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ack = await runtime.api.sendMessage({ chat_id: runtime.owner, text });
     if (ack === undefined) return 'blocked';
     if (whatsappHeld(ack)) return 'held';
-    const telegramId = (ack as { message_id?: unknown } | null)?.message_id;
-    if (surface === 'whatsapp' ? whatsappAckId(ack) === null : !(Number.isSafeInteger(telegramId) && Number(telegramId) > 0)) throw new Error('notification_unacknowledged');
+    if (!route.acknowledged(ack)) throw new Error('notification_unacknowledged');
     return 'sent';
   }
   private taskLog(entry: TurnLogEntry): void {
@@ -2691,7 +2699,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
-        sent = surface === 'app' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
