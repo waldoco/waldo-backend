@@ -7,7 +7,7 @@ import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKin
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, TOOL_SPILL_VIEW_MAX_CHARS,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, proposeCalendarPlanArgsSchema, type ProposeCalendarPlanArgs, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, TOOL_SPILL_VIEW_MAX_CHARS,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { PEOPLE_UNREADABLE, UNKNOWN_THREAD_MESSAGE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
@@ -17,6 +17,7 @@ import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusa
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { CalendarEgressScreen } from '../../health/trigger';
 import type { OwnerClock } from './get-context';
+import { planBlocks } from '../../channels/calendar-plan';
 import { connectNeededText } from './connect-text';
 import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
 
@@ -439,6 +440,41 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 };
 
 // ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
+// CALENDAR_PLAN: the day's new blocks on one card. It only proposes; the owner's tap adds every block or none.
+export const calendarPlanHandler = (google: GoogleAccess, desk: EffectDesk & Pick<ApprovalDesk, 'proposeCalendarPlan'>, clock: OwnerClock, calendarEgress?: CalendarEgressScreen) => ({
+  name: 'propose_calendar_plan',
+  description: "Propose a day plan's new blocks of time on one card, so the owner adds them all to their own calendar in one tap. Give the day and each block in their local time, in order; leave out events already on the calendar. No one is invited. Nothing is added until they approve. A title goes to Google: keep any mention of health out of it.",
+  schema: proposeCalendarPlanArgsSchema,
+  trigger_allowlist: allowlist('propose_calendar_plan'),
+  autonomy_gated: false,
+  requires_connector: true,
+  eligible: granted(google, 'calendar'),
+  mutates_state: true,
+  proposal_only: true,
+  async handle(args: ProposeCalendarPlanArgs, ctx?: ToolDispatcherContext) {
+    for (const block of args.blocks) {
+      const screened = await calendarEgress?.check(ctx?.turnId, { title: block.title });
+      if (screened === 'refused') return { ok: false, code: 'rejected', error: "Nothing was proposed: a word about the owner's health is in a block's title, and the calendar is read by others. Propose it again without it.", source_taint: null };
+      if (screened === 'unchecked') return { ok: false, code: 'rejected', error: "Nothing was proposed: the owner's health context could not be read to check the titles before they reach their calendar.", source_taint: null };
+    }
+    const timezone = clock.timezone, blocks = planBlocks(args, timezone);
+    if (typeof blocks === 'string') return { ok: false, code: 'rejected', error: `Nothing was proposed: ${blocks} in ${timezone}. Propose it again.`, source_taint: null };
+    const result = await withGoogle(google, 'calendar', ctx, async client => {
+      try {
+        const proposal_id = await desk.proposeCalendarPlan({ day: args.day, time_zone: timezone, blocks, reason: args.reason, ...(client.account?.email ? { account: client.account.email } : {}), operation_ref: await ownerEffectOperationRef(ctx) },
+          { ...(args.replaces ? { replaces: args.replaces } : {}), outside: turnReadOutside(ctx), why: callWhy(ctx) });
+        return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has been added.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
+      } catch (error) {
+        if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(args.replaces!, error) };
+        throw error;
+      }
+    }, args.account);
+    const refused = result.ok && 'refused' in result.data ? result.data.refused : undefined;
+    if (refused !== undefined) return { ok: false, code: 'rejected', error: refused, source_taint: null };
+    return result.ok ? { ...result, source_taint: null } : result;
+  },
+}) satisfies ToolHandler<ProposeCalendarPlanArgs, unknown, ToolDispatcherContext>;
+
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null, calendarEgress?: CalendarEgressScreen) => [
   {
     name: 'query_calendar',

@@ -29,3 +29,21 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
   })
   .refine((args) => args.attendees === undefined || args.send_updates !== undefined, { error: 'say whether to email the attendees: send_updates all or none' });
 export type ProposeCalendarChangeArgs = z.infer<typeof proposeCalendarChangeArgsSchema>;
+
+// A day plan for one card (approvals revision 9): new blocks on the owner's own primary calendar, in their local time on one
+// day. Proposal only: the owner's tap adds every block or none.
+const localClock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'HH:MM, 24-hour');
+export const proposeCalendarPlanArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  day: z.iso.date().describe("The owner's local day, YYYY-MM-DD."),
+  blocks: z.array(z.strictObject({
+    title: z.string().min(1).max(200),
+    start: localClock.describe('Local time.'),
+    end: localClock.describe('Local time, after start.'),
+    block: z.enum(['rest', 'deep_work']).optional(),
+  })).min(2).max(12).describe('New blocks only, in time order; not events already on the calendar.'),
+  reason: z.string().min(1).max(300).describe('Why, in a few words, for the owner.'),
+  replaces: replacesApprovalSchema,
+}).refine(({ blocks }) => blocks.every(({ start, end }) => start < end), { error: 'each block ends after it starts', path: ['blocks'] })
+  .refine(({ blocks }) => blocks.every((block, index) => index === 0 || blocks[index - 1]!.end <= block.start), { error: 'blocks run in time order without overlapping', path: ['blocks'] });
+export type ProposeCalendarPlanArgs = z.infer<typeof proposeCalendarPlanArgsSchema>;
