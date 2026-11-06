@@ -107,7 +107,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type PinBlock } from '../memory/claims';
-import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, APP_SCHEDULE_TIME_IDS_V1, appScheduleTimeReceiptV1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
@@ -162,7 +162,7 @@ import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
 import { mergedSteps, whyJson, withWhy, type TrailStep, type WhyHolder } from '../tools/why-trail';
-import { applyDayPlan, applyReplan, applyWake, parseWakeReply, takeWakeTurn, wakeTarget, wakeTurnsPerDay, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, applyWake, setCardTime, parseWakeReply, takeWakeTurn, wakeTarget, wakeTurnsPerDay, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
 import { channelStyle, type ReadsAs } from '../prompt/update-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
@@ -368,7 +368,7 @@ type OwnerRuntime = Readonly<{
   machine: MachineAppliers;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
-  act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
+  act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string | ControlReceipt>;
   googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel, opts?: Readonly<{ handoff?: boolean; signin?: boolean }>): Promise<string | null>;
   googleConsoleStart(): Promise<string | null>;
   connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
@@ -3020,6 +3020,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       const done = action ? await this.serial(() => act(action)) : false;
       // A string result is a NOTICES key, such as an honest partial-failure receipt.
+      if (typeof done === 'object') return resultPage(done.message, done.state === 'recorded');
       return typeof done === 'string' ? noticePage(done) : done && action ? resultPage(NOTICES[action.action] ?? 'The change was recorded.', true) : noticePage('invalid');
     }
     // B9: the background task list as a first-class read-only endpoint (same console session).
@@ -3926,6 +3927,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A day card the outbox still holds may yet go out, or may have: only a delivery the surface refused outright is none.
     const cardQueued = (day: string, card: CardId) => finalOutbox.records().some(record => record.status !== 'blocked'
       && (record.id === dayCardFinalId(day, card) || record.id.startsWith(`${dayCardFinalId(day, card)}:try:`)));
+    // The owner's Brief or Close time from the console or the app: today's card follows it unless it is already on its way.
+    const cardTimeDeps = (now: number) => ({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now, queued: cardQueued,
+      enabled: schedPrefs.enabled('daily_brief') && armable('daily_brief'), quiet: (at: number) => isQuiet(loops.proactivity(), at, clock.timezone) });
     const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
     // Supabase holds the editable settings when configured; the DO applies its copy only after that write lands.
     const saveSettings = async (settings: OwnerSettings): Promise<boolean> => {
@@ -6168,7 +6172,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
               ...(status.state ? { state: status.state } : {}), ...(status.reason ? { stateReason: status.reason } : {}), ...(status.retriesLeft === undefined ? {} : { retriesLeft: status.retriesLeft }) };
           }),
-          ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
+          ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), wakeBrief: this.env.WAKE_BRIEF === '1', pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: (row.status === 'running' ? waitingNotes.get(row.id) : undefined) ?? row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
           page: { trace_before: tracePage.next, runs_before: runPage.next, trace_applied: page?.traceBefore ?? null, runs_applied: page?.runsBefore ?? null },
         };
@@ -6186,10 +6190,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const spotId = Number(id);
         if (action === 'forget.retry') {
           if (!(await this.forgetPurgeJob().retry(id))) return false;
+        } else if (action === 'schedule.set' && APP_SCHEDULE_TIME_IDS_V1.some((card) => card === id)) {
+          if (!isClock(value)) return false;
+          const card = id as (typeof APP_SCHEDULE_TIME_IDS_V1)[number];
+          const today = await setCardTime(cardTimeDeps(now), card, value, true);
+          return today === 'unreadable' ? APP_SCHEDULE_RECEIPTS_V1.unavailable : appScheduleTimeReceiptV1({ card, time: value, today, noLaterThan: card === 'card:brief' && this.env.WAKE_BRIEF === '1' });
         } else if (action === 'schedule.set' || action === 'schedule.reset') {
           const kind = SCHEDULE_KINDS.find((candidate) => candidate === id);
-          if (action === 'schedule.set') { if (!kind || (value !== 'on' && value !== 'off')) return false; schedPrefs.set(kind, value === 'on'); } else schedPrefs.reset();
+          if (action === 'schedule.set' && (!kind || (value !== 'on' && value !== 'off'))) return false;
+          const was = kind === undefined ? undefined : schedPrefs.enabled(kind);
+          if (action === 'schedule.set') schedPrefs.set(kind!, value === 'on'); else schedPrefs.reset();
           await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow(), alongHeartbeat: lookFollows }, action === 'schedule.set' ? kind : undefined);
+          if (action === 'schedule.set') return APP_SCHEDULE_RECEIPTS_V1[was === (value === 'on') ? (value === 'on' ? 'already_on' : 'already_off') : value === 'on' ? 'on' : 'off'];
         } else if (action === 'proactivity.set') {
           const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
@@ -6291,8 +6303,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (action === 'card.unpin') plans.pin(card.id, null);
           else {
             if (!isClock(value)) return false;
-            if (action === 'card.pin') plans.pin(card.id, value);
-            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : SET_FOR_TODAY }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
+            if (await setCardTime(cardTimeDeps(now), card.id, value, action === 'card.pin') === 'unreadable') return 'card.unreadable.failed';
           }
         } else return false;
         // consoleActionTraceDetail strips the free-form form id before it can reach the
