@@ -510,6 +510,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     postpone(id: string, dueAt: number): boolean {
       return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1, inflight_json = NULL WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
     },
+    // A report the lane holds back looks again at `at`. Not a deferral: nothing failed, and updated_at keeps the report time.
+    hold(id: string, at: number): boolean {
+      return sql.exec("UPDATE task_jobs SET due_at = ? WHERE id = ? AND status = 'reported'", at, id).rowsWritten > 0;
+    },
     // A queued job written to start later starts at `at` instead, when that is sooner.
     bringForward(id: string, at: number): boolean {
       return sql.exec("UPDATE task_jobs SET due_at = ? WHERE id = ? AND status = 'queued' AND attempt = 0 AND due_at > ?", at, id, at).rowsWritten > 0;

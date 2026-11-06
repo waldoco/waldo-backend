@@ -6,7 +6,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, TASK_LEASE_MS, TASK_MAX_RUNNING, type CreateJob, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
-import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
+import { cardWaitsIn, REPORT_HOLD_MAX_MS, REPORT_HOLD_RECHECK_MS, runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { promiseRetry } from '../src/tasks/retry-turn';
 import { fixedReport, progressNote, retryParkedNotice } from '../src/prompt/fixed-lines';
 import { JOB_START_GRACE_MS } from '../src/tasks/jobs';
@@ -309,6 +309,71 @@ describe('the jobs lane', () => {
       expect(await runJobsLane(deps({ room: () => false }))).toBe(clock.at);
       expect(turns).toEqual([]);
       expect(book.get(id)!.status).toBe('reported');
+    });
+  });
+});
+
+describe('a report while the owner has a card to answer in words', () => {
+  it('waits while one is live in the chat it goes to, looks again later, and goes once the card is answered', async () => {
+    await withLane(async ({ book, clock, sent, turns, deps, log }) => {
+      const id = reported(book, 'k1');
+      let waiting = true;
+      const next = await runJobsLane(deps({ held: () => waiting }));
+      expect(sent.size).toBe(0);
+      expect(turns).toEqual([]);
+      expect(book.get(id)).toMatchObject({ status: 'reported', due_at: T0 + REPORT_HOLD_RECHECK_MS, deferrals: 0, inflight_json: null });
+      expect(next).toBe(T0 + REPORT_HOLD_RECHECK_MS);
+      expect(log.filter(entry => entry.hop === 'task_report_held')).toEqual([expect.objectContaining({ job_id: id, ok: true })]);
+      clock.at = T0 + REPORT_HOLD_RECHECK_MS;
+      waiting = false;
+      await runJobsLane(deps({ held: () => waiting }));
+      expect([...sent.keys()]).toEqual([`task:${id}`]);
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+
+  it('asks about the chat the report goes to: a task started in a thread names it, one started in main names none', async () => {
+    await withLane(async ({ book, deps }) => {
+      const { job } = book.create(task('k-thread', { brief: { ...brief, conversation_ref: 'owner:prn_1:thr_1' } }));
+      expect(book.report(book.startAttempt(job.id)!, result, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      reported(book, 'k-main');
+      const asked: (string | undefined)[] = [];
+      await runJobsLane(deps({ held: chat => { asked.push(chat); return false; } }));
+      expect(asked).toEqual(['owner:prn_1:thr_1', undefined]);
+    });
+  });
+
+  it(`waits at most ${REPORT_HOLD_MAX_MS / 60_000} minutes from the report: its first look past that sends it with the card still waiting`, async () => {
+    await withLane(async ({ book, clock, sent, deps }) => {
+      const id = reported(book, 'k1');
+      clock.at = T0 + REPORT_HOLD_MAX_MS - 1;
+      await runJobsLane(deps({ held: () => true }));
+      expect(sent.size).toBe(0);
+      clock.at = book.get(id)!.due_at!;
+      await runJobsLane(deps({ held: () => true }));
+      expect([...sent.keys()]).toEqual([`task:${id}`]);
+    });
+  });
+
+  it('a card waits in the report\'s chat only when it was shown there: a thread\'s card holds that thread, main\'s cards hold main', () => {
+    const THREAD = 'owner:prn_1:thr_0a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d', OTHER = 'owner:prn_1:thr_1a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d', MAIN = 'owner:prn_1';
+    expect(cardWaitsIn([THREAD], THREAD)).toBe(true);
+    expect(cardWaitsIn([OTHER], THREAD)).toBe(false);
+    expect(cardWaitsIn([MAIN], THREAD)).toBe(false);
+    expect(cardWaitsIn([MAIN], undefined)).toBe(true);
+    expect(cardWaitsIn([null], undefined)).toBe(true);
+    expect(cardWaitsIn([THREAD], undefined)).toBe(false);
+    expect(cardWaitsIn([], undefined)).toBe(false);
+  });
+
+  it('a stopped task\'s notice waits the same way', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const { job } = book.create(task('k1'));
+      book.startAttempt(job.id);
+      book.park(job.id, 'deadline');
+      await runJobsLane(deps({ held: () => true }));
+      expect(sent.size).toBe(0);
+      expect(book.get(job.id)!.status).toBe('reported');
     });
   });
 });

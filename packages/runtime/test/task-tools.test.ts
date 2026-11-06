@@ -7,7 +7,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { jobBook, jobCheckpoint, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, type JobBook } from '../src/tasks/jobs';
 import { dispatchLoopTool } from '../src/conversation/tool-loop';
 import { promiseRetry } from '../src/tasks/retry-turn';
-import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
+import { finishedTasksNote, runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 // The brain's start_task and cancel_task handlers over the real job book on Durable Object SQLite. Each refusal is followed
@@ -364,6 +364,33 @@ describe('steer_task', () => {
     await withTools(async (h) => {
       const names = taskToolHandlers({ book: h.book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }).map(handler => handler.name);
       expect(names).toEqual(['start_task', 'cancel_task', 'check_task']);
+    });
+  });
+});
+
+describe('the note a running owner turn gets when a task finishes', () => {
+  it('names each task that reported since the turn started, its title as quoted data, and says how to read it now', async () => {
+    await withTools(async (h) => {
+      const ids: string[] = [];
+      for (const title of ['Before the turn', 'Finished', 'Stopped', 'Still running']) ids.push(((await h.start.handle({ ...args, title }, ctx({ turnId: `turn-${title}`, toolCallId: title }))) as { data: { job_id: string } }).data.job_id);
+      const [before, finished, stopped, running] = ids as [string, string, string, string];
+      const done = { status: 'done' as const, summary: 'Done.', findings: [], proposals: [], left: [] };
+      h.book.report(h.book.startAttempt(before)!, done, { rounds: 1, costUsd: 0 });
+      h.clock.now = T0 + 60_000;
+      const since = h.clock.now;
+      expect(finishedTasksNote(h.book, since)).toBe('');
+      h.book.startAttempt(running);
+      h.clock.now = T0 + 90_000;
+      h.book.report(h.book.startAttempt(finished)!, done, { rounds: 1, costUsd: 0 });
+      h.book.startAttempt(stopped);
+      h.book.park(stopped, 'deadline');
+      const note = finishedTasksNote(h.book, since);
+      expect(note).toContain(`- ${finished}: title "Finished"`);
+      expect(note).toContain(`- ${stopped}: title "Stopped" (stopped before it finished)`);
+      expect(note).not.toContain(before);
+      expect(note).not.toContain(running);
+      expect(note).toMatch(/depends on one, read it with check_task.*full report reaches the owner right after this reply/s);
+      expect(note).not.toContain('Done.');
     });
   });
 });

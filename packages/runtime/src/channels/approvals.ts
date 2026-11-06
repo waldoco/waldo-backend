@@ -292,6 +292,9 @@ export type ApprovalDesk = Readonly<{
   settleUnknownGrants(): Promise<void>;
   // Waldo's unexpired cards the owner has not settled, oldest first, with the ones they put off marked.
   waiting(): readonly WaitingApproval[];
+  // The conversations where a card the owner can approve in words waits on this surface, as each card was shown (null where the
+  // surface names no thread). A put-off card is not waiting on their next word.
+  wordsAwaited(): readonly (string | null)[];
   // Closes a card of Waldo's that is still waiting, with the owner-visible reason. It never approves; a card the owner
   // decided, that expired, or whose effect is on record is left as it is.
   withdraw(id: string, reason: string, options?: Readonly<{ outside?: boolean }>): Promise<WithdrawOutcome>;
@@ -1870,6 +1873,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     settleReplay(id, status) {
       return sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE id = ? AND status = 'running'", status, deps.now(), id).rowsWritten > 0;
+    },
+    wordsAwaited() {
+      expireDue();
+      return sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${WITHDRAWABLE_SQL} AND deferred_at IS NULL`).toArray()
+        .filter(entry => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p') && approvesInWords(entry))
+        .flatMap(entry => sql.exec<{ conversation_ref: string | null }>(
+          'SELECT conversation_ref FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL', entry.id, surface,
+        ).toArray().map(presentation => presentation.conversation_ref));
     },
     waiting() {
       expireDue();
