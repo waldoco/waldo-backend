@@ -119,6 +119,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   get_device_context: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_weather: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
+  query_phone_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_contacts: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
@@ -265,7 +266,7 @@ export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick
 // slow reads (mail search, calendar, web, health) sit in core. Every tool is named so a new one fails the build here too.
 const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   search_communication: 'mail', read_thread: 'mail', get_communication: 'mail', search_contacts: 'mail', send_email: 'mail', send_agent_mail: 'mail', draft_email: 'mail', archive_thread: 'mail', delete_message: 'mail', restore_message: 'mail',
-  query_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_calendar_plan: 'calendar', propose_schedule: 'calendar',
+  query_calendar: 'calendar', query_phone_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_calendar_plan: 'calendar', propose_schedule: 'calendar',
   get_tasks: 'tasks', propose_google_task_change: 'tasks', write_task: 'tasks', update_task: 'tasks',
   web_search: 'web', browse_page: 'web', browse_act: 'web',
   // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.

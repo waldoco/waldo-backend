@@ -131,6 +131,13 @@ describe('DEVICE_PLACE in the Worker config', () => {
   });
 });
 
+describe('DEVICE_CALENDAR in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration: the owner object keeps the consent and the events', () => {
+    expect(parsed.vars.DEVICE_CALENDAR).toBe('0');
+    expect(parsed.env.staging.vars.DEVICE_CALENDAR).toBe('1');
+  });
+});
+
 describe('DEVICE_WEATHER in the Worker config', () => {
   it('is off in production and on in staging, where it offers get_weather only once the WeatherKit secrets are set', () => {
     expect(parsed.vars.DEVICE_WEATHER).toBe('0');

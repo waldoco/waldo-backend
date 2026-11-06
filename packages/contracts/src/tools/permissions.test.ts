@@ -146,6 +146,7 @@ describe('toolName', () => {
       'set_experiment',
       'review_experiment',
       'check_task',
+      'query_phone_calendar',
     ]);
   });
 
@@ -185,6 +186,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_device_context',
         'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
         'search_communication',
@@ -225,6 +227,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_health',
         'get_screen_time',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
         'search_communication',
@@ -244,7 +247,7 @@ describe('TOOL_PERMISSIONS', () => {
         'search_tools',
         'skills_load',
       ],
-      handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
+      handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'query_phone_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
       handoff_act: [
         'execute_action',
         'write_task',
@@ -269,7 +272,7 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_action',
         'skills_load',
       ],
-      intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
+      intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_phone_calendar', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
       user_message: [
         'use_mac',
         'get_crs',
@@ -278,6 +281,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_device_context',
         'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'send_console_link',
         'connect_app',

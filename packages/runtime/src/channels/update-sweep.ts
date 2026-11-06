@@ -54,6 +54,9 @@ export type SweepCheckDeps = Readonly<{
   held(): readonly string[];
   // A change it read lands on the owner's today: asks for a health recompute, after the transaction.
   dayChanged(): Promise<void>;
+  // DEVICE_CALENDAR: the changes between the owner's phone-calendar snapshots, taken once inside the transaction, judged with
+  // the rest.
+  phone?: Readonly<{ takeChanges(): readonly Change[] }>;
 }>;
 
 // The job's key is the window it covers: the watermarks before this tick moved them.
@@ -78,7 +81,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   let checked: SweepChecked;
   let changes = read.changes;
   try { checked = deps.transaction((): SweepChecked => {
-    changes = writeChanges(updates, read);
+    changes = [...writeChanges(updates, read), ...(deps.phone?.takeChanges() ?? [])];
     let recordId = changes.length ? updates.record(deps.day, deps.now, changes, null) : null;
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
