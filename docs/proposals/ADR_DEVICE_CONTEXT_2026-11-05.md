@@ -155,23 +155,33 @@ Location is personal data, not ADR-0081 health data. It lives on the health plan
 The owner ruled on §4's open decision: landing after travel, or coming home, may start proactive work. This is the smallest change that does it, and it adds no trigger the model does not already run.
 
 - **What counts as a move:**
-  - The place upload's answer gains `moved`. It is true when this newer reading puts the device in another time zone, or in another named city or country, than the row it replaces.
+  - The place upload's answer gains `moved`. It is true when this newer reading puts the device in another time zone, or in another named city or country, than the row it replaces, and the owner lets Waldo's model read place (`model_processing`).
+  - With model use withdrawn, the reading is still kept under storage consent, but no move is told.
   - Each of these is not a move:
     - a first reading;
     - a reading that loses to a newer one;
     - a cell with no names;
-    - another cell in the same city.
+    - another cell in the same city;
+    - a reading that leaves out the country.
   - The database decides from the row it already keeps, so no history and no new store is added.
   - "Another city" is the OS's locality name changing, a schema fact, not a judgment about where the owner went.
 - **What a move does:**
   - The Worker strips `moved` from the app's receipt, which keeps its contract shape, and sends the owner's object a signed notice that carries nothing.
+  - The notice goes after the answer (`waitUntil`), so a background upload is not held for it.
   - A replayed upload does not tell it again. A notice that fails costs the upload nothing.
+  - The stored receipt never holds `moved`, so a replay always answers in the receipt's old shape.
   - The owner's object brings Waldo's own look (PROACTIVE_INTERVENTIONS) to now, or to the owner's next Brief if their day is over.
 - **Where the judgment stays:**
   - The look is told why it runs and that "a move is a reason to look, not a reason to speak". It reads `get_device_context`, calendar and mail.
   - It decides `none`, `say` or `act` as on any look.
   - Every limit of the look holds: the owner's consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget and the gap.
   - Looks stay one per owner-local hour, so a phone that flips zones cannot run more.
+  - A move that lands on an hour whose look already ran, or is still running, is looked at in the next owner-local hour.
+  - Limits are kept in the owner's set time zone, which a trip can make wrong for a while. The look is told this and weighs the local hour where the phone is before speaking. Holding quiet hours in the device's zone is a later change.
+- **Rollout order:**
+  - Deploy the Worker that strips `moved` before applying migration `20261106190000`. An older Worker reads the extra key as a malformed receipt and answers 503.
+  - To roll back, revert the migration first. Its receipts never stored the key, so a replay is safe either way.
+- **The notice can be replayed.** Like the health notices, it is signed with a fixed time, so a captured one could be sent again. Its only effect is bringing a look forward, at most one look an hour, and only the Worker can reach the route.
 - **What it does not do:**
   - It adds no geofence, no arrival rule, no "home" or "gym" label and no fine location.
   - Arriving at a named place (the gym, home) needs place history (§5) and stays with A3.

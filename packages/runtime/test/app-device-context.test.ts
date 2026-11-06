@@ -84,6 +84,16 @@ describe('app device-context routes', () => {
     expect(notices).toEqual([{ path: '/app/v1/internal/place-moved', sig: await routerSignature(SECRET, 0, 'placemoved.owner-1'), body: '{}' }]);
   });
 
+  it('sends the notice after the answer when the Worker can defer work, so a background upload is not held for it', async () => {
+    rpcResult = { request_id: 'dc-place-0001', replayed: false, status: 'accepted', moved: true };
+    const deferred: Promise<unknown>[] = [];
+    const response = await handleApp(new Request('https://w.test/app/v1/device-context/place', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify(upload) }), env(), auth, work => { deferred.push(work); }) as Response;
+    expect(response.status).toBe(200);
+    expect(deferred).toHaveLength(1);
+    await Promise.all(deferred);
+    expect(notices.map(notice => notice.path)).toEqual(['/app/v1/internal/place-moved']);
+  });
+
   it('tells it nothing on a replay, a reading that is not a move, or a refusal, and a failed notice costs the upload nothing', async () => {
     for (const answer of [{ request_id: 'dc-place-0001', replayed: true, status: 'accepted', moved: true }, { request_id: 'dc-place-0001', replayed: false, status: 'accepted', moved: false },
       { request_id: 'dc-place-0001', replayed: false, status: 'superseded', moved: false }, { error: 'consent_required' }]) {

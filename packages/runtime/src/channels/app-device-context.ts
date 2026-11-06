@@ -18,6 +18,8 @@ export type AppDeviceContextInput = Readonly<{
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
   // Tells the owner's object that a phone moved to another time zone or city, so its next look comes now.
   moved?: () => Promise<void>;
+  // Runs work after the answer goes (the Worker's waitUntil), so a background upload is not held for the notice.
+  defer?: (work: Promise<unknown>) => void;
 }>;
 
 export const APP_DEVICE_CONTEXT_PATH = '/app/v1/device-context';
@@ -98,7 +100,10 @@ export const handleAppDeviceContext = async (input: AppDeviceContextInput): Prom
   // does not tell it again), and the app's receipt stays as the contract has it. A notice that fails costs the upload nothing.
   if (route === '/place' && result && typeof result === 'object' && 'moved' in result) {
     const { moved, ...receipt } = result as Record<string, unknown>;
-    if (moved === true && receipt.replayed === false && input.moved) await input.moved().catch(() => console.error('app device context moved notice'));
+    if (moved === true && receipt.replayed === false && input.moved) {
+      const told = input.moved().catch(() => console.error('app device context moved notice'));
+      if (input.defer) input.defer(told); else await told;
+    }
     return settle(receipt, write.response, write.operation);
   }
   return settle(result, write.response, write.operation);

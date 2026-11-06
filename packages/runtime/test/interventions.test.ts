@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { interruptBook, type InterruptLimits } from '../src/channels/interruptions';
-import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
+import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, nextLocalHour, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
 import { verifiedPlaceMoved } from '../src/health/zone-change-route';
 import { routerSignature } from '../src/identity/owner-directory';
 import { triageTools } from '../src/channels/update-sweep';
@@ -137,7 +137,8 @@ describe('a look brought forward by a move', () => {
   it('knows why it runs, is told a move is a reason to look and not to speak, and can read where the phones are', async () => {
     const moved = await look({ decision: 'none' }, { moved: true });
     expect(moved.codes).toEqual(['none']);
-    expect(moved.prompts[0]).toContain('brought forward because one of the owner\'s phones just reported another time zone or city');
+    expect(moved.prompts[0]).toContain('brought forward because one of the owner\'s phones reported another time zone or city since the last look');
+    expect(moved.prompts[0]).toContain('It may be night where they are now');
     expect(moved.prompts[0]).toContain('A move is a reason to look, not a reason to speak');
     expect(moved.tools[0]).toContain('get_device_context');
     const usual = await look({ decision: 'none' });
@@ -166,6 +167,15 @@ describe('a look brought forward by a move', () => {
     expect(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, moved: true }).items.map(item => item.ref)).toEqual(['now', 'moved']);
     expect(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, moved: true }).key).toBe(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW }).key);
     expect(triageTools(false, true)).toContain('get_device_context');
+  });
+
+  it('a move that lands on an hour that already had its look is looked at in the next owner-local hour, half-hour zones included', () => {
+    const at = Date.parse('2026-11-05T10:40:12.345Z');
+    expect(nextLocalHour(at, 'UTC')).toBe(Date.parse('2026-11-05T11:00:00Z'));
+    expect(nextLocalHour(at, 'Asia/Kolkata')).toBe(Date.parse('2026-11-05T10:30:00Z') + 3_600_000);
+    expect(nextLocalHour(Date.parse('2026-11-05T10:00:00Z'), 'UTC')).toBe(Date.parse('2026-11-05T11:00:00Z'));
+    expect(interventionSpec({ surface: 'app', timezone: 'Asia/Kolkata', now: nextLocalHour(at, 'Asia/Kolkata') }).key)
+      .not.toBe(interventionSpec({ surface: 'app', timezone: 'Asia/Kolkata', now: at }).key);
   });
 
   it('takes only a signed, empty notice addressed to this very object', async () => {

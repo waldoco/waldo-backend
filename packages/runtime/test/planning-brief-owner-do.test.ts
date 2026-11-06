@@ -476,6 +476,20 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'moved']]);
       expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
     });
+    await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+      await owner.alarm();
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n).toBe(1);
+      expect((await moved(owner, 'intervention-moved-same-hour')).status).toBe(200);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n).toBe(1);
+      const hour = Date.parse(new Date(AT).toISOString().slice(0, 13) + ':00:00Z') + 3_600_000;
+      expect(armed(state)).toEqual([{ due_at: hour, moved: 'place_moved' }]);
+    });
     await owned('intervention-moved-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
       expect((await moved(owner, 'intervention-moved-off')).status).toBe(200);
       expect(armed(state)).toEqual([]);

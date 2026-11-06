@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(12);
+select plan(16);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -27,6 +27,7 @@ create function pg_temp.moved(id text,place jsonb,device text default '5e910000-
 insert into auth.users(id,email) values ('5e110000-0000-0000-0000-0000000000d1','dc-m@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values ('5e310000-0000-0000-0000-0000000000d3','5e110000-0000-0000-0000-0000000000d1','dc-owner-m','dc-m@example.invalid');
 select is(pg_temp.dc('consent_grant','dc-owner-m','{"request_id":"moved-grant-1","signal":"place","purpose":"storage_compute","version":1,"expected_epoch":0}')->'consent'->>'status','granted','storage is granted');
+select is(pg_temp.dc('consent_grant','dc-owner-m','{"request_id":"moved-grant-2","signal":"place","purpose":"model_processing","version":1,"expected_epoch":0}')->'consent'->>'status','granted','and model use');
 
 select is(pg_temp.moved('moved-0001',pg_temp.city('tdr1w','Pune','IN','Asia/Kolkata',60)),'["accepted",false]'::jsonb,'a first reading is not a move');
 select is(pg_temp.moved('moved-0002',pg_temp.city('tdr1y','Pune','IN','Asia/Kolkata',55)),'["accepted",false]'::jsonb,'another cell in the same city and zone is not a move');
@@ -37,11 +38,16 @@ select is(pg_temp.moved('moved-0006',pg_temp.zone('Europe/London',120)),'["super
 select is(pg_temp.moved('moved-0007',pg_temp.city('thrr0','Bengaluru','AE','Asia/Dubai',35)),'["accepted",true]'::jsonb,'a city of the same name in another country is a move');
 select is(pg_temp.moved('moved-0008',pg_temp.city('thrr1','Bengaluru','AE','Asia/Dubai',30) - array['locality','region','country']),'["accepted",false]'::jsonb,
   'a cell without names says no city, so it is not a move');
-select is(pg_temp.moved('moved-0001',pg_temp.city('tdr1w','Pune','IN','Asia/Kolkata',60)),'["accepted",false]'::jsonb,'a replay answers what it recorded');
-select is(pg_temp.ingest('moved-0004','5e910000-0000-0000-0000-0000000000e1',pg_temp.city('tsq4z','Bengaluru','IN','Asia/Kolkata',45))->'replayed','true'::jsonb,
-  'and says it is a replay, which the Worker does not act on');
+select is(pg_temp.ingest('moved-0004','5e910000-0000-0000-0000-0000000000e1',pg_temp.city('tsq4z','Bengaluru','IN','Asia/Kolkata',45)),
+  '{"request_id":"moved-0004","replayed":true,"status":"accepted"}'::jsonb,'a replay answers in the receipt''s old shape: the stored receipt never holds moved');
+select is((select count(*)::int from waldo.device_context_requests where owner_id='5e310000-0000-0000-0000-0000000000d3' and response ? 'moved'),0,'no stored receipt does');
+select is(pg_temp.moved('moved-0010',pg_temp.city('thrr2','Bengaluru','AE','Asia/Dubai',28) - array['country']),'["accepted",false]'::jsonb,
+  'a reading that leaves out the country is not a move to another country');
 select is(pg_temp.moved('moved-0009',pg_temp.city('tdr1w','Pune','IN','Asia/Kolkata',25),'5e910000-0000-0000-0000-0000000000e2'),'["accepted",false]'::jsonb,
   'a second phone''s first reading is not a move, whatever the first phone said');
+select is(pg_temp.dc('consent_withdraw','dc-owner-m','{"request_id":"moved-withdraw-1","signal":"place","purpose":"model_processing","expected_epoch":1}')->'consent'->>'status','withdrawn',
+  'the owner withdraws model use of place');
+select is(pg_temp.moved('moved-0011',pg_temp.zone('Europe/London',20)),'["accepted",false]'::jsonb,'a new zone is still kept, and is no longer told as a move');
 
 select * from finish();
 rollback;

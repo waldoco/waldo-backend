@@ -1,8 +1,9 @@
 -- Device context: a place upload says when the phone moved, so a change of time zone or city can bring Waldo's next look
--- forward (device-context ADR §4, amended for #1980 B4). The upload is unchanged; its answer gains `moved`, true when this newer
--- reading puts the device in another time zone, or another named city or country, than the row it replaces. The Worker reads
--- it, tells the owner's object, and strips it before answering the app, whose receipt is unchanged. Nothing new is stored, and
--- a replay answers with the moved it recorded but replayed set, which the Worker does not act on.
+-- forward (device-context ADR §8). The upload is unchanged; its answer gains `moved`, true when this newer reading puts the
+-- device in another time zone, or another named city or country, than the row it replaces, and the owner lets Waldo's model
+-- read place (model_processing): with that withdrawn, a move is not told. The Worker reads it, tells the owner's object, and
+-- strips it before answering the app. The stored receipt never holds it, so a replay answers in the receipt's old shape.
+-- Order: deploy the Worker that strips `moved` first, then apply this; to roll back, revert this first. Nothing new is stored.
 
 create or replace function waldo.device_context_place_ingest(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -53,7 +54,9 @@ begin
     v_moved := (v_was.timezone_observed_at <= v_observed and v_reading->>'timezone' is distinct from v_was.timezone)
       or (v_place is not null and v_was.place is not null and v_was.place_observed_at <= v_observed
         and v_place->>'locality' is not null and v_was.place->>'locality' is not null
-        and (v_place->>'locality' is distinct from v_was.place->>'locality' or v_place->>'country' is distinct from v_was.place->>'country'));
+        and (v_place->>'locality' is distinct from v_was.place->>'locality'
+          or (v_place->>'country' is not null and v_was.place->>'country' is not null and v_place->>'country' is distinct from v_was.place->>'country')));
+    v_moved := v_moved and waldo.device_context_refusal(v_owner, 'place', array['storage_compute', 'model_processing']) is null;
   end if;
   insert into waldo.device_place_latest as t (owner_id, device_id, epoch, platform, timezone, timezone_observed_at, place, place_observed_at)
     values (v_owner, v_device, v_epoch, v_reading->>'platform', v_reading->>'timezone', v_observed, v_place, case when v_place is not null then v_observed end)
@@ -68,7 +71,7 @@ begin
     where t.timezone_observed_at <= excluded.timezone_observed_at
       or (excluded.place is not null and (t.place_observed_at is null or t.place_observed_at <= excluded.place_observed_at));
   if not found then v_status := 'superseded'; v_moved := false; end if;
-  v_result := jsonb_build_object('request_id', v_id, 'replayed', false, 'status', v_status, 'moved', v_moved);
+  v_result := jsonb_build_object('request_id', v_id, 'replayed', false, 'status', v_status);
   insert into waldo.device_context_requests (owner_id, request_id, operation, payload_digest, response) values (v_owner, v_id, 'place_ingest', md5(p_payload), v_result);
-  return v_result;
+  return v_result || jsonb_build_object('moved', v_moved);
 end $$;
