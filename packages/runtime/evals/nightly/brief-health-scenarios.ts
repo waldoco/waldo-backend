@@ -37,7 +37,7 @@ const silentAboutTheBody: Receipt = {
   why: 'no Waldo message speaks of sleep, recovery, energy, readiness or a score',
   holds: (trial) => waldoTexts(trial).every((text) => !/\b(sleep|slept|recover(y|ed)?|energy|readiness|score)\b/.test(text)),
 };
-const calendarUnchanged = (seeded: readonly SeedEvent[]): Receipt => ({
+export const calendarUnchanged = (seeded: readonly SeedEvent[]): Receipt => ({
   why: 'no calendar event changed: the Brief offers, and only the owner\'s yes raises a card',
   holds: (trial) => {
     const now = new Map(((trial.final_state as { calendar?: readonly SeedEvent[] }).calendar ?? []).map((entry) => [entry.id, entry]));
