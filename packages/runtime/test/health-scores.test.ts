@@ -306,6 +306,18 @@ describe('health scores: time', () => {
     expect(hours('2026-03-29', 'Europe/London')).toBe(23);
     expect(hours('2026-04-05', 'Pacific/Auckland')).toBe(25);
     expect(hours('2026-03-20', 'Asia/Kolkata')).toBe(24);
+    expect(hours('2026-04-05', 'Australia/Lord_Howe')).toBe(24.5);
+    expect(hours('2026-10-04', 'Australia/Lord_Howe')).toBe(23.5);
+  });
+  it('starts a day at the jump where the clock skips midnight, and ends the day before there', () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(localDayWindow('2026-09-05', 'America/Santiago')).toEqual({ start: at('2026-09-05T04:00:00Z'), end: at('2026-09-06T04:00:00Z') });
+    expect(localDayWindow('2026-09-06', 'America/Santiago')).toEqual({ start: at('2026-09-06T04:00:00Z'), end: at('2026-09-07T03:00:00Z') });
+    expect(localDayWindow('2026-04-04', 'America/Santiago')).toEqual({ start: at('2026-04-04T03:00:00Z'), end: at('2026-04-05T04:00:00Z') });
+    expect(localDayWindow('2026-03-07', 'America/Havana')).toEqual({ start: at('2026-03-07T05:00:00Z'), end: at('2026-03-08T05:00:00Z') });
+    expect(localDayWindow('2026-03-08', 'America/Havana')).toEqual({ start: at('2026-03-08T05:00:00Z'), end: at('2026-03-09T04:00:00Z') });
+    expect(localDayWindow('2026-03-29', 'Europe/London')).toEqual({ start: at('2026-03-29T00:00:00Z'), end: at('2026-03-29T23:00:00Z') });
+    expect(localDayWindow('2026-11-01', 'America/New_York')).toEqual({ start: at('2026-11-01T04:00:00Z'), end: at('2026-11-02T05:00:00Z') });
   });
   it('drops hourly readings outside the day own local window', () => {
     const outside = { ...hourly(TARGET, 0)[0]!, startAt: `${addDays(TARGET, 1)}T12:00:00.000Z`, movementMinutes: 55 };

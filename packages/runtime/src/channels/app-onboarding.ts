@@ -190,6 +190,7 @@ export type OwnerOnboardingDeps = Readonly<{
   // Hides retained copies of these texts wherever the owner's memory forget reaches them (chat history, stored tool output,
   // episodes, thread titles and the rest), and throws when it cannot verify that it did.
   hideText(texts: readonly string[]): Promise<void>;
+  stopLookup(): void;
 }>;
 // Quiet hours run from this time until the Brief, so nothing but the Brief opens the owner's morning.
 export const FIRST_RUN_QUIET_FROM = '22:00';
@@ -217,6 +218,9 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
   };
   const withdrawLookup = async () => {
     if (consent.state('owner_lookup').status !== 'granted') return { state: consent.state('owner_lookup'), erased: 0 };
+    // A running look-up counts as an unseen copy of whatever it reads, so it is stopped and fenced first: no finding or card
+    // after this point, and the cleanup below can finish.
+    deps.stopLookup();
     const before = findings.texts();
     await hide(before);
     const result = transaction(() => {

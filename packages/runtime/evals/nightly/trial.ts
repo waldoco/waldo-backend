@@ -6,6 +6,7 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { isSkip } from '../../src/channels/day-cards';
 import type { CardId } from '../../src/prompt/day-cards';
 import { capacityContext } from '../../src/prompt/capacity';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -26,6 +27,7 @@ import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
+import { constellationSoFar, welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -40,13 +42,16 @@ export type Step =
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
   // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
-  | Readonly<{ card: CardId; capacity?: string }>
+  // tomorrow: TOMORROW_TODAY's Close, offered its card tools as the owner object offers them.
+  | Readonly<{ card: CardId; capacity?: string; tomorrow?: true }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
   | Readonly<{ outside_job: string }>
   // A batch of Google changes reaches the triage turn (GOOGLE_REALTIME_TRIAGE) through the production prompt, tainted
   // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
-  | Readonly<{ triage: readonly Change[] }>;
+  | Readonly<{ triage: readonly Change[] }>
+  // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
+  | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
 // call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave. light_steps are the
 // owner turns that took a light step (WALDO_LIGHT_CHAT), light_handovers those the light model handed to the chat model.
@@ -201,6 +206,13 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         const raised = carded() > before;
         world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
         if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
+      } else if ('welcome' in step) {
+        const { stage, sources, text } = step.welcome;
+        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
+        // An answer that is not a node list writes nothing, as the build settles that stage unavailable.
+        const nodes = (() => { try { return (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes; } catch { return undefined; } })();
+        transcript.push({ role: 'waldo', text: !Array.isArray(nodes) ? '(the answer was not a node list; nothing written)' : nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
@@ -212,7 +224,8 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('card' in step) {
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
         skills.turn(`${scenario.id}-${step.card}`);
-        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined), time, undefined, undefined, undefined,
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.tomorrow === true), time,
+          step.tomorrow ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined,
           step.capacity === undefined ? undefined : capacityContext(step.capacity, ''), 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {

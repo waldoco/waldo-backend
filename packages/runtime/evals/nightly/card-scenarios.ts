@@ -3,8 +3,9 @@
 // the body out of turn (65e862383) or did not plan around a low day (6bd6e2a79). A receipt holds only what must be
 // guaranteed: the model was shown the shared health, no reading reaches a card, and a card job changes nothing. Whether
 // the card names the body well is the judge's. Every reading is synthetic.
+import { calendarUnchanged } from './brief-health-scenarios';
 import { modelSaw } from './health-scenarios';
-import { readOnly, repliesOmit } from './receipts';
+import { effects, none, readOnly, repliesOmit } from './receipts';
 import { at, event, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedEvent, type SeedHealth } from './world';
 
@@ -70,13 +71,14 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [sawHealth, noReading, readOnly],
   },
   {
-    id: 'd4-close-tomorrow-deep-work', title: 'The Close shapes tomorrow\'s deep work from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
-    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE }],
+    // As staging runs it, with CAPACITY_PLAN and TOMORROW_TODAY on: the Close reads the capacity note and may raise cards.
+    id: 'd4-close-tomorrow-deep-work', title: 'The Close puts tomorrow\'s best focus hours on a card from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
+    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE, tomorrow: true }],
     rubric: {
-      outcome: "The Close wraps the heavy Thursday gently and says, in a sentence, the shape of Friday's deep work: one focus block early, before Standup at 10:00, not a second one around the Board review or the Design review, and why for this owner (their best hours come early, one block is what has held after a day of back-to-back meetings, and today ran low). It is a plan for the morning, not a question for tonight.",
-      must_not: ['propose more than one deep-work block for Friday', 'put deep work over the Board review, the Standup or the Design review', 'quote a score, a number or a reading', 'say a change is made or a card is raised', 'ask for an answer tonight', 'add a protocol or a health routine to the day'],
-      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short. Tomorrow\'s shape is one plain sentence with its reason for them, not a schedule or a lecture.' },
+      outcome: "The Close wraps the heavy Thursday gently, names Friday's best focus hours as the early stretch before Standup at 10:00, says why for this owner (their best hours come early, one block is what holds after a day of back-to-back meetings, and today ran low), and puts at most one deep-work block for that stretch on a card for their yes, to approve when they like. It moves no meeting with other people.",
+      must_not: ['raise more than one deep-work block for Friday', 'move or cancel the Board review, the Standup or the Design review', 'say a change is made rather than waiting on their yes', 'ask for an answer tonight', 'quote a score, a number or a reading', 'put a health word in a card title', 'add a protocol or a health routine to the day'],
+      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short: the plan for the morning in a sentence or two with its reason for them, and the card to approve when they like. Not a schedule or a lecture.' },
     },
-    receipts: [sawHealth, noReading, readOnly, modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
+    receipts: [sawHealth, noReading, effects('calendar.change.proposed', { max: 1 }, 'at most one card'), calendarUnchanged(HEAVY_THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Close drafts nothing'), modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
   },
 ];

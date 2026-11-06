@@ -50,7 +50,7 @@ const world = (state: DurableObjectState, options: Readonly<{ on?: () => boolean
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
   const propose = (p = focus()) => desk.propose(p, 'turn-1', `tool:${n + 1}`, { origin: 'owner' });
   const host: AppAutonomyHost = {
-    csrf: 'session-1', expires: NOW + DAY, storage: state.storage, signedInAt: options.signedInAt ?? new Date(Date.now() - 3 * HOUR).toISOString(),
+    csrf: 'session-1', expires: NOW + DAY, storage: state.storage, signedInAt: options.signedInAt ?? new Date(NOW - 3 * HOUR).toISOString(),
     assertCurrent: async () => undefined, sessions: async () => [{ csrf: 'session-1', expires: Date.now() + DAY }],
     grants, usesToday: async grant => effects.count(grants.usage(grant, now)), now: () => now,
   };
@@ -184,7 +184,7 @@ describe('B3: revoke and pause, in words and in the app, end what Waldo may do a
   }));
 
   it('pause_autonomy keeps the grant but stops it, and only a resume in the app with a recent sign-in brings it back', () => inDo('b3-pause-tool', async state => {
-    const w = world(state, { signedInAt: new Date(Date.now() - 3 * DAY).toISOString() });
+    const w = world(state, { signedInAt: new Date(NOW - 3 * DAY).toISOString() });
     w.grants.grant(terms(), 'app');
     await w.tool('pause_autonomy').handle({} as never, w.turn('owner'));
     expect(w.status(await w.propose(focus(NOW + 5 * HOUR)))).toBe('open');
@@ -197,7 +197,7 @@ describe('B3: revoke and pause, in words and in the app, end what Waldo may do a
   }));
 
   it('the app pauses with no reviewed revision, and resumes with one after a recent sign-in', () => inDo('b3-pause-route', async state => {
-    const w = world(state, { signedInAt: new Date().toISOString() });
+    const w = world(state, { signedInAt: new Date(NOW).toISOString() });
     w.grants.grant(terms(), 'app');
     expect((await w.route('POST', '/app/v1/autonomy/changes', { request_id: 'autonomy-0003', change: { op: 'pause' } })).status).toBe(200);
     expect(w.status(await w.propose(focus(NOW + 5 * HOUR)))).toBe('open');
