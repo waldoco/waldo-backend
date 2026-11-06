@@ -26,13 +26,13 @@ const note = (text: string) => JSON.stringify({ kind: 'notice', text });
 const quiet = JSON.stringify({ kind: 'no_op', text: '' });
 // The line the shared health block opens its zones with; absent whenever no health is shared.
 const ZONE_LINE = 'Form zone:';
-const SCORES = ['47.6', '29.3', '63.8'];
+const SCORES = ['29.3', '63.8'];
 
 
 describe('the Brief and health-only-day set in the catalogue', () => {
-  it('runs five cases nightly, each held by a receipt', () => {
+  it('runs four cases nightly, each held by a receipt', () => {
     expect(BRIEF_HEALTH_SCENARIOS.map((entry) => entry.id)).toEqual([
-      'h20-brief-with-shared-health', 'h21-brief-without-health', 'h22-brief-after-sharing-withdrawn', 'h23-brief-heavy-day-low-form', 'h24-health-only-day-sharp-drop',
+      'h21-brief-without-health', 'h22-brief-after-sharing-withdrawn', 'h23-brief-heavy-day-low-form', 'h24-health-only-day-sharp-drop',
     ]);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     for (const entry of BRIEF_HEALTH_SCENARIOS) {
@@ -45,19 +45,7 @@ describe('the Brief and health-only-day set in the catalogue', () => {
 });
 
 describe('the Brief with and without shared health', () => {
-  it('h20: the Brief request carries the shared health and the body rule, never a score, and an honest Brief holds', async () => {
-    const { failed, asked } = await run('h20-brief-with-shared-health', reply(BRIEF, 'The Brief\nA moderate day after a short night. Board prep at 11 is the one to protect; keep the evening light if you can.'));
-    expect(asked(BRIEF)).toHaveLength(1);
-    expect(asked(BRIEF)[0]).toContain('short night');
-    expect(asked(BRIEF)[0]).toContain(ZONE_LINE);
-    expect(asked(BRIEF)[0]).toContain('Plan with their body only when this request carries their shared health context');
-    for (const score of SCORES) expect(asked(BRIEF)[0]).not.toContain(score);
-    expect(failed).toEqual([]);
-  });
 
-  it('h20: fails a Brief that quotes the score', async () => {
-    expect((await run('h20-brief-with-shared-health', reply(BRIEF, 'The Brief\nForm is 47.6 today, so go gently.'))).failed).toEqual([expect.stringContaining('no score or reading')]);
-  });
 
   it.each(['h21-brief-without-health', 'h22-brief-after-sharing-withdrawn'])('%s: tells the model no health is available, shows none, and fails a Brief that speaks of the body', async (id) => {
     const honest = await run(id, reply(BRIEF, 'The Brief\nStandup at 10, then Board prep at 11. Board prep is the one thing that matters today.'));

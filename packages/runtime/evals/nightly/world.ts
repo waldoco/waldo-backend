@@ -53,7 +53,9 @@ export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
 // forgotten: the owner asked to forget this topic, so the claim is gone and the barrier that keeps it from being relearned stays.
-export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts'; forgotten?: string }>;
+// inferred: Waldo's own read, not the owner's word. replaced: a later fact ended it at this time, so it is history, not current.
+// bring_up_less: the owner asked Waldo not to raise it unprompted.
+export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts'; forgotten?: string; inferred?: true; replaced?: string; bring_up_less?: true }>;
 // claims: the production memory store and tools. raw_history: no claim store and no memory tools, so the model has only
 // the conversation and search_episodes; the baseline a memory change is compared against.
 export type MemoryMode = 'claims' | 'raw_history';
@@ -297,7 +299,9 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const { sql, transactionSync } = sqlite();
   const claims = claimStore(sql, transactionSync);
   for (const seeded of seed.memory ?? []) {
-    claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
+    claims.add({ kind: seeded.kind, text: seeded.text, source: seeded.inferred ? 'inferred' : 'stated', evidence: seeded.inferred ? 'Waldo noticed it across several days.' : 'The owner said so.', origin: seeded.inferred ? 'agent' : 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
+    if (seeded.replaced !== undefined) claims.retire(seeded.id, seeded.replaced);
+    if (seeded.bring_up_less) claims.bringUpLess(seeded.id, start, true);
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
     if (seeded.forgotten !== undefined) { claims.forget(seeded.id); claims.barrier(seeded.forgotten, start); }
   }
@@ -376,7 +380,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -475,7 +479,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
-      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, valid_to: claim.valid_to ?? null, bring_up_less: Boolean(claim.bring_up_less_at), created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
       ...(store ? { workspace: workspace.files.filter((file) => file.state === 'ready').map(({ path, mime, provenance }) => ({ path, mime, provenance })) } : {}),
       ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
       ...(cards ? { approvals: sql.exec<{ id: string; status: string; summary: string; withdrawn_reason: string | null; replaced_by: string | null }>(

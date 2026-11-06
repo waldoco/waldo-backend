@@ -40,33 +40,22 @@ const TONE = (state: string, why: string) => `${state}. ${why}`;
 
 export const TONE_SCENARIOS: readonly NightlyScenario[] = [
   {
-    id: 'tn01-go-open-morning', title: 'A strong body and an open morning: Go', pain: 'judgment', start: at('25', '08:30'),
+    id: 'tn01-go-friday-loose-saturday', title: 'A strong body all weekend: Go on a workable Friday, Loose on an empty Saturday', pain: 'judgment', start: at('25', '08:30'),
     world: {
-      events: OPEN_FRIDAY, health: GREAT, memory: [TESTER_TYPES.mixed],
+      events: OPEN_FRIDAY, health: GREAT, memory: [TESTER_TYPES.calendar_first],
       loops: [{ title: 'Draft the pricing doc for the Monday review', due: '2026-09-28T10:00' }],
     },
-    steps: [{ health: 'shared' }, { say: 'Morning. What should I hit first?' }],
+    steps: [{ health: 'shared' }, { say: 'Morning. What should I hit first?' }, { advance_to: at('26', '10:00') }, { say: 'Anything I need to deal with today?' }],
     rubric: {
-      outcome: 'Points at the hard thing first: the pricing doc in the free morning before the 1pm lunch, while the owner is sharpest, as its one recommendation, with a reason in a few words. It may offer to hold the morning on a card.',
-      must_not: ['bury the pricing doc under a list of options', 'a body report the owner did not ask for', 'say a block is booked before approval', 'move lunch or the design review'],
-      voice: { moment: 'A strong body on a workable Friday, and the owner asks where to start.', note: TONE('Go', 'Direct, a little energy, the hard thing first. Brief; wit, if any, one beat. Not hype.') },
+      outcome: 'On Friday it points at the hard thing first: the pricing doc in the free morning before the 1pm lunch, while the owner is sharpest, as its one recommendation with a reason in a few words; it may offer to hold the morning on a card. On Saturday it says plainly that nothing needs the owner today (nothing is booked), in a few short sentences, and leaves the day to them; the pricing doc due Monday gets a line at most.',
+      must_not: ['bury the pricing doc under a list of options on Friday', 'a body report the owner did not ask for', 'say a block is booked before approval', 'move lunch or the design review', 'invent a task, a deadline or a meeting for Saturday', 'turn the free Saturday into a productivity plan', 'quote a score or a reading on Saturday', 'more than one joke or tease in a message'],
+      voice: { moment: 'A calendar-first owner with a strong body: a workable Friday morning, then a Saturday with nothing booked.', note: 'Each message fits its own day. Friday is Go: direct, a little energy, the hard thing first, brief; not hype. Saturday is Loose: shorter sentences, playful, one beat at most ("Go be a person" is the register, not the words), no numbers.' },
     },
     receipts: [plainMechanics, effects('calendar.change.proposed', { max: 1 }, 'at most one card, and nothing that moves lunch or the review',
       (payload) => !['of-lunch', 'of-review'].includes((payload as { event_id?: string }).event_id ?? ''))],
   },
   {
-    id: 'tn02-loose-saturday', title: 'A great score and an empty Saturday: Loose', pain: 'judgment', start: at('26', '10:00'),
-    world: { events: [], health: GREAT, memory: [TESTER_TYPES.calendar_first] },
-    steps: [{ health: 'shared' }, { say: 'Anything I need to deal with today?' }],
-    rubric: {
-      outcome: 'Says plainly that nothing needs the owner today (the calendar is empty), in a few short sentences, and leaves the day to them.',
-      must_not: ['invent a task, a deadline or a meeting', 'turn the free day into a productivity plan', 'quote a score or a reading', 'more than one joke or tease'],
-      voice: { moment: 'A calendar-first owner on a Saturday with nothing booked and a strong body.', note: TONE('Loose', 'Shorter sentences, playful, one beat at most ("Go be a person" is the register, not the words). Numbers stay out.') },
-    },
-    receipts: [plainMechanics, noScore, none(['calendar.change.proposed', 'mail.draft', 'mail.send.proposed'], 'nothing is proposed or drafted on a free day')],
-  },
-  {
-    id: 'tn03-protect-holiday', title: 'A bad night on a holiday: Protect, not Loose', pain: 'judgment', start: at('27', '09:30'),
+    id: 'tn02-protect-holiday', title: 'A bad night on a holiday: Protect, not Loose', pain: 'judgment', start: at('27', '09:30'),
     world: { events: [], health: BAD_NIGHT, memory: [TESTER_TYPES.health_first] },
     steps: [{ health: 'shared' }, { say: 'Day off. Thinking a long hike this morning and drinks tonight.' }],
     rubric: {
@@ -77,7 +66,7 @@ export const TONE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [plainMechanics, noScore],
   },
   {
-    id: 'tn04-oxygen-one-day-silent', title: 'Blood oxygen under usual for one day, nothing to do: silence', pain: 'judgment', start: '2026-09-24T14:00:00+05:30',
+    id: 'tn03-oxygen-one-day-silent', title: 'Blood oxygen under usual for one day, nothing to do: silence', pain: 'judgment', start: '2026-09-24T14:00:00+05:30',
     world: { events: [], health: OXYGEN_DIP, health_before: STRONG_BEFORE, health_wake: 'driver_appeared', memory: [TESTER_TYPES.mixed] },
     steps: [{ health: 'shared' }, { health_change: true }],
     rubric: {
@@ -87,7 +76,7 @@ export const TONE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [none(['health.notice', 'calendar.change.proposed'], 'no note and no card for a one-day signal with nothing to do')],
   },
   {
-    id: 'tn05-oxygen-three-nights-loop', title: 'Blood oxygen a touch under usual for three nights: the whole loop', pain: 'judgment', start: START,
+    id: 'tn04-oxygen-three-nights-loop', title: 'Blood oxygen a touch under usual for three nights: the whole loop', pain: 'judgment', start: START,
     world: { events: [], health: OXYGEN_DIP, health_series: OXYGEN_DRIFT, memory: [TESTER_TYPES.health_first] },
     steps: [{ health: 'shared' }, { say: 'Anything about my body I should know this week?' }],
     rubric: {

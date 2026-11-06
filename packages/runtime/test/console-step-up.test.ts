@@ -326,7 +326,7 @@ describe('every app action and approval decision is classified by the same table
     for (const kind of approvalKindV1Schema.options) {
       for (const action of approvalActionV1Schema.options) {
         const gated = stepUp.appApprovalStepUp({ kind, exact }, action);
-        expect([kind, action, gated]).toEqual([kind, action, action === 'approve' && kind !== 'calendar_change' && kind !== 'google_task_change']);
+        expect([kind, action, gated]).toEqual([kind, action, action === 'approve' && kind !== 'calendar_change' && kind !== 'calendar_plan' && kind !== 'google_task_change']);
       }
     }
   });

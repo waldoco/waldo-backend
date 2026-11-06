@@ -60,6 +60,8 @@ export const forgetPurge = ({ sql, store, stores, now, arm, log }: Readonly<{
 
   const run = async (): Promise<Readonly<{ settled: number; pending: number }>> => {
     // Claims a nightly pass or the console marked for removal go now, and only they: their words join custody as history.
+    // A pending row whose claim a topic purge deleted has nothing left to settle and would keep the profile view blank.
+    sql.exec('DELETE FROM purge_pending WHERE claim_id NOT IN (SELECT id FROM claims)');
     const purging = store.claims('purging').map((claim) => claim.id);
     if (purging.length) {
       const purged = store.purge(purging, iso());

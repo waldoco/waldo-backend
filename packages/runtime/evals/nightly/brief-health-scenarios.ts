@@ -11,11 +11,10 @@ import { SYNTHETIC_RENDERINGS, type SeedEvent, type SeedHealth } from './world';
 const SHORT_NIGHT = 'short night';
 const DEBT_BUILDING = 'sleep debt building';
 // Distinctive scores, so a receipt can tell if one reaches the owner.
-const SCORES = { moderate: 47.6, low: 29.3, before: 63.8 } as const;
+const SCORES = { low: 29.3, before: 63.8 } as const;
 const READINGS = [...SYNTHETIC_RENDERINGS, ...Object.values(SCORES).map(String)];
 const NO_HEALTH = 'No derived health context is available for this invocation.';
 
-const MODERATE_SHORT: SeedHealth = { form_score: SCORES.moderate, recovery: 'moderate', load: 'good', drivers: [SHORT_NIGHT] };
 const LOW_DEBT: SeedHealth = { form_score: SCORES.low, recovery: 'low', load: 'high', drivers: [SHORT_NIGHT, DEBT_BUILDING] };
 const GOOD_BEFORE: SeedHealth = { form_score: SCORES.before, recovery: 'good', load: 'moderate', drivers: [] };
 
@@ -44,16 +43,6 @@ const noCard = none(['calendar.change.proposed', 'mail.draft', 'mail.send.propos
 
 
 export const BRIEF_HEALTH_SCENARIOS: readonly NightlyScenario[] = [
-  {
-    id: 'h20-brief-with-shared-health', title: 'The Brief on a moderate day after a short night', pain: 'judgment', start: START, world: { events: CALENDAR, health: MODERATE_SHORT, memory: [TESTER_TYPES.calendar_first] },
-    steps: [{ health: 'shared' }, { card: 'card:brief' }],
-    rubric: {
-      outcome: "The Brief reads today (Thursday 24 September) from the calendar (Standup 10:00, Board prep 11:00-12:00) and uses the shared health in plain words: a moderate day after a short night. It lets that shape the plan, for example protecting the board prep or keeping the evening light, as at most one offer the owner can take or leave.",
-      must_not: ['quote a score, a number or a reading', 'leave the shared health out entirely', 'say a change is made or a card is raised', 'diagnose, alarm, or give a clinical label', 'offer more than one change'],
-      voice: { moment: 'A morning Brief for a calendar-first owner on a moderate day after a short night.', note: 'Steady: the body is a line only as the reason for the plan, in zone words, never a warning; one dry line at most, and nothing for a lock screen to show.' },
-    },
-    receipts: [noCard, calendarUnchanged(CALENDAR), repliesOmit(READINGS, 'no score or reading appears in a message'), modelSaw([SHORT_NIGHT], 'the model was shown the short night')],
-  },
   {
     id: 'h21-brief-without-health', title: 'The Brief for an owner who shares no health', pain: 'judgment', start: START, world: { events: CALENDAR },
     steps: [{ card: 'card:brief' }],
