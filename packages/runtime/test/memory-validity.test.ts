@@ -147,6 +147,19 @@ describe('replaced rows nothing points to are forget leftovers', () => {
   }));
 });
 
+describe('forgetting a topic forgets the versions its claims replaced', () => {
+  it('a topic purge that deletes the newer claim takes the retired earlier one too, so nothing resurfaces', () => withStore(store => {
+    store.add(owned('Works at Acme'), T1);
+    store.add(owned('Works at Globex'), T1);
+    store.retire(1, T2, 2);
+    expect(store.recallReplaced('acme')).toHaveLength(1);
+    store.purge([], '2026-10-13T00:00:00.000Z', ['Globex']);
+    expect(store.allClaims()).toEqual([]);
+    expect(store.recallReplaced('acme')).toEqual([]);
+    expect(store.replacedClaims(5)).toEqual([]);
+  }));
+});
+
 describe('forgetting a claim forgets the versions it replaced', () => {
   const history = (store: ReturnType<typeof claimStore>) => {
     store.add(owned('Allergic to cobalt'), T1);
