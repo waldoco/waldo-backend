@@ -7,6 +7,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { jobBook, jobCheckpoint, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, type JobBook } from '../src/tasks/jobs';
 import { dispatchLoopTool } from '../src/conversation/tool-loop';
 import { promiseRetry } from '../src/tasks/retry-turn';
+import { delegateTaskHandler } from '../src/conversation/subagent';
 import { finishedTasksNote, runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -120,6 +121,21 @@ describe('start_task', () => {
       expect(refused).toMatchObject({ ok: false, error_code: 'invalid_args', error: expect.stringContaining('reader or errand profile'), fix: expect.stringContaining('call again') });
       expect(book.open()).toHaveLength(0);
       expect(await dispatched([start, cancel], 'call-2', args)).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    });
+  });
+});
+
+// Foreground or background is the model's call. The two tools say how to make it, by how long the work will take, each
+// naming the other, so the guidance reaches exactly the turns that hold them and adds nothing to the behaviour prompt.
+describe('choosing delegate_task or start_task', () => {
+  it('each description gives the expected duration that decides it and names the other tool', async () => {
+    await withTools(async (h) => {
+      const start = taskToolHandlers({ book: h.book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined })[0]!.description;
+      const delegate = delegateTaskHandler(async () => { throw new Error('not spawned'); }).description;
+      expect(start).toMatch(/take minutes/);
+      expect(start).toMatch(/delegate_task/);
+      expect(delegate).toMatch(/about a minute/);
+      expect(delegate).toMatch(/take minutes[^.]*start_task/);
     });
   });
 });
