@@ -106,8 +106,8 @@ import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type PinBlock } from '../memory/claims';
 import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
-import { ownerName, recordSignupName } from '../onboarding/first-run';
-import { lookupPending, openLookup, startLookup } from '../onboarding/lookup';
+import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
+import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
@@ -395,6 +395,7 @@ type OwnerRuntime = Readonly<{
 const LATE_FIRE_MS = 5 * 60_000;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
 const LOOKUP_STARTED_KEY = 'owner_lookup_started';
+const LOOKUP_TRACE = 'owner-lookup';
 // The last message row of one chain. Every chain of an owner shares one history store, so the store's own leaf can sit in another chain.
 const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
   [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
@@ -1652,7 +1653,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
-      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
+      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX) || record.id.startsWith(LOOKUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
         try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
@@ -1752,12 +1753,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const headers={'cache-control':'no-store'};
     const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!range)return Response.json({error:'unavailable'},{status:403,headers});
-    const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
-    try{
-      const answer=await runtime.calendarDemand(range);
-      runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:answer.state==='available',code:demandCode(answer)});
-      return Response.json(answer,{headers});
-    }catch{runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:false,code:'read_failed'});return Response.json({error:'unavailable'},{status:503,headers});}
+    try{return Response.json(await this.setup('app').calendarDemand(range),{headers});}
+    catch{return Response.json({error:'unavailable'},{status:503,headers});}
   }
   // Worker-to-DO only: today's derived health row moved zone. It carries the day and nothing else, and arms the trigger.
   private async healthZoneChange(request: Request): Promise<Response> {
@@ -1909,7 +1906,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const current=async()=>{await this.appAuthority(name,hash);};
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
-            ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
+            ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
@@ -6027,17 +6024,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       reconcile: async () => {
         // A yes that no longer counts stops a running look-up whatever the switch says now, so turning the switch off never
         // leaves one running.
+        // Each pass that writes no job says why, by code alone, so a look-up that never ran is visible.
+        const skipped = (code: string) => log({ trace: LOOKUP_TRACE, hop: 'lookup_skipped', ms: 0, ok: true, code });
         const consent = lookupConsent();
         if (!consent.active('owner_lookup')) {
-          for (const id of this.jobs().cancelMachine('owner_lookup')) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
+          const cancelled = this.jobs().cancelMachine('owner_lookup');
+          for (const id of cancelled) { this.tasks.cancelled(id); log({ trace: `task:${id}`, hop: 'lookup_cancelled', ms: 0, ok: true, job_id: id }); }
+          if (!cancelled.length) {
+            const grant = consent.state('owner_lookup');
+            // A yes on record that no longer counts: an old copy, or the notice it depends on is no longer live.
+            skipped(!consent.offered('owner_lookup') ? 'not_offered' : grant.status === 'granted' ? 'grant_not_current' : 'not_granted');
+          }
           return;
         }
-        if (!lookupOn || lookupStarted() === consent.state('owner_lookup').granted_at) return;
+        if (!lookupOn) return skipped('switch_off');
+        if (lookupStarted() === consent.state('owner_lookup').granted_at) return skipped('started');
         const name = ownerName(memory), doName = identity.get<string>('do_name');
         const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
         const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, surface: 'app',
           started: lookupStarted, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
-        if (made.code !== 'enqueued') return;
+        if (made.code !== 'enqueued') return skipped(made.code === 'no_name' ? `no_name:${ownerNameGap(memory)}` : made.code);
         log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
@@ -6048,10 +6054,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, Date.now());
       },
     };
-    // The look-up's worker records its findings as it goes, so its apply tells the owner nothing; its end lets a web stage that
-    // settled without it read the findings.
-    const lookupApply = { decidesOnEmpty: true, apply: async (_row: unknown, _result: unknown, io: { settle(): void }) => { io.settle(); return 'skipped' as const; },
-      ended: () => { welcome.lateWeb(); this.continueWelcome(runtime); } };
+    // The look-up's worker records its findings as it goes; its end tells the owner how it went, under the update cards' gate,
+    // and lets a web stage that settled without it read the findings.
+    const lookupApply = lookupApplier({
+      found: since => { const store = findingStore(storage.sql, memory, lookupConsent(), Date.now); return { count: store.foundSince(since), sources: store.sourcesSince(since) }; },
+      consented: () => lookupConsent().active('owner_lookup'),
+      gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
+      deliver: async (id, trace, text, commit) => {
+        if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text }, ownerSubject: String(owner),
+          doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
+      },
+      ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
     const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
@@ -6234,9 +6248,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       googleConsoleStart: () => google.consoleStart(),
       connectLink,
       issueTicket,
-      calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
-        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
-        client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
+      // Each read, from the Worker's route or the owner object's own recompute, logs its reason code, and why a stretch went
+      // unknown: never a calendar, a title or a minute.
+      calendarDemand: async (range) => {
+        const started = Date.now(), trace = `calendar-demand:${started}`;
+        try {
+          const answer = await calendarDemand({ sql: this.ctx.storage.sql, now: Date.now, voided: code => log({ trace, hop: 'calendar_demand_stretch', ms: 0, ok: false, code }),
+            accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
+            client: (email) => google.client('availability', undefined, undefined, email) }).read(range);
+          log({ trace, hop: 'calendar_demand', ms: Date.now() - started, ok: answer.state === 'available', code: demandCode(answer) });
+          return answer;
+        } catch (error) { log({ trace, hop: 'calendar_demand', ms: Date.now() - started, ok: false, code: 'read_failed' }); throw error; }
+      },
       calendarDay: (request) => appCalendarDayRequest(request, { now: Date.now, timezone: () => clock.timezone, google,
         readScores: day => healthRpc('scores_read', JSON.stringify({ day })) }),
       openFile: async (id) => {
