@@ -230,9 +230,9 @@ export const createOwnerResponder = (
   // re-billed the whole prompt on the next call. get_context gives the model the exact time mid-turn.
   let turnClockLine: string | undefined;
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
-  // Earlier turns' tool results, without anything the owner removed or is forgetting.
+  // What earlier turns' tools returned that a later turn may read, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
-    const fragments = await toolLedger?.recent(heldTopics(), thread) ?? [];
+    const fragments = await toolLedger?.carried(heldTopics(), thread) ?? [];
     return barrier().texts(fragments, fragment => fragment.text, (fragment, text) => ({ ...fragment, text }));
   };
   const earlierOwnerResults = async () => {
