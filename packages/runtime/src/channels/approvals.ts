@@ -72,7 +72,8 @@ const SETTLE_RETRY_FIRST_MS = 5 * 60_000, SETTLE_RETRY_MAX_MS = 6 * 60 * 60_000;
 
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
 // time_zone: the zone the review's times were written in.
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; operation_ref?: string; time_zone?: string };
+// seen_target: for a move, the events already in its new time when it was proposed; one added there after the card stops it.
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; seen_target?: readonly string[]; operation_ref?: string; time_zone?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -370,13 +371,21 @@ const CHAT_APPROVABLE_KINDS: readonly string[] = [...DRAFT_SEND_KINDS, 'calendar
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+// The timed events, other than the one moving, in a move's new time on the owner's main calendar, by id.
+const targetEvents = async (client: GoogleClient, p: Stored): Promise<string[]> => {
+  const from = Date.parse(p.start!), to = Date.parse(p.end!);
+  const events = await client.events(p.start!, p.end!, 50, false);
+  return events.filter(event => event.id !== p.event_id && event.status !== 'cancelled' && !event.all_day && Date.parse(event.start) < to && Date.parse(event.end) > from).map(event => event.id);
+};
 // A browser expiry that isn't a safe integer closes the request when it was made.
 const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
   if (entry.kind === 'browser_submit') return p.approvalExpiresAt !== undefined && !Number.isSafeInteger(p.approvalExpiresAt)
     ? entry.created_at : Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
   if (entry.kind === 'calendar_plan') return Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse((p as unknown as StoredPlan).blocks[0]!.start));
-  return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
+  // A move also closes when the event it moves starts: approving it after that would move something already under way.
+  return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start), p.action === 'move' && p.seen_start ? Date.parse(p.seen_start) : Infinity)
+    : entry.created_at + PROPOSAL_TTL_MS;
 };
 // A request closes at expires_at; one with no readable expiry is closed.
 const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
@@ -1032,7 +1041,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
     return sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed === 1 ? null : noLongerOpen(id);
   };
-  const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
+  const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale' | 'taken'> => {
     // No choice sends no options, so a change proposed before calendars and emailing existed keeps its intent bytes.
     const target = p.calendar_id || p.send_updates ? { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) } : undefined;
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
@@ -1044,6 +1053,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     }
     const before = await client.event(p.event_id!, p.calendar_id);
     if (p.seen_etag && before.etag !== p.seen_etag) return 'stale';
+    if (p.action === 'move' && p.seen_target) {
+      const there = await targetEvents(client, p);
+      if (there.some(id => !p.seen_target!.includes(id))) return 'taken';
+    }
     try {
       if (p.action === 'move') {
         const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker, p.rename_to ? { ...target, title: p.rename_to } : target);
@@ -1107,8 +1120,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         }
         return { status: 'unknown' };
       }, grant);
-      const undo = receipt.result as Undo | 'stale' | null;
-      if (undo === 'stale') {
+      const undo = receipt.result as Undo | 'stale' | 'taken' | null;
+      if (undo === 'taken') {
+        setStatus(id, 'stale');
+        out = { toast: 'The time is taken', message: `${span(proposal.start!, proposal.end!)} is no longer free in your main calendar, so I didn't move it: ${describe(proposal)}. Ask me again and I'll find another time.` };
+      } else if (undo === 'stale') {
         setStatus(id, 'stale');
         out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
       } else if (undo?.op === 'move' && undo.name_kept) {
@@ -2094,7 +2110,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const before = client && bound.event_id ? await client.event(bound.event_id, bound.calendar_id) : undefined;
         const seen = before?.etag;
         const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}), time_zone: deps.timezone };
+        // Without a read of the new time there is no baseline, and the move is not rechecked there, as before.
+        const seenTarget = client && bound.action === 'move' ? await targetEvents(client, bound).then(ids => ({ seen_target: ids }), () => ({})) : {};
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...seenTarget, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}), time_zone: deps.timezone };
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);

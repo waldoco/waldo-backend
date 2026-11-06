@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appSubjectFor } from '../src/channels/app-api';
+import { approvalDesk } from '../src/channels/approvals';
 import { CAPACITY_NOTE_KEY, capacityNote } from '../src/channels/capacity';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { NIGHTLY_ID } from '../src/channels/episodes';
@@ -246,6 +247,21 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
         expect(brief().request, name).not.toContain(JSON.stringify(CAPACITY_BUDGET_INSTRUCTION).slice(1, -1));
       });
     }
+  });
+
+  it('a move the owner turned down is in the next Brief\'s context, and a disconnected Google is one line, not two', async () => {
+    model.card = [{ text: 'The Brief\nA long day.' }];
+    await owned('capacity-budget-declined', BUDGET, async ({ state, card }) => {
+      const source = { events: async () => [], event: async (id: string) => ({ ...EXPENSES, id, all_day: false, etag: 'v1' }) };
+      const desk = approvalDesk(state.storage.sql, { call: async () => ({}), owner: 42, google: async () => source as never, newId: () => 'declined', now: () => AT - 86_400_000, timezone: 'UTC', log: () => undefined });
+      await desk.decide(await desk.propose({ action: 'move', event_id: EXPENSES.id, title: EXPENSES.title, start: '2030-03-08T13:30:00Z' as never, end: '2030-03-08T14:30:00Z' as never, reason: 'Friday is light' }), 's', 't');
+      await state.storage.delete('google:accounts');
+      await card('card:brief');
+      const request = brief().request;
+      expect(request).toContain('move of \\"Expense report\\" to Fri 8 Mar, proposed Mon 4 Mar: they said no');
+      expect(request).toContain('Google is not connected');
+      expect(request).not.toContain('Google Calendar is not set up');
+    });
   });
 
   it('a week that cannot be read is said plainly and the Brief still goes', async () => {
