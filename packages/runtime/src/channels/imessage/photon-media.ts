@@ -18,10 +18,13 @@ const PHOTON_HOSTS = new Set(Object.values(PHOTON_ORIGINS).map(origin => new URL
 export const IMESSAGE_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 export const IMESSAGE_MEDIA_TIMEOUT_MS = 30_000;
 
+// The most files one message carries across, so a stored inbox record stays small. Above LLM_ATTACHMENTS_MAX, so a message
+// with more files than the model reads is still answered with the too-many reply.
+export const IMESSAGE_MEDIA_FILES_MAX = 32;
 /** What crosses from the bridge to the owner: Photon attachments carry Photon's id; a Mac host's files have none. */
 export const iMessageMediaSchema = z.strictObject({
   messageGuid: id,
-  files: z.array(z.strictObject({ id: id.optional(), name: id, mimeType: id, size: z.int().nonnegative() })).min(1),
+  files: z.array(z.strictObject({ id: id.optional(), name: id, mimeType: id, size: z.int().nonnegative() })).min(1).max(IMESSAGE_MEDIA_FILES_MAX),
 });
 export type IMessageMedia = z.infer<typeof iMessageMediaSchema>;
 type MediaFile = IMessageMedia['files'][number];
@@ -31,7 +34,7 @@ export const iMessageMediaOf = (event: Pick<Extract<IMessageEvent, { kind: 'mess
     ...(event.photonAttachments ?? []).map(({ id, name, mimeType, size }) => ({ id, name, mimeType, size })),
     ...event.attachments.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.byteLength })),
   ];
-  return files.length ? { messageGuid: event.messageGuid, files } : undefined;
+  return files.length ? { messageGuid: event.messageGuid, files: files.slice(0, IMESSAGE_MEDIA_FILES_MAX) } : undefined;
 };
 
 export type PhotonMediaEnv = Readonly<{ PHOTON_PROJECT_ID?: string; PHOTON_PROJECT_SECRET?: string }>;
@@ -59,6 +62,10 @@ const allowedOrigin = (origin: string): string | null => {
   } catch { return null; }
 };
 
+// A guid goes into a URL path with the bearer token. encodeURIComponent leaves "." and ".." as they are, and a path segment of
+// only dots normalises to another route on the same host, so such a guid never makes a request.
+const photonGuid = (guid: string) => PHOTON_ID.test(guid) && !/^\.+$/.test(guid);
+
 const readBounded = async (response: Response, budget: number): Promise<Uint8Array> => {
   const reader = response.body?.getReader();
   if (!reader) return new Uint8Array();
@@ -84,7 +91,7 @@ export const photonAttachmentSource = (env: PhotonMediaEnv, fetcher: typeof fetc
   if (!PHOTON_ID.test(projectId) || !secret) return null;
   return async ({ messageGuid, sender, files, maxBytes, signal }) => {
     const tokenOrigin = allowedOrigin(origins.token), imessageOrigin = allowedOrigin(origins.imessage);
-    if (!tokenOrigin || !imessageOrigin) return { ok: false, code: 'egress_refused' };
+    if (!tokenOrigin || !imessageOrigin || ![messageGuid, ...files.map(file => file.id)].every(photonGuid)) return { ok: false, code: 'egress_refused' };
     try {
       const minted = await fetcher(`${tokenOrigin}/projects/${encodeURIComponent(projectId)}/imessage/tokens`,
         { method: 'POST', headers: { authorization: `Basic ${btoa(`${projectId}:${secret}`)}` }, redirect: 'manual', signal });
