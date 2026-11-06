@@ -56,19 +56,23 @@ const FILLERS: Readonly<Record<string, (n: number) => string>> = {
   'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
 };
 
-// 300 ms for 80,000 characters is several times what a linear pass takes on a slow runner and a fraction of what the
-// patterns this file guards took before they were fixed (1 to 4 s), so a regression fails instead of passing by luck.
+// 600 ms for 80,000 characters is several times what a linear pass takes (30 to 80 ms here, about four times that on a shared
+// runner) and under what the patterns this file guards took before they were fixed (1 to 4 s here), so a regression fails
+// instead of passing by luck.
 describe('the patterns sanitise() runs stay linear on the near-miss and whitespace inputs tried here', () => {
   // These take longer per character for a reason that is the same at every size (about 5 microseconds each, twice the size
   // is twice the time), so they are read at a quarter of the length.
   const HEAVY = new Set(['a bearer word repeated', 'an api key word repeated', 'a private key header repeated']);
   it.each(Object.keys(NEAR_MISSES))('%s, up to 80,000 characters', name => {
-    const text = NEAR_MISSES[name]!(HEAVY.has(name) ? 20_000 : 80_000);
-    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(300);
+    const heavy = HEAVY.has(name);
+    const text = NEAR_MISSES[name]!(heavy ? 20_000 : 80_000);
+    // A shared runner took 410 ms for 20,000 characters of the heavy ones (110 ms here); a pattern that squares its input
+    // takes tens of seconds at that size, so a second still separates them.
+    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(heavy ? 1_000 : 600);
   });
 
   it.each(['hrv', 'slept', 'wrist temperature'])('%s followed by 500 blanks of each kind is read in a moment', word => {
-    for (const filler of ['spaces', 'newlines', 'no-break spaces']) expect(millis(() => scan(`${word}${FILLERS[filler]!(500)}`)), filler).toBeLessThan(100);
+    for (const filler of ['spaces', 'newlines', 'no-break spaces']) expect(millis(() => scan(`${word}${FILLERS[filler]!(500)}`)), filler).toBeLessThan(300);
   });
 
   it('every health, secret and token word followed by 400 characters of each filler is read in a moment', () => {
@@ -79,8 +83,8 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
       slowest = Math.max(slowest, took);
       total += took;
     }
-    expect(slowest).toBeLessThan(100);
-    expect(total).toBeLessThan(3_000);
+    expect(slowest).toBeLessThan(300);
+    expect(total).toBeLessThan(6_000);
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
@@ -111,7 +115,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   // A role tag is `<`, an optional `/`, a role and `>`, each with blanks allowed between: blanks after a lone `<` are read once.
   it.each([['<'], ['</'], ['< /'], ['<system']])('%s followed by 100,000 blanks is read in a moment', start => {
     const text = `${start}${' '.repeat(100_000)}`;
-    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(300);
+    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(600);
   });
 
   it('a hostile uuid-like string takes time in proportion to its length', () => {
@@ -120,6 +124,6 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
       fc.array(fc.constantFrom(...pool), { minLength: 12_000, maxLength: 16_000 }).map(parts => parts.join('')));
     let total = 0;
     fc.assert(fc.property(nearMiss, text => { total += millis(() => scan(text)); }), { numRuns: 40 });
-    expect(total).toBeLessThan(3_000);
+    expect(total).toBeLessThan(6_000);
   });
 });
