@@ -58,6 +58,19 @@ describe('a day card in the nightly world', () => {
     expect((await card('d3-close-one-body-line', 'Done for today. Form 29.4, so sleep early.')).failed).toEqual(['no score or reading appears on a card']);
   });
 
+  it('d4: one deep-work card for tomorrow passes, and a Close that raises a second card fails', async () => {
+    const hold = (from: string, to: string, title: string) => ({ name: 'propose_calendar_change',
+      arguments: { action: 'create', title, start: `2026-09-25T${from}:00+05:30`, end: `2026-09-25T${to}:00+05:30`, block: 'deep_work', reason: 'Your best hours come early' } });
+    const close = async (calls: ReturnType<typeof hold>[]) => {
+      const gateway = scriptedGateway({ rules: [{ match: /Scheduled card/, rounds: [{ toolCalls: calls }, { text: 'Friday: hold the early stretch before Standup; the card waits on your yes.' }] }], unmatchedText: 'ok' });
+      const record = await runTrial(scenario('d4-close-tomorrow-deep-work'), { gateway, budget: callBudget(10) });
+      expect(record.status).toBe('ran');
+      return failedReceipts([...STATE_INVARIANTS, ...scenario('d4-close-tomorrow-deep-work').receipts!], record);
+    };
+    expect(await close([hold('07:30', '09:30', 'Deck')])).toEqual([]);
+    expect(await close([hold('07:30', '09:30', 'Deck'), hold('16:45', '18:00', 'Notes')])).toEqual(['at most one card']);
+  });
+
   it('sends nothing when the card says SKIP', async () => {
     const { record } = await card('d1-brief-good-day-one-line', 'SKIP');
     expect(record.transcript.filter((turn) => turn.role === 'waldo')).toEqual([]);
