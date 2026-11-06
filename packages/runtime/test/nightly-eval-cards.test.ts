@@ -21,7 +21,7 @@ const card = async (id: string, text: string) => {
 
 describe('the day-card set in the catalogue', () => {
   it('runs the good-day Brief, the Check-in and the Close nightly, each with a receipt, a rubric, a voice rubric and a card step', () => {
-    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line', 'd4-close-tomorrow-deep-work']);
+    expect(CARD_SCENARIOS.map((entry) => entry.id)).toEqual(['d1-brief-good-day-one-line', 'd2-checkin-rest-of-low-day', 'd3-close-one-body-line', 'd4-close-tomorrow-deep-work', 'd5-brief-budget-moves-what-can-give']);
     for (const entry of CARD_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
@@ -61,6 +61,19 @@ describe('a day card in the nightly world', () => {
   it('sends nothing when the card says SKIP', async () => {
     const { record } = await card('d1-brief-good-day-one-line', 'SKIP');
     expect(record.transcript.filter((turn) => turn.role === 'waldo')).toEqual([]);
+  });
+
+  it('d5: the planning Brief reads the week ahead, one move passes, and a Brief that raises a second card fails', async () => {
+    const move = (id: string, title: string, day: string, from: string, to: string) => ({ name: 'propose_calendar_change',
+      arguments: { action: 'move', event_id: id, title, start: `2026-09-${day}T${from}:00+05:30`, end: `2026-09-${day}T${to}:00+05:30`, reason: 'Today runs past what holds for you' } });
+    const brief = async (calls: ReturnType<typeof move>[]) => {
+      const gateway = scriptedGateway({ rules: [{ match: /Scheduled card/, rounds: [{ toolCalls: calls }, { text: 'Thursday asks more than holds; the expense report can wait for Monday, on a card for your yes.' }] }], unmatchedText: 'ok' });
+      const record = await runTrial(scenario('d5-brief-budget-moves-what-can-give'), { gateway, budget: callBudget(10) });
+      expect(record.status).toBe('ran');
+      return failedReceipts([...STATE_INVARIANTS, ...scenario('d5-brief-budget-moves-what-can-give').receipts!], record);
+    };
+    expect(await brief([move('cb-expenses', 'Expense report', '28', '13:30', '14:30')])).toEqual([]);
+    expect(await brief([move('cb-expenses', 'Expense report', '28', '13:30', '14:30'), move('cb-standup', 'Standup', '25', '09:30', '09:45')])).toEqual(['at most one card']);
   });
 });
 

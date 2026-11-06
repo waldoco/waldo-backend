@@ -128,3 +128,10 @@ describe('CAPACITY_PLAN in the Worker config', () => {
     expect(parsed.env.staging.vars.CAPACITY_PLAN).toBe('1');
   });
 });
+
+describe('CAPACITY_BUDGET in the Worker config', () => {
+  it('is on for staging and off for production', () => {
+    expect(parsed.vars.CAPACITY_BUDGET).toBe('0');
+    expect(parsed.env.staging.vars.CAPACITY_BUDGET).toBe('1');
+  });
+});

@@ -239,7 +239,7 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
 import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memory';
-import { cardCapacityNote, recentBlocks, runCapacityPass } from './capacity';
+import { capacityBudgetContext, cardCapacityNote, recentBlocks, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
 import { chooseProactiveSurface, linkingAppRows, proactiveReads, proactiveSurface, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
@@ -5850,6 +5850,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const proposing = planning || (actAhead && card.id === 'card:midday');
       // CAPACITY_PLAN: the Brief and the Close plan deep work from the capacity note, on the chat model, as health planning does.
       const capacity = this.env.CAPACITY_PLAN === '1' && card.id !== 'card:midday';
+      // CAPACITY_BUDGET: the planning Brief also reads the rest of the week, for a lighter day to move what can give.
+      const budget = capacity && planning && this.env.CAPACITY_BUDGET === '1';
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
         ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
@@ -5867,7 +5869,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           const proposes = ['propose_calendar_change', 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity,
-            capacity ? capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)) : undefined)).trim();
+            capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
+              ...(budget ? [await capacityBudgetContext(now, clock.timezone, client)] : [])].join('\n\n') : undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);

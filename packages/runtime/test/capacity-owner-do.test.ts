@@ -13,7 +13,7 @@ import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { barrierPrompt, claimStore } from '../src/memory/claims';
-import { CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
+import { CAPACITY_BUDGET_INSTRUCTION, CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
 import { PROSE_RULE } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -44,12 +44,18 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const calendar = vi.hoisted(() => ({ events: [] as Record<string, unknown>[], created: 0 }));
+const calendar = vi.hoisted(() => ({ events: [] as Record<string, unknown>[], week: [] as Record<string, unknown>[], weekFails: false, reads: [] as string[], created: 0 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (...args: Parameters<typeof original.googleClient>) => args[0].clientId !== 'capacity-fixture' ? original.googleClient(...args) : ({
     account: { connection_id: null, email: 'owner@example.test' },
-    events: async () => calendar.events,
+    events: async (from: string, to: string) => {
+      calendar.reads.push(`${from}/${to}`);
+      if (from < `${TOMORROW}T00:00:00.000Z`) return calendar.events;
+      if (calendar.weekFails) throw new Error('calendar unavailable');
+      return calendar.week;
+    },
+    event: async (id: string) => ({ ...[...calendar.events, ...calendar.week].find(event => event.id === id), etag: 'etag' }),
     createEvent: async () => { calendar.created += 1; return { id: 'created', etag: 'etag', status: 'confirmed' }; },
   }) };
 });
@@ -57,6 +63,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b';
 const DAY = '2030-03-05';
+const TOMORROW = '2030-03-06';
 const AT = Date.parse(`${DAY}T08:00:00Z`);
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const google = { GOOGLE_CLIENT_ID: 'capacity-fixture', GOOGLE_CLIENT_SECRET: 'fictional-secret', WALDO_OAUTH_STATE_SECRET: 'fictional-state-secret' };
@@ -71,7 +78,7 @@ const HEALTH_ROW = { context: { id: 'capacity-health', day: DAY, form: { score: 
 beforeEach(() => {
   model.capacity = []; model.cards = []; model.card = []; health.shared = false;
   model.capacityReply = JSON.stringify({ note: NOTE, touches_forgotten: false });
-  calendar.events = [MEETING]; calendar.created = 0;
+  calendar.events = [MEETING]; calendar.week = []; calendar.weekFails = false; calendar.reads = []; calendar.created = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -193,6 +200,59 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
       expect(state.storage.sql.exec<{ ok: number }>("SELECT ok FROM trace_log WHERE hop = 'capacity'").toArray()).toEqual([{ ok: 0 }]);
       expect(state.storage.sql.exec<{ ok: number }>("SELECT ok FROM trace_log WHERE hop = 'machine_turn' AND trace = ?", `${NIGHTLY_ID}:${AT - 1000}`).toArray()).toEqual([{ ok: 1 }]);
       expect(state.storage.kv.get(CAPACITY_NOTE_KEY)).toBeUndefined();
+    });
+  });
+});
+
+// CAPACITY_BUDGET: on a day that asks more than the owner sustains, the planning Brief may move one item that can give to a
+// lighter day this week, as the Brief's one card.
+describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
+  const EXPENSES = { id: 'ev-expenses', title: 'Expense report', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:00:00Z`, status: 'confirmed' };
+  const LIGHT = { id: 'ev-dentist', title: 'Dentist', start: '2030-03-08T09:00:00Z', end: '2030-03-08T10:00:00Z', status: 'confirmed' };
+  const MOVE = { action: 'move', event_id: EXPENSES.id, title: EXPENSES.title, start: '2030-03-08T13:30:00Z', end: '2030-03-08T14:30:00Z', reason: 'Today runs past what holds for you; Friday afternoon is light' };
+  const BUDGET = { CAPACITY_PLAN: '1', CAPACITY_BUDGET: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' };
+  const brief = () => model.cards.find(asked => asked.request.includes('Scheduled card \\"The Brief'))!;
+  const weekReads = () => calendar.reads.filter(read => read.startsWith(TOMORROW));
+
+  it('reads the rest of the week beside the note as the job\'s context, and its one move waits on a card under the owner\'s limits', async () => {
+    calendar.events = [MEETING, EXPENSES]; calendar.week = [LIGHT];
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'The Brief\nA long day; the expense report can wait for Friday afternoon, on a card for your yes.' }];
+    await owned('capacity-budget-on', BUDGET, async ({ state, nightly, card, approvals }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      await nightly();
+      await card('card:brief');
+      expect(weekReads()).toEqual([`${TOMORROW}T00:00:00.000Z/2030-03-12T00:00:00.000Z`]);
+      const request = brief().request;
+      expect(request).toContain(JSON.stringify(CAPACITY_BUDGET_INSTRUCTION).slice(1, -1));
+      expect(request).toContain(JSON.stringify(NOTE).slice(1, -1));
+      // After the card's own text, which the day_card trace keeps, not inside it.
+      expect(request.indexOf('Dentist')).toBeGreaterThan(request.indexOf(JSON.stringify(PROSE_RULE).slice(1, -1)));
+      expect(brief().model).not.toBe(WALDO_AUXILIARY_MODEL);
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open', exact: { changes: { action: 'move', title: 'Expense report' } } }]);
+      expect(calendar.created).toBe(0);
+      expect(book.spent().count).toBe(0);
+      expect(book.question()).toBeNull();
+    });
+  });
+
+  it('reads no week with the switch off, on the recap Brief, or with CAPACITY_PLAN off', async () => {
+    for (const [name, settings] of [['budget-off', { ...BUDGET, CAPACITY_BUDGET: '0' }], ['budget-recap', { ...BUDGET, PLANNING_BRIEF: '0' }], ['budget-no-plan', { ...BUDGET, CAPACITY_PLAN: '0' }]] as const) {
+      model.cards = []; calendar.reads = []; model.card = [{ text: 'The Brief\nA long day.' }];
+      await owned(`capacity-${name}`, settings, async ({ card }) => {
+        await card('card:brief');
+        expect(weekReads(), name).toEqual([]);
+        expect(brief().request, name).not.toContain(JSON.stringify(CAPACITY_BUDGET_INSTRUCTION).slice(1, -1));
+      });
+    }
+  });
+
+  it('a week that cannot be read is said plainly and the Brief still goes', async () => {
+    calendar.weekFails = true;
+    model.card = [{ text: 'The Brief\nA long day; I could not see the rest of your week, so nothing moves.' }];
+    await owned('capacity-budget-unread', BUDGET, async ({ card, approvals }) => {
+      await card('card:brief');
+      expect(brief().request).toContain('Calendar could not be read right now');
+      expect(await approvals()).toEqual([]);
     });
   });
 });
