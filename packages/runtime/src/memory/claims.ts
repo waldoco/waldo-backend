@@ -927,6 +927,9 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
                   if (normal === row.value && redacted !== normal) next = redacted;
                 } catch { continue; }
               }
+              // A goal's text holds at most 500 characters (its CHECK); a marker longer than the text it replaces can grow it past
+              // that, so the end is cut and the forget still lands.
+              if (table === 'goals') next = next.slice(0, 500);
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }

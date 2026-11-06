@@ -5931,7 +5931,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // CAPACITY_BUDGET: the planning Brief also reads the rest of the week, for a lighter day to move what can give.
       const budget = capacity && planning && this.env.CAPACITY_BUDGET === '1';
       // The Brief plans around the owner's open quests; the Close checks in on those due tonight, which count as checked in once
-      // the Close goes out, whether or not it had anything to say about them.
+      // the Close reaches the owner, whether or not it spoke of them. A Close that never reaches them leaves them due.
       const questText = questCardContext(card.id, quests), questsDue = card.id === 'card:close' ? quests.due().map(quest => quest.id) : [];
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
@@ -5974,9 +5974,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
           await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-            doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now } });
+            doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now, ...(questsDue.length ? { quests: questsDue } : {}) } });
           plans.waiting(day, card.id);
-          quests.checkedIn(questsDue);
           await scheduler.rearm();
           log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: `${card.id} queued`, text: { input: said, output: text } });
           return log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
@@ -6041,7 +6040,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (record.dayCard) {
         // A card the owner never saw keeps its day-plan row unsent and its updates for the next card.
-        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); }
+        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); quests.checkedIn(record.dayCard.quests ?? []); }
         log({ trace: record.trace, hop: 'day_card', ms: 0, ok: delivered, detail: `${record.dayCard.card} ${delivered ? 'delivered' : record.reason ?? record.status}` });
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {

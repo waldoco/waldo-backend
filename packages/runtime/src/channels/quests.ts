@@ -6,7 +6,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import type { CardId } from '../prompt/day-cards';
 import { turnReadOutside } from './approvals';
-import { localIso, localToEpoch } from './reminders';
+import { localIso } from './reminders';
 
 // Quests (ADR-0064 GoalRecord, as amended for health quests): goals the owner chose to work toward with Waldo, kept in the
 // goals table. The owner starts and changes them in chat; the Brief plans the day around the active ones and the Close checks
@@ -45,7 +45,7 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
     const state = goalState({ active: row.active === 1, ...(row.state ? { state: row.state } : {}) });
     return {
       id: row.id, title: row.description, state, plan: row.plan, usual: row.baseline, target: row.target, progress: row.progress,
-      deadline: row.deadline === null ? null : dayOf(row.deadline), check_in_days: row.check_in_days,
+      deadline: row.deadline?.slice(0, 10) ?? null, check_in_days: row.check_in_days,
       next_check_in: state === 'active' && row.check_in_days !== null ? addDays(dayOf(row.last_check_in_at ?? row.created_at), row.check_in_days) : null,
     };
   };
@@ -60,8 +60,8 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
       if (state !== 'completed' && (!before || view(before).state === 'completed') && open().length >= QUESTS_OPEN_MAX)
         return `The owner already has ${QUESTS_OPEN_MAX} open quests. Ask which one to complete or drop first.`;
       const text = (given: string | null | undefined, kept: string | null): string | null => given === undefined ? kept : given === null ? null : oneLine(given);
-      const deadline = args.deadline === undefined ? before?.deadline ?? null
-        : args.deadline === null ? null : new Date(localToEpoch(`${args.deadline}T23:59`, clock.timezone)).toISOString();
+      // A deadline is the owner's calendar day, kept at UTC midnight so a move to another zone never shifts it.
+      const deadline = args.deadline === undefined ? before?.deadline ?? null : args.deadline === null ? null : `${args.deadline}T00:00:00Z`;
       const values = [
         text(args.title, before?.description ?? null), text(args.usual, before?.baseline ?? null), text(args.target, before?.target ?? null),
         text(args.progress, before?.progress ?? null), deadline, state === 'completed' ? 0 : 1, text(args.plan, before?.plan ?? null), state,
@@ -73,9 +73,11 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
       return { status: before ? 'changed' : 'started', quest: view(sql.exec<Row>('SELECT * FROM goals WHERE id = ?', id).one()) };
     },
     open,
+    // Every open quest fits (QUESTS_OPEN_MAX is below the app's cap), so recently completed ones only fill the room left.
     shown: () => {
       const since = clock.now().getTime() - COMPLETED_SHOWN_MS;
-      return rows().filter(row => view(row).state !== 'completed' || Date.parse(row.updated_at) >= since).map(view).slice(0, APP_QUESTS_MAX_V1);
+      const done = rows().filter(row => view(row).state === 'completed' && Date.parse(row.updated_at) >= since).map(view);
+      return [...open(), ...done].slice(0, APP_QUESTS_MAX_V1);
     },
     due: () => {
       const today = localIso(clock.now().getTime(), clock.timezone).slice(0, 10);

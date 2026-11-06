@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
 import { claimStore } from '../src/memory/claims';
+import { questBook } from '../src/channels/quests';
 import { episodeIndex } from '../src/channels/episodes';
 import { holdTopic } from './helpers/pending-topic';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][], sent: [] as string[], status: undefined as string | undefined }));
@@ -809,9 +810,9 @@ const sp = T8.indexOf(' about');
 
 // Regression proofs for all eight derived stores named PURGED by forget-store-table.
 // Keep failures visible: a successful forget receipt must not silently leave these copies.
-const positiveStore = (table: string, topic: string, seed: (sql: SqlStorage, text: string) => void, read: (sql: SqlStorage) => string) => {
-  it(`forget_memory removes its literal topic from ${table} and preserves unrelated history`, async () => {
-    const name = `memory-do-derived-${table}`;
+const positiveStore = (table: string, topic: string, seed: (sql: SqlStorage, text: string) => void, read: (sql: SqlStorage) => string, label = table) => {
+  it(`forget_memory removes its literal topic from ${label} and preserves unrelated history`, async () => {
+    const name = `memory-do-derived-${label}`;
     await turn(name, 1, 'Unrelated standup is at 09:10 UTC');
     await runInDurableObject(stub(name), (_instance, state) => {
       seed(state.storage.sql, `Private ${topic} note; unrelated context`);
@@ -838,6 +839,10 @@ positiveStore('goals', 'POSGOAL769', (sql, text) => {
   sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
   sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'pos-769-goal', 'u', text, 't', 't');
 }, sql => JSON.stringify(sql.exec('SELECT id, description FROM goals').toArray()));
+// A quest's text is held to 500 characters; a topic shorter than the marker that replaces it grows the text, and the forget still lands.
+positiveStore('goals', 'POSQ7', (sql, text) => {
+  questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1').set({ title: 'Training block', plan: `${text} POSQ7 ${'x'.repeat(500 - text.length - 7)}` }, 'u');
+}, sql => JSON.stringify(sql.exec('SELECT plan FROM goals').toArray()), 'a quest plan at its length bound');
 
 positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));

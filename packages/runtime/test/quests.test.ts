@@ -64,12 +64,33 @@ describe('quest book', () => {
     });
   });
 
+  it('keeps the deadline on the owner\'s day when they move to another zone', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const clock = { ...clockAt('2026-11-06T20:00:00Z'), timezone: 'America/New_York' };
+      const book = questBook(state.storage.sql, clock, ids());
+      book.set({ title: 'Race day', deadline: '2027-03-14' }, 'owner-1');
+      clock.timezone = 'Asia/Tokyo';
+      expect(book.open()[0]!.deadline).toBe('2027-03-14');
+    });
+  });
+
+  it('lists every open quest to the app before any completed one', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const book = questBook(state.storage.sql, clockAt('2026-11-06T10:00:00Z'), ids());
+      for (let n = 0; n < 10; n += 1) book.set({ title: `Done ${n}`, state: 'completed' }, 'owner-1');
+      for (let n = 0; n < QUESTS_OPEN_MAX; n += 1) book.set({ title: `Open ${n}` }, 'owner-1');
+      const shown = book.shown();
+      expect(shown).toHaveLength(20);
+      expect(shown.slice(0, QUESTS_OPEN_MAX).every(quest => quest.state === 'active')).toBe(true);
+    });
+  });
+
   it('lists completed quests to the app for 30 days', async () => {
     await runInDurableObject(stub(), (_instance, state) => {
       const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
       book.set({ title: 'Done', state: 'completed' }, 'owner-1');
       book.set({ title: 'Open' }, 'owner-1');
-      expect(book.shown().map(quest => quest.title)).toEqual(['Done', 'Open']);
+      expect(book.shown().map(quest => quest.title)).toEqual(['Open', 'Done']);
       clock.at += 31 * DAY;
       expect(book.shown().map(quest => quest.title)).toEqual(['Open']);
     });
