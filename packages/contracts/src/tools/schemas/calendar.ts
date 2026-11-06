@@ -45,7 +45,6 @@ export const proposeCalendarPlanArgsSchema = z.strictObject({
     block: z.enum(['rest', 'deep_work']).optional(),
   })).min(2).max(12).describe('New blocks only, in time order; not events already on the calendar.'),
   reason: z.string().min(1).max(300).describe('Why, in a few words, for the owner.'),
-  offer: z.literal('free_window').optional().describe('Create only, with block: a window that opens soon, offered in a line the owner answers Do it, Not now or Keep it free. reason is that line. Leave it out for a later window or any other change.'),
   replaces: replacesApprovalSchema,
 }).refine(({ blocks }) => blocks.every(({ start, end }) => start < end), { error: 'each block ends after it starts', path: ['blocks'] })
   .refine(({ blocks }) => blocks.every((block, index) => index === 0 || blocks[index - 1]!.end <= block.start), { error: 'blocks run in time order without overlapping', path: ['blocks'] });

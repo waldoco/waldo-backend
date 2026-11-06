@@ -6,7 +6,8 @@ import type { DeviceCalendarBook } from './device-calendar';
 // only: no title, attendee or calendar id. Whether that looks like the owner's whole day is the model's call.
 export const COVERAGE_DAYS = 14;
 const DAY_MS = 24 * 60 * 60_000;
-// Each account's past fortnight is read in one page; a page that fills makes the counts unknown rather than short.
+// Each account's past fortnight is read in one page, declined events included so the page the connector filters is the page
+// it fetched; a page that fills makes the counts unknown rather than short.
 const PAST_EVENTS = 250;
 const MAX_ACCOUNTS = 5;
 
@@ -21,7 +22,10 @@ export type CoverageDeps = Readonly<{
   pastEvents(email: string, from: string, to: string, limit: number): Promise<readonly PastEvent[] | null>;
   // Off when the phone calendar is not offered here.
   phone: Pick<DeviceCalendarBook, 'stored'> | null;
+  // The weekday counts are read once per owner-local day and kept here: every triage batch reads them.
+  cache?: Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
 }>;
+const WEEKDAYS_KEY = 'coverage_weekdays_v1';
 
 const weekdayOf = (event: PastEvent, timezone: string): number => {
   const day = event.all_day ? new Date(`${event.start.slice(0, 10)}T12:00:00Z`).getUTCDay()
@@ -32,12 +36,18 @@ const weekdayOf = (event: PastEvent, timezone: string): number => {
 export const coverageFacts = async (deps: CoverageDeps): Promise<CoverageFacts> => {
   const accounts = await deps.accounts().catch(() => []);
   const calendars = accounts.filter(account => account.calendar && account.error === null).slice(0, MAX_ACCOUNTS);
-  const from = new Date(deps.now - COVERAGE_DAYS * DAY_MS).toISOString(), to = new Date(deps.now).toISOString();
-  const reads = await Promise.all(calendars.map(account => deps.pastEvents(account.email, from, to, PAST_EVENTS).catch(() => null)));
-  const weekdays = calendars.length === 0 || reads.some(read => read === null || read.length >= PAST_EVENTS) ? null : (() => {
+  // Kept for the owner's local day and the accounts read, so a newly connected account is counted the same day.
+  const key = `${new Intl.DateTimeFormat('en-CA', { timeZone: deps.timezone }).format(new Date(deps.now))}|${calendars.map(account => account.id).join(',')}`;
+  const kept = deps.cache?.get<{ key: string; weekdays: CoverageFacts['weekdays'] }>(WEEKDAYS_KEY);
+  const weekdays = kept?.key === key ? kept.weekdays : await (async () => {
+    const from = new Date(deps.now - COVERAGE_DAYS * DAY_MS).toISOString(), to = new Date(deps.now).toISOString();
+    const reads = await Promise.all(calendars.map(account => deps.pastEvents(account.email, from, to, PAST_EVENTS).catch(() => null)));
+    if (calendars.length === 0 || reads.some(read => read === null || read.length >= PAST_EVENTS)) return null;
     const counts = [0, 0, 0, 0, 0, 0, 0];
     for (const event of reads.flat() as PastEvent[]) counts[weekdayOf(event, deps.timezone)]! += 1;
-    return { counts, days: COVERAGE_DAYS };
+    const found = { counts, days: COVERAGE_DAYS };
+    deps.cache?.put(WEEKDAYS_KEY, { key, weekdays: found });
+    return found;
   })();
   const stored = deps.phone?.stored().devices ?? [];
   return {

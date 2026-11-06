@@ -561,16 +561,16 @@ const NOT_CHANGED_IN_APP = "It can't be changed in the Waldo app either. Ask me 
 // the owner wants the time left open.
 const OFFER_LABELS: Readonly<Partial<Record<AppApprovalPart['actions'][number], string>>> = { approve: 'Do it', defer: 'Not now', skip: 'Keep it free' };
 const QUESTION_CHARS = 120;
-const offerOf = (entry: LedgerRow): Readonly<{ line: string; start: number; end: number }> | null => {
-  if (entry.kind !== 'calendar_change') return null;
+const offerOf = (entry: LedgerRow, offers: boolean): Readonly<{ line: string; title: string; start: number; end: number }> | null => {
+  if (!offers || entry.kind !== 'calendar_change') return null;
   const p = JSON.parse(entry.payload_json) as Partial<Stored>;
-  if (p.offer !== 'free_window' || !p.start || !p.end || !p.reason) return null;
+  if (p.offer !== 'free_window' || !p.start || !p.end || !p.reason || !p.title) return null;
   const line = p.reason.replace(/\s+/g, ' ').trim();
-  return { line: line.length > QUESTION_CHARS ? `${line.slice(0, QUESTION_CHARS - 1).trimEnd()}…` : line, start: Date.parse(p.start), end: Date.parse(p.end) };
+  return { line: line.length > QUESTION_CHARS ? `${line.slice(0, QUESTION_CHARS - 1).trimEnd()}…` : line, title: p.title, start: Date.parse(p.start), end: Date.parse(p.end) };
 };
 const offerLabels = (actions: AppApprovalPart['actions']) => Object.fromEntries(actions.flatMap(action => OFFER_LABELS[action] ? [[action, OFFER_LABELS[action]!]] : []));
-const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
-  const review = appReview(entry), offer = offerOf(entry);
+const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>, offers = false): AppApprovalPart => {
+  const review = appReview(entry), offer = offerOf(entry, offers);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
     actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text,
     ...(offer ? { question: offer.line, labels: offerLabels(shown.actions) } : {}) };
@@ -578,10 +578,10 @@ const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart[
 // Chat revision 9's line for an offer's live card: the same approval, its answers in the order the owner reads them.
 export type AppFreeWindowPart = z.infer<typeof replyFreeWindowPartV1Schema>;
 const freeWindowPartOf = (entry: LedgerRow, part: AppApprovalPart): AppFreeWindowPart | null => {
-  const offer = offerOf(entry);
+  const offer = offerOf(entry, true);
   if (!offer) return null;
   const choices = (['approve', 'defer', 'skip'] as const).filter(action => part.actions.includes(action)).map(action => ({ action, label: OFFER_LABELS[action]! }));
-  const parsed = replyFreeWindowPartV1Schema.safeParse({ type: 'free_window', approval_id: part.approval_id, line: offer.line, start: offer.start, end: offer.end, choices,
+  const parsed = replyFreeWindowPartV1Schema.safeParse({ type: 'free_window', approval_id: part.approval_id, line: offer.line, title: offer.title, start: offer.start, end: offer.end, choices,
     fallback_text: `${offer.line} ${choices.map(choice => choice.label).join(' / ')}` });
   return parsed.success ? parsed.data : null;
 };
@@ -719,6 +719,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger. grant writes
   // the one the owner approved on a standing_grant card; without it such a card is never approvable here.
   grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'> & Partial<Pick<StandingGrants, 'grant'>>;
+  // FREE_WINDOW_OFFERS: a calendar card marked as a free-window offer is labelled as one; off, it is an ordinary card.
+  freeWindowOffers?: () => boolean;
   // Whether the owner can approve a card shown here by telling Waldo to go ahead (APPROVE_IN_CHAT).
   approvesInChat?: () => boolean;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
@@ -900,7 +902,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (surface === 'app' || handsToApp || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
+        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }, deps.freeWindowOffers?.() === true));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions, ...healthOf(entry) });
         inApp = { approvable };
@@ -2352,14 +2354,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 // part unread, so the card's words go in the message text instead, never a card hidden without a word.
 export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[]; offers?: readonly AppFreeWindowPart[] }>;
 const UPDATE_TO_REVIEW = 'Update the Waldo app to review and approve it.';
-export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1) => (parentId: string): AppApprovalCards => {
+export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1, offersOn = false) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
   const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [], offers: AppFreeWindowPart[] = [];
   let dropped = 0;
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
-      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }, offersOn));
       if (!part.success) { dropped++; continue; }
       const waiting = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
       const unread = waiting && !appApprovalKindShownAt(part.data.kind, approvalsRevision), text = unread ? `${part.data.fallback_text} ${UPDATE_TO_REVIEW}` : part.data.fallback_text;
@@ -2367,7 +2369,7 @@ export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROV
       if (unread) withheld.push(text);
       else if (waiting) {
         live.push(part.data);
-        const offer = chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
+        const offer = offersOn && chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
         if (offer) offers.push(offer);
       }
     } catch { dropped++; }

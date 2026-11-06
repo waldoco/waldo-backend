@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { coverageFacts, type CoverageDeps } from '../src/channels/coverage';
 import { coverageSection } from '../src/prompt/day-shaping';
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
+import { updateBook } from '../src/channels/update-cards';
 
 // The coverage facts are counts and times the model judges; code decides nothing about whether the calendar is thin.
 const NOW = Date.parse('2026-11-09T06:00:00Z');
@@ -49,4 +52,30 @@ describe('coverage facts', () => {
     expect(facts.accounts[0]).toMatchObject({ failing: true });
     expect(reads).toBe(0);
   });
+
+  it('reads the past fortnight once per local day and set of accounts', async () => {
+    const kept = new Map<string, unknown>();
+    const cache = { get: <T,>(key: string) => kept.get(key) as T | undefined, put: (key: string, value: unknown) => { kept.set(key, value); } };
+    let reads = 0;
+    const read = async () => { reads += 1; return [{ start: '2026-11-03T04:30:00Z', all_day: false }]; };
+    await coverageFacts(deps({ cache, pastEvents: read }));
+    await coverageFacts(deps({ cache, pastEvents: read, now: NOW + 3_600_000 }));
+    expect(reads).toBe(1);
+    await coverageFacts(deps({ cache, pastEvents: read, now: NOW + 24 * 3_600_000 }));
+    await coverageFacts(deps({ cache, pastEvents: read, accounts: async () => [account, { ...account, id: 'acct-2', email: 'work@example.test' }] }));
+    expect(reads).toBe(4);
+  });
+});
+
+describe('when each account was last read', () => {
+  it('with the delta reads, an account with no read of its own is not read yet; without them the shared watermark stands', () => runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`coverage-read-${crypto.randomUUID()}`)), async (_i, state) => {
+    const book = updateBook(state.storage.sql);
+    expect(book.calendarReadAt('acct-1')).toBeNull();
+    book.mark('calendar_since', NOW);
+    expect(book.calendarReadAt('acct-1')).toBe(NOW);
+    book.markRead('cal:acct-1:primary', NOW - 60_000, null);
+    book.markRead('cal:acct-1:work', NOW - 30_000, null);
+    expect(book.calendarReadAt('acct-1')).toBe(NOW - 30_000);
+    expect(book.calendarReadAt('acct-2')).toBeNull();
+  }));
 });

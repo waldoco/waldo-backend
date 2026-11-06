@@ -5,7 +5,7 @@ import { proposeCalendarChangeArgsSchema } from '../tools/schemas/calendar';
 
 // Synthetic offer: a made-up window and task.
 const part = {
-  type: 'free_window', approval_id: 'appr_1', line: 'Your 3pm moved. 45 minutes free: finish the deck?',
+  type: 'free_window', approval_id: 'appr_1', line: 'Your 3pm moved. 45 minutes free: finish the deck?', title: 'Finish the deck',
   start: 1_794_236_400_000, end: 1_794_239_100_000,
   choices: [{ action: 'approve', label: 'Do it' }, { action: 'defer', label: 'Not now' }, { action: 'skip', label: 'Keep it free' }],
   fallback_text: 'Your 3pm moved. 45 minutes free: finish the deck? Do it / Not now / Keep it free',
@@ -32,6 +32,8 @@ describe('free-window offer (chat revision 9)', () => {
       { ...part, choices: [{ action: 'undo', label: 'Undo' }, { action: 'skip', label: 'No' }] },
       { ...part, choices: [{ action: 'approve', label: 'Do it right away please now' }, { action: 'skip', label: 'No' }] },
       { ...part, fallback_text: undefined },
+      { ...part, title: undefined },
+      { ...part, title: ' ' },
       { ...part, review: 'extra' },
     ]) expect(replyFreeWindowPartV1Schema.safeParse(bad).success).toBe(false);
   });

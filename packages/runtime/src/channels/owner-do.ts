@@ -236,7 +236,7 @@ import { deviceContextReadBook, getDeviceContextHandler } from '../tools/live/de
 import { APP_DEVICE_CALENDAR_PATH, deviceCalendarBook, deviceCalendarRequest, type DeviceCalendarBook } from './device-calendar';
 import { phoneCalendarReader, queryPhoneCalendarHandler } from '../tools/live/phone-calendar';
 import { coverageFacts } from './coverage';
-import { dayShapingContext } from '../prompt/day-shaping';
+import { dayShapingContext, protocolMovesAllowed } from '../prompt/day-shaping';
 import { weatherTools } from '../tools/live/weather';
 import { cacheApiWeatherCache } from '../connectors/weatherkit';
 import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -1392,7 +1392,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const sql = this.ctx.storage.sql;
     return { admit: () => this.admitOwnerJob(), chain,
       // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
-      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1') }) };
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1') }) };
   }
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
@@ -2063,7 +2063,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
     // Main chat only, like ratings; each claim is read as it is now, so a forgotten one is gone from the answer.
     const used=memoryUsed&&thread===undefined?memoryUsedFor(memoryUsedBook(this.ctx.storage.sql),()=>[...claimStore(this.ctx.storage.sql).claims(),...claimStore(this.ctx.storage.sql).claims('promoted')],()=>heldTopicsOf(claimStore(this.ctx.storage.sql))):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals,chat),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used);
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals,chat,this.env.FREE_WINDOW_OFFERS==='1'),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used);
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
@@ -4564,7 +4564,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const grants = standingGrants(storage, { now: () => deps.now(), newId: () => `g${deps.newRunId().replaceAll('-', '').slice(0, 24)}`,
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants,
+      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1',
       approvesInChat: () => this.env.APPROVE_IN_CHAT === '1', conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
@@ -4749,13 +4749,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const updates = updateBook(storage.sql);
     // How Waldo plans the real day (CALENDAR_COVERAGE, FREE_WINDOW_OFFERS): the facts and intent a planning turn reads. A health
     // move is a candidate only while the owner shares their health and CAPACITY_PLAN is on; a read that fails counts as not shared.
-    const dayShaping = async (trace: string): Promise<string> => {
+    // A health move is offered only from the planning Brief, whose calendar proposals pass the deterministic health-word screen.
+    const dayShaping = async (trace: string, brief = false): Promise<string> => {
       const coverage = this.env.CALENDAR_COVERAGE === '1', offers = this.env.FREE_WINDOW_OFFERS === '1';
       if (!coverage && !offers) return '';
-      const protocols = offers && this.env.CAPACITY_PLAN === '1' && await healthContext.read(trace).then(read => read !== null && read !== 'unknown', () => false);
-      return dayShapingContext({ offers, protocols, coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone,
+      const protocols = protocolMovesAllowed({ brief, offers, capacityPlan: this.env.CAPACITY_PLAN === '1' }) && await healthContext.read(trace).then(read => read !== null && read !== 'unknown', () => false);
+      return dayShapingContext({ offers, protocols, brief, coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone, cache: storage.kv,
         accounts: async () => await google.state(), readAt: id => updates.calendarReadAt(id),
-        pastEvents: async (email, from, to, limit) => { const reader = await google.client('calendar', undefined, undefined, email); return reader ? reader.events(from, to, limit, false) : null; },
+        pastEvents: async (email, from, to, limit) => { const reader = await google.client('calendar', undefined, undefined, email); return reader ? reader.events(from, to, limit, true) : null; },
         phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null });
     };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
@@ -4827,7 +4828,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const assertSkillOwnerCurrent = async () => { scope.admit(); };
       // The receipt read runs on every tool round; one failure line per turn keeps the bounded trace table readable.
       let receiptsUnavailableLogged = false;
-      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1'), turnId: turn.traceId,
+      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1'), turnId: turn.traceId,
         trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch }, scope);
       return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
         await assertSkillOwnerCurrent();
@@ -6053,7 +6054,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', ...(planning && this.env.CALENDAR_PLAN === '1' ? ['propose_calendar_plan' as const] : []), 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
-          const shaping = planning ? await dayShaping(trace) : '';
+          const shaping = planning ? await dayShaping(trace, true) : '';
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '',

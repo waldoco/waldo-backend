@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coverageSection, dayShapingContext, FREE_WINDOW_INSTRUCTION, PROTOCOL_INSTRUCTION, COVERAGE_INSTRUCTION, type CoverageFacts } from '../src/prompt/day-shaping';
+import { BRIEF_WINDOWS, COVERAGE_NOT_HERE, coverageSection, dayShapingContext, FREE_WINDOW_INSTRUCTION, PROTOCOL_INSTRUCTION, COVERAGE_INSTRUCTION, protocolMovesAllowed, type CoverageFacts } from '../src/prompt/day-shaping';
 import { triagePrompt } from '../src/prompt/update-cards';
 import { interventionPrompt } from '../src/channels/interventions';
 
@@ -47,17 +47,36 @@ describe('the day-shaping context', () => {
     expect(unshared).not.toMatch(/caffeine|daylight|wind-down/i);
   });
 
+  it('health moves come only from the planning Brief, with offers and CAPACITY_PLAN on', () => {
+    expect(protocolMovesAllowed({ brief: true, offers: true, capacityPlan: true })).toBe(true);
+    for (const off of [{ brief: false, offers: true, capacityPlan: true }, { brief: true, offers: false, capacityPlan: true }, { brief: true, offers: true, capacityPlan: false }])
+      expect(protocolMovesAllowed(off)).toBe(false);
+  });
+
+  it('only the Brief asks about coverage and puts several windows on one plan card; triage and the look only propose less', () => {
+    const brief = dayShapingContext({ coverage: thin, offers: true, protocols: false, brief: true });
+    expect(brief).toContain(BRIEF_WINDOWS);
+    expect(brief).not.toContain(COVERAGE_NOT_HERE);
+    const look = dayShapingContext({ coverage: thin, offers: true, protocols: false });
+    expect(look).toContain(COVERAGE_NOT_HERE);
+    expect(look).not.toContain(BRIEF_WINDOWS);
+  });
+
+  it('lists a movement break only as a grade C choice', () => {
+    expect(PROTOCOL_INSTRUCTION).toMatch(/Grade C, only as a choice they may like: a movement break/);
+  });
+
   it('is empty with every switch off', () => {
     expect(dayShapingContext({ coverage: null, offers: false, protocols: false })).toBe('');
     expect(dayShapingContext({ coverage: null, offers: false, protocols: true })).toBe('');
   });
 
   it('protocol moves are grade A or B, one a day, in words, never a reading, never onto a full day, and a cutoff is a reminder', () => {
-    expect(PROTOCOL_INSTRUCTION).toMatch(/grade A or B/);
+    expect(PROTOCOL_INSTRUCTION).toMatch(/grade A or B/i);
     expect(PROTOCOL_INSTRUCTION).toMatch(/at most one/i);
     expect(PROTOCOL_INSTRUCTION).toMatch(/never a reading/i);
     expect(PROTOCOL_INSTRUCTION).toMatch(/full day/);
-    expect(PROTOCOL_INSTRUCTION).toMatch(/reminder, not a block/);
+    expect(PROTOCOL_INSTRUCTION).toMatch(/reminder in the plan.s words, not a block/);
     expect(PROTOCOL_INSTRUCTION).toMatch(/no health word/i);
   });
 
