@@ -1,6 +1,7 @@
 import { appControlsRequest } from './app-controls';
 import { appGooglePicture, googlePictures } from './app-google-picture';
 import { wearablesCatalogue } from '../health/wearables';
+import { GOOGLE_PRIMARY_KEY, primaryFirst } from '../connectors/google-primary';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
@@ -4317,7 +4318,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
           return { failing, circuit };
         });
-        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature) && (!selectedAccount || account.email.toLowerCase() === selectedAccount.toLowerCase())).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const fit = primaryFirst(all, await storage.get<string>(GOOGLE_PRIMARY_KEY)).filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature) && (!selectedAccount || account.email.toLowerCase() === selectedAccount.toLowerCase())).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) { if (circuit.skipped.length) log({ trace: `google:${Date.now()}`, hop: 'google_circuit_open', ms: 0, ok: false, detail: `${circuit.skipped.length} account(s) need reconnect; next probe within 6h` }); return null; }
         const metadata = { connection_id: account.id, email: account.email };
@@ -4331,6 +4332,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const failing = await health();
         return (await accounts()).map((account) => ({ id: account.id, email: account.email, error: failing[account.id] ?? null, calendar: googleHas(account.scopes, 'calendar'), mail: googleHas(account.scopes, 'mail'), tasks: googleHas(account.scopes, 'tasks'),
           drive: googleHas(account.scopes, 'drive'), docs: googleHas(account.scopes, 'docs'), sheets: googleHas(account.scopes, 'sheets'), slides: googleHas(account.scopes, 'slides') }));
+      },
+      async setPrimary(id: string): Promise<boolean> {
+        if (!(await accounts()).some((account) => account.id === id)) return false;
+        await storage.put(GOOGLE_PRIMARY_KEY, id);
+        return true;
       },
       async disconnect(id: string): Promise<boolean> {
         const [all, doName] = [await accounts(), vaultOwner()];
@@ -4355,6 +4361,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const { [id]: _profile, ...profiles } = await googleProfiles();
         const remaining = all.filter((known) => known.id !== id);
         await storage.put({ 'google:accounts': remaining, 'google:profiles': profiles });
+        if ((await storage.get<string>(GOOGLE_PRIMARY_KEY)) === id) await storage.delete(GOOGLE_PRIMARY_KEY);
         noteHealth(id, '');
         await endWatchUpkeep(scheduler, watchGrants(remaining));
         if (!briefSweepRuns(watchGrants(remaining))) await scheduler.cancelReadable(BRIEF_SWEEP_ID);
@@ -6301,6 +6308,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
           if (!(await google.disconnect(id))) return false;
+        } else if (action === 'google.set_primary') {
+          if (!(await google.setPrimary(id))) return false;
         } else if (action === 'schedule.resume') {
           if (!(await scheduler.resume(id))) return false;
         } else if (action === 'card.retry') {

@@ -55,7 +55,7 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'google.set_primary']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -77,6 +77,9 @@ export const appControlActionV1Schema = z.strictObject({
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
   if (action.account !== undefined && action.action !== 'google.connect') ctx.addIssue({ code: 'custom', path: ['account'], message: 'account belongs to google.connect alone' });
+  // Choosing the primary Google account names the account's connections id and nothing else (revision 20).
+  if (action.action === 'google.set_primary' && (action.view !== 'connections' || !action.id
+    || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'google.set_primary starts from the connections view and names one Google account in id, nothing else' });
   // Disconnecting Google names the account's connections id and nothing else; the receipt is recorded once Waldo has dropped it.
   if (action.action === 'google.disconnect' && (action.view !== 'connections' || !action.id
     || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'google.disconnect starts from the connections view and names one Google account in id, nothing else' });
@@ -257,6 +260,10 @@ export const appConnectorTileV1Schema = z.strictObject({
 // Docs, Sheets and Slides (drive, docs, sheets, slides, like calendar, mail and tasks: true only where the account's saved
 // grant lets Waldo read it), and the view carries wearables. A build below it receives none of them.
 export const APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION = 17;
+// Controls revision 20 (`controls=20`): each Google account says whether it is primary, the account Waldo uses when a read or
+// write names none, and google.set_primary chooses it. Exactly one account is primary while any is connected; with none
+// chosen it is the first connected. A build below it never receives primary and is refused the action.
+export const APP_CONTROLS_GOOGLE_PRIMARY_REVISION = 20;
 // A Google account's profile picture is served by Waldo, so the phone never calls Google's image host. picture is this path,
 // fetched from the same origin with the app session's bearer like any other app route, and is privately cacheable for an
 // hour. The answer is the image with its own image type, or a JSON 404 when Waldo holds no picture; the key changes when the picture
@@ -284,7 +291,8 @@ export const appControlConnectionsDataV1Schema = z.strictObject({
   // account with google.connect account 'signin'. Its presence is the capability: a backend without it never offers it, and
   // an older app reads the view tolerantly and drops it. email is the owner's own confirmed address.
   google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']), picture: googlePicture.nullable().optional(),
-    drive: z.boolean().optional(), docs: z.boolean().optional(), sheets: z.boolean().optional(), slides: z.boolean().optional() })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
+    drive: z.boolean().optional(), docs: z.boolean().optional(), sheets: z.boolean().optional(), slides: z.boolean().optional(), primary: z.boolean().optional() }))
+    .refine(accounts => accounts.every(account => account.primary === undefined) || accounts.filter(account => account.primary).length === 1, { error: 'exactly one account is primary', path: ['primary'] }), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
   wearables: z.array(appWearableV1Schema).max(APP_WEARABLES_MAX_V1)
     .refine(wearables => new Set(wearables.map(wearable => wearable.id)).size === wearables.length, 'A wearable is listed once').optional(),
   // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo

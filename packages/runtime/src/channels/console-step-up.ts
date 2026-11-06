@@ -62,6 +62,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
   'google.connect': { gated: false, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
+  'google.set_primary': { gated: false, why: 'Chooses which connected Google account Waldo uses by default; grants nothing new.' },
   'mcp.connect': { gated: false, why: 'Connects a tool server Waldo keeps calling after this session.' },
   'mcp.disconnect': { gated: false, why: 'Disconnects a tool server; removes access.' },
   'granola.connect': { gated: false, why: 'Connects Granola, whose meeting notes Waldo keeps reading after this session.' },
