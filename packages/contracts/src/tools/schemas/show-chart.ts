@@ -10,7 +10,8 @@ export const showChartArgsSchema = replyChartSeriesPartV1Schema.omit({ type: tru
 export type ShowChartArgs = z.infer<typeof showChartArgsSchema>;
 export const showChartResultSchema = z.union([
   z.strictObject({ shown: z.literal(true), charts_left: z.int().nonnegative() }),
-  // not_owner_turn: only the owner's own chat turn carries a chart. limit_reached: this reply has its charts.
-  z.strictObject({ shown: z.literal(false), reason: z.enum(['not_owner_turn', 'limit_reached']) }),
+  // not_owner_turn: only the owner's own chat turn carries a chart. limit_reached: this reply has its charts. health_in_turn:
+  // this turn has shown the model the owner's health readings, and a chart is kept with the reply, where readings never go.
+  z.strictObject({ shown: z.literal(false), reason: z.enum(['not_owner_turn', 'limit_reached', 'health_in_turn']) }),
 ]);
 export type ShowChartResult = z.infer<typeof showChartResultSchema>;

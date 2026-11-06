@@ -10,7 +10,8 @@ export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 // get_health sits in the core brain; the rest of the owner's health reads and logs sit in the health brain, and so do get_screen_time
 // get_device_context and get_weather, whose output (screen time, the phones' zones and cities, the weather there) is withheld from
 // diagnostics the same way.
-const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', ...toolsWhere((record) => record.brain === 'health')]);
+// show_chart's points are numbers no prose floor can read as health, so its call is withheld whole too.
+const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', ...toolsWhere((record) => record.brain === 'health')]);
 // Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 

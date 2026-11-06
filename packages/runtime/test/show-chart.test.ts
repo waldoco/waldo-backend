@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { literalTextRedactor, redactConversationEntry, SHOW_CHART_MAX_PER_TURN, type ConversationChart, type ConversationEntry } from '@waldo/contracts';
+import { literalTextRedactor, redactConversationEntry, SHOW_CHART_MAX_PER_TURN, type ConversationEntry, type ToolResult } from '@waldo/contracts';
 import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appTranscriptPage } from '../src/channels/app-api';
@@ -11,7 +11,9 @@ import { ensureSchema } from '../src/tracer/schema';
 import { TOOL_RECORDS } from '../src/tools/records';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
-const CHART: ConversationChart = { title: 'Long runs this block', unit: 'km', alt_text: 'Long runs rose from 12 km to 16 km over three weeks.', series: [{ label: 'Long run', points: [{ t: 1, v: 12 }, { t: 2, v: 14 }, { t: 3, v: 16 }] }] };
+const CHART = { title: 'Long runs this block', unit: 'km', alt_text: 'Long runs rose from 12 km to 16 km over three weeks.', series: [{ label: 'Long run', points: [{ t: 1, v: 12 }, { t: 2, v: 14 }, { t: 3, v: 16 }] }] };
+
+const dataOf = (result: ToolResult<unknown>): unknown => (result.ok ? result.data : result);
 
 describe('show_chart', () => {
   const ownerTurn = { trigger: 'user_message', ownerInitiated: true, turnId: 'turn-1' } as ToolDispatcherContext;
@@ -20,12 +22,31 @@ describe('show_chart', () => {
     expect(await tool.handle(CHART, ownerTurn)).toEqual({ ok: true, data: { shown: true, charts_left: SHOW_CHART_MAX_PER_TURN - 1 }, source_taint: null });
     expect(await tool.handle(CHART, ownerTurn)).toEqual({ ok: true, data: { shown: true, charts_left: 0 }, source_taint: null });
     expect(await tool.handle(CHART, ownerTurn)).toEqual({ ok: true, data: { shown: false, reason: 'limit_reached' }, source_taint: null });
-    for (const ctx of [{ ...ownerTurn, ownerInitiated: false }, { ...ownerTurn, trigger: 'patrol' }, { ...ownerTurn, turnId: undefined }]) expect((await tool.handle(CHART, ctx as ToolDispatcherContext)).data).toEqual({ shown: false, reason: 'not_owner_turn' });
+    for (const ctx of [{ ...ownerTurn, ownerInitiated: false }, { ...ownerTurn, trigger: 'patrol' }, { ...ownerTurn, turnId: undefined }]) expect(dataOf(await tool.handle(CHART, ctx as ToolDispatcherContext))).toEqual({ shown: false, reason: 'not_owner_turn' });
     expect(book.take('turn-1')).toEqual([CHART, CHART]);
     expect(book.take('turn-1')).toEqual([]);
     book.queue('turn-2', CHART); book.clear('turn-2');
     expect(book.take('turn-2')).toEqual([]);
     expect(TOOL_RECORDS.show_chart).toMatchObject({ claim: null, ownerTurnOnly: true });
+  });
+
+  it('draws nothing once the turn has shown the model a health reading, since the chart is kept with the reply', async () => {
+    const book = turnChartBook(), tool = showChartHandler(book);
+    expect(dataOf(await tool.handle(CHART, { ...ownerTurn, healthShown: true } as ToolDispatcherContext))).toEqual({ shown: false, reason: 'health_in_turn' });
+    expect(book.take('turn-1')).toEqual([]);
+  });
+
+  it('removes a secret-bearing link from the chart\'s words before it is kept, like the reply\'s own', async () => {
+    const book = turnChartBook(), tool = showChartHandler(book);
+    const ticket = 'https://waldo.example/c/abcdefghijklmnopqrstuv';
+    await tool.handle({ ...CHART, title: `Runs ${ticket}`, alt_text: `See ${ticket} for more.`, series: [{ label: ticket, points: [{ t: 1, v: 1 }] }] }, ownerTurn);
+    expect(JSON.stringify(book.take('turn-1'))).not.toContain('/c/abcdefghijklmnopqrstuv');
+  });
+
+  it('keeps its points out of diagnostics: the call is withheld whole, like a health tool\'s', async () => {
+    const { scrubTraceHealth, HEALTH_WITHHELD } = await import('../src/observability/trace-health-scrub');
+    const entry = { trace: 't', hop: 'tool_show_chart', ms: 1, ok: true, text: { input: JSON.stringify(CHART), output: '{"shown":true}' } };
+    expect(scrubTraceHealth(entry as never).text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
   });
 });
 
@@ -43,11 +64,17 @@ describe('a reply\'s chart in the app transcript', () => {
     expect(older.parts.map(part => part.type)).toEqual(['text', 'receipt']);
     for (const page of [appTranscriptPage([entry], null, 10, undefined, undefined, undefined, undefined, true), appTranscriptPage([entry], null, 10)]) expect(appHistoryResultV1Schema.safeParse(page).success).toBe(true);
   });
-  it('is forgotten with the reply: every text in it goes through the forget, and its points stay numbers', () => {
-    const redacted = redactConversationEntry(entry, text => `<${text}>`).charts![0]!;
-    expect(redacted).toEqual({ title: `<${CHART.title}>`, unit: '<km>', alt_text: `<${CHART.alt_text}>`, series: [{ label: '<Long run>', points: CHART.series[0]!.points }] });
-    const forgotten = redactConversationEntry(entry, literalTextRedactor(['Long run'], '[forgotten]')).charts![0]!;
-    expect(forgotten.series[0]!.label).toBe('[forgotten]');
+  it('goes whole when a forget touches any of its words, since its points would still say what was forgotten', () => {
+    for (const touched of ['Long runs this block', 'km', 'Long run', 'three weeks']) expect(redactConversationEntry(entry, literalTextRedactor([touched], '[forgotten]')).charts, touched).toEqual([]);
+    expect(redactConversationEntry(entry, literalTextRedactor(['marathon'], '[forgotten]')).charts).toEqual([CHART]);
+  });
+
+  it('is told in words, even to chat=8, when its stored words no longer fit the part', () => {
+    const long = { ...entry, charts: [{ ...CHART, title: 'x'.repeat(121) }] };
+    const page = appTranscriptPage([long], null, 10, undefined, undefined, undefined, undefined, true);
+    expect(page.messages[0]!.parts.map(part => part.type)).toEqual(['text', 'receipt']);
+    expect(page.messages[0]!.text).toBe(`Your long runs are building well.\n\n${CHART.alt_text}\n\nDid: 1 thing`);
+    expect(appHistoryResultV1Schema.safeParse(page).success).toBe(true);
   });
 });
 

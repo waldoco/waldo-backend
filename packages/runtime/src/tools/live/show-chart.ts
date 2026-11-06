@@ -2,6 +2,7 @@ import {
   SHOW_CHART_MAX_PER_TURN, showChartArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConversationChart, type ShowChartArgs, type ShowChartResult, type ToolHandler, type ToolResult,
 } from '@waldo/contracts';
+import { redactSecretUrls } from '../../channels/egress-guard';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // The charts the model drew for its turn's reply, by the turn's id. The owner turn takes them when it saves the reply, so they
@@ -26,6 +27,7 @@ const DESCRIPTION = [
   'Draw a chart in your reply in the owner\'s app: one to eight series of points (t is the x position: a day number, an hour or epoch ms; v the value), a title, a unit and alt_text.',
   'Chart only numbers you already have in this turn, such as a quest\'s progress, the day\'s plan or a trend you read; never invent points.',
   'alt_text says in a sentence or two what the chart shows: it is what a build or surface that draws no chart shows instead, so write your reply to read whole without the chart.',
+  'A chart is kept with the reply, so once this turn has read the owner\'s health readings none is drawn: say the trend in words instead.',
   `At most ${SHOW_CHART_MAX_PER_TURN} per reply.`,
 ].join(' ');
 
@@ -41,7 +43,13 @@ export const showChartHandler = (book: TurnChartBook): ToolHandler<ShowChartArgs
   turn_bound: true,
   async handle(args, ctx) {
     if (ctx.trigger !== 'user_message' || ctx.ownerInitiated !== true || !ctx.turnId) return result({ shown: false, reason: 'not_owner_turn' });
-    const left = book.queue(ctx.turnId, { title: args.title, unit: args.unit, alt_text: args.alt_text, series: args.series.map(series => ({ label: series.label, points: series.points.map(point => ({ t: point.t, v: point.v })) })) });
+    // Raw readings never go into the transcript, and a chart's points are kept there: a turn whose model has seen a reading
+    // (from a tool or in its own context) draws none.
+    if (ctx.healthShown === true) return result({ shown: false, reason: 'health_in_turn' });
+    // Chart text is stored like the reply's own, so a secret-bearing link in it is removed the same way.
+    const kept = (text: string) => redactSecretUrls(text).text;
+    const left = book.queue(ctx.turnId, { title: kept(args.title), unit: kept(args.unit), alt_text: kept(args.alt_text),
+      series: args.series.map(series => ({ label: kept(series.label), points: series.points.map(point => ({ t: point.t, v: point.v })) })) });
     return left === 'limit_reached' ? result({ shown: false, reason: 'limit_reached' }) : result({ shown: true, charts_left: left });
   },
 });
