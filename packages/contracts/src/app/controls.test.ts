@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -730,5 +730,50 @@ describe('where Waldo writes first, from the day view', () => {
     const messages = Object.values(APP_PROACTIVE_SURFACE_RECEIPTS_V1).map(receipt => receipt.message);
     expect(new Set(messages).size).toBe(messages.length);
     expect([APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved.state, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked.state]).toEqual(['recorded', 'rejected']);
+  });
+});
+
+describe('schedule.set, controls revision 16', () => {
+  const set = (extra: object = {}) => ({ view: 'day', action: 'schedule.set', id: 'daily_brief', value: 'off', revision, request_id: 'schedule-0001', ...extra });
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const row = (id: string, extra: object = {}) => ({ id, on: true, accepts: 'on_off', time: null, no_later_than: false, ...extra });
+  const timed = (id: string, time: string, extra: object = {}) => row(id, { accepts: 'time', time, ...extra });
+  it('is revision 16', () => expect(APP_CONTROLS_SCHEDULE_REVISION).toBe(16));
+  it('turns one of the five schedules on or off, or sets the Brief or the Close time, from the day view and nothing else', () => {
+    for (const id of ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat']) for (const value of ['on', 'off']) expect(appControlActionV1Schema.safeParse(set({ id, value })).success).toBe(true);
+    for (const [id, value] of [['card:brief', '07:10'], ['card:close', '21:30'], ['card:brief', '00:00'], ['card:close', '23:59']]) expect(appControlActionV1Schema.safeParse(set({ id, value })).success).toBe(true);
+    for (const bad of [set({ id: undefined }), set({ value: undefined }), set({ id: 'health_proposals' }), set({ id: 'card:midday', value: '14:00' }), set({ id: 'nightly', value: '03:00' }),
+      set({ id: 'heartbeat', value: '10:00' }), set({ id: 'card:brief', value: 'on' }), set({ id: 'card:brief', value: '7:10' }), set({ id: 'card:brief', value: '24:00' }), set({ id: 'card:close', value: '21:30pm' }),
+      set({ value: 'ON' }), set({ view: 'connections' }), set({ view: 'account' }), set({ volume: 'low' }), set({ quiet_start: '22:00' }), set({ confirmation: 'DELETE' }), set({ code: '123456' }), set({ notice: '1' })])
+      expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+  it('the day view lists each schedule with what it takes, and stays optional for a build below 16', () => {
+    const all = [row('daily_brief'), row('followups'), row('event_briefs', { on: false }), row('nightly'), row('heartbeat'), timed('card:brief', '07:10', { no_later_than: true }), timed('card:close', '21:30', { on: false })];
+    for (const valid of [{}, { schedule_controls: all }, { schedule_controls: [] }]) expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [[row('daily_brief'), row('daily_brief')], [row('card:brief')], [timed('daily_brief', '07:10')], [row('nightly', { time: '03:00' })], [timed('card:brief', '7:10')],
+      [timed('card:close', '21:30', { no_later_than: true })], [row('heartbeat', { no_later_than: true })], [row('card:midday')], [row('daily_brief', { actions: ['on'] })], [timed('card:brief', null as never)]])
+      expect(appControlProjectionV1Schema.safeParse(day({ schedule_controls: invalid })).success).toBe(false);
+  });
+  it('says a time as 7:10am and 9:30pm', () => {
+    expect(['07:10', '21:30', '00:05', '12:00', '12:45', '23:59', '09:00'].map(appClock12V1)).toEqual(['7:10am', '9:30pm', '12:05am', '12:00pm', '12:45pm', '11:59pm', '9:00am']);
+  });
+  it('has fixed on and off receipts, each one the app can parse, with distinct messages', () => {
+    for (const receipt of Object.values(APP_SCHEDULE_RECEIPTS_V1)) expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true);
+    const messages = Object.values(APP_SCHEDULE_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    expect(APP_SCHEDULE_RECEIPTS_V1.unavailable.state).toBe('rejected');
+  });
+  it('a time receipt names the new time and what happens today, and says "by" when the Brief can come earlier on waking', () => {
+    expect(appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today: 'planned', noLaterThan: false })).toEqual({ state: 'recorded', message: 'Saved. Your Brief comes at 7:10am.' });
+    expect(appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today: 'planned', noLaterThan: true }).message).toBe('Saved. Your Brief comes by 7:10am, earlier when you wake before then.');
+    expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'now', noLaterThan: false }).message).toBe("Saved. Your Close comes at 9:30pm. Today's is on its way now.");
+    expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'unchanged', noLaterThan: false }).message).toBe('Your Close already comes at 9:30pm.');
+    const todays = ['planned', 'now', 'sent', 'busy', 'passed', 'quiet', 'off', 'unchanged'] as const;
+    const messages = todays.map(today => appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today, noLaterThan: false }));
+    for (const receipt of messages) { expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true); expect(receipt.message).toContain('7:10am'); }
+    expect(new Set(messages.map(receipt => receipt.message)).size).toBe(todays.length);
   });
 });
