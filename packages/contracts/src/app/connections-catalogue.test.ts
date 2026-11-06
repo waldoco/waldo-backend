@@ -37,6 +37,13 @@ describe('a Google account picture', () => {
   });
 });
 
+describe('the Workspace services on a Google account', () => {
+  it('are optional booleans', () => {
+    expect(appControlProjectionV1Schema.safeParse(connections({ google: { connectAvailable: true, accounts: [{ ...account, drive: true, docs: true, sheets: false, slides: false }] } })).success).toBe(true);
+    for (const bad of [{ drive: 'yes' }, { slides: null }, { forms: true }]) expect(appControlProjectionV1Schema.safeParse(connections({ google: { connectAvailable: true, accounts: [{ ...account, ...bad }] } })).success).toBe(false);
+  });
+});
+
 describe('the wearables catalogue', () => {
   it('is optional on the view and lists each source once', () => {
     expect(appControlProjectionV1Schema.safeParse(connections({ wearables: [] })).success).toBe(true);

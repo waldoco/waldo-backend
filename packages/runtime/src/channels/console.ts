@@ -242,7 +242,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean; drive?: boolean; docs?: boolean; sheets?: boolean; slides?: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   // Every catalogue app as a Connections tile. Only the app's read fills it.

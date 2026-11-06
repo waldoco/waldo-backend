@@ -4329,7 +4329,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       async state() {
         await google.migrate();
         const failing = await health();
-        return (await accounts()).map((account) => ({ id: account.id, email: account.email, error: failing[account.id] ?? null, calendar: googleHas(account.scopes, 'calendar'), mail: googleHas(account.scopes, 'mail'), tasks: googleHas(account.scopes, 'tasks') }));
+        return (await accounts()).map((account) => ({ id: account.id, email: account.email, error: failing[account.id] ?? null, calendar: googleHas(account.scopes, 'calendar'), mail: googleHas(account.scopes, 'mail'), tasks: googleHas(account.scopes, 'tasks'),
+          drive: googleHas(account.scopes, 'drive'), docs: googleHas(account.scopes, 'docs'), sheets: googleHas(account.scopes, 'sheets'), slides: googleHas(account.scopes, 'slides') }));
       },
       async disconnect(id: string): Promise<boolean> {
         const [all, doName] = [await accounts(), vaultOwner()];

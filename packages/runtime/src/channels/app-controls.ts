@@ -128,9 +128,11 @@ const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim
 // Controls revision 17 gives each Google account its picture and lists the wearables; builds below it never receive either.
 // Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
 const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
-const withPictures=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[])=>{
+// The Workspace services each account's saved grant lets Waldo read come from the same console read as calendar, mail and tasks.
+const SERVICES=['drive','docs','sheets','slides'] as const;
+const withRevision17=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[],grants:ConsoleView['google']['accounts'])=>{
   const paths=await (async()=>{try{return await googlePicturePaths(await host.googlePictures?.()??new Map());}catch{return new Map<string,string>();}})();
-  return accounts.map(account=>({...account,picture:paths.get(account.id)??null}));
+  return accounts.map(account=>{const grant=grants.find(known=>known.id===account.id);return {...account,picture:paths.get(account.id)??null,...Object.fromEntries(SERVICES.map(service=>[service,grant?.[service]===true]))};});
 };
 const wearablesOf=async(host:AppControlsHost)=>{
   if(!host.wearables)return {};
@@ -228,7 +230,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
     const catalogue=google!==null&&listsCatalogue(request);
-    const connections=google?{google:{...google,...(catalogue?{accounts:await withPictures(host,google.accounts)}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
+    const connections=google?{google:{...google,...(catalogue?{accounts:await withRevision17(host,google.accounts,built?.google.accounts??[])}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
     const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }

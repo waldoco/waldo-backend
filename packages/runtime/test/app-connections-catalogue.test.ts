@@ -120,6 +120,25 @@ describe('Google account pictures', () => {
   });
 });
 
+describe("each Google account's Workspace services", () => {
+  const AUTH = 'https://www.googleapis.com/auth/';
+  it('says drive, docs, sheets and slides from the saved grant, false for an older grant that never held them, and nothing below revision 17', async () => {
+    await appOwner('app-catalogue-services', async (ctx) => {
+      await ctx.state.storage.put('google:accounts', [
+        { id: 'conn-docs', email: 'docs@example.test', scopes: [`${AUTH}drive.readonly`, `${AUTH}documents.readonly`, `${AUTH}tasks`] },
+        { id: 'conn-all', email: 'all@example.test', scopes: ['drive.readonly', 'documents.readonly', 'spreadsheets.readonly', 'presentations.readonly'].map(scope => `${AUTH}${scope}`) },
+        { id: 'local:legacy@example.test', email: 'legacy@example.test', scopes: null, refresh_token: 'synthetic-offline-only' },
+      ]);
+      const accounts = (await connections(ctx, 'controls=17')).google.accounts;
+      const services = (id: string) => { const { drive, docs, sheets, slides, tasks } = accounts.find(account => account.id === id)!; return { drive, docs, sheets, slides, tasks }; };
+      expect(services('conn-docs')).toEqual({ drive: true, docs: true, sheets: false, slides: false, tasks: true });
+      expect(services('conn-all')).toEqual({ drive: true, docs: true, sheets: true, slides: true, tasks: false });
+      expect(services('local:legacy@example.test')).toMatchObject({ drive: false, docs: false, sheets: false, slides: false });
+      for (const account of (await connections(ctx, 'controls=16')).google.accounts) for (const key of ['drive', 'docs', 'sheets', 'slides']) expect(Object.hasOwn(account, key)).toBe(false);
+    });
+  });
+});
+
 describe('the wearables catalogue', () => {
   const WHOOP = { WHOOP_CLIENT_ID: 'synthetic-client', WHOOP_CLIENT_SECRET: 'synthetic-secret', WHOOP_REDIRECT_URI: 'https://worker.fixture.invalid/oauth/whoop/callback' };
 
