@@ -136,6 +136,33 @@ export const getScreenTimeResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetScreenTimeResult = z.infer<typeof getScreenTimeResultSchema>;
 
+// Where the owner's phones are, as they last said: each phone's time zone and, when it sent one, the city-level place the phone's
+// own OS named, each with when it was observed and how many minutes ago that was. Never a cell or a coordinate. device numbers
+// the owner's phones 1, 2, ... most recently heard from first. Nothing observed more than 30 days ago is kept.
+export const getDeviceContextArgsSchema = z.strictObject({});
+export type GetDeviceContextArgs = z.infer<typeof getDeviceContextArgsSchema>;
+const deviceContextAge = z.int().min(0).max(31 * 24 * 60);
+export const deviceContextToolDeviceSchema = z.strictObject({
+  device: z.int().min(1).max(8),
+  platform: z.enum(['ios', 'android']),
+  timezone: z.string().min(1).max(64),
+  timezone_observed_at: z.iso.datetime(),
+  timezone_age_minutes: deviceContextAge,
+  // null when the phone has sent only its zone; a place without names is a cell the OS could not name.
+  place: z.strictObject({
+    locality: z.string().min(1).max(80).optional(),
+    region: z.string().min(1).max(80).optional(),
+    country: z.string().regex(/^[A-Z]{2}$/).optional(),
+    observed_at: z.iso.datetime(),
+    age_minutes: deviceContextAge,
+  }).nullable(),
+});
+export const getDeviceContextResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('available'), devices: z.array(deviceContextToolDeviceSchema).min(1).max(8) }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_data', 'read_failed']) }),
+]);
+export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema>;
+
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   account: z.email().optional(),

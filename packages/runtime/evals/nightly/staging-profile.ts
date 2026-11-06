@@ -81,7 +81,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
-  DEVICE_PLACE: inert('it serves only the app\'s place consent and upload routes; no tool reads place yet'),
+  DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),
   WELCOME_V2: gap('one trial asks a single second-build stage (w1); the build\'s order, admission and caps are held by their own tests; staging has it on'),
   HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),
