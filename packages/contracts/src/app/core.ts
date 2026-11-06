@@ -84,9 +84,43 @@ export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoke
 // minutes, then stops; it renews once, so a second renewal of it is refused.
 export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512), renew_after: z.int().nonnegative() });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
-export const appSendRequestV1Schema = z.strictObject({
-  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
+// Chat attachments: one voice note, photo or file per message, uploaded first (raw bytes, its type in content-type, its
+// kind and name in the upload headers) and named by the send. A backend that takes none answers 404 at
+// APP_CHAT_UPLOAD_PATH, so a build attaches only after an upload there succeeds. An upload not sent within
+// APP_CHAT_UPLOAD_TTL_MS is dropped. A sent one is kept only until its message's turn ends: a voice note is read for its
+// transcript and not kept; a photo or file is kept in the owner's files where file keeping is on, as on every chat surface.
+// Upload failures: 400 (no or unknown kind, empty body, a file without a plain name), 404 (attachments off), 413 (over
+// the cap), 415 (a type its kind does not take), 429 (APP_CHAT_UPLOADS_WAITING_MAX unsent uploads, or the rate budget).
+export const APP_CHAT_UPLOAD_PATH = '/app/v1/chat/uploads' as const;
+export const APP_CHAT_UPLOAD_KIND_HEADER = 'x-waldo-upload-kind' as const;
+export const APP_CHAT_UPLOAD_NAME_HEADER = 'x-waldo-upload-name' as const;
+export const APP_CHAT_UPLOAD_KINDS = ['voice', 'photo', 'file'] as const;
+export type AppChatUploadKind = typeof APP_CHAT_UPLOAD_KINDS[number];
+export const APP_CHAT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const APP_CHAT_UPLOAD_TTL_MS = 60 * 60_000;
+export const APP_CHAT_UPLOADS_WAITING_MAX = 4;
+// The types a voice note or photo may have, with the extension each is read under. A file may have any type: it is read when
+// Waldo can read it and kept either way.
+export const APP_CHAT_VOICE_TYPES: Readonly<Record<string, string>> = {
+  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'webm',
+};
+export const APP_CHAT_PHOTO_TYPES: Readonly<Record<string, string>> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+export const appChatUploadIdV1Schema = z.string().regex(/^up_[A-Za-z0-9_-]{22}$/);
+export const appChatUploadResultV1Schema = z.strictObject({
+  upload_id: appChatUploadIdV1Schema, kind: z.enum(APP_CHAT_UPLOAD_KINDS), bytes: z.int().positive().max(APP_CHAT_UPLOAD_MAX_BYTES), expires_at: z.int().positive(),
 });
+// With an attachment, `text` is its caption: it may be empty and holds at most APP_CHAT_CAPTION_MAX_CHARS. Without one it is
+// the message, as it always was.
+export const APP_CHAT_CAPTION_MAX_CHARS = 1024;
+export const appSendFieldsV1Schema = z.strictObject({
+  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().max(4000),
+  attachments: z.array(z.strictObject({ upload_id: appChatUploadIdV1Schema })).length(1).optional(),
+});
+export const refineAppSendV1 = (send: Readonly<{ text: string; attachments?: readonly unknown[] | undefined }>, ctx: z.RefinementCtx): void => {
+  if (!send.attachments && send.text.length === 0) ctx.addIssue({ code: 'custom', path: ['text'], message: 'a message without an attachment needs text' });
+  if (send.attachments && send.text.length > APP_CHAT_CAPTION_MAX_CHARS) ctx.addIssue({ code: 'custom', path: ['text'], message: `a caption holds at most ${APP_CHAT_CAPTION_MAX_CHARS} characters` });
+};
+export const appSendRequestV1Schema = appSendFieldsV1Schema.superRefine(refineAppSendV1);
 export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
   state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']).optional(),

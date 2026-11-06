@@ -3,6 +3,7 @@ import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
+import { dropAppUpload, sweepAppUploads, takeAppUpload, type AppUploadRef } from './app-uploads';
 import { APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appContractRevision, type AppChatActivityKind } from '../../../contracts/src/app/core';
 import { REPLY_TEXT_MAX_CHARS } from '../../../contracts/src/app/parts';
 import type { ReplyDraftSurface } from '../conversation/reply-stream';
@@ -23,6 +24,8 @@ const closedAt = (row: AppInboxRecord) => row.closedAt ?? row.admittedAt;
 export type AppInboxRecord = {
   id: string; updateId: number; clientId: string; digest: string; text: string;
   owner: string; sessionHash: string; conversationRef: string; admittedAt: number;
+  // The message's attachment, staged in app-uploads until the message closes.
+  upload?: AppUploadRef;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'session_revoked' | 'cancelled'; effectsUnconfirmed?: boolean;
@@ -47,7 +50,8 @@ const replyActivities = new WeakMap<DurableObjectStorage, ReplyActivity>();
 // see neither until they declare the revision.
 export const chatRevision = (request: Request): number => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'chat');
 const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
-const clear = (row: AppInboxRecord) => { row.text = ''; };
+// A closed message keeps neither its words nor its attachment.
+const clear = (kv: DurableObjectStorage['kv'], row: AppInboxRecord) => { row.text = ''; if (row.upload) { dropAppUpload(kv, row.upload.id); delete row.upload; } };
 // One durable writer: admitted payload, digest, sequence and alarm commit before ACK.
 // A recovered running attempt is uncertain and never becomes runnable again.
 export class AppInbox {
@@ -75,8 +79,10 @@ export class AppInbox {
       },
       minIntervalMs:250,maxUpdates:2_000,maxChars:REPLY_TEXT_MAX_CHARS};
   }
-  async admit(owner:string,sessionHash:string,clientId:string,text:string,conversationRef:string,assertCurrent?:()=>void,threadRevision?:number) {
-    const digest=await sha256Hex(stableJson({text,conversationRef}));
+  // upload: the id of an attachment the owner staged; the message takes it in this transaction or is not admitted.
+  async admit(owner:string,sessionHash:string,clientId:string,text:string,conversationRef:string,assertCurrent?:()=>void,threadRevision?:number,upload?:string) {
+    const digest=await sha256Hex(stableJson(upload?{text,conversationRef,upload}:{text,conversationRef}));
+    if(upload)this.storage.transactionSync(()=>sweepAppUploads(this.storage.kv,this.now()));
     return this.storage.transaction(async txn=>{
       assertCurrent?.();
       const now=this.now();
@@ -92,7 +98,9 @@ export class AppInbox {
       if(rows.length>=MAX_ROWS)rows=await evict(rows,now-APP_INBOX_FLOOR_MS);
       if(rows.length>=MAX_ROWS||rows.filter(row=>row.state==='admitted'||row.state==='running').length>=256)return {kind:'capacity' as const};
       const sequence=(await txn.get<number>('app_seq')??0)+1;
-      const record:AppInboxRecord={id:`app-${APP_UPDATE_BASE+sequence}`,updateId:APP_UPDATE_BASE+sequence,clientId,digest,text:redactSecretUrls(text).text,owner,sessionHash,conversationRef,admittedAt:this.now(),state:'admitted',...(threadRevision===undefined?{}:{threadRevision})};
+      const taken=upload?await takeAppUpload(txn,upload,owner,`app-${APP_UPDATE_BASE+sequence}`,now):undefined;
+      if(taken===null)return {kind:'upload_unavailable' as const};
+      const record:AppInboxRecord={id:`app-${APP_UPDATE_BASE+sequence}`,updateId:APP_UPDATE_BASE+sequence,clientId,digest,text:redactSecretUrls(text).text,owner,sessionHash,conversationRef,admittedAt:this.now(),state:'admitted',...(threadRevision===undefined?{}:{threadRevision}),...(taken?{upload:taken}:{})};
       assertCurrent?.();
       await txn.put({[PREFIX+record.id]:record,app_seq:sequence});
       await persistAppInboxWake(txn,this.now()+250);
@@ -102,7 +110,7 @@ export class AppInbox {
   recover(live:ReadonlySet<string>):void {
     this.storage.transactionSync(()=>{
       const rows=this.records();
-      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(row);this.storage.kv.put(PREFIX+row.id,row);}
+      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(this.storage.kv,row);this.storage.kv.put(PREFIX+row.id,row);}
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
     });
   }
@@ -121,7 +129,7 @@ export class AppInbox {
       for(const row of this.records()){
         if(row.sessionHash!==sessionHash||(row.state!=='admitted'&&row.state!=='running'))continue;
         const ran=row.state==='running';
-        row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(row);delete row.landed;
+        row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(this.storage.kv,row);delete row.landed;
         this.storage.kv.put(PREFIX+row.id,row);fenced+=1;
       }
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
@@ -137,16 +145,17 @@ export class AppInbox {
       if(!row)return null;
       if(row.state!=='admitted'&&row.state!=='running')return row;
       row.effectsUnconfirmed=row.state==='running';
-      row.state='interrupted';row.closedReason='cancelled';row.closedAt=this.now();clear(row);delete row.landed;
+      row.state='interrupted';row.closedReason='cancelled';row.closedAt=this.now();clear(this.storage.kv,row);delete row.landed;
       this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
       return row;
     });
   }
   // The running turn's model folded a waiting message into its own answer: the message completes without a turn of its own,
-  // and its answer is the reply to `into`. Only a message still admitted folds. Runs inside the running turn's commit.
+  // and its answer is the reply to `into`. Only a message still admitted folds, and never one with an attachment: the fold
+  // carries words only. Runs inside the running turn's commit.
   fold(id:string,into:string):boolean {
-    const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted')return false;
-    row.state='completed';row.foldedInto=into;row.closedAt=this.now();clear(row);
+    const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted'||row.upload)return false;
+    row.state='completed';row.foldedInto=into;row.closedAt=this.now();clear(this.storage.kv,row);
     this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
     return true;
   }
@@ -155,7 +164,7 @@ export class AppInbox {
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted')return null;
       row.state=sessionCurrent?'running':'revoked';
       if(sessionCurrent){row.attempt=crypto.randomUUID();row.deadline=deadline;}
-      else{row.closedAt=this.now();row.closedReason='session_revoked';row.effectsUnconfirmed=false;clear(row);}
+      else{row.closedAt=this.now();row.closedReason='session_revoked';row.effectsUnconfirmed=false;clear(this.storage.kv,row);}
       this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
       return sessionCurrent?structuredClone(row):null;
     });
@@ -170,7 +179,7 @@ export class AppInbox {
   settle(record:AppInboxRecord,completed:boolean):void {
     this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+record.id);if(!row||row.state!=='running'||row.attempt!==record.attempt)return;
-      row.state=completed?'completed':'interrupted';row.closedAt=this.now();clear(row);
+      row.state=completed?'completed':'interrupted';row.closedAt=this.now();clear(this.storage.kv,row);
       if(completed)delete row.landed;else{row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';}
       this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
     });
@@ -179,7 +188,7 @@ export class AppInbox {
   // Erases a deleted chat's messages, whatever their state, with any reply still owed. It runs inside the caller's
   // transaction, the one that deletes the chat, so it opens none of its own.
   eraseChat(conversationRef:string):void {
-    for(const row of this.records())if(row.conversationRef===conversationRef)this.storage.kv.delete(PREFIX+row.id);
+    for(const row of this.records())if(row.conversationRef===conversationRef){clear(this.storage.kv,row);this.storage.kv.delete(PREFIX+row.id);}
     this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
   }
   // Kept only while the same attempt still runs: a run that was revoked or replaced owes no reply.
