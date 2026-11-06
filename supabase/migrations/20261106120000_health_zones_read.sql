@@ -1,8 +1,9 @@
 -- Zones over a range, for the model (ADR-0064's health-quests amendment, personal experiments): each day's Recovery and Form
 -- zone words from the owner's derived rows between two local days, oldest first, so an experiment's trial is compared with the
 -- owner's own usual in zone words only. Scores, drivers, sleep debt, windows and readings never leave the health plane here.
--- - The payload is exactly {from, to}: two YYYY-MM-DD days, from not after to, at most 56 days (a 28-day trial and the 28
---   days before it). Anything else is invalid_request.
+-- - The payload is exactly {from, to}: two YYYY-MM-DD days, from not after to, at most 57 days: a 28-day trial and the 28
+--   days before it, with a day's Recovery read from the night that ended that morning, so its windows run one day later.
+--   Anything else is invalid_request.
 -- - A day is returned only while its consent basis is live for model use, as waldo.health_context_read requires, and never
 --   when it is a backfilled row (ADR-0081: a backfilled row never reaches the model). A day with no such row is absent.
 -- - A pillar with no zone, or a stored word outside the row vocabulary, is null.
@@ -24,7 +25,7 @@ begin
     or (v_body->>'from') !~ '^\d{4}-\d{2}-\d{2}$' or (v_body->>'to') !~ '^\d{4}-\d{2}-\d{2}$' then return '{"error":"invalid_request"}'; end if;
   v_from := (v_body->>'from')::date;
   v_to := (v_body->>'to')::date;
-  if v_to < v_from or v_to - v_from > 55 then return '{"error":"invalid_request"}'; end if;
+  if v_to < v_from or v_to - v_from > 56 then return '{"error":"invalid_request"}'; end if;
   select jsonb_agg(jsonb_build_object(
       'day', c.day,
       'recovery', case when c.recovery->>'zone' in ('low', 'moderate', 'good', 'high') then c.recovery->>'zone' end,

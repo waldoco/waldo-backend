@@ -51,18 +51,22 @@ An experiment is one change the owner tries inside a quest, such as a caffeine c
   - Fields: the change in the owner's words, the start day and length, the state (`running`, `kept`, `dropped` or `stopped`), the verdict's reason and day, and when a Close offered the verdict.
   - The quest book creates the table itself, as it does for the quest columns.
 - **Writer: `set_experiment`.** It runs on the owner's own chat turn only, under the same taint and reading rules as `set_quest`.
+  - The verdict's reason is the model's own summary, so it never holds a reading or a score, on any turn.
+  - Completing a quest stops its running experiment, so no verdict is left due for a quest that no card reads.
   - It starts an experiment, records kept or dropped with the reason, or stops one early without a verdict.
   - It records a verdict only once the owner has said which.
-- **The comparison is on the health plane.** A new signed RPC, `waldo.health_zones_read`, returns each day's Recovery and Form zone words between two local days, at most 56 apart. It:
+- **The comparison is on the health plane.** A new signed RPC, `waldo.health_zones_read`, returns each day's Recovery and Form zone words over at most 57 local days. It:
   - requires live model-use consent;
   - never returns a score, reading or backfilled row (ADR-0081);
   - is used by the runtime to count days per zone for the trial so far, and for the same number of days just before it. A day with no zone counts as none.
+  - A night's Recovery belongs to the morning it ended, so Recovery is counted from the morning after the start to the morning after the last trial day, against the mornings before, up to and including the start morning. Form is counted on the trial's own days.
   - Nothing here sets a threshold. Whether the change helped, and how sure that is, is the model's call from those counts and what the owner has said.
 - **Readers.**
   - `review_experiment` returns the comparison on an owner turn, as turn-only output (never in the tool ledger or memory).
   - Owner turns read each experiment on its quest line: the day of the trial, a verdict due or offered, and the two latest verdicts.
   - The day after the trial ends, the Close reads the comparison and offers a keep-or-drop verdict, with its reason and its uncertainty, in zone words.
   - The verdict counts as offered once that Close reaches the owner, under the same delivery rule as check-ins. The experiment ids it offered travel with the card, so one that ends while a held Close waits is not marked.
+  - A verdict due is not a check-in. It never moves the quest's own pace, and an ambient quest stays ambient.
 - **Health plane.** Only zone-day counts leave Supabase, and only into the turn or the Close that asked. Experiment hops sit in the `quests` tool namespace and are withheld from traces whole.
 - **Forget.** It redacts `change` and `reason` and keeps the row, as for goals. A redaction is cut at the column's bound (300 for `change`, 500 for `reason`).
 

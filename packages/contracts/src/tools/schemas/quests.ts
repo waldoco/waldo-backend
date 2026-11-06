@@ -58,12 +58,15 @@ export type SetExperimentArgs = z.infer<typeof setExperimentArgsSchema>;
 export const setExperimentResultSchema = z.strictObject({ status: z.enum(['started', 'decided']), experiment: experimentSchema });
 export type SetExperimentResult = z.infer<typeof setExperimentResultSchema>;
 
-// The comparison counts days by zone word, the trial against the same number of days just before it. A day with no zone
-// (no row, no consent for model use, or a pillar not computed that day) is none. Scores and readings never appear.
+// The comparison counts days by zone word, the trial so far against the same number of days just before it. A day with no
+// zone (no row, no consent for model use, or a pillar not computed that day) is none. Scores and readings never appear.
+// A day's Recovery reads the night that ended that morning, so Recovery's days run from the morning after the start; Form
+// reads the day itself. Recovery is null until the first morning after the start.
 const count = z.int().min(0).max(EXPERIMENT_DAYS_MAX);
 const zoneDays = <T extends string>(zones: readonly T[]) =>
   z.strictObject({ ...Object.fromEntries(zones.map(zone => [zone, count])) as Record<T, typeof count>, none: count });
-export const experimentWindowSchema = z.strictObject({ from: day, to: day, recovery: zoneDays(recoveryZoneSchema.options), form: zoneDays(formZoneSchema.options) });
+const pillarWindow = <T extends string>(zones: readonly T[]) => z.strictObject({ from: day, to: day, days: zoneDays(zones) });
+export const experimentWindowSchema = z.strictObject({ recovery: pillarWindow(recoveryZoneSchema.options).nullable(), form: pillarWindow(formZoneSchema.options) });
 export type ExperimentWindow = z.infer<typeof experimentWindowSchema>;
 export const reviewExperimentArgsSchema = z.strictObject({ id: experimentIdSchema.describe('The experiment to review, by its id.') });
 export type ReviewExperimentArgs = z.infer<typeof reviewExperimentArgsSchema>;

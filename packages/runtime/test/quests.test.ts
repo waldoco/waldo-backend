@@ -201,10 +201,15 @@ describe('experiments inside a quest', () => {
       const stopped = book.startExperiment('quest:q1', 'Cold shower', 14) as { experiment: { id: string } };
       expect(book.decideExperiment(stopped.experiment.id, 'stopped', null)).toMatchObject({ experiment: { state: 'stopped', reason: null, decided_on: null } });
       expect(book.experimentsIn('quest:q1').map(note => `${note.experiment.state}: ${note.experiment.change}`)).toEqual(['kept: Earlier dinner', 'dropped: Morning light']);
+      book.startExperiment('quest:q1', 'Reading before bed', 7);
+      clock.at += 8 * DAY;
+      book.set({ id: 'quest:q1', state: 'completed' }, 'owner-1');
+      expect(book.verdictsDue()).toEqual([]);
+      expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM experiments WHERE change = 'Reading before bed'").one().state).toBe('stopped');
     });
   });
 
-  it('is due for a verdict the day after its trial ends, and counts as offered only for the verdicts the Close offered', async () => {
+  it('is due for a verdict the day after its trial ends, apart from the quest\'s own pace, and counts as offered only for the verdicts the Close offered', async () => {
     await runInDurableObject(stub(), (_instance, state) => {
       const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
       book.set({ title: 'Steadier sleep' }, 'owner-1');
@@ -215,7 +220,7 @@ describe('experiments inside a quest', () => {
       expect(book.due()).toEqual([]);
       clock.at += DAY;
       expect(book.verdictsDue().map(experiment => experiment.id)).toEqual(['exp:q3']);
-      expect(book.due().map(quest => quest.id)).toEqual(['quest:q1']);
+      expect(book.due()).toEqual([]);
       book.startExperiment('quest:q2', 'Run at lunch', 7);
       clock.at += 7 * DAY;
       book.checkedIn(['quest:q1'], ['exp:q3']);
@@ -224,7 +229,7 @@ describe('experiments inside a quest', () => {
     });
   });
 
-  it('compares the trial with the same number of days before it, in zone days only', async () => {
+  it('compares the trial with the same number of days before it in zone days only, Recovery read from the morning after', async () => {
     await runInDurableObject(stub(), async (_instance, state) => {
       const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
       book.set({ title: 'Steadier sleep' }, 'owner-1');
@@ -234,12 +239,23 @@ describe('experiments inside a quest', () => {
         '2026-11-06': ['good', 'good'], '2026-11-08': ['high', null], '2026-11-12': ['good', 'high'], '2026-11-13': ['good', null],
       });
       const comparison = await compareExperiment(experiment, '2026-11-20', read);
-      expect(asked).toEqual([['2026-10-30', '2026-11-12']]);
+      expect(asked).toEqual([['2026-10-30', '2026-11-13']]);
       expect(reviewExperimentResultSchema.parse({ experiment, comparison }).comparison).toEqual({
-        trial: { from: '2026-11-06', to: '2026-11-12', recovery: { excellent: 1, solid: 2, mixed: 0, compromised: 0, none: 4 }, form: { energized: 1, steady: 1, flagging: 0, depleted: 0, none: 5 } },
-        usual: { from: '2026-10-30', to: '2026-11-05', recovery: { excellent: 0, solid: 0, mixed: 2, compromised: 1, none: 4 }, form: { energized: 0, steady: 0, flagging: 1, depleted: 0, none: 6 } },
+        trial: {
+          recovery: { from: '2026-11-07', to: '2026-11-13', days: { excellent: 1, solid: 2, mixed: 0, compromised: 0, none: 4 } },
+          form: { from: '2026-11-06', to: '2026-11-12', days: { energized: 1, steady: 1, flagging: 0, depleted: 0, none: 5 } },
+        },
+        usual: {
+          recovery: { from: '2026-10-31', to: '2026-11-06', days: { excellent: 0, solid: 1, mixed: 1, compromised: 1, none: 4 } },
+          form: { from: '2026-10-30', to: '2026-11-05', days: { energized: 0, steady: 0, flagging: 1, depleted: 0, none: 6 } },
+        },
       });
-      expect((await compareExperiment(experiment, '2026-11-08', read))!.trial).toMatchObject({ from: '2026-11-06', to: '2026-11-08', recovery: { none: 1 } });
+      // Mid-trial, the days before it are as many as the trial has had so far.
+      expect(await compareExperiment(experiment, '2026-11-08', read)).toEqual({
+        trial: { recovery: { from: '2026-11-07', to: '2026-11-08', days: expect.objectContaining({ excellent: 1, none: 1 }) }, form: { from: '2026-11-06', to: '2026-11-08', days: expect.objectContaining({ steady: 1, none: 2 }) } },
+        usual: { recovery: { from: '2026-11-05', to: '2026-11-06', days: expect.objectContaining({ mixed: 1, solid: 1, none: 0 }) }, form: { from: '2026-11-03', to: '2026-11-05', days: expect.objectContaining({ none: 3 }) } },
+      });
+      expect(await compareExperiment(experiment, '2026-11-06', read)).toMatchObject({ trial: { recovery: null, form: { from: '2026-11-06', to: '2026-11-06' } }, usual: { recovery: null, form: { from: '2026-11-05', to: '2026-11-05' } } });
       expect(await compareExperiment(experiment, '2026-11-20', async () => null)).toBeNull();
       expect(await compareExperiment(experiment, '2026-11-20', async () => ({ error: 'not_linked' }))).toBeNull();
       expect(await compareExperiment(experiment, '2026-11-20', plane({}).read)).toBeNull();
@@ -259,8 +275,9 @@ describe('experiments inside a quest', () => {
       expect(await set.handle({ quest_id: 'quest:q1', change: 'Keep HRV above 60 ms' }, outside)).toMatchObject({ ok: false, code: 'rejected' });
       expect(await set.handle({ quest_id: 'quest:q1', change: 'No caffeine after noon' }, ownerTurn)).toMatchObject({ ok: true, data: { status: 'started', experiment: { id: 'exp:q2', days: 14 } } });
       expect(await set.handle({ quest_id: 'quest:q1', change: 'Morning light' }, ownerTurn)).toMatchObject({ ok: false, code: 'invalid_args' });
-      expect(await review.handle({ id: 'exp:q2' }, ownerTurn)).toMatchObject({ ok: true, data: { comparison: { trial: { recovery: { solid: 1, none: 0 } } } } });
+      expect(await review.handle({ id: 'exp:q2' }, ownerTurn)).toMatchObject({ ok: true, data: { comparison: { trial: { recovery: null, form: { days: { none: 1 } } } } } });
       expect(await review.handle({ id: 'exp:nope' }, ownerTurn)).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(await set.handle({ id: 'exp:q2', state: 'kept', reason: 'Resting heart rate fell to 52 bpm' }, ownerTurn)).toMatchObject({ ok: false, code: 'rejected' });
       expect(await set.handle({ id: 'exp:q2', state: 'kept', reason: 'Recovery sat in solid more often than usual' }, ownerTurn)).toMatchObject({ ok: true, data: { status: 'decided' } });
     });
   });
@@ -275,15 +292,17 @@ describe('experiments inside a quest', () => {
       expect(questsPrompt(book)).toContain('- [quest:q1] Steadier sleep (active; check-ins every 7 days; experiment [exp:q3] No caffeine after noon, day 3 of 7)');
       expect(questCardContext('card:close', book)).not.toContain('verdict is due');
       clock.at += 5 * DAY;
+      const unformed = { energized: 0, steady: 0, flagging: 0, depleted: 0, none: 7 };
       const comparison = {
-        trial: { from: '2026-11-06', to: '2026-11-12', recovery: { excellent: 0, solid: 5, mixed: 2, compromised: 0, none: 0 }, form: { energized: 0, steady: 0, flagging: 0, depleted: 0, none: 7 } },
-        usual: { from: '2026-10-30', to: '2026-11-05', recovery: { excellent: 0, solid: 2, mixed: 4, compromised: 1, none: 0 }, form: { energized: 0, steady: 0, flagging: 0, depleted: 0, none: 7 } },
+        trial: { recovery: { from: '2026-11-07', to: '2026-11-13', days: { excellent: 0, solid: 5, mixed: 2, compromised: 0, none: 0 } }, form: { from: '2026-11-06', to: '2026-11-12', days: unformed } },
+        usual: { recovery: { from: '2026-10-31', to: '2026-11-06', days: { excellent: 0, solid: 2, mixed: 4, compromised: 1, none: 0 } }, form: { from: '2026-10-30', to: '2026-11-05', days: unformed } },
       };
       const close = questCardContext('card:close', book, new Map([['exp:q3', comparison]]))!;
       expect(close).toContain('verdict is due has finished its trial');
       expect(close).toContain('[quest:q1] Steadier sleep (active; check-ins every 7 days; check-in due tonight; experiment [exp:q3] No caffeine after noon, ended 2026-11-12, verdict due)');
-      expect(close).toContain('  - [exp:q3] trial (2026-11-06 to 2026-11-12): Recovery solid 5, mixed 2; Form no zone 7');
-      expect(close).toContain('    the 7 days before (2026-10-30 to 2026-11-05): Recovery solid 2, mixed 4, compromised 1; Form no zone 7');
+      expect(close).toContain('  - [exp:q3] trial: Recovery (mornings 2026-11-07 to 2026-11-13) solid 5, mixed 2; Form (days 2026-11-06 to 2026-11-12) no zone 7');
+      expect(close).toContain('    before it: Recovery (mornings 2026-10-31 to 2026-11-06) solid 2, mixed 4, compromised 1; Form (days 2026-10-30 to 2026-11-05) no zone 7');
+      expect(close).toContain('- [quest:q2] Run more (active; no check-ins on a schedule)');
       expect(questCardContext('card:close', book)).toContain("  - [exp:q3] the owner's zones are not available for these days");
       expect(questCardContext('card:brief', book)).not.toContain('verdict is due');
       book.checkedIn(['quest:q1'], ['exp:q3']);

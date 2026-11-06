@@ -39,9 +39,9 @@ select throws_ok($$ select waldo.health_zones_read('zones-owner','{}',extract(ep
 select is(pg_temp.zones('nobody',3,0),'{"error":"not_linked"}'::jsonb,'an unknown owner object is not linked');
 select is((select count(*)::int from unnest(array[
   '{}'::jsonb, '"week"', jsonb_build_object('from',pg_temp.d(3)), jsonb_build_object('from',pg_temp.d(3),'to',pg_temp.d(0),'owner','zones-other'),
-  jsonb_build_object('from',pg_temp.d(0),'to',pg_temp.d(3)), jsonb_build_object('from',pg_temp.d(56),'to',pg_temp.d(0)),
+  jsonb_build_object('from',pg_temp.d(0),'to',pg_temp.d(3)), jsonb_build_object('from',pg_temp.d(57),'to',pg_temp.d(0)),
   '{"from":"2026-02-30","to":"2026-03-02"}', '{"from":"2026-1-1","to":"2026-01-02"}', '{"from":20260101,"to":"2026-01-02"}'
-]) bad where pg_temp.h('zones_read','zones-owner',bad)->>'error' = 'invalid_request'),9,'a missing or extra key, a reversed range, more than 56 days and a malformed date are refused');
+]) bad where pg_temp.h('zones_read','zones-owner',bad)->>'error' = 'invalid_request'),9,'a missing or extra key, a reversed range, more than 57 days and a malformed date are refused');
 
 -- Storage alone holds the rows; the model reads them only once the owner grants model use.
 select is(pg_temp.h('consent_grant','zones-owner',pg_temp.grant_body('grant-z-storage1','storage_compute'))->'consent'->>'status','granted','the owner grants storage');
@@ -58,7 +58,7 @@ select is(pg_temp.days('zones-owner',3,1),array[pg_temp.d(3)||' low none',pg_tem
 select ok(pg_temp.zones('zones-owner',9,0)::text !~ 'score|72|85','no score reaches the answer');
 select is((select array_agg(k order by k) from jsonb_array_elements(pg_temp.zones('zones-owner',9,0)->'zones'->'days') d, jsonb_object_keys(d) k where d->>'day' = pg_temp.d(0)),
   array['day','form','recovery'],'a day carries its date and its two zone words only');
-select ok(pg_temp.zones('zones-owner',55,0)->'zones'->'days' is not null,'56 days, a 28-day trial and the 28 before it, is the widest range');
+select ok(pg_temp.zones('zones-owner',56,0)->'zones'->'days' is not null,'57 days, a 28-day trial and the 28 before it with Recovery a morning later, is the widest range');
 
 -- Another owner's days never appear, and withdrawing model use hides them again.
 select is(pg_temp.days('zones-other',9,0),array[]::text[],'another owner sees none of these days');

@@ -139,10 +139,10 @@ it('the owner tries one change inside a quest, the Close offers its verdict in z
     proof.requests = [];
     world.at(Date.parse('2026-11-20T21:30:00Z'));
     await world.closeDue();
-    expect(zonesAsked).toEqual([{ from: '2026-10-23', to: '2026-11-19' }]);
+    expect(zonesAsked).toEqual([{ from: '2026-10-23', to: '2026-11-20' }]);
     expect(closeRequest()).toContain('verdict is due has finished its trial');
-    expect(closeRequest()).toContain(`  - [${experiment!.id}] trial (2026-11-06 to 2026-11-19): Recovery solid 2, no zone 12; Form steady 1, no zone 13`);
-    expect(closeRequest()).toContain('the 14 days before (2026-10-23 to 2026-11-05): Recovery mixed 1, compromised 1, no zone 12; Form no zone 14');
+    expect(closeRequest()).toContain(`  - [${experiment!.id}] trial: Recovery (mornings 2026-11-07 to 2026-11-20) solid 2, no zone 12; Form (days 2026-11-06 to 2026-11-19) steady 1, no zone 13`);
+    expect(closeRequest()).toContain('before it: Recovery (mornings 2026-10-24 to 2026-11-06) mixed 1, compromised 1, no zone 12; Form (days 2026-10-23 to 2026-11-05) no zone 14');
     expect(world.experiments()[0]!.offered_at?.slice(0, 10)).toBe('2026-11-20');
 
     proof.outputs.push([call('keep', 'set_experiment', { id: experiment!.id, state: 'kept', reason: 'Recovery sat in solid on more trial days than before, on few days with a zone' })], []);

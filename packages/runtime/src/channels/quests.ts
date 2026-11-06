@@ -99,6 +99,8 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
       const id = before?.id ?? `quest:${newId()}`;
       if (before) sql.exec('UPDATE goals SET description = ?, baseline = ?, target = ?, progress = ?, deadline = ?, active = ?, plan = ?, state = ?, check_in_days = ?, updated_at = ? WHERE id = ?', ...values, now, id);
       else sql.exec('INSERT INTO goals (description, baseline, target, progress, deadline, active, plan, state, check_in_days, id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', ...values, id, userId, now, now);
+      // A finished quest leaves no trial running, so no verdict is left due for a quest no card reads.
+      if (state === 'completed') sql.exec("UPDATE experiments SET state = 'stopped', updated_at = ? WHERE quest_id = ? AND state = 'running'", now, id);
       return { status: before ? 'changed' : 'started', quest: view(sql.exec<Row>('SELECT * FROM goals WHERE id = ?', id).one()) };
     },
     open,
@@ -108,10 +110,7 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
       const done = rows().filter(row => view(row).state === 'completed' && Date.parse(row.updated_at) >= since).map(view);
       return [...open(), ...done].slice(0, APP_QUESTS_MAX_V1);
     },
-    due: () => {
-      const verdicts = new Set(unoffered().map(row => row.quest_id));
-      return open().filter(quest => quest.next_check_in !== null && quest.next_check_in <= today() || verdicts.has(quest.id));
-    },
+    due: () => open().filter(quest => quest.next_check_in !== null && quest.next_check_in <= today()),
     checkedIn(questIds, verdictsOffered = []) {
       const now = clock.now().toISOString();
       for (const id of questIds) sql.exec('UPDATE goals SET last_check_in_at = ? WHERE id = ?', now, id);
@@ -147,28 +146,34 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
 };
 
 // The experiment's comparison: the zone-day counts of the trial so far against the same number of days just before it,
-// read from the health plane. null when the read failed or the plane holds no zone for either window.
+// read from the health plane. A night's Recovery belongs to the morning it ended, so Recovery's trial runs from the morning
+// after the start to the morning after the last trial day, and its usual ends on the start morning. null when the read
+// failed or the plane holds no zone for either window.
 export type ReadZones = (from: string, to: string) => Promise<unknown>;
 const zonesAnswerSchema = z.object({ zones: z.object({ days: z.array(z.object({ day: z.string(), recovery: z.string().nullable(), form: z.string().nullable() })) }) });
 const daysBetween = (from: string, to: string): number => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 
 export const compareExperiment = async (experiment: Experiment, today: string, readZones: ReadZones): Promise<ReviewExperimentResult['comparison']> => {
-  const trialTo = experiment.ends_on < today ? experiment.ends_on : today;
-  const usualFrom = addDays(experiment.started_on, -experiment.days), usualTo = addDays(experiment.started_on, -1);
-  const answer = zonesAnswerSchema.safeParse(await readZones(usualFrom, trialTo));
+  const start = experiment.started_on, earlier = (a: string, b: string) => (a < b ? a : b);
+  const formTo = earlier(experiment.ends_on, today), recoveryTo = earlier(addDays(experiment.ends_on, 1), today);
+  const formDays = daysBetween(start, formTo), recoveryDays = Math.max(0, daysBetween(addDays(start, 1), recoveryTo));
+  const formUsualFrom = addDays(start, -formDays), recoveryUsualFrom = addDays(start, 1 - recoveryDays);
+  const answer = zonesAnswerSchema.safeParse(await readZones(earlier(formUsualFrom, recoveryUsualFrom), recoveryTo > formTo ? recoveryTo : formTo));
   if (!answer.success || !answer.data.zones.days.length) return null;
-  const window = (from: string, to: string): ExperimentWindow => {
-    const length = daysBetween(from, to);
-    const recovery: Record<string, number> = { ...Object.fromEntries(recoveryZoneSchema.options.map(zone => [zone, 0])), none: length };
-    const form: Record<string, number> = { ...Object.fromEntries(formZoneSchema.options.map(zone => [zone, 0])), none: length };
-    for (const row of answer.data.zones.days.filter(row => row.day >= from && row.day <= to)) {
-      const recoveryZone = fromRowZone('recovery', row.recovery), formZone = fromRowZone('form', row.form);
-      if (recoveryZone) { recovery[recoveryZone]! += 1; recovery.none! -= 1; }
-      if (formZone) { form[formZone]! += 1; form.none! -= 1; }
+  const rows = answer.data.zones.days;
+  const counted = <P extends 'recovery' | 'form'>(pillar: P, zones: readonly string[], from: string, to: string) => {
+    const days: Record<string, number> = { ...Object.fromEntries(zones.map(zone => [zone, 0])), none: daysBetween(from, to) };
+    for (const row of rows) {
+      const zone = row.day >= from && row.day <= to ? fromRowZone(pillar, row[pillar]) : null;
+      if (zone) { days[zone]! += 1; days.none! -= 1; }
     }
-    return { from, to, recovery, form } as ExperimentWindow;
+    return { from, to, days };
   };
-  return { trial: window(experiment.started_on, trialTo), usual: window(usualFrom, usualTo) };
+  const recovery = (from: string, to: string) => (recoveryDays ? counted('recovery', recoveryZoneSchema.options, from, to) : null);
+  return {
+    trial: { recovery: recovery(addDays(start, 1), recoveryTo), form: counted('form', formZoneSchema.options, start, formTo) },
+    usual: { recovery: recovery(recoveryUsualFrom, start), form: counted('form', formZoneSchema.options, formUsualFrom, addDays(start, -1)) },
+  } as ReviewExperimentResult['comparison'];
 };
 
 const experimentPart = ({ experiment, offered }: ExperimentNote, today: string): string => experiment.state !== 'running'
@@ -198,10 +203,11 @@ const QUEST_CARD: Readonly<Partial<Record<CardId, string>>> = {
 };
 
 const VERDICT = "An experiment whose verdict is due has finished its trial. Offer the owner a verdict, keep or drop, with the reason against their own usual: weigh the trial's zone days below against the same number of days before it, and what they have told you. Say how sure you are: a few weeks is a small sample, a day with no zone counts for nothing, and other things changed too. When the zones are not available, say so and ask how it felt. Ask them to say keep or drop; it is recorded only when they answer.";
-const counted = (counts: Readonly<Record<string, number>>): string => Object.entries(counts).filter(([, days]) => days > 0).map(([zone, days]) => `${zone === 'none' ? 'no zone' : zone} ${days}`).join(', ');
-const windowLine = (label: string, window: ExperimentWindow): string => `${label} (${window.from} to ${window.to}): Recovery ${counted(window.recovery)}; Form ${counted(window.form)}`;
-export const evidenceLines = (experiment: Experiment, comparison: ReviewExperimentResult['comparison']): string[] => comparison
-  ? [`  - [${experiment.id}] ${windowLine('trial', comparison.trial)}`, `    ${windowLine(`the ${experiment.days} days before`, comparison.usual)}`]
+const zoneDays = (days: Readonly<Record<string, number>>): string => Object.entries(days).filter(([, n]) => n > 0).map(([zone, n]) => `${zone === 'none' ? 'no zone' : zone} ${n}`).join(', ');
+const windowLine = (label: string, window: ExperimentWindow): string => `${label}: ${window.recovery
+  ? `Recovery (mornings ${window.recovery.from} to ${window.recovery.to}) ${zoneDays(window.recovery.days)}` : 'Recovery (no morning yet)'}; Form (days ${window.form.from} to ${window.form.to}) ${zoneDays(window.form.days)}`;
+const evidenceLines = (experiment: Experiment, comparison: ReviewExperimentResult['comparison']): string[] => comparison
+  ? [`  - [${experiment.id}] ${windowLine('trial', comparison.trial)}`, `    ${windowLine('before it', comparison.usual)}`]
   : [`  - [${experiment.id}] the owner's zones are not available for these days`];
 
 // What the Brief and the Close read about the open quests, as the job's context; null when the card has none to read. The
@@ -259,7 +265,10 @@ export const experimentHandlers = (book: QuestBook, readZones: ReadZones): reado
   mutates_state: true,
   async handle(args, ctx) {
     if (ctx.trigger !== 'user_message') return { ok: false, code: 'rejected', error: OWNER_TURN_ONLY };
-    if (readingFromOutside(ctx, [args.change, args.reason])) return { ok: false, code: 'rejected', error: OUTSIDE_READING };
+    if (readingFromOutside(ctx, [args.change])) return { ok: false, code: 'rejected', error: OUTSIDE_READING };
+    // The reason is the model's own summary, never the owner's words, so it holds zone words and no reading on any turn.
+    if (args.reason !== undefined && (args.reason.includes(HEALTH_SPAN_MARKER) || numericHealthIn(args.reason)))
+      return { ok: false, code: 'rejected', error: 'Write the reason in zone words, with no reading or score.' };
     const result = committed(ctx, () => args.quest_id !== undefined
       ? book.startExperiment(args.quest_id, args.change!, args.days ?? EXPERIMENT_DAYS_DEFAULT)
       : book.decideExperiment(args.id!, args.state!, args.reason ?? null));

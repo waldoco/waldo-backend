@@ -29,7 +29,7 @@ describe('set_quest', () => {
 const experiment = {
   id: 'exp:c4d5e6', quest_id: 'quest:a1b2c3', change: 'No caffeine after noon', state: 'running', started_on: '2026-11-06', days: 14, ends_on: '2026-11-19', reason: null, decided_on: null,
 } as const;
-const counts = { recovery: { excellent: 1, solid: 6, mixed: 4, compromised: 1, none: 2 }, form: { energized: 0, steady: 3, flagging: 2, depleted: 0, none: 9 } };
+const recoveryDays = { excellent: 1, solid: 6, mixed: 4, compromised: 1, none: 2 }, formDays = { energized: 0, steady: 3, flagging: 2, depleted: 0, none: 9 };
 
 describe('set_experiment', () => {
   it('starts one change inside a quest, and decides or stops one by id', () => {
@@ -63,10 +63,13 @@ describe('review_experiment', () => {
   });
 
   it('compares the trial with the days before it in zone-day counts only, or says the zones are not shared', () => {
-    const comparison = { trial: { from: '2026-11-06', to: '2026-11-19', ...counts }, usual: { from: '2026-10-23', to: '2026-11-05', ...counts } };
-    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison }).success).toBe(true);
+    const trial = { recovery: { from: '2026-11-07', to: '2026-11-20', days: recoveryDays }, form: { from: '2026-11-06', to: '2026-11-19', days: formDays } };
+    const usual = { recovery: { from: '2026-10-24', to: '2026-11-06', days: recoveryDays }, form: { from: '2026-10-23', to: '2026-11-05', days: formDays } };
+    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { trial, usual } }).success).toBe(true);
+    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { trial: { ...trial, recovery: null }, usual: { ...usual, recovery: null } } }).success).toBe(true);
     expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: null }).success).toBe(true);
-    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { ...comparison, trial: { ...comparison.trial, recovery: { ...counts.recovery, score: 61 } } } }).success).toBe(false);
-    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { ...comparison, usual: { ...comparison.usual, form: { ...counts.form, steady: -1 } } } }).success).toBe(false);
+    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { trial: { ...trial, recovery: { ...trial.recovery, days: { ...recoveryDays, score: 61 } } }, usual } }).success).toBe(false);
+    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { trial, usual: { ...usual, form: { ...usual.form, days: { ...formDays, steady: -1 } } } } }).success).toBe(false);
+    expect(reviewExperimentResultSchema.safeParse({ experiment, comparison: { trial: { ...trial, form: undefined }, usual } }).success).toBe(false);
   });
 });
