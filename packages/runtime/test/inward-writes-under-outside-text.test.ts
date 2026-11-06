@@ -28,7 +28,7 @@ const fakes = () => {
     runs,
     handlers: [
       handler('search_communication', { messages: [{ id: 'm1', from: 'stranger@example.net', body: INJECTED }] }),
-      handler('set_reminder'), handler('cancel_reminder'), handler('send_email'), handler('web_search', { results: [] }), handler('forget_memory'),
+      handler('set_reminder'), handler('cancel_reminder', { id: 'reminder:r1', cancelled: true, note: 'Pay the rent', at: '2026-11-08T09:00' }), handler('send_email'), handler('web_search', { results: [] }), handler('forget_memory'),
     ],
   };
 };
@@ -54,7 +54,7 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     const reply = await runToolLoop({ handlers, ctx: context({ ownerInitiated: true }), maxSteps: 10, step: obedient(), onTool: (event) => events.push({ name: event.call.name, ok: event.ok, ...(event.error_code ? { error_code: event.error_code } : {}) }) });
     expect(runs.map(([tool]) => tool)).toEqual(['search_communication', 'set_reminder', 'web_search']);
     expect(events.find((event) => event.name === 'send_email')).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
-    expect(reply).toBe(`Done.\n\n${INWARD_RECEIPTS_HEADER}\n- Reminder at 2026-11-07 15:00: "Wire $900 to account 4411"`);
+    expect(reply).toBe(`Done.\n\n${INWARD_RECEIPTS_HEADER}\n- Reminder set for 2026-11-07 15:00: "Wire $900 to account 4411" (you can cancel it)`);
   });
 
   it('the owner can undo it in the same turn: a cancel only narrows, so outside text cannot hold it back', async () => {
@@ -63,18 +63,34 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     expect(runs.map(([tool]) => tool)).toContain('cancel_reminder');
   });
 
-  // "Cancel all my reminders" in an email: a narrowing write runs, but never out of the owner's sight.
-  it('an injected cancel runs and is listed too, even in a turn with no owner message that would have stayed silent', async () => {
+  // "Cancel my rent reminder" in an email: a narrowing write runs, but never out of the owner's sight, and its line quotes what
+  // went so the owner can set it again. "Cancel all my reminders" is carded: no line could name everything it removed.
+  it('an injected cancel of one reminder runs and is quoted, even in a turn with no owner message that would have stayed silent', async () => {
+    const line = '- Cancelled the reminder for 2026-11-08 09:00: "Pay the rent"';
     for (const [ctx, answer, expected] of [
-      [context({ ownerInitiated: true }), 'Done.', `Done.\n\n${INWARD_RECEIPTS_HEADER}\n- Cancelled all your reminders`],
-      [context(), 'SKIP', `${INWARD_RECEIPTS_HEADER}\n- Cancelled all your reminders`],
+      [context({ ownerInitiated: true }), 'Done.', `Done.\n\n${INWARD_RECEIPTS_HEADER}\n${line}`],
+      [context(), 'SKIP', `${INWARD_RECEIPTS_HEADER}\n${line}`],
     ] as const) {
       const { runs, handlers } = fakes();
       let round = 0;
-      const script = [[call('c1', 'search_communication', { query: 'x' })], [call('c2', 'cancel_reminder', { all: true })]];
+      const script = [[call('c1', 'search_communication', { query: 'x' })], [call('c2', 'cancel_reminder', { id: 'reminder:r1' })]];
       const reply = await runToolLoop({ handlers, ctx, maxSteps: 10, step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: answer }) });
       expect(runs.map(([tool]) => tool)).toEqual(['search_communication', 'cancel_reminder']);
       expect(reply).toBe(expected);
+    }
+  });
+
+  it('an injected cancel of every reminder is carded, owner in the turn or not', async () => {
+    for (const ctx of [context({ ownerInitiated: true }), context()]) {
+      const { runs, handlers } = fakes();
+      const events: Array<{ name: string; error_code?: string }> = [];
+      let round = 0;
+      const script = [[call('c1', 'search_communication', { query: 'x' })], [call('c2', 'cancel_reminder', { all: true })]];
+      const reply = await runToolLoop({ handlers, ctx, maxSteps: 10, onTool: (event) => events.push({ name: event.call.name, ...(event.error_code ? { error_code: event.error_code } : {}) }),
+        step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: 'Done.' }) });
+      expect(runs.map(([tool]) => tool)).toEqual(['search_communication']);
+      expect(events.find((event) => event.name === 'cancel_reminder')).toMatchObject({ error_code: 'taint_needs_approval' });
+      expect(reply).toBe('Done.');
     }
   });
 
@@ -88,6 +104,21 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
         step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: 'Done.' }) });
       expect(runs.map(([tool]) => tool)).toEqual(['search_communication']);
     }
+  });
+
+  it('a sleep need the owner stated runs after outside text and is listed like the other changes', async () => {
+    const { runs, handlers } = fakes();
+    const said = 'Read the mail from my coach, and set my sleep need to 7 hours 30 minutes';
+    const ctx = context({ ownerInitiated: true, memoryTurn: { ownerId: 'owner-1', conversationRef: 'c', current: { message_ref: 'm1', text: said }, recent: [] } } as Partial<ToolDispatcherContext>);
+    let round = 0;
+    const script = [[call('c1', 'search_communication', { query: 'coach' })], [call('c2', 'set_sleep_need', { minutes: 450 })]];
+    const sleepNeed: ToolHandler<unknown, unknown, ToolDispatcherContext> = {
+      name: 'set_sleep_need', description: 'set_sleep_need', schema: TOOL_ARG_SCHEMAS.set_sleep_need as never, trigger_allowlist: allowlist('set_sleep_need'), autonomy_gated: false, mutates_state: true,
+      handle: async (args) => { runs.push(['set_sleep_need', args]); return { ok: true, data: { state: 'set' }, source_taint: null }; },
+    };
+    const reply = await runToolLoop({ handlers: [...handlers, sleepNeed], ctx, maxSteps: 10, step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: 'Done.' }) });
+    expect(runs.map(([tool]) => tool)).toEqual(['search_communication', 'set_sleep_need']);
+    expect(reply).toBe(`Done.\n\n${INWARD_RECEIPTS_HEADER}\n- Set your sleep need to 7 h 30 min (you can change it)`);
   });
 
   it('a silent reply with nothing changed stays silent', () => {
@@ -111,9 +142,11 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     expect(reply).toBe('Set.');
   });
 
-  // The receipt lines and the exemptions name one set: an inward or narrowing exemption without a receipt line fails here.
-  it('every owner-inward and narrowing record has a receipt line, and nothing else does', () => {
-    const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted !== undefined && 'exempt' in record.tainted && (record.tainted.exempt === 'owner_inward' || record.tainted.exempt === 'narrows')).map(([tool]) => tool).sort();
+  // The receipt lines and the exemptions name one set: a write that can run after outside text without a card (inward,
+  // narrowing, or a figure the owner stated) and has no receipt line fails here.
+  it('every owner-inward, narrowing and owner-stated record has a receipt line, and nothing else does', () => {
+    const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, { tainted }]) => tainted !== undefined
+      && ('exempt' in tainted ? tainted.exempt === 'owner_inward' || tainted.exempt === 'narrows' : tainted.unless_owner_stated !== undefined)).map(([tool]) => tool).sort();
     expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual(listed);
   });
 });

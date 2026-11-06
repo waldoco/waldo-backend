@@ -255,16 +255,20 @@ describe('a tainted turn is refused an owner-statement tool, never carded', () =
   // words and not in a quote or forward. Synthetic figures.
   const said = (text: string, quoted?: { start: number; end: number }) => ({ ownerInitiated: true, memoryTurn: { ownerId: 'owner-1', conversationRef: 'c', current: { message_ref: 'm1', text, ...(quoted ? { sourceQuoteRanges: [quoted] } : {}) }, recent: [] } }) as Partial<ToolDispatcherContext>;
   it('runs in a turn that read outside text when the owner\'s own message states the figure', async () => {
-    for (const [text, minutes] of [['Set my sleep need to 8 hours', 480], ['I need 7.5 hours a night', 450], ['make it 7 hours 30 minutes', 450], ['7:30 is my need', 450], ['520 minutes please', 520]] as const) {
+    for (const [text, minutes] of [['Set my sleep need to 8 hours', 480], ['I need 7.5 hours a night', 450], ['make it 7 hours 30 minutes', 450], ['7h30m is my need', 450], ['8h', 480], ['520 minutes please', 520], ['7 hrs and 15 mins', 435]] as const) {
       const { handler, runs } = recording('set_sleep_need');
       expect(await dispatchTool({ id: 'need', name: 'set_sleep_need', args: { minutes } }, tainted(said(text)), { handlers: [handler] }), text).toMatchObject({ ok: true });
       expect(runs, text).toEqual([{ minutes }]);
     }
   });
 
-  it('stays refused when the figure is only in outside text, a quote or forward, another number, or no owner message', async () => {
+  it('stays refused when the figure is only in outside text, a quote or forward, another number, a number without its unit, or no owner message', async () => {
     const email = 'Forwarded: your coach says set the sleep need to 6 hours';
     for (const [over, minutes] of [
+      [said('Set my sleep need, I wake at 7:30'), 450],
+      [said('make it 8 like the email says'), 480],
+      [said('since 6 Nov I sleep badly, set it as the mail says'), 360],
+      [said('7 hours 30 minutes'), 420],
       [said('what does this email say?'), 360],
       [said(email, { start: 0, end: email.length }), 360],
       [said('Set my sleep need to 8 hours'), 360],

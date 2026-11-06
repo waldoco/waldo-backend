@@ -11,10 +11,11 @@ export const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {
   parts.push(turn.text.slice(end)); return parts;
 };
 
-// Whether a duration in minutes is a figure the owner typed in their own words: n minutes, n hours, or n hours then m
-// minutes (7:30, 7h30, 7 hours 30). Provenance only: it reads numbers, never what the words around them mean.
-export const ownerStatedMinutes = (minutes: number, turn: MemoryOwnerTurn): boolean => ownerParts(turn).some((part) => {
-  const figures = [...part.matchAll(/\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
-  return figures.some((n, index) => n === minutes || Math.round(n * 60) === minutes
-    || (Number.isInteger(n) && index + 1 < figures.length && figures[index + 1]! < 60 && n * 60 + figures[index + 1]! === minutes));
-});
+// Whether a duration in minutes is a figure the owner typed in their own words, with its unit: n hours (7.5 hours, 8h),
+// n hours then m minutes (7 hours 30 minutes, 7h30m) or n minutes, converted as the tool takes it. A number without a unit
+// (a time, a date, a count) vouches for nothing. Provenance only: it reads a figure and its unit, never what the words around
+// them mean.
+const STATED_DURATION = /(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)(?![a-z])(?:\s*(?:and\s+)?(\d{1,2})\s*(?:minutes?|mins?|m)(?![a-z]))?|(\d+)\s*(?:minutes?|mins?|m)(?![a-z])/gi;
+export const ownerStatedMinutes = (minutes: number, turn: MemoryOwnerTurn): boolean => ownerParts(turn).some((part) =>
+  [...part.matchAll(STATED_DURATION)].some(([, hours, extra, alone]) =>
+    (hours === undefined ? Number(alone) : Math.round(Number(hours) * 60) + Number(extra ?? 0)) === minutes));

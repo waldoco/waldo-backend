@@ -530,13 +530,19 @@ export const recordNeedsOwnerCard = async (
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
   switch (tainted?.exempt) {
-    case 'draft': case 'honest_origin': case 'instructions_only': case 'narrows': return false;
+    case 'draft': case 'honest_origin': case 'instructions_only': return false;
+    case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
     case 'owner_inward': return ctx.ownerInitiated !== true;
     default: return true;
   }
 };
+
+// A narrowing call that removes everything of its kind at once is carded: its receipt cannot name what it removed, so outside
+// text could wipe the owner's reminders with nothing to set them again from. One by one, each receipt quotes what went.
+const clearsEverything = (tool: ToolName, args: unknown): boolean =>
+  tool === 'cancel_reminder' && typeof args === 'object' && args !== null && (args as { all?: unknown }).all === true;
 
 // A loop bound to an observed mail source records that source, its title never enters a prompt as the owner's
 // (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back: it is the owner-enabled mail

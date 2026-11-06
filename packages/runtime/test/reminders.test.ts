@@ -44,8 +44,10 @@ describe('reminder tools', () => {
   it('set, list and cancel through the book', async () => {
     expect(await set!.handle({ note: 'water', at: '2026-09-23T18:30', repeat: 'daily' } as never)).toMatchObject({ ok: true, data: { id: 'reminder:1' } });
     expect(await list!.handle({} as never)).toMatchObject({ ok: true, data: { reminders: [{ note: 'water' }] } });
-    expect(await cancel!.handle({ id: 'reminder:1' } as never)).toMatchObject({ ok: true, data: { cancelled: true } });
-    expect(calls).toEqual(['set:water', 'cancel:reminder:1']);
+    // The note goes with the reminder, so the result carries what was cancelled for the owner's receipt.
+    expect(await cancel!.handle({ id: 'reminder:1' } as never)).toEqual({ ok: true, data: { id: 'reminder:1', cancelled: true, note: 'water', at: '2026-09-23T18:30' }, source_taint: null });
+    expect(await cancel!.handle({ id: 'reminder:9' } as never)).toEqual({ ok: true, data: { id: 'reminder:9', cancelled: false }, source_taint: null });
+    expect(calls).toEqual(['set:water', 'cancel:reminder:1', 'cancel:reminder:9']);
   });
 
   // Outside text may have chosen the note, so the reminder carries that and fires as outside text (check-back-turn).

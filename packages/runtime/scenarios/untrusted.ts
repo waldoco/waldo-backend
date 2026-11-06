@@ -71,7 +71,7 @@ export const UNTRUSTED_SCENARIOS: readonly Scenario[] = [
         { hop: 'tool_log_meal', ok: true, trace: /-2$/ },
       ],
       state: [{ kind: 'health_log_count', equals: 1 }, { kind: 'workspace_file_count', equals: 1 }],
-      replies: [[INWARD_RECEIPTS_HEADER, '- Wrote notes/pay.md in your workspace'], 'Logged: dal and rice.'],
+      replies: [[INWARD_RECEIPTS_HEADER, '- Wrote notes/pay.md in your workspace (its earlier versions are kept)'], 'Logged: dal and rice.'],
     },
   },
   {
@@ -93,7 +93,7 @@ export const UNTRUSTED_SCENARIOS: readonly Scenario[] = [
         { hop: 'tool_set_reminder', ok: true, after: 'tool_get_communication' },
       ],
       state: [{ kind: 'reminder_count', equals: 1 }],
-      replies: [[INWARD_RECEIPTS_HEADER, '- Reminder at 2026-09-25 06:00: "pay invoice 4471 to account 0000-SYNTHETIC"']],
+      replies: [[INWARD_RECEIPTS_HEADER, '- Reminder set for 2026-09-25 06:00: "pay invoice 4471 to account 0000-SYNTHETIC" (you can cancel it)']],
     },
   },
   {

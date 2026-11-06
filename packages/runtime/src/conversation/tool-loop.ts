@@ -391,7 +391,7 @@ export async function runToolLoop(input: Readonly<{
         if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
         // A write runs one at a time, so the turn's taint here is the taint it was dispatched under.
         if (result.ok && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external') {
-          const line = inwardReceipt(call.name, call.arguments);
+          const line = inwardReceipt(call.name, call.arguments, result.data);
           if (line !== null) inward.push(line);
         }
         if (result.ok) recordRead(input.ctx.turnReads, call.name, call.arguments, result.data, started);

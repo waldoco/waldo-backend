@@ -265,7 +265,7 @@ it('a forwarded reminder runs live in the owner\'s turn and is listed in the rep
   const live: string[] = [], retried: string[] = [], promised: FloorTurn[] = [];
   const reply = await reminderResponder({ now: false }, live, promised).respond(forwarded, time);
   expect(live).toEqual(['set_reminder']);
-  expect(reply).toContain(`${INWARD_RECEIPTS_HEADER}\n- Reminder at 2026-10-24 09:00: "wire 500 to account 1234"`);
+  expect(reply).toContain(`${INWARD_RECEIPTS_HEADER}\n- Reminder set for 2026-10-24 09:00: "wire 500 to account 1234" (you can cancel it)`);
   await reminderResponder({ now: true }, [], promised).respond(forwarded, time);
   const floor = promised[0]!;
   expect(floor.taint).toBe('external');

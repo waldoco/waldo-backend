@@ -162,14 +162,18 @@ export const reminderHandlers = (book: ReminderBook) => [
       if (all === true) return { ok: true, data: { cancelled: await book.cancelAll() }, source_taint: null };
       if (id === undefined) return { ok: false, code: 'invalid_args', error: 'Supply a reminder id or all: true.' };
       try {
-        return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+        // What was cancelled rides the result, since the note is deleted with it: the owner's receipt quotes it.
+        const reminder = book.list().find((entry) => entry.id === id);
+        const note = reminder?.note ?? book.note(id);
+        const cancelled = await book.cancel(id);
+        return { ok: true, data: { id, cancelled, ...(cancelled && note !== null ? { note, ...(reminder ? { at: reminder.at } : {}) } : {}) }, source_taint: null };
       } catch (error) {
         // Retrying cannot help: nothing was cancelled, and this version will never read the row.
         if (error instanceof UnreadableScheduleRowError) return { ok: false, code: 'rejected', error: "That reminder is stored in a form this version can't read, so it can't be cancelled here. Nothing was changed." };
         throw error;
       }
     },
-  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean } | { cancelled: number }, ToolDispatcherContext>,
+  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean; note?: string; at?: string } | { cancelled: number }, ToolDispatcherContext>,
 ];
 
 export function localIso(at: number, timezone: string): string {
