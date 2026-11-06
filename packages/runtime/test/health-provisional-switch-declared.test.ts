@@ -145,6 +145,13 @@ describe('CALENDAR_COVERAGE and FREE_WINDOW_OFFERS in the Worker config', () => 
   });
 });
 
+describe('BLOCK_LIFECYCLE in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration', () => {
+    expect(parsed.vars.BLOCK_LIFECYCLE).toBe('0');
+    expect(parsed.env.staging.vars.BLOCK_LIFECYCLE).toBe('1');
+  });
+});
+
 describe('DEVICE_WEATHER in the Worker config', () => {
   it('is off in production and on in staging, where it offers get_weather only once the WeatherKit secrets are set', () => {
     expect(parsed.vars.DEVICE_WEATHER).toBe('0');

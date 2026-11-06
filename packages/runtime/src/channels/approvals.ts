@@ -721,6 +721,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'> & Partial<Pick<StandingGrants, 'grant'>>;
   // FREE_WINDOW_OFFERS: a calendar card marked as a free-window offer is labelled as one; off, it is an ordinary card.
   freeWindowOffers?: () => boolean;
+  // BLOCK_LIFECYCLE: every block Waldo creates carries its mark, so Waldo can tell its own blocks from the owner's later.
+  marksBlocks?: () => boolean;
   // Whether the owner can approve a card shown here by telling Waldo to go ahead (APPROVE_IN_CHAT).
   approvesInChat?: () => boolean;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
@@ -1091,7 +1093,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
       // While grants can act, every event Waldo creates carries its mark, so a later grant can tell Waldo's blocks from the owner's.
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...(deps.grants?.enabled() ? { made: true } : {}), ...target,
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...(deps.grants?.enabled() || (p.block && deps.marksBlocks?.()) ? { made: true } : {}), ...target,
         ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}), ...(p.block ? { block: p.block } : {}) });
       return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
     }
@@ -1267,7 +1269,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       setStatus(id, 'done');
       return { toast: 'Partly undone', message: `Removed ${undone.removed.length ? blocksNamed(undone.removed) : 'nothing'}. Left ${blocksNamed(undone.kept)} as it is, because it changed after I added it.` };
     }
-    const outcome = await addPlan({ client, effect, operationRef, plan, made: deps.grants?.enabled() === true });
+    const outcome = await addPlan({ client, effect, operationRef, plan, made: deps.grants?.enabled() === true || deps.marksBlocks?.() === true });
     deps.log({ trace, hop: 'calendar_plan', ms: deps.now() - started, ok: outcome.state === 'done', code: outcome.state });
     if (outcome.state === 'done') {
       setStatus(id, 'done', outcome.undo);
