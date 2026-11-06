@@ -72,6 +72,10 @@
     {
       "version": 16,
       "name": "history-archive"
+    },
+    {
+      "version": 17,
+      "name": "reply-memory-used"
     }
   ]
 }

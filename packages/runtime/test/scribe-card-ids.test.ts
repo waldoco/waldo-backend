@@ -26,13 +26,16 @@ describe('identifiers survive the card rule', () => {
     for (const destination of ['internal_context', 'owner_reply', 'send_message'] as const) expect(textOf(id, destination).text).toBe(id);
   });
 
-  // A dashless id or a git SHA is a run of hex characters; digits inside it are not a card.
-  it('keeps random 32-character hex ids and 40-character SHAs, digit-heavy ones included', () => {
-    const hex = (length: number) => fc.array(fc.oneof({ weight: 3, arbitrary: fc.constantFrom(...'0123456789') }, { weight: 1, arbitrary: fc.constantFrom(...'abcdef') }), { minLength: length, maxLength: length }).map(chars => chars.join(''));
-    fc.assert(fc.property(fc.oneof(hex(32), hex(40)), fc.constantFrom('', 'sha:', 'id_', 'commit '), (id, prefix) => {
+  // A dashless id, a git SHA or a 0x hash is a run of hex characters; digits inside it are not a card.
+  it('keeps random hex ids of 20, 24, 32, 40 and 64 characters, with or without 0x, digit-heavy ones included', () => {
+    const hex = (length: number) => fc.array(fc.oneof({ weight: 3, arbitrary: fc.constantFrom(...'0123456789') }, { weight: 1, arbitrary: fc.constantFrom(...'abcdef') }), { minLength: length, maxLength: length })
+      .filter(chars => chars.some(char => char >= 'a')).map(chars => chars.join(''))
+      // A run of 13 to 19 digits that passes the check digit is a card number even inside a hex run, and is redacted.
+      .filter(id => !(id.match(/\d{13,19}/g) ?? []).some(run => [...run].reverse().reduce((sum, char, at) => { const digit = Number(char) * (at % 2 ? 2 : 1); return sum + (digit > 9 ? digit - 9 : digit); }, 0) % 10 === 0));
+    fc.assert(fc.property(fc.constantFrom(20, 24, 32, 40, 64).chain(hex), fc.constantFrom('', '0x', 'sha:', 'id_', 'commit ', '0X'), (id, prefix) => {
       expect(textOf(`${prefix}${id}`).text).toBe(`${prefix}${id}`);
       expect(textOf(`see ${prefix}${id}, then ${prefix}${id}.`).text).toBe(`see ${prefix}${id}, then ${prefix}${id}.`);
-    }), { numRuns: 500 });
+    }), { numRuns: 800 });
   });
 
   it('keeps an id held in a field of a tool result', () => {
@@ -73,6 +76,12 @@ describe('card numbers are still redacted', () => {
     ['4111111111111111-12/27', '[REDACTED_CREDIT_CARD]-12/27'],
     ['4111 1111 1111 1111-exp', '[REDACTED_CREDIT_CARD]-exp'],
     ['card_4111111111111111', 'card_[REDACTED_CREDIT_CARD]'],
+    ['card4111111111111111', 'card[REDACTED_CREDIT_CARD]'],
+    ['CC4111111111111111', 'CC[REDACTED_CREDIT_CARD]'],
+    ['4111111111111111abcd', '[REDACTED_CREDIT_CARD]abcd'],
+    ['abcd4111111111111111', 'abcd[REDACTED_CREDIT_CARD]'],
+    ['deadbeef4111111111111111', 'deadbeef[REDACTED_CREDIT_CARD]'],
+    ['4111111111111111deadbeef', '[REDACTED_CREDIT_CARD]deadbeef'],
     ['x4111111111111111', 'x[REDACTED_CREDIT_CARD]'],
     ['pay:4111-1111-1111-1111;', 'pay:[REDACTED_CREDIT_CARD];'],
   ])('redacts the card in %s', (input, expected) => {
