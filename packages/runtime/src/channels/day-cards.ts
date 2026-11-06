@@ -8,9 +8,9 @@ import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '
 import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
+import { localDayWindow, shiftDay } from '../health/scores/time';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
-const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
@@ -274,9 +274,10 @@ export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timez
   return (await applyDayPlan(scheduler, book, timezone, now, defaultPlan(DAY_CARDS))).length > 0;
 };
 
+// The owner's local day, whole on a 23- or 25-hour day around a clock change.
 export const dayWindow = (now: number, timezone: string): Readonly<{ from: number; to: number }> => {
-  const midnight = localToEpoch(`${localIso(now, timezone).slice(0, 10)}T00:00`, timezone);
-  return { from: midnight, to: midnight + DAY_MS };
+  const day = localDayWindow(localIso(now, timezone).slice(0, 10), timezone);
+  return { from: day.start, to: day.end };
 };
 
 // A card waiting for the owner (WhatsApp outside its 24-hour window) is current until the owner's next card is due, which
@@ -429,11 +430,11 @@ export const dayCardsLine = (deps: CardDeps): string => {
   return said.length ? `Today's cards: ${said.join('; ')}.` : '';
 };
 
+// Local days, so a 23- or 25-hour day around a clock change is read whole and no hour of the next day leaks in.
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
-  const { from: midnight } = dayWindow(now, timezone);
-  if (card.calendar === 'today') return { from: midnight, to: midnight + DAY_MS };
-  if (card.calendar === 'rest_of_today') return { from: now, to: midnight + DAY_MS };
-  return { from: midnight + DAY_MS, to: midnight + 2 * DAY_MS };
+  const today = localIso(now, timezone).slice(0, 10);
+  const day = localDayWindow(card.calendar === 'tomorrow' ? shiftDay(today, 1) : today, timezone);
+  return { from: card.calendar === 'rest_of_today' ? now : day.start, to: day.end };
 };
 
 const eventLine = (event: CalendarItem, timezone: string) =>
@@ -474,13 +475,13 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean; dayShape?: boolean; capacity?: boolean }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean; dayShape?: boolean; capacity?: boolean; tomorrow?: boolean }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
-  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true, sources.dayShape === true, sources.capacity === true);
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true, sources.dayShape === true, sources.capacity === true, sources.tomorrow === true);
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
   if (wireSize(build(whole)) <= cap) return build(whole);
   const wanted = [

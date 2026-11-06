@@ -42,8 +42,9 @@ export type Step =
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
   // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
+  // tomorrow: TOMORROW_TODAY's Close, offered its card tools as the owner object offers them.
   // budget: CAPACITY_BUDGET's planning Brief, which also reads the rest of the week and is offered its card tools.
-  | Readonly<{ card: CardId; capacity?: string; budget?: true }>
+  | Readonly<{ card: CardId; capacity?: string; tomorrow?: true; budget?: true }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
   | Readonly<{ outside_job: string }>
@@ -225,8 +226,8 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
         skills.turn(`${scenario.id}-${step.card}`);
         const context = step.capacity === undefined ? undefined : [capacityContext(step.capacity, ''), ...(step.budget ? [await world.weekAhead()] : [])].join('\n\n');
-        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.budget === true), time,
-          step.budget ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined, context, 'external');
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.tomorrow === true, step.budget === true), time,
+          step.tomorrow || step.budget ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined, context, 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
         world.shareHealth(step.health === 'shared');

@@ -440,7 +440,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       return keptNote(`file "${file.filename}"`, await keepUpload({ bytes, filename: file.filename, mime: file.mime, key }), false);
     },
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
-    dayCard: (id: CardId, capacity = false, planning = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}), ...(planning ? { planning } : {}) }),
+    dayCard: (id: CardId, capacity = false, tomorrow = false, planning = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}), ...(tomorrow ? { tomorrow } : {}), ...(planning ? { planning } : {}) }),
     // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
