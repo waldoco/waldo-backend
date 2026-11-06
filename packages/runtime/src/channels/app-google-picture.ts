@@ -55,5 +55,5 @@ export async function appGooglePicture(request: Request, pictures: () => Promise
   let bytes: Uint8Array | null;
   try { bytes = await boundedBytes(response.body); } catch { return refuse('picture_unavailable', 502); }
   if (!bytes) return refuse('picture_unavailable', 502);
-  return new Response(bytes, { status: 200, headers: { 'content-type': media, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+  return new Response(bytes, { status: 200, headers: { 'content-type': media, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' } });
 }

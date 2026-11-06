@@ -258,7 +258,8 @@ export const appConnectorTileV1Schema = z.strictObject({
 // grant lets Waldo read it), and the view carries wearables. A build below it receives none of them.
 export const APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION = 17;
 // A Google account's profile picture is served by Waldo, so the phone never calls Google's image host. picture is this path,
-// fetched from the same origin with the app session's bearer like any other app route; the key changes when the picture
+// fetched from the same origin with the app session's bearer like any other app route, and is privately cacheable for an
+// hour. The answer is the image with its own image type, or a JSON 404 when Waldo holds no picture; the key changes when the picture
 // does, so the app may cache the image by path. null or absent: Waldo holds no picture for the account, and the app shows
 // its own fallback.
 export const APP_GOOGLE_PICTURE_PATH_V1 = '/app/v1/connections/google/pictures';
