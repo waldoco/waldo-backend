@@ -175,6 +175,8 @@ export type HookRuntimeContext = {
   proposalOnlyCall?: ToolName;
   // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
   loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
+  // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
+  ownerInitiated?: boolean;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -506,14 +508,14 @@ export const taintedCallRefused = (tool: ToolName, taint: SourceTaint): boolean 
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
@@ -521,6 +523,7 @@ export const recordNeedsOwnerCard = async (
     case 'draft': case 'honest_origin': case 'instructions_only': case 'narrows': return false;
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
+    case 'owner_inward': return ctx.ownerInitiated !== true;
     default: return true;
   }
 };

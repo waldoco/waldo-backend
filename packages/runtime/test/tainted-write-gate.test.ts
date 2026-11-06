@@ -42,7 +42,6 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
     ['log_workout', { type: 'run', duration_minutes: 30 }],
   ],
   'workspace writes': [
-    ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
     ['workspace_render', { source_file_id: 'f1', source_revision: 1, path: 'out/vendor.pdf', expected_revision: 0, format: 'pdf' }],
     ['extract_archive', { file_id: 'abcdefab-cdef-4abc-8abc-000000000001', revision: 1 }],
   ],
@@ -58,6 +57,22 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   ],
 };
 
+// The owner's own inward writes that the owner can undo: they send, publish and grant nothing. In a turn the owner's message
+// started they run under outside text, with a receipt in the reply; with no owner in the turn they are carded.
+const INWARD: readonly (readonly [ToolName, Record<string, unknown>])[] = [
+  ['set_reminder', { note: 'Wire the deposit to the new account', at: '2026-11-07T15:00', repeat: 'none' }],
+  ['update_todo', { item_id: 'i1', status: 'done' }],
+  ['track_responsibility', { title: 'Pay the vendor', intent: 'Pay the vendor before Friday' }],
+  ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
+];
+// What only ends or stops something: outside text can at worst make Waldo drop a reminder or a job the owner can set again.
+const NARROWS: readonly (readonly [ToolName, Record<string, unknown>])[] = [
+  ['cancel_reminder', { id: 'reminder:r1' }],
+  ['cancel_task', { job_id: 'job_0123456789ab' }],
+  ['cancel_standing_order', { id: 'o1' }],
+  ['forget_memory', { topic: 'vendor', scope_note: 'the vendor' }],
+];
+
 describe('a tainted turn sends every write to the owner card', () => {
   for (const [kind, calls] of Object.entries(WRITES)) {
     it(`${kind}: after outside text the direct call is refused with the card as its fix; the owner's own turn runs it`, async () => {
@@ -71,6 +86,29 @@ describe('a tainted turn sends every write to the owner card', () => {
       }
     });
   }
+
+  it('an inward write the owner can undo runs under outside text in the owner\'s own turn, and is carded with no owner in the turn', async () => {
+    for (const [tool, args] of INWARD) {
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, {}), tool).toBe(true);
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, { ownerInitiated: true }), tool).toBe(false);
+      // update_todo is held by no owner-message turn today; the decision above is its whole gate.
+      if (!allowlist(tool).includes('user_message')) continue;
+      const { handler, runs } = recording(tool);
+      expect(await dispatchTool({ id: `${tool}-m`, name: tool, args }, tainted(), { handlers: [handler] }), tool)
+        .toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(runs, tool).toEqual([]);
+      expect(await dispatchTool({ id: `${tool}-o`, name: tool, args }, tainted({ ownerInitiated: true }), { handlers: [handler] }), tool).toMatchObject({ ok: true });
+      expect(runs, tool).toHaveLength(1);
+    }
+  });
+
+  it('a call that only ends or stops something runs under outside text, owner in the turn or not', async () => {
+    for (const [tool, args] of NARROWS) {
+      const { handler, runs } = recording(tool);
+      expect(await dispatchTool({ id: `${tool}-t`, name: tool, args }, tainted(), { handlers: [handler] }), tool).toMatchObject({ ok: true });
+      expect(runs, tool).toHaveLength(1);
+    }
+  });
 
   it('a draft is exempt: it sends nothing and the owner reviews it before sending', async () => {
     const { handler, runs } = recording('draft_email');
@@ -137,15 +175,15 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   // A standing change outlives the turn; it is not privileged, so the owner's own turn makes it with no approval line.
-  it('a reminder, loop, standing order, setting or forget from a tainted turn is the owner\'s; none is a privileged action', async () => {
-    for (const tool of ['set_reminder', 'cancel_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory'] as const) {
+  it('a reminder, loop, standing order or setting from a tainted turn is the owner\'s; none is a privileged action', async () => {
+    for (const tool of ['set_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'set_proactivity', 'set_schedule_preference'] as const) {
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, {}), tool).toBe(true);
       expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
       expect(taintGateBlocksDirectExecution(tool, 'external'), tool).toBe(false);
     }
     const scope_note = 'the plan';
     for (const args of [{ claim_ids: [1], scope_note }, { topic: 'plan', scope_note }, { topic: 'e', scope_note }, { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note }, null, undefined]) {
-      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, {})).toBe(true);
+      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, {})).toBe(false);
     }
   });
 
@@ -167,13 +205,19 @@ describe('a tainted turn sends every write to the owner card', () => {
     const carded: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
-      'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
-      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
+      'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
+      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
       'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
+    // With the owner's own message in the turn, exactly the inward writes leave the carded set; sends, publishes, grants,
+    // background tasks, MCP writes and the writes with no undo stay on the owner's card.
+    const ownerTurn: ToolName[] = [];
+    for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'create_artifact', 'revise_artifact']));
   });
 });
 
