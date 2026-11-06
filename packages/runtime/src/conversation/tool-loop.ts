@@ -30,10 +30,14 @@ export const capToolOutput = (output: string, offload?: ToolOutputStore, callId?
 };
 
 // model: the model that answered, when one did; its provider's cache lifetime decides when old results may be cleared.
+// view: whether the turns already showed the owner's health readings, and whether the turn has read outside content. A step
+// whose own context (system prompt, conversation) holds a reading says so in healthInContext; it checks only when it would
+// offer a provider-hosted search, which it leaves out once either shows a reading, or when the turn is tainted.
 export type ToolLoopStep = (
   tools: readonly LLMTool[] | undefined,
   turns: readonly LLMToolTurn[],
-) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[]; model?: ModelName }>>;
+  view: Readonly<{ healthShown: boolean; tainted: boolean }>,
+) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[]; model?: ModelName; healthInContext?: boolean }>>;
 
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
 // parallel_batches is 1 on the first call of a dispatch batch and 0 on the calls that ran beside it, so summing it over a
@@ -291,8 +295,12 @@ export async function runToolLoop(input: Readonly<{
     input.ctx.runScope?.admit();
     let response: Awaited<ReturnType<ToolLoopStep>>;
     const shown = shownTurns();
+    for (const turn of healthShown ? [] : shown) {
+      if (!healthTurns.has(turn)) healthTurns.set(turn, ownerHealthTurn(turn, input.ctx));
+      if (await healthTurns.get(turn)) { healthShown = true; input.ctx.healthShown = true; break; }
+    }
     try {
-      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shown));
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shown, { healthShown, tainted }));
     } catch (error) {
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
@@ -314,10 +322,7 @@ export async function runToolLoop(input: Readonly<{
         : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls), inward);
     }
     // This round's calls were written from the request just answered, so they are fenced when it showed both.
-    for (const turn of healthShown ? [] : shown) {
-      if (!healthTurns.has(turn)) healthTurns.set(turn, ownerHealthTurn(turn, input.ctx));
-      if (await healthTurns.get(turn)) { healthShown = true; input.ctx.healthShown = true; break; }
-    }
+    if (response.healthInContext === true) { healthShown = true; input.ctx.healthShown = true; }
     healthFenced ||= healthShown && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
     let firstCall = true;
     roundStarts.push(turns.length);

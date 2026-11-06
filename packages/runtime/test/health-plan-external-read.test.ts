@@ -11,7 +11,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // decimal so no timestamp the turn writes can hold it.
 const HRV = '67.4';
 const EVENT = 'Quarterly board call';
-const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' | 'health_first' }));
+const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' | 'health_first' | 'stated' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       { call_id: 'search-1', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) },
       { call_id: 'page-1', name: 'browse_page', arguments: JSON.stringify({ url: `https://collector.example/?v=${HRV}` }) },
     ];
-    const steps = { together: [[health, calendar]], calendar_first: [[calendar], [health]], health_first: [[health], [calendar]] }[model.order];
+    const steps = { together: [[health, calendar]], calendar_first: [[calendar], [health]], health_first: [[health], [calendar]], stated: [[calendar]] }[model.order];
     const rounds = request.tool_turns?.length ?? 0;
     let at = 0;
     for (const step of steps) { if (rounds === at) return done('', step); at += step.length; }
@@ -101,7 +101,40 @@ for (const order of ['together', 'calendar_first', 'health_first'] as const) {
         expect(turns.find(turn => turn.call.name === 'get_health')!.output).toContain(HRV);
         for (const name of ['web_search', 'browse_page']) expect(turns.find(turn => turn.call.name === name)!.output).toContain('"error_code":"egress_denied"');
         expect(egressCalls).toEqual([]);
+        // The provider's hosted search searches again inside one call, after reading its own results, with no dispatch to
+        // fence: a request offers it only until one has shown the reading.
+        const hosted = replyRequests().filter(request => request.tools?.length).map(request => ({ reading: (request.tool_turns ?? []).some(turn => turn.call.name === 'get_health'), hosted: request.web_search !== undefined }));
+        expect(hosted.length).toBeGreaterThan(2);
+        expect(hosted.filter(request => request.hosted !== !request.reading)).toEqual([]);
       } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
     });
   });
 }
+
+// The owner's own message states the reading, so it rides the request's context, never a tool result: the calendar read still
+// fences the turn's egress, and no request offers the hosted search.
+it("a reading the owner states in the message fences the turn after an outside read, and keeps the hosted search off", async () => {
+  const name = 'health-plan-external-stated';
+  model.order = 'stated';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql); ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    vi.setSystemTime('2026-10-13T06:30:00Z');
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    try {
+      const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'plan-stated-client-01', text: `My HRV was ${HRV} ms this morning. Plan tomorrow around my energy: what should I do when, given my calendar?` }) }));
+      const { message_id: id } = await sent.json() as { message_id: string };
+      const settled = () => state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state;
+      await vi.waitFor(() => expect(['completed', 'interrupted']).toContain(settled()), { timeout: 10_000, interval: 20 });
+      expect(settled()).toBe('completed');
+      const turns = replyRequests().at(-1)!.tool_turns ?? [];
+      expect(turns.map(turn => turn.call.name)).toEqual(['query_calendar', 'web_search', 'browse_page']);
+      for (const name of ['web_search', 'browse_page']) expect(turns.find(turn => turn.call.name === name)!.output).toContain('"error_code":"egress_denied"');
+      expect(egressCalls).toEqual([]);
+      expect(replyRequests().filter(request => request.web_search !== undefined)).toEqual([]);
+    } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
