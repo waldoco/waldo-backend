@@ -1,8 +1,11 @@
 // Everything that reaches a model or a person passes through sanitise(), and the owner's inbound text (WhatsApp, mail, web
 // pages) is arbitrary: a pattern that backtracks super-linearly lets one hostile message stall the owner's Durable Object.
-// The redactor scans a string of up to MODEL_CONTEXT_MAX_CHARS before it applies a destination's own cap, so each case is
-// held to a time bound at a size where a quadratic pattern takes seconds. Time is only measured in plain node (this file
-// runs in the scenarios config); the workers pool does not advance its clock during synchronous work.
+// The redactor scans a string of up to MODEL_CONTEXT_MAX_CHARS before it applies a destination's own cap.
+// A fixed time budget is a poor test of that: a shared CI runner is three to five times slower than a laptop, and the
+// inputs here are linear, not stalls. Each case is timed at one size and at four times that size, and the time may grow
+// by less than eight times (linear is about four, a quadratic pattern sixteen, a cubic one sixty-four); a case that takes
+// under a quarter of a second at the larger size is fast enough not to matter. Time is only measured in plain node (this
+// file runs in the scenarios config); the workers pool does not advance its clock during synchronous work.
 import type { SanitiseDestination } from '@waldo/contracts';
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +18,17 @@ const CANARIES = ['a1b2c3d4e5f60718', '0f1e2d3c4b5a6978', '9a8b7c6d5e4f3021'];
 const scan = (text: string, destination: SanitiseDestination = 'send_message') =>
   sanitise({ payload: destination === 'send_message' ? text : { body: text }, destination, canary_tokens: [...CANARIES], source_taint: 'external' });
 const millis = (run: () => unknown): number => { const start = performance.now(); run(); return performance.now() - start; };
+const FAST_ENOUGH_MS = 250;
+const GROWTH_LIMIT = 8;
+// The best of two runs, unless the first is already slow (a stall would only be repeated).
+const timeOf = (run: () => unknown): number => { const first = millis(run); return first < FAST_ENOUGH_MS ? Math.min(first, millis(run)) : first; };
+// `at(n)` runs the case on an input of size n; the case is read at `size / 4` and at `size`.
+const expectLinear = (label: string, size: number, at: (n: number) => unknown): void => {
+  const small = timeOf(() => at(size / 4));
+  const large = timeOf(() => at(size));
+  if (large < FAST_ENOUGH_MS) return;
+  expect(large / Math.max(small, 30), `${label}: ${Math.round(small)} ms, then ${Math.round(large)} ms for four times the input`).toBeLessThan(GROWTH_LIMIT);
+};
 
 const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'a uuid one character short, repeated': n => '7e2aa0c8-91b3-4c2e-8a11-f0e023af605 '.repeat(n / 37),
@@ -56,51 +70,32 @@ const FILLERS: Readonly<Record<string, (n: number) => string>> = {
   'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
 };
 
-// 600 ms for 80,000 characters is several times what a linear pass takes (30 to 80 ms here, about four times that on a shared
-// runner) and under what the patterns this file guards took before they were fixed (1 to 4 s here), so a regression fails
-// instead of passing by luck.
 describe('the patterns sanitise() runs stay linear on the near-miss and whitespace inputs tried here', () => {
-  // These take longer per character for a reason that is the same at every size (about 5 microseconds each, twice the size
-  // is twice the time), so they are read at a quarter of the length.
-  const HEAVY = new Set(['a bearer word repeated', 'an api key word repeated', 'a private key header repeated']);
   it.each(Object.keys(NEAR_MISSES))('%s, up to 80,000 characters', name => {
-    const heavy = HEAVY.has(name);
-    const text = NEAR_MISSES[name]!(heavy ? 20_000 : 80_000);
-    // A shared runner took 410 ms for 20,000 characters of the heavy ones (110 ms here); a pattern that squares its input
-    // takes tens of seconds at that size, so a second still separates them.
-    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(heavy ? 1_000 : 600);
+    for (const destination of ['send_message', 'internal_context'] as const) expectLinear(destination, 80_000, n => scan(NEAR_MISSES[name]!(n), destination));
   });
 
-  it.each(['hrv', 'slept', 'wrist temperature'])('%s followed by 500 blanks of each kind is read in a moment', word => {
-    for (const filler of ['spaces', 'newlines', 'no-break spaces']) expect(millis(() => scan(`${word}${FILLERS[filler]!(500)}`)), filler).toBeLessThan(300);
+  it.each(['hrv', 'slept', 'wrist temperature'])('%s followed by a run of blanks of each kind', word => {
+    for (const filler of ['spaces', 'newlines', 'no-break spaces']) expectLinear(filler, 500, n => scan(`${word}${FILLERS[filler]!(n)}`));
   });
 
-  it('every health, secret and token word followed by 400 characters of each filler is read in a moment', () => {
-    let slowest = 0;
-    let total = 0;
-    for (const word of TRIGGERS) for (const make of Object.values(FILLERS)) {
-      const took = millis(() => scan(`${word}${make(400)}`));
-      slowest = Math.max(slowest, took);
-      total += took;
-    }
-    expect(slowest).toBeLessThan(300);
-    expect(total).toBeLessThan(6_000);
+  it('every health, secret and token word followed by a run of each filler', () => {
+    for (const word of TRIGGERS) for (const [name, make] of Object.entries(FILLERS)) expectLinear(`${word} + ${name}`, 400, n => scan(`${word}${make(n)}`));
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd'])('numericHealthIn and redactNumericHealth read %s followed by 100,000 blanks in a moment', word => {
-    const text = `${word}${' '.repeat(100_000)}`;
-    expect(millis(() => numericHealthIn(text))).toBeLessThan(300);
-    expect(millis(() => redactNumericHealth(text, '[health]'))).toBeLessThan(300);
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+    expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
+    expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });
 
   // A word between a health word and its number may not swallow the number's own digits and be tried at every split. The
   // free-text health patterns run only inside sanitise(), so this goes through it, to both a message and the model's context.
-  it.each(['heart rate', 'glucose', 'hrv', 'steps', 'bp', 'blood pressure', 'sleep duration', 'form', 'body temperature'])('%s, a word, then 80,000 digits, is read in a moment with or without a letter after them', word => {
+  it.each(['heart rate', 'glucose', 'hrv', 'steps', 'bp', 'blood pressure', 'sleep duration', 'form', 'body temperature'])('%s, a word, then a run of digits, with or without a letter after them', word => {
     for (const destination of ['send_message', 'internal_context'] as const) {
-      for (const tail of ['z', '']) expect(millis(() => scan(`${word} x ${'1'.repeat(80_000)}${tail}`, destination)), `${destination}, tail ${JSON.stringify(tail)}`).toBeLessThan(300);
-      expect(millis(() => scan(`${word} ${'1'.repeat(200_000)}`, destination)), `${destination}, a bare run of digits`).toBeLessThan(300);
-      expect(millis(() => scan(`${word} ${'x1'.repeat(40_000)}`, destination)), `${destination}, letters between digits`).toBeLessThan(300);
+      for (const tail of ['z', '']) expectLinear(`${destination}, tail ${JSON.stringify(tail)}`, 80_000, n => scan(`${word} x ${'1'.repeat(n)}${tail}`, destination));
+      expectLinear(`${destination}, a bare run of digits`, 200_000, n => scan(`${word} ${'1'.repeat(n)}`, destination));
+      expectLinear(`${destination}, letters between digits`, 80_000, n => scan(`${word} ${'x1'.repeat(n / 2)}`, destination));
     }
   });
 
@@ -113,17 +108,14 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // A role tag is `<`, an optional `/`, a role and `>`, each with blanks allowed between: blanks after a lone `<` are read once.
-  it.each([['<'], ['</'], ['< /'], ['<system']])('%s followed by 100,000 blanks is read in a moment', start => {
-    const text = `${start}${' '.repeat(100_000)}`;
-    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(600);
+  it.each([['<'], ['</'], ['< /'], ['<system']])('%s followed by a run of blanks', start => {
+    for (const destination of ['send_message', 'internal_context'] as const) expectLinear(destination, 100_000, n => scan(`${start}${' '.repeat(n)}`, destination));
   });
 
   it('a hostile uuid-like string takes time in proportion to its length', () => {
     const tokens = ['7e2aa0c8', '91b3', '4c2e', '8a11', 'f0e023af605', '-', '-', '.', ' ', '1', 'a', '@', '%', ':', '4111', 'ms', 'eyJ', 'hrv', 'slept'];
     const nearMiss = fc.array(fc.constantFrom(...tokens), { minLength: 2, maxLength: 8 }).chain(pool =>
-      fc.array(fc.constantFrom(...pool), { minLength: 12_000, maxLength: 16_000 }).map(parts => parts.join('')));
-    let total = 0;
-    fc.assert(fc.property(nearMiss, text => { total += millis(() => scan(text)); }), { numRuns: 40 });
-    expect(total).toBeLessThan(6_000);
+      fc.array(fc.constantFrom(...pool), { minLength: 48_000, maxLength: 64_000 }).map(parts => parts.join('')));
+    fc.assert(fc.property(nearMiss, text => { expectLinear('a random near miss', text.length, n => scan(text.slice(0, n))); }), { numRuns: 25 });
   });
 });
