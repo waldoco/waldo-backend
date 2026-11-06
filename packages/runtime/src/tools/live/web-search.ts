@@ -29,7 +29,8 @@ export const webSearchHandler = (
   async handle({ query, limit }: WebSearchArgs, ctx) {
     if (!apiKey) return { ok: false, code: 'auth_failed', source_taint: 'external', error: 'Web search is not set up on this Waldo yet.' };
     const country = ownerTimezone ? searchLocation(ownerTimezone()).country : undefined;
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}${country ? `&country=${country}` : ''}`;
+    // Brave decorates display strings (highlight markup in snippets) unless asked not to; a hit is read and quoted as text.
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}&text_decorations=false${country ? `&country=${country}` : ''}`;
     let response: Response;
     try {
       await ctx?.assertTaskSourceCurrent?.();
