@@ -18,7 +18,7 @@ import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
-import { appMessageBody, appTurnText, appUploadName, readAppUpload, stageAppUpload } from './app-uploads';
+import { appMessageBody, appTurnText, appUploadName, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
@@ -86,7 +86,7 @@ import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-m
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, persistAppInboxWake, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -468,6 +468,9 @@ const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindow
 // Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
 // as a new message, which is itself the notification, so quiet hours hold it there.
 const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
+// Whether a surface's media stays with its provider, so the owner's file list can point at it later (owner_files). An app
+// attachment is dropped once its message closes, so the list would keep a name and caption with nothing behind them.
+const MEDIA_STAYS_WITH_PROVIDER: Readonly<Record<ChannelKind, boolean>> = { telegram: true, whatsapp: true, app: false, imessage: false };
 // How a surface takes a notice outside any turn. The app's caller acknowledges nothing outside a turn, so the notice is
 // written into the transcript of the owner the directory admits. iMessage takes none: its caller acknowledges a send it only
 // drops while an iMessage turn runs. A chat surface sends, and its ack proves the send in the surface's own shape.
@@ -2226,16 +2229,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async appUpload(request: Request, name: string): Promise<Response> {
     const answer=(body:object,status:number)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
     if(this.env.APP_CHAT_ATTACHMENTS!=='1')return answer({error:'unavailable'},404);
+    // Everything that can refuse it is asked before the bytes are read.
     const kind=APP_CHAT_UPLOAD_KINDS.find(known=>known===request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER));
     if(!kind)return answer({error:'invalid_kind'},400);
     const mime=(request.headers.get('content-type')??'').split(';')[0]!.trim().toLowerCase();
-    const named=appUploadName(kind,mime,request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER));
+    let given:string|null=null;
+    try{const raw=request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER);given=raw===null?null:decodeURIComponent(raw);}catch{return answer({error:'invalid_name'},400);}
+    const named=appUploadName(kind,mime,given);
     if('refused' in named)return named.refused==='type'?answer({error:'unsupported_type'},415):answer({error:'invalid_name'},400);
+    if(!appUploadRoom(this.ctx.storage,Date.now()))return answer({error:'uploads_waiting'},429);
     const data=new Uint8Array(await request.arrayBuffer());
     if(!data.length)return answer({error:'empty'},400);
     if(data.length>APP_CHAT_UPLOAD_MAX_BYTES)return answer({error:'too_large'},413);
     const staged=stageAppUpload(this.ctx.storage,{owner:name,kind,mime,name:named.name,data},Date.now());
     if(staged==='capacity')return answer({error:'uploads_waiting'},429);
+    // The alarm wakes at the upload's expiry, to drop it if no message took it.
+    const wake=this.ctx.storage.kv.get<number|null>(APP_INBOX_DUE_KEY)??null;
+    await this.ctx.storage.transaction(txn=>persistAppInboxWake(txn,wake===null?staged.expiresAt:Math.min(wake,staged.expiresAt)));
     return answer(appChatUploadResultV1Schema.parse({upload_id:staged.id,kind,bytes:data.length,expires_at:staged.expiresAt}),201);
   }
   // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
@@ -2267,6 +2277,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return { ...scope, admit: () => { scope.admit(); current(); }, commit: work => scope.commit(() => { current(); return work(); }) };
   }
   private async drainApp(alarmEnd?: number): Promise<void> {
+    this.appInbox.sweepUploads();
     this.appInbox.recover(this.appAttempts);
     await this.writeAppNotices();
     const untitled=new Map<string,string>(),compactable=new Map<string,AppInboxRecord>();
@@ -5080,7 +5091,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       respond: async (turn, time) => {
         const earlier = this.whatsappEarlier?.updateId === turn.updateId ? this.whatsappEarlier.turns : [];
-        for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
+        if (MEDIA_STAYS_WITH_PROVIDER[channel]) for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
         if (earlier.length) turn = { ...turn, earlier };
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
         const opened = openedForTurn(this.iMessageOpened, turn);

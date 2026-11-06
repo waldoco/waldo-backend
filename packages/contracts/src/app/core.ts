@@ -85,7 +85,8 @@ export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoke
 export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512), renew_after: z.int().nonnegative() });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 // Chat attachments: one voice note, photo or file per message, uploaded first (raw bytes, its type in content-type, its
-// kind and name in the upload headers) and named by the send. A backend that takes none answers 404 at
+// kind and its name, percent-encoded UTF-8, in the upload headers) and named by the send. A send naming an upload that is
+// not there to take (unknown, expired, already sent, or attachments off) is refused 409 upload_unavailable. A backend that takes none answers 404 at
 // APP_CHAT_UPLOAD_PATH, so a build attaches only after an upload there succeeds. An upload not sent within
 // APP_CHAT_UPLOAD_TTL_MS is dropped. A sent one is kept only until its message's turn ends: a voice note is read for its
 // transcript and not kept; a photo or file is kept in the owner's files where file keeping is on, as on every chat surface.

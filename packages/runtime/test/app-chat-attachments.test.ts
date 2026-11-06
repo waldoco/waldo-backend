@@ -96,8 +96,11 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
       expect((await settled(id)).state).toBe('completed');
       expect(stt.calls).toEqual([{ name: 'voice.m4a', type: 'audio/mp4', bytes: audio.length }]);
       expect(model.requests.join('\n')).toContain(TRANSCRIPT);
-      expect(JSON.stringify([...state.storage.kv.list()])).not.toContain(base64(audio.subarray(0, 300)));
       expect(staged()).toEqual([]);
+      // The owner's file list points only at media its provider keeps; an app attachment is gone once its message closes.
+      const listed = state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'owner_files'").one().n
+        ? state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM owner_files').one().n : 0;
+      expect(listed).toBe(0);
     });
   });
 
@@ -131,16 +134,82 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
     });
   });
 
-  it('a stopped message drops its upload, and a sent upload cannot be sent again', async () => {
-    await fixture('attach-cancel', ON, async ({ upload, send, staged, owner }) => {
+  it('a sent upload cannot be sent again', async () => {
+    await fixture('attach-twice', ON, async ({ upload, send, settled }) => {
       const { upload_id } = await uploaded(await upload('photo', 'image/jpeg', bytes(1_000, 1)));
-      const first = await send('stop-client-0001', { text: 'look', attachments: [{ upload_id }] });
-      expect(first.status).toBe(202);
-      expect((await send('stop-client-0002', { text: 'again', attachments: [{ upload_id }] })).status).toBe(409);
-      const stopped = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages/stop-client-0001/cancel', { method: 'POST',
-        headers: { 'x-waldo-do-name': 'attach-cancel', 'x-waldo-app-session-hash': 'b'.repeat(64) } }));
-      expect(stopped.status).toBe(200);
-      await vi.waitFor(() => expect(staged()).toEqual([]), { timeout: 10_000, interval: 20 });
+      const first = await admitted(await send('twice-client-0001', { text: 'look', attachments: [{ upload_id }] }));
+      expect((await send('twice-client-0002', { text: 'again', attachments: [{ upload_id }] })).status).toBe(409);
+      await settled(first);
+    });
+  });
+
+  it('a photo sent in a thread reaches that thread\'s turn', async () => {
+    await fixture('attach-thread', ON, async ({ owner, upload, settled }) => {
+      const headers = { 'x-waldo-do-name': 'attach-thread', 'x-waldo-app-session-hash': 'b'.repeat(64), 'content-type': 'application/json' };
+      const { thread_id } = await (await owner.fetch(new Request('https://telegram-owner/app/v1/threads', { method: 'POST', headers,
+        body: JSON.stringify({ operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001', title: 'Receipts' }) }))).json() as { thread_id: string };
+      const { thread } = await (await owner.fetch(new Request(`https://telegram-owner/app/v1/threads/${thread_id}`, { headers }))).json() as { thread: { revision: number } };
+      const photo = bytes(700, 4);
+      const { upload_id } = await uploaded(await upload('photo', 'image/webp', photo));
+      const sent = await owner.fetch(new Request(`https://telegram-owner/app/v1/threads/${thread_id}/messages`, { method: 'POST', headers,
+        body: JSON.stringify({ client_message_id: 'thread-client-0001', text: '', attachments: [{ upload_id }], expected_revision: thread.revision }) }));
+      expect((await settled(await admitted(sent))).state).toBe('completed');
+      expect(model.requests.join('\n')).toContain(base64(photo));
+    });
+  });
+
+  it('a file named in any script arrives under that name, percent-encoded; a malformed encoding is refused', async () => {
+    await fixture('attach-names', ON, async ({ upload, send, settled }) => {
+      const doc = await uploaded(await upload('file', 'application/pdf', bytes(400, 6), encodeURIComponent('Rapport déc 予定.pdf')));
+      await settled(await admitted(await send('names-client-0001', { text: '', attachments: [{ upload_id: doc.upload_id }] })));
+      expect(model.requests.join('\n')).toContain('Rapport déc 予定.pdf');
+      expect((await upload('file', 'application/pdf', bytes(10, 1), '%E0%A4%A')).status).toBe(400);
+    });
+  });
+});
+
+describe('an upload nobody sends', () => {
+  it('wakes the owner object at its expiry and is dropped by the alarm there, with attachments since switched off', async () => {
+    await fixture('attach-expiry', ON, async ({ upload, send, settled, staged, state }) => {
+      const { upload_id, expires_at } = await uploaded(await upload('voice', 'audio/mp4', bytes(5_000, 2)));
+      expect(state.storage.kv.get<number>('app_inbox_due_v1')).toBe(expires_at);
+      // A message run meanwhile moves the inbox's wake and must leave it on the waiting upload's expiry.
+      await settled(await admitted(await send('expiry-client-001', { text: 'something else first' })));
+      expect(state.storage.kv.get<number>('app_inbox_due_v1')).toBe(expires_at);
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(expires_at);
+      const meta = state.storage.kv.get<{ expiresAt: number }>(`app_upload:${upload_id}`)!;
+      state.storage.kv.put(`app_upload:${upload_id}`, { ...meta, expiresAt: Date.now() - 1 });
+      const off = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', APP_CHAT_ATTACHMENTS: '0' } as never);
+      await off.alarm();
+      expect(staged()).toEqual([]);
+      expect(state.storage.kv.get('app_inbox_due_v1')).toBeNull();
+    });
+  });
+});
+
+describe('every way an app message closes drops its upload', () => {
+  const closes: ReadonlyArray<readonly [string, (inbox: import('../src/channels/app-inbox').AppInbox, id: string, state: DurableObjectState, name: string) => void]> = [
+    ['the owner stops it', (inbox, _id, _state, name) => { inbox.cancel(name, 'close-client-0001', 'owner:x'); }],
+    ['its session is revoked', (inbox) => { inbox.revokeSession('b'.repeat(64)); }],
+    ['its session lapsed before it ran', (inbox, id) => { inbox.claim(id, false); }],
+    ['it was running when the object restarted', (inbox, id) => { inbox.claim(id, true); inbox.recover(new Set()); }],
+    ['its turn finished', (inbox, id) => { const row = inbox.claim(id, true)!; inbox.settle(row, true); }],
+    ['its chat was deleted', (inbox, _id, state) => { state.storage.transactionSync(() => inbox.eraseChat('owner:x')); }],
+  ];
+  it.each(closes)('when %s', async (why, close) => {
+    const name = `attach-close-${closes.findIndex(([each]) => each === why)}`;
+    await fixture(name, ON, async ({ state, staged }) => {
+      const { AppInbox } = await import('../src/channels/app-inbox');
+      const { stageAppUpload } = await import('../src/channels/app-uploads');
+      const inbox = new AppInbox(state.storage);
+      const upload = stageAppUpload(state.storage, { owner: name, kind: 'voice', mime: 'audio/ogg', name: 'voice.ogg', data: bytes(600_000, 8) }, Date.now());
+      if (upload === 'capacity') throw new Error('fixture expected room for one upload');
+      const admittedRow = await inbox.admit(name, 'b'.repeat(64), 'close-client-0001', '', 'owner:x', undefined, undefined, upload.id);
+      if (admittedRow.kind !== 'admitted') throw new Error('fixture expected the message admitted');
+      expect(staged().length).toBe(3);
+      close(inbox, admittedRow.record.id, state, name);
+      expect(staged()).toEqual([]);
+      expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${admittedRow.record.id}`)?.upload).toBeUndefined();
     });
   });
 });

@@ -3,7 +3,7 @@ import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
-import { dropAppUpload, sweepAppUploads, takeAppUpload, type AppUploadRef } from './app-uploads';
+import { appUploadsDue, dropAppUpload, sweepAppUploads, takeAppUpload, type AppUploadRef } from './app-uploads';
 import { APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appContractRevision, type AppChatActivityKind } from '../../../contracts/src/app/core';
 import { REPLY_TEXT_MAX_CHARS } from '../../../contracts/src/app/parts';
 import type { ReplyDraftSurface } from '../conversation/reply-stream';
@@ -49,7 +49,11 @@ const replyActivities = new WeakMap<DurableObjectStorage, ReplyActivity>();
 // The chat revision a receipt is read at: 2 adds the draft, 3 the activity. Installed builds parse receipts strictly and
 // see neither until they declare the revision.
 export const chatRevision = (request: Request): number => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'chat');
-const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
+// The inbox's wake: soon for work waiting, else the next unsent upload's expiry, so the alarm sweeps it on time.
+const due = (kv: DurableObjectStorage['kv'], rows: readonly AppInboxRecord[], now: number) => {
+  const work = rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null, expiry = appUploadsDue(kv);
+  return work === null ? expiry : expiry === null ? work : Math.min(work, expiry);
+};
 // A closed message keeps neither its words nor its attachment.
 const clear = (kv: DurableObjectStorage['kv'], row: AppInboxRecord) => { row.text = ''; if (row.upload) { dropAppUpload(kv, row.upload.id); delete row.upload; } };
 // One durable writer: admitted payload, digest, sequence and alarm commit before ACK.
@@ -111,7 +115,7 @@ export class AppInbox {
     this.storage.transactionSync(()=>{
       const rows=this.records();
       for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(this.storage.kv,row);this.storage.kv.put(PREFIX+row.id,row);}
-      this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
+      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,rows,this.now()));
     });
   }
   // While the directory is unavailable, admitted work stays queued. Its wake moves out so the shared
@@ -132,7 +136,7 @@ export class AppInbox {
         row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(this.storage.kv,row);delete row.landed;
         this.storage.kv.put(PREFIX+row.id,row);fenced+=1;
       }
-      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
       return fenced;
     });
   }
@@ -146,7 +150,7 @@ export class AppInbox {
       if(row.state!=='admitted'&&row.state!=='running')return row;
       row.effectsUnconfirmed=row.state==='running';
       row.state='interrupted';row.closedReason='cancelled';row.closedAt=this.now();clear(this.storage.kv,row);delete row.landed;
-      this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
       return row;
     });
   }
@@ -156,7 +160,7 @@ export class AppInbox {
   fold(id:string,into:string):boolean {
     const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted'||row.upload)return false;
     row.state='completed';row.foldedInto=into;row.closedAt=this.now();clear(this.storage.kv,row);
-    this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+    this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
     return true;
   }
   claim(id:string,sessionCurrent:boolean,deadline=this.now()+APP_TURN_DEADLINE_MS):AppInboxRecord|null {
@@ -165,7 +169,7 @@ export class AppInbox {
       row.state=sessionCurrent?'running':'revoked';
       if(sessionCurrent){row.attempt=crypto.randomUUID();row.deadline=deadline;}
       else{row.closedAt=this.now();row.closedReason='session_revoked';row.effectsUnconfirmed=false;clear(this.storage.kv,row);}
-      this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
       return sessionCurrent?structuredClone(row):null;
     });
   }
@@ -181,15 +185,19 @@ export class AppInbox {
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+record.id);if(!row||row.state!=='running'||row.attempt!==record.attempt)return;
       row.state=completed?'completed':'interrupted';row.closedAt=this.now();clear(this.storage.kv,row);
       if(completed)delete row.landed;else{row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';}
-      this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
     });
+  }
+  // Drops unsent uploads past their expiry and moves the wake to the next one; the drain runs it on every pass.
+  sweepUploads():void {
+    this.storage.transactionSync(()=>{sweepAppUploads(this.storage.kv,this.now());this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));});
   }
   noticesDue():AppInboxRecord[] { return this.records().filter(row=>row.notice==='due'); }
   // Erases a deleted chat's messages, whatever their state, with any reply still owed. It runs inside the caller's
   // transaction, the one that deletes the chat, so it opens none of its own.
   eraseChat(conversationRef:string):void {
     for(const row of this.records())if(row.conversationRef===conversationRef){clear(this.storage.kv,row);this.storage.kv.delete(PREFIX+row.id);}
-    this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+    this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
   }
   // Kept only while the same attempt still runs: a run that was revoked or replaced owes no reply.
   noteLanded(id:string,attempt:string,line:string):void {
@@ -204,7 +212,7 @@ export class AppInbox {
     this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(row?.notice!=='due')throw new ClosedRunError();
       row.notice=outcome;delete row.landed;this.storage.kv.put(PREFIX+id,row);work();
-      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.storage.kv,this.records(),this.now()));
     });
   }
 }

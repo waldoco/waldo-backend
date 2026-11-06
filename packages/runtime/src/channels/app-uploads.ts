@@ -22,10 +22,18 @@ export const dropAppUpload = (kv: SyncKv, id: string): void => {
 
 const waiting = (kv: SyncKv): Meta[] => [...kv.list<Meta>({ prefix: META })].map(([, meta]) => meta).filter(meta => meta.takenBy === undefined);
 
-// Drops every untaken upload past its expiry.
+// Drops every untaken upload past its expiry. The app inbox's wake includes the next expiry (appUploadsDue), so the alarm
+// runs this on time whether or not attachments are still switched on.
 export const sweepAppUploads = (kv: SyncKv, now: number): void => {
   for (const meta of waiting(kv)) if (meta.expiresAt !== null && meta.expiresAt <= now) dropAppUpload(kv, meta.id);
 };
+export const appUploadsDue = (kv: SyncKv): number | null => waiting(kv).reduce<number | null>((soonest, meta) =>
+  meta.expiresAt !== null && (soonest === null || meta.expiresAt < soonest) ? meta.expiresAt : soonest, null);
+// Whether another upload may wait, asked before its bytes are read; staging asks again in its own transaction.
+export const appUploadRoom = (storage: DurableObjectStorage, now: number): boolean => storage.transactionSync(() => {
+  sweepAppUploads(storage.kv, now);
+  return waiting(storage.kv).length < APP_CHAT_UPLOADS_WAITING_MAX;
+});
 
 export const stageAppUpload = (storage: DurableObjectStorage, upload: Readonly<{ owner: string; kind: AppChatUploadKind; mime: string; name: string; data: Uint8Array }>, now: number)
   : Readonly<{ id: string; expiresAt: number }> | 'capacity' => storage.transactionSync(() => {
@@ -81,7 +89,8 @@ export const appMessageBody = (text: string, upload?: AppUploadRef) => {
   return { ...caption, document: { ...file, mime_type: upload.mime, file_name: upload.name } };
 };
 
-// The input an app message is admitted under: its words, or for a message that is only an attachment, a note naming the
-// attachment. It is the admission's text only; the model reads the attachment's own note and transcript from the media reader.
+// The input an app message is admitted under: its words, or for a message that is only an attachment, a note saying what
+// kind it is (never its name, which someone else may have chosen). It is the admission's text only; the model reads the
+// attachment's own note and transcript from the media reader.
 export const appTurnText = (record: Readonly<{ text: string; upload?: AppUploadRef }>): string =>
-  record.text || (record.upload ? `[Owner sent a ${record.upload.kind === 'voice' ? 'voice note' : record.upload.kind === 'photo' ? 'photo' : `file "${record.upload.name}"`}.]` : '');
+  record.text || (record.upload ? `[Owner sent a ${record.upload.kind === 'voice' ? 'voice note' : record.upload.kind}.]` : '');
