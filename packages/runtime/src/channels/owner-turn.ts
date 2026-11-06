@@ -17,6 +17,7 @@ import type { ConversationModelMessage, RunOrigin } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
+import { healthInContext } from '../conversation/health-fence';
 import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
@@ -276,7 +277,7 @@ export const createOwnerResponder = (
   // The running turn's request sanitisation results, begun again when a forget lands (this turn's or the console's).
   let turnSanitise: Readonly<{ forgets: string; memo: TurnSanitiseMemo }> | undefined;
   // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
-  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined;
+  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown; healthShown?: boolean }> | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
   // out), else the plain line.
   const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
@@ -297,7 +298,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {
     await assertCurrent();
     if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
@@ -355,7 +356,7 @@ export const createOwnerResponder = (
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
           ...(tools ? brainTools(tools, providerSearch && purpose === 'reply' && !light) : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
-          ...(tools && ownerTurnActive && purpose === 'reply' && !light ? { web_search: searchLocation(clock.timezone) } : {}),
+          ...(tools && ownerTurnActive && purpose === 'reply' && !light && hostedSearch ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
@@ -592,8 +593,9 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: childHandlers,
           budget: turnBudget,
-          // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say.
-          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say,
+          // and a child whose task was written after the owner's readings were shown fences its egress once it is tainted.
+          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -625,6 +627,7 @@ export const createOwnerResponder = (
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
       const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
+      let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
@@ -637,7 +640,7 @@ export const createOwnerResponder = (
         // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
         onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
-        step: async function turnStep(tools, turns) {
+        step: async function turnStep(tools, turns, view) {
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
@@ -784,11 +787,19 @@ export const createOwnerResponder = (
               : light.truncated ? 'truncated' : 'answered';
             log({ trace, hop: 'light_route', ms: Date.now() - started, ok: true, detail: route });
             if (route === 'answered') return light!;
-            if (control.revision() !== contextSteering) return turnStep(tools, turns);
+            if (control.revision() !== contextSteering) return turnStep(tools, turns, view);
           }
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
           // to it, gets the chat model.
-          return complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel);
+          // A reading in this request's own context fences the turn's egress once it is tainted, and keeps a hosted search off it.
+          let contextHealth = false;
+          if (!view.healthShown && ((tools !== undefined && ownerTurnActive) || view.tainted)) {
+            const key = `${system.text}\u0000${JSON.stringify(entries)}`;
+            if (contextHealthCheck?.key !== key) contextHealthCheck = { key, holds: healthInContext([{ role: 'system', content: system.text }, ...entries], loopCtx) };
+            contextHealth = await contextHealthCheck.holds;
+          }
+          const answer = await complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel, undefined, false, !view.healthShown && !contextHealth);
+          return contextHealth ? { ...answer, healthInContext: true } : answer;
         },
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).

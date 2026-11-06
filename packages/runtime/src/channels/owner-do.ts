@@ -115,7 +115,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, reminderFloorText } from './check-back';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -5078,7 +5078,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
           return;
         }
-        const text = medication?.state === 'text' ? medication.text : await responder.remind(trace, owner, note, time, timing).then(checkBackReply, (error: unknown) => {
+        const said = medication?.state === 'text' ? undefined : book.outside(entry.id)
+          ? responder.prompt(trace, owner, outsideReminderCheckBackText(note, timing), time, OUTSIDE_TEXT_JOB_TOOLS, undefined, undefined, undefined, 'external')
+          : responder.remind(trace, owner, note, time, timing);
+        const text = said === undefined ? medication!.text : await said.then(checkBackReply, (error: unknown) => {
           if (!(error instanceof ModelUnavailableError)) throw error;
           log({ trace, hop: 'reminder_floor', ms: Date.now() - started, ok: true, code: error.reason });
           return reminderFloorText(note);

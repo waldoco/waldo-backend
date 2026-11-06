@@ -315,7 +315,7 @@ export type ApprovalDesk = Readonly<{
   replayCurrent(id: string, argsDigest: string): Promise<boolean>;
   // Moves a running card to how its replay ended. Only a running card moves, so a settle is applied once.
   settleReplay(id: string, status: ReplayCardStatus): boolean;
-  ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
+  ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string; outside?: true }>[]): string;
 }>;
 
 const DECISION = { a: 'approve', e: 'edit', s: 'skip' } as const;
@@ -2290,7 +2290,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...unconfirmed.map((r) => `- ${summaryOf(r)} (${r.card_waits_on ? 'review card goes out when you next write; cannot approve yet' : 'review card delivery unconfirmed; cannot approve'})`),
         ...reviewOnly.map((r) => `- ${summaryOf(r)} (too long for approval card; cannot send)`),
         '', 'Reminders',
-        ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
+        ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}${r.outside ? ' (set while reading outside content)' : ''}`) : ['- none set']),
         '', 'Recent',
         ...(done.length ? done.map((r) => `- ${r.status}: ${summaryOf(r)}${r.status === 'withdrawn' && r.withdrawn_reason ? ` (${r.withdrawn_reason})` : ''}${r.grant_json ? ' (by the owner\'s standing grant, with no card)' : ''}`) : ['- nothing yet']),
       ];

@@ -35,8 +35,6 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:{instructions
    if(seen.mode==='revise'){expect(readOutput.data.text).toContain('demo@example.test');seen.edit={path:seen.mode==='revise'&&seen.override?seen.olderPath:seen.currentPath,edits:[{before:'Subject: Demo plan',after:'Subject: Revised demo plan'},{before:'09:10 UTC.',after:'10:00 UTC.'}],mime:'text/markdown',expected_revision:seen.revision};return call('workspace_write',seen.edit);}
    return call('workspace_write',{path:seen.currentPath,text,mime:'text/markdown',expected_revision:0});
   }
-  // The read made the turn's text outside text, so the edit goes to the owner's card.
-  if(step===3 && seen.mode==='revise')return call('propose_action',{tool:'workspace_write',args:seen.edit,reasoning:'Make the saved draft warmer and move the demo to 10:00 UTC.'});
  }
  return {id:'fixture-final',output_text:seen.mode==='ambiguous'?'Which saved file do you mean?':'Draft prepared for review; it has not been sent.',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
@@ -76,13 +74,8 @@ it.each([
    await state.storage.delete(['conv-leaf','conv-count']);
    instance=new OwnerDO(state,privateEnv);
    await send('revise',seen.override?`Make the older saved draft ${seen.olderPath} warmer and move the demo to 10:00 UTC. Leave ${seen.currentPath} unchanged.`:'Make it warmer and move the demo to 10:00 UTC. Update the same saved file.');
-   expect(seen.calls).toEqual(['skills_load','workspace_read','workspace_write','propose_action']);
-   expect(ws.files.find(file=>file.file_id===seen.fileId)?.revision).toBe(1);
-   const card=state.storage.sql.exec<{id:string}>("SELECT id FROM ledger WHERE kind='tainted_action' AND status='open'").one();
-   const tap=++seq;
-   await inbox.admit({bot:'7.fixture',subject:'42',doName:name},tap,JSON.stringify({update_id:tap,callback_query:{id:`approve-${tap}`,from:{id:42,is_bot:false},data:`a:${card.id}`,message:{message_id:1,chat:{id:42,type:'private'}}}}));
-   await (instance as unknown as {drainInbox():Promise<void>}).drainInbox();
-   expect(state.storage.sql.exec<{status:string}>('SELECT status FROM ledger WHERE id=?',card.id).one().status).toBe('done');
+   // The read made the turn's text outside text; a private workspace edit in the owner's own turn still runs, listed in the reply.
+   expect(seen.calls).toEqual(['skills_load','workspace_read','workspace_write']);
    expect(ws.files).toHaveLength(2);expect(ws.files.find(file=>file.file_id===seen.fileId)?.revision).toBe(2);const untouched=seen.override?draft:older;expect(ws.files.find(file=>file.file_id===untouched.file_id)).toEqual(untouched);
    expect((await seen.store!.read(untouched.file_id,1,0,8000)).text).toBe('To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.');
    const read=await seen.store!.read(seen.fileId,2,0,8000);expect(read.text).toContain('10:00 UTC');expect(read.text).toContain('To: demo@example.test');expect(read.text).not.toContain('[REDACTED_EMAIL]');
