@@ -776,6 +776,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return jobsKept(this.ctx.storage.sql) ? this.tasks.report(ticket, outcome, events, spend, outcomes) : 'fenced';
   }
   async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return jobsKept(this.ctx.storage.sql) && this.tasks.heartbeat(ticket); }
+  // Spend is recorded even where the job book is gone: the calls were paid for.
+  async taskSpent(ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void> { await this.tasks.spent(ticket, events); }
 
   // Binds this owner's WhatsApp to a number, or unbinds it, inside the caller's transactionSync. When the number changes, an
   // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting,
