@@ -1,9 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { setQuestResultSchema } from '@waldo/contracts';
+import { reviewExperimentResultSchema, setExperimentResultSchema, setQuestResultSchema } from '@waldo/contracts';
 import { applyDoMigration, GOAL_QUESTS_MIGRATION, HEY144_GOALS_SCHEMA_MIGRATION } from '../src/do-schema';
-import { questBook, questCardContext, questHandler, questsPrompt, QUESTS_OPEN_MAX } from '../src/channels/quests';
+import { compareExperiment, experimentHandlers, questBook, questCardContext, questHandler, questsPrompt, QUESTS_OPEN_MAX, type ReadZones } from '../src/channels/quests';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 let seq = 0;
@@ -166,3 +166,129 @@ describe('what the model reads', () => {
   });
 });
 
+describe('experiments inside a quest', () => {
+  // Zones as the health plane answers them: row words, a day with no row absent.
+  const plane = (days: Readonly<Record<string, [string | null, string | null]>>) => {
+    const asked: string[][] = [];
+    const read: ReadZones = async (from, to) => { asked.push([from, to]); return { zones: { from, to, days: Object.entries(days).map(([day, [recovery, form]]) => ({ day, recovery, form })) } }; };
+    return { read, asked };
+  };
+
+  it('starts one change in an open quest for 14 days by default, one running at a time', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const book = questBook(state.storage.sql, clockAt('2026-11-06T20:00:00Z'), ids());
+      book.set({ title: 'Steadier sleep' }, 'owner-1');
+      expect(setExperimentResultSchema.parse(book.startExperiment('quest:q1', 'No  caffeine\nafter noon', 14))).toEqual({ status: 'started', experiment: {
+        id: 'exp:q2', quest_id: 'quest:q1', change: 'No caffeine after noon', state: 'running', started_on: '2026-11-06', days: 14, ends_on: '2026-11-19', reason: null, decided_on: null } });
+      expect(book.startExperiment('quest:q1', 'Morning light', 14)).toMatch(/already has a running experiment/);
+      expect(book.startExperiment('quest:nope', 'Morning light', 14)).toMatch(/No open quest/);
+      book.set({ id: 'quest:q1', state: 'completed' }, 'owner-1');
+      book.set({ title: 'Another' }, 'owner-1');
+      expect(book.startExperiment('quest:q1', 'Morning light', 14)).toMatch(/No open quest/);
+    });
+  });
+
+  it('records a verdict once, with its day, and the quest keeps its two latest verdicts', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const clock = clockAt('2026-11-06T20:00:00Z'), book = questBook(state.storage.sql, clock, ids());
+      book.set({ title: 'Steadier sleep' }, 'owner-1');
+      for (const [change, verdict] of [['No caffeine after noon', 'kept'], ['Morning light', 'dropped'], ['Earlier dinner', 'kept']] as const) {
+        const started = book.startExperiment('quest:q1', change, 7);
+        clock.at += 8 * DAY;
+        expect(book.decideExperiment((started as { experiment: { id: string } }).experiment.id, verdict, 'Recovery sat in solid more often than usual')).toMatchObject({ status: 'decided', experiment: { state: verdict } });
+      }
+      expect(book.decideExperiment('exp:q2', 'dropped', 'Changed my mind')).toMatch(/already kept/);
+      const stopped = book.startExperiment('quest:q1', 'Cold shower', 14) as { experiment: { id: string } };
+      expect(book.decideExperiment(stopped.experiment.id, 'stopped', null)).toMatchObject({ experiment: { state: 'stopped', reason: null, decided_on: null } });
+      expect(book.experimentsIn('quest:q1').map(note => `${note.experiment.state}: ${note.experiment.change}`)).toEqual(['kept: Earlier dinner', 'dropped: Morning light']);
+    });
+  });
+
+  it('is due for a verdict the day after its trial ends, and counts as offered only for the verdicts the Close offered', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
+      book.set({ title: 'Steadier sleep' }, 'owner-1');
+      book.set({ title: 'Run more' }, 'owner-1');
+      book.startExperiment('quest:q1', 'No caffeine after noon', 7);
+      clock.at += 6 * DAY;
+      expect(book.verdictsDue()).toEqual([]);
+      expect(book.due()).toEqual([]);
+      clock.at += DAY;
+      expect(book.verdictsDue().map(experiment => experiment.id)).toEqual(['exp:q3']);
+      expect(book.due().map(quest => quest.id)).toEqual(['quest:q1']);
+      book.startExperiment('quest:q2', 'Run at lunch', 7);
+      clock.at += 7 * DAY;
+      book.checkedIn(['quest:q1'], ['exp:q3']);
+      expect(book.verdictsDue().map(experiment => experiment.id)).toEqual(['exp:q4']);
+      expect(book.experimentsIn('quest:q1')).toEqual([expect.objectContaining({ offered: true })]);
+    });
+  });
+
+  it('compares the trial with the same number of days before it, in zone days only', async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
+      book.set({ title: 'Steadier sleep' }, 'owner-1');
+      const { experiment } = book.startExperiment('quest:q1', 'No caffeine after noon', 7) as { experiment: Parameters<typeof compareExperiment>[0] };
+      const { read, asked } = plane({
+        '2026-10-30': ['moderate', null], '2026-11-01': ['low', 'moderate'], '2026-11-05': ['moderate', 'unknown'],
+        '2026-11-06': ['good', 'good'], '2026-11-08': ['high', null], '2026-11-12': ['good', 'high'], '2026-11-13': ['good', null],
+      });
+      const comparison = await compareExperiment(experiment, '2026-11-20', read);
+      expect(asked).toEqual([['2026-10-30', '2026-11-12']]);
+      expect(reviewExperimentResultSchema.parse({ experiment, comparison }).comparison).toEqual({
+        trial: { from: '2026-11-06', to: '2026-11-12', recovery: { excellent: 1, solid: 2, mixed: 0, compromised: 0, none: 4 }, form: { energized: 1, steady: 1, flagging: 0, depleted: 0, none: 5 } },
+        usual: { from: '2026-10-30', to: '2026-11-05', recovery: { excellent: 0, solid: 0, mixed: 2, compromised: 1, none: 4 }, form: { energized: 0, steady: 0, flagging: 1, depleted: 0, none: 6 } },
+      });
+      expect((await compareExperiment(experiment, '2026-11-08', read))!.trial).toMatchObject({ from: '2026-11-06', to: '2026-11-08', recovery: { none: 1 } });
+      expect(await compareExperiment(experiment, '2026-11-20', async () => null)).toBeNull();
+      expect(await compareExperiment(experiment, '2026-11-20', async () => ({ error: 'not_linked' }))).toBeNull();
+      expect(await compareExperiment(experiment, '2026-11-20', plane({}).read)).toBeNull();
+    });
+  });
+
+  it('set_experiment writes on the owner\'s chat turn only and stores no reading from outside content; review_experiment stays in the turn', async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const book = questBook(state.storage.sql, clockAt('2026-11-06T10:00:00Z'), ids());
+      book.set({ title: 'Steadier sleep' }, 'owner-1');
+      const [set, review] = experimentHandlers(book, plane({ '2026-11-06': ['good', null] }).read);
+      expect(set.trigger_allowlist).toEqual(['user_message']);
+      expect(review.trigger_allowlist).toEqual(['user_message']);
+      expect(review.turn_only_output).toBe(true);
+      expect(await set.handle({ quest_id: 'quest:q1', change: 'No caffeine after noon' }, { ...ownerTurn, trigger: 'intervention' })).toMatchObject({ ok: false, code: 'rejected' });
+      const outside = { ...ownerTurn, toolArgSourceTaint: 'external' } as ToolDispatcherContext;
+      expect(await set.handle({ quest_id: 'quest:q1', change: 'Keep HRV above 60 ms' }, outside)).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await set.handle({ quest_id: 'quest:q1', change: 'No caffeine after noon' }, ownerTurn)).toMatchObject({ ok: true, data: { status: 'started', experiment: { id: 'exp:q2', days: 14 } } });
+      expect(await set.handle({ quest_id: 'quest:q1', change: 'Morning light' }, ownerTurn)).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(await review.handle({ id: 'exp:q2' }, ownerTurn)).toMatchObject({ ok: true, data: { comparison: { trial: { recovery: { solid: 1, none: 0 } } } } });
+      expect(await review.handle({ id: 'exp:nope' }, ownerTurn)).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(await set.handle({ id: 'exp:q2', state: 'kept', reason: 'Recovery sat in solid more often than usual' }, ownerTurn)).toMatchObject({ ok: true, data: { status: 'decided' } });
+    });
+  });
+
+  it('owner turns read each experiment on its quest line; the Close offers a due verdict with its zone days', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
+      book.set({ title: 'Steadier sleep', check_in_days: 7 }, 'owner-1');
+      book.set({ title: 'Run more' }, 'owner-1');
+      book.startExperiment('quest:q1', 'No caffeine after noon', 7);
+      clock.at += 2 * DAY;
+      expect(questsPrompt(book)).toContain('- [quest:q1] Steadier sleep (active; check-ins every 7 days; experiment [exp:q3] No caffeine after noon, day 3 of 7)');
+      expect(questCardContext('card:close', book)).not.toContain('verdict is due');
+      clock.at += 5 * DAY;
+      const comparison = {
+        trial: { from: '2026-11-06', to: '2026-11-12', recovery: { excellent: 0, solid: 5, mixed: 2, compromised: 0, none: 0 }, form: { energized: 0, steady: 0, flagging: 0, depleted: 0, none: 7 } },
+        usual: { from: '2026-10-30', to: '2026-11-05', recovery: { excellent: 0, solid: 2, mixed: 4, compromised: 1, none: 0 }, form: { energized: 0, steady: 0, flagging: 0, depleted: 0, none: 7 } },
+      };
+      const close = questCardContext('card:close', book, new Map([['exp:q3', comparison]]))!;
+      expect(close).toContain('verdict is due has finished its trial');
+      expect(close).toContain('[quest:q1] Steadier sleep (active; check-ins every 7 days; check-in due tonight; experiment [exp:q3] No caffeine after noon, ended 2026-11-12, verdict due)');
+      expect(close).toContain('  - [exp:q3] trial (2026-11-06 to 2026-11-12): Recovery solid 5, mixed 2; Form no zone 7');
+      expect(close).toContain('    the 7 days before (2026-10-30 to 2026-11-05): Recovery solid 2, mixed 4, compromised 1; Form no zone 7');
+      expect(questCardContext('card:close', book)).toContain("  - [exp:q3] the owner's zones are not available for these days");
+      expect(questCardContext('card:brief', book)).not.toContain('verdict is due');
+      book.checkedIn(['quest:q1'], ['exp:q3']);
+      expect(questsPrompt(book)).toContain('experiment [exp:q3] No caffeine after noon, ended 2026-11-12, verdict offered, waiting for the owner)');
+      expect(questCardContext('card:close', book)).not.toContain('verdict is due');
+    });
+  });
+});

@@ -44,7 +44,29 @@ ADR-0064 kept goals as a contract with no runtime writer. This amendment gives t
 - **Forget:** the owner's forget redacts the topic from `description`, `baseline`, `target`, `progress` and `plan`, as it already did for the first four. A redaction that would grow a column past its 500-character CHECK is cut at 500, so the forget always lands.
 - **While a forget is cleaning:** quest lines ride the owner turn with the standing orders and cross the same forget barrier, so a quest that still holds the topic is dropped from what the model reads.
 
+## Personal experiments (A2)
+An experiment is one change the owner tries inside a quest, such as a caffeine cutoff, morning light or an earlier training slot. It runs for 7 to 28 days (14 by default) from the owner's local start day, and is then kept or dropped against their own usual.
+
+- **Storage.** The owner DO's `experiments` table (DO migration 19). At most one experiment runs per quest at a time, so each change is judged on its own.
+  - Fields: the change in the owner's words, the start day and length, the state (`running`, `kept`, `dropped` or `stopped`), the verdict's reason and day, and when a Close offered the verdict.
+  - The quest book creates the table itself, as it does for the quest columns.
+- **Writer: `set_experiment`.** It runs on the owner's own chat turn only, under the same taint and reading rules as `set_quest`.
+  - It starts an experiment, records kept or dropped with the reason, or stops one early without a verdict.
+  - It records a verdict only once the owner has said which.
+- **The comparison is on the health plane.** A new signed RPC, `waldo.health_zones_read`, returns each day's Recovery and Form zone words between two local days, at most 56 apart. It:
+  - requires live model-use consent;
+  - never returns a score, reading or backfilled row (ADR-0081);
+  - is used by the runtime to count days per zone for the trial so far, and for the same number of days just before it. A day with no zone counts as none.
+  - Nothing here sets a threshold. Whether the change helped, and how sure that is, is the model's call from those counts and what the owner has said.
+- **Readers.**
+  - `review_experiment` returns the comparison on an owner turn, as turn-only output (never in the tool ledger or memory).
+  - Owner turns read each experiment on its quest line: the day of the trial, a verdict due or offered, and the two latest verdicts.
+  - The day after the trial ends, the Close reads the comparison and offers a keep-or-drop verdict, with its reason and its uncertainty, in zone words.
+  - The verdict counts as offered once that Close reaches the owner, under the same delivery rule as check-ins. The experiment ids it offered travel with the card, so one that ends while a held Close waits is not marked.
+- **Health plane.** Only zone-day counts leave Supabase, and only into the turn or the Close that asked. Experiment hops sit in the `quests` tool namespace and are withheld from traces whole.
+- **Forget.** It redacts `change` and `reason` and keeps the row, as for goals. A redaction is cut at the column's bound (300 for `change`, 500 for `reason`).
+
 ## Not covered
-- Personal experiments inside a quest (A2).
-- An app control to change a quest. Quests change in chat.
+- An app control to change a quest or an experiment. Both change in chat.
 - Check-ins outside the Close.
+- Sleep-debt and Load days in the comparison. Recovery already weighs sleep, and Load measures effort, not outcome.

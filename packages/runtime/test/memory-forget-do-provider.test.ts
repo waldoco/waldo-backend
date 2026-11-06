@@ -843,6 +843,12 @@ positiveStore('goals', 'POSGOAL769', (sql, text) => {
 positiveStore('goals', 'POSQ7', (sql, text) => {
   questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1').set({ title: 'Training block', plan: `${text} POSQ7 ${'x'.repeat(500 - text.length - 7)}` }, 'u');
 }, sql => JSON.stringify(sql.exec('SELECT plan FROM goals').toArray()), 'a quest plan at its length bound');
+// An experiment's change is held to 300 characters, and the forget still lands at that bound too.
+positiveStore('experiments', 'POSX7', (sql, text) => {
+  const book = questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1');
+  book.set({ title: 'Steadier sleep' }, 'u');
+  book.startExperiment('quest:q1', `${text} POSX7 ${'x'.repeat(300 - text.length - 7)}`, 14);
+}, sql => JSON.stringify(sql.exec('SELECT change FROM experiments').toArray()), 'an experiment change at its length bound');
 
 positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));

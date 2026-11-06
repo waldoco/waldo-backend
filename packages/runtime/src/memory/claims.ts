@@ -95,12 +95,17 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress', 'plan']],
+  ['experiments', ['change', 'reason']],
   // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
   ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
 // Of those, the owner's goals are the owner's own record and keep their rows; the rest are Waldo's derived text and a row
 // that carries a forgotten text is deleted.
-const RECORD_STORES: ReadonlySet<string> = new Set(['goals']);
+const RECORD_STORES: ReadonlySet<string> = new Set(['goals', 'experiments']);
+// The owner's records hold bounded text (their CHECKs).
+const RECORD_TEXT_MAX: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  goals: { description: 500, baseline: 500, target: 500, progress: 500, plan: 500 }, experiments: { change: 300, reason: 500 },
+};
 // Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
 export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   let parsed: unknown;
@@ -927,9 +932,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
                   if (normal === row.value && redacted !== normal) next = redacted;
                 } catch { continue; }
               }
-              // A goal's text holds at most 500 characters (its CHECK); a marker longer than the text it replaces can grow it past
-              // that, so the end is cut and the forget still lands.
-              if (table === 'goals') next = next.slice(0, 500);
+              // A marker longer than the text it replaces can grow an owner record past its bound, so the end is cut and the
+              // forget still lands.
+              const max = RECORD_TEXT_MAX[table]?.[column];
+              if (max !== undefined) next = next.slice(0, max);
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }

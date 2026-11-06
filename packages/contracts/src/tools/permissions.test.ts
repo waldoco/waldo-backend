@@ -143,6 +143,8 @@ describe('toolName', () => {
       'get_weather',
       'propose_calendar_plan',
       'set_quest',
+      'set_experiment',
+      'review_experiment',
     ]);
   });
 
@@ -341,6 +343,8 @@ describe('TOOL_PERMISSIONS', () => {
         'set_proactivity',
         'set_schedule_preference',
         'set_quest',
+        'set_experiment',
+        'review_experiment',
         'read_tool_output',
         'log_meal',
         'log_workout',
