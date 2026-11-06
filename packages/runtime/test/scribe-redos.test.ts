@@ -6,7 +6,7 @@
 import type { SanitiseDestination } from '@waldo/contracts';
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { sanitise } from '../src/scribe/sanitiser';
+import { numericHealthIn, redactNumericHealth, sanitise } from '../src/scribe/sanitiser';
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'];
 // External text is the one that has every PII class redacted, including the ones the owner may read in their own words.
@@ -29,6 +29,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'long hex': n => 'a1'.repeat(n / 2),
   'long hex with a tail': n => 'a1'.repeat(n / 2) + 'g',
   'a street address that never ends': n => '12 a '.repeat(n / 5),
+  'a role tag opener with blanks': n => '<' + ' '.repeat(n),
+  'role tag openers repeated': n => '< '.repeat(n / 2),
   'colon-separated hex': n => 'a1:'.repeat(n / 3),
   'a token header repeated': n => 'eyJ-'.repeat(n / 4),
   'a token header repeated, then a short second segment': n => 'eyJ-'.repeat(n / 4) + '.a.aaaaaaaa',
@@ -77,6 +79,28 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     }
     expect(slowest).toBeLessThan(100);
     expect(total).toBeLessThan(3_000);
+  });
+
+  // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd'])('numericHealthIn and redactNumericHealth read %s followed by 100,000 blanks in a moment', word => {
+    const text = `${word}${' '.repeat(100_000)}`;
+    expect(millis(() => numericHealthIn(text))).toBeLessThan(300);
+    expect(millis(() => redactNumericHealth(text, '[health]'))).toBeLessThan(300);
+  });
+
+  // A word between a health word and its number may not swallow the number's own digits and be tried at every split.
+  it.each(['heart rate', 'glucose', 'hrv', 'steps', 'bp', 'blood pressure', 'sleep duration', 'form', 'body temperature'])('%s, a word, then 40,000 digits that end in a letter, is read in a moment', word => {
+    const text = `${word} x ${'1'.repeat(40_000)}z`;
+    expect(millis(() => scan(text)), 'sanitise').toBeLessThan(300);
+    expect(millis(() => numericHealthIn(text)), 'numericHealthIn').toBeLessThan(300);
+    expect(millis(() => redactNumericHealth(text, '[health]')), 'redactNumericHealth').toBeLessThan(300);
+    expect(millis(() => scan(`${word} ${'1'.repeat(200_000)}`)), 'a bare run of digits').toBeLessThan(300);
+  });
+
+  // A role tag is `<`, an optional `/`, a role and `>`, each with blanks allowed between: blanks after a lone `<` are read once.
+  it.each([['<'], ['</'], ['< /'], ['<system']])('%s followed by 100,000 blanks is read in a moment', start => {
+    const text = `${start}${' '.repeat(100_000)}`;
+    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(300);
   });
 
   it('a hostile uuid-like string takes time in proportion to its length', () => {

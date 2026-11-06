@@ -91,16 +91,16 @@ const DERIVED_HEALTH_ELIGIBILITIES = new Set([
 ]);
 const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|steps?|hours?|hrs?|minutes?|mins?|celsius|fahrenheit|°c|°f|degrees?\s*[cf]|mg\/dl|mmol\/l)$/i;
 // Health phrases with a number: the free-text floor for destinations the structured checks do not cover.
-const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
+export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
-  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
-  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
-  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
+  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
+  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*?[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
 ];
 // Health phrases without a number (a state named in words). Kept apart so a later qualitative entry can never join the
 // numeric floor by accident.
@@ -133,7 +133,7 @@ const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
 // HRV with the method get_health labels it by, or the method alone.
-const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*\(?\s*(?:rmssd|sdnn)\b\s*\)?)?|(?:rmssd|sdnn)\b)`;
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?|(?:rmssd|sdnn)\b)`;
 const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
 // The minute signals get_health returns beside sleep.
 const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;

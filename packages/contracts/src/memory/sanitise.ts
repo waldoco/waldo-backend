@@ -422,7 +422,7 @@ export const PII_PATTERNS = {
 // Check 4 - external content cannot forge a conversation role. There is no keyword scoring:
 // the defence against injected text is structural (fences, taint -> approval, egress checks).
 // The only rule left neutralises role tags so external text cannot open a system/user turn.
-export const ROLE_TAG_PATTERN = /<\s*\/?\s*(?:system|assistant|developer|user)\s*>/gi;
+export const ROLE_TAG_PATTERN = /<\s*(?:\/\s*)?(?:system|assistant|developer|user)\s*>/gi;
 
 // ADR-0024's 2 KB memory-block cap in UTF-16 units — the single owner both the sanitiser
 // table below and memoryContentSchema (hall.ts) derive from, so the schema seam and the
