@@ -116,9 +116,14 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'hrv →', 'hrv now', '42 ms'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
+  });
+
+  it.each([['an arrow chain', (n: number) => `hrv 1${' → 1'.repeat(n / 4)}`], ['table cells', (n: number) => `| hrv | 1${' | 1'.repeat(n / 4)} |`], ['arrows with no value', (n: number) => `hrv ${'→ '.repeat(n / 2)}`]] as const)('a reading followed by %s stays linear', (_shape, make) => {
+    expectLinear('numericHealthIn', 100_000, n => numericHealthIn(make(n)));
+    expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(make(n), '[health]'));
   });
 
   // A word between a health word and its number may not swallow the number's own digits and be tried at every split. The

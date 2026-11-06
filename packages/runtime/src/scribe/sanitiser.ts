@@ -119,8 +119,9 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEA
 // A trend ("dropped to", "went from") carries the value too, except after a word ordinary life shares ("HR jumped to 30
 // candidates").
 const STEADY_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
-const READING_WORDS = String.raw`${STEADY_WORDS}|(?:rose|fell|dropped|dipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
-const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const READING_WORDS = String.raw`${STEADY_WORDS}|now|(?:rose|fell|dropped|dipped|slipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
+// An arrow ties a metric to its value as a trend word does ("HRV → 42 ms", "HRV ↓ 35").
+const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~→↓↑]|->|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
 // A gap that also takes some words of its own is one gap with more words, not a gap inside a repeat: a repeat around a gap
@@ -132,7 +133,8 @@ const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
 const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
-const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
+const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
+const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
@@ -157,6 +159,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*ms\s+(?:of\s+)?${HRV}`),
   // Apple names VO2 max "Cardio Fitness", which is also a class with a length.
   reading(String.raw`\b(?:vo2\s*max|cardio\s+fitness)\b${BARE_GAP}${BARE_VALUE}(?!\s*${DURATION})`),
   reading(String.raw`\b${READING_NUMBER}\s*ml\s*\/\s*kg\s*\/\s*min\b`),
@@ -165,7 +168,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
   reading(String.raw`\b(?:blood\s+pressure|systolic|diastolic)\b${BARE_GAP}${BARE_VALUE}`),
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
-  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b(?!\s+${CARRIED}\b)`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
   // Body composition as get_health gives it: body mass and lean mass in kilograms, body fat as a percentage.
   reading(String.raw`\b(?:body|lean(?:\s+body)?)\s+mass\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
@@ -174,7 +177,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
   // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b(?:slept|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}${READING_NUMBER}\s*${DURATION}`),
+  // "Sleep 8 hours before the flight" is a plan; the past tense above is what was slept.
+  reading(String.raw`\b(?:sleeps?|sleeping)\b${SLEEP_GAP}${READING_NUMBER}\s*${DURATION}(?!\s+(?:before|until|till|ahead\s+of)\b)`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
   // a sleep word, and REM only in capitals.
@@ -247,7 +252,9 @@ const MARKUP = new RegExp(String.raw`${EMPHASIS}|[|\u2013\u2014\u2082]|(?<= )-(?
 const unmarked = (text: string): string => text.replace(MARKUP, (mark) => (mark === '|' ? ':' : mark === '\u2082' ? '2' : ' '));
 const unemphasised = (text: string): string => text.replace(new RegExp(EMPHASIS, 'gu'), ' ');
 // A trend's second value ("from 48 to 35", "48 → 35") belongs to the reading.
-const TREND_TAIL = String.raw`\s*(?:to|→|->)\s*[+\-−]?\d+(?:[.,]\d+)?`;
+// Every further value is the reading's too: a trend's next step ("→ 38 → 35"), a restated value (", now 35") or the next
+// cells of a table row, whose borders the prose view reads as colons.
+const TREND_TAIL = String.raw`(?:\s*(?:to|→|->|↓|↑|,\s*now|:)\s*[+\-−]?\d+(?:[.,]\d+)?)+`;
 type Found = Readonly<{ index: number; text: string }>;
 const found = (pattern: RegExp, source: string): Found[] => {
   const tail = new RegExp(TREND_TAIL, 'iy');

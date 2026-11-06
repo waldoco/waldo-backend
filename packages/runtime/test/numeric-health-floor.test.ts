@@ -1,6 +1,6 @@
 import { healthReadSignalSchema, type HealthReadSignal } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { numericHealthIn } from '../src/scribe/sanitiser';
+import { numericHealthIn, redactNumericHealth } from '../src/scribe/sanitiser';
 
 // The one floor that keeps measurements from outside content out of memory, and out of stored summaries. A match drops the
 // write, so precision wins over recall: it must not fire on ordinary life that puts a number near a word a metric also
@@ -226,5 +226,29 @@ describe('the numeric health floor', () => {
   // colon after an ordinary word in prose is not.
   it.each(['{"hrv_ms": 48}', '"steps": 8432', 'heartRate=88', 'restingHeartRate: 52', 'weight_kg: 82'])('holds a serialized health field: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
+  });
+});
+
+// Shapes a relay or a summary gives a reading that the gate on the floor found still passing. Synthetic values.
+describe('readings tied by an arrow, a trend word, or a number before the label', () => {
+  it.each(['HRV → 42 ms', 'HRV ↓ 35', 'HRV ↑ 52 ms', 'HRV slipped to 35', 'HRV now 35', '42 ms HRV', 'resting HR now 61'])('holds %s', (text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it.each(['Weight — 20 kg suitcase', 'Sleep — 8 hours before the flight', 'Now 35 people are coming', 'Moved 42 ms of latency off the hot path'])('leaves %s alone', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
+});
+
+describe('trace redaction takes every value a reading carries', () => {
+  it.each([
+    ['| HRV | 42 | 45 | 48 |', ['42', '45', '48']],
+    ['HRV 42 → 38 → 35', ['42', '38', '35']],
+    ['HRV was 48, now 35', ['48', '35']],
+    ['HRV → 42 ms', ['42']],
+    ['42 ms HRV', ['42']],
+  ])('%s', (text, values) => {
+    const redacted = redactNumericHealth(text, '[W]');
+    expect(redacted).toContain('[W]');
+    for (const value of values) expect(redacted).not.toContain(value);
   });
 });
