@@ -11,6 +11,7 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
+import { importSourceOf } from '../../memory/import-ref';
 
 export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
@@ -139,7 +140,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }
         return success({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' });
       } },
-    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, or an exact stored owner-message span using UTF-16 offsets. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
+    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, an exact stored owner-message span using UTF-16 offsets, or import_source for everything brought in from one assistant\'s export. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         // A forget by ids from a turn that read outside text runs only from the owner's card. That replay has no
@@ -161,6 +162,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);
         }
+        // A whole import: every claim it brought in, the ones the owner has confirmed since included.
+        if (args.import_source) for (const claim of claims) if (importSourceOf(claim.source_ref) === args.import_source) selected.set(claim.id, claim);
         // What a selected claim replaced goes with it, so no earlier wording of it stays as history.
         for (const id of store.lineage([...selected.keys()])) { const earlier = claims.find(row => row.id === id); if (earlier && !selected.has(id)) selected.set(id, earlier); }
         // Only what the owner named purges the claims table, deleting the derived memory that carries it. The forget removes

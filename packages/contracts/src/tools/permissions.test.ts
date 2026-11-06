@@ -142,6 +142,8 @@ describe('toolName', () => {
       'get_device_context',
       'get_weather',
       'propose_calendar_plan',
+      'read_import',
+      'import_memories',
     ]);
   });
 
@@ -368,6 +370,8 @@ describe('TOOL_PERMISSIONS', () => {
       'cancel_task',
       'record_owner_finding',
       'list_owner_findings',
+      'read_import',
+      'import_memories',
       'search_history',
       ],
       dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],

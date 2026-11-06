@@ -6,6 +6,7 @@ import { carriesTopic, forgettableTopic, hidesTopic, startsTopic } from './forge
 import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
+import { importSourceOf } from './import-ref';
 import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
@@ -1250,6 +1251,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content, and
 // the background passes do when the quote answers a reply that carried outside content.
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
+  : importSourceOf(claim.source_ref) ? ' (the owner\'s words in a chat export they imported, perhaps out of date, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content or said in answer to a reply that carried it, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 
