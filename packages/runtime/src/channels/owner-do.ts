@@ -3942,7 +3942,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       && (record.id === dayCardFinalId(day, card) || record.id.startsWith(`${dayCardFinalId(day, card)}:try:`)));
     // The owner's Brief or Close time from the console or the app: today's card follows it unless it is already on its way.
     const cardTimeDeps = (now: number) => ({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now, queued: cardQueued,
-      enabled: schedPrefs.enabled('daily_brief') && armable('daily_brief'), quiet: (at: number) => isQuiet(loops.proactivity(), at, clock.timezone) });
+      enabled: schedPrefs.enabled('daily_brief'), armable: armable('daily_brief'), quiet: (at: number) => isQuiet(loops.proactivity(), at, clock.timezone) });
     const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
     // Supabase holds the editable settings when configured; the DO applies its copy only after that write lands.
     const saveSettings = async (settings: OwnerSettings): Promise<boolean> => {
@@ -6219,7 +6219,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (action === 'schedule.set' && (!kind || (value !== 'on' && value !== 'off'))) return false;
           const was = kind === undefined ? undefined : schedPrefs.enabled(kind);
           if (action === 'schedule.set') schedPrefs.set(kind!, value === 'on'); else schedPrefs.reset();
-          await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow(), alongHeartbeat: lookFollows }, action === 'schedule.set' ? kind : undefined);
+          await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }, action === 'schedule.set' ? kind : undefined);
           if (action === 'schedule.set') {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
             return APP_SCHEDULE_RECEIPTS_V1[was === (value === 'on') ? (value === 'on' ? 'already_on' : 'already_off') : value === 'on' ? 'on' : 'off'];

@@ -22,7 +22,7 @@ const owner = (tz: string, at: number, run: (world: World) => Promise<void>) =>
     await armDayCards(scheduler, book, tz, at);
     await run({ scheduler, book, kv: state.storage.kv });
   });
-const deps = (world: World, tz: string, now: number, extra: Partial<{ enabled: boolean; quiet: (at: number) => boolean; queued: () => boolean }> = {}) =>
+const deps = (world: World, tz: string, now: number, extra: Partial<{ enabled: boolean; armable: boolean; quiet: (at: number) => boolean; queued: () => boolean }> = {}) =>
   ({ ...world, timezone: tz, now, enabled: true, quiet: () => false, queued: () => false, ...extra });
 const due = (world: World, id: CardId) => { const found = world.scheduler.lookup(id); return found.state === 'entry' ? found.entry.due_at : null; };
 const planned = (world: World, day: string, id: CardId) => world.book.read(day).find(row => row.card === id);
@@ -83,6 +83,14 @@ describe('a new Brief or Close time', () => {
     await owner(tz, at('06:00'), async world => {
       await world.scheduler.cancel('card:brief');
       expect(await setCardTime(deps(world, tz, at('06:00'), { enabled: false }), 'card:brief', '07:10', true)).toBe('off');
+      expect([due(world, 'card:brief'), world.book.pins()['card:brief']]).toEqual([null, '07:10']);
+    });
+  });
+
+  it('while the day cards may not be armed yet, keeps the time, arms nothing and says they wait for the zone', async () => {
+    await owner(tz, at('06:00'), async world => {
+      await world.scheduler.cancel('card:brief');
+      expect(await setCardTime(deps(world, tz, at('06:00'), { armable: false }), 'card:brief', '07:10', true)).toBe('zone');
       expect([due(world, 'card:brief'), world.book.pins()['card:brief']]).toEqual([null, '07:10']);
     });
   });

@@ -292,14 +292,15 @@ export const parseWakeReply = (raw: string, planned: string, nowClock: string): 
   return time === 'now' || (isClock(time) && time > nowClock && time < planned) ? time : null;
 };
 // The Brief's new time is recorded on its plan row as well as its schedule row, so the owner's day (window) opens with it on
-// every surface, not only once the app has it.
+// every surface, not only once the app has it. The model chose its time against the clock before its turn; a time that
+// passed while it answered sends the Brief now, so the turn's length never cancels it.
 export const applyWake = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, time: string): Promise<boolean> => {
   const target = wakeTarget(book, timezone, now);
   if (target === 'nothing_to_move' || scheduler.lookup('card:brief').state === 'unreadable') return false;
   const local = localIso(now, timezone), day = local.slice(0, 10);
-  if (time !== 'now') return (await applyDayPlan(scheduler, book, timezone, now, [{ card: 'card:brief', time, reason: MOVED_EARLIER }], false)).length > 0;
-  book.save(day, { card: 'card:brief', time: local.slice(11, 16), reason: MOVED_EARLIER });
-  await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: now, dueAt: now, recurrence: null });
+  const at = time === 'now' ? now : Math.max(localToEpoch(`${day}T${time}`, timezone), now);
+  book.save(day, { card: 'card:brief', time: time === 'now' ? local.slice(11, 16) : time, reason: MOVED_EARLIER });
+  await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: at, dueAt: at, recurrence: null });
   return true;
 };
 
@@ -307,13 +308,15 @@ export const applyWake = async (scheduler: Scheduler, book: DayPlanBook, timezon
 // moves to it at once when it is still to come. A time already past sends today's card now, but only when it was still due
 // later today, so the change never drops it; a card already sent, being made, held, waiting or paused is left as it is.
 export type CardTimeToday = AppScheduleTimeTodayV1 | 'unreadable';
-export const setCardTime = async (deps: CardDeps & Readonly<{ enabled: boolean; quiet: (at: number) => boolean }>, id: CardId, time: string, every: boolean): Promise<CardTimeToday> => {
+// armable is false while this surface may not arm the day cards yet (an app owner who has not confirmed their zone).
+export const setCardTime = async (deps: CardDeps & Readonly<{ enabled: boolean; armable?: boolean; quiet: (at: number) => boolean }>, id: CardId, time: string, every: boolean): Promise<CardTimeToday> => {
   if (deps.scheduler.lookup(id).state === 'unreadable') return 'unreadable';
   const day = localIso(deps.now, deps.timezone).slice(0, 10);
   const row = deps.book.read(day).find(planned => planned.card === id);
   if (every && deps.book.pins()[id] === time) return 'unchanged';
   if (every) deps.book.pin(id, time);
   if (!deps.enabled) return 'off';
+  if (deps.armable === false) return 'zone';
   if (row?.sent) return 'sent';
   if (cardStatus(deps, cardFor(id)!).state !== 'pending' || deps.queued(day, id)) return 'busy';
   const found = deps.scheduler.lookup(id);

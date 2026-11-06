@@ -13,6 +13,8 @@ import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { loopBook } from '../src/channels/loops';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { jobBook } from '../src/tasks/jobs';
+import { enqueueMachine } from '../src/tasks/machine';
 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
@@ -23,7 +25,7 @@ type Directory = { whatsapp: 'linked' | 'not_linked' | 'down' };
 type App = (path: string, body?: unknown) => Promise<Response>;
 type World = { app: App; storage: DurableObjectStorage; directory: Directory };
 
-const fixture = async (run: (world: World) => Promise<void>, options: { revision?: number; bound?: boolean; wake?: boolean } = {}) => {
+const fixture = async (run: (world: World) => Promise<void>, options: { revision?: number; bound?: boolean; wake?: boolean; confirmed?: boolean } = {}) => {
   const name = `app-schedule-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
@@ -55,7 +57,7 @@ const fixture = async (run: (world: World) => Promise<void>, options: { revision
       WALDO_OWNER_DO_NAMESPACE: 'schedule-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: SECRET,
       WHATSAPP_ACCESS_TOKEN: 'synthetic-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: '100000000000001', GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined, WAKE_BRIEF: options.wake ? '1' : undefined };
     // A set-up owner: the zone is confirmed, so the app's runtime arms the day's own jobs.
-    state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
+    state.storage.kv.put('timezone', 'UTC'); if (options.confirmed !== false) state.storage.kv.put('timezone_confirmed', true);
     const instance = new OwnerDO(state, settings as never);
     if (options.bound !== false) state.storage.kv.put('whatsapp_subject', WHATSAPP);
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
@@ -132,6 +134,19 @@ it('turns each schedule off and back on where the scheduler reads it, with a rec
   });
 });
 
+it('turning the check-in off from the app cancels its open background job, as the agent tool does', async () => {
+  await fixture(async ({ app, storage }) => {
+    let n = 0;
+    const book = jobBook(storage.sql, { now: Date.now, newId: () => `job${(n += 1).toString().padStart(9, '0')}`, newToken: () => `tok-${n}` });
+    const made = enqueueMachine(book, { job: 'heartbeat', scope: 'owner', key: 'machine:heartbeat:heartbeat-tick:1', surface: 'app',
+      text: { title: 'Loop check-back', goal: 'Check these loops.', done_when: 'Return no findings when nothing is worth telling.' },
+      items: [{ ref: 'l1', detail: 'Chase the quote (due 2026-11-07 09:00)' }], timezone: 'UTC', now: NOW, deadlineAt: NOW + 30 * 60_000 }, []);
+    const id = (made as { job: { id: string } }).job.id;
+    expect(receipt((await set(app, 'heartbeat', 'off', (await dayView(app)).revision)).body)).toEqual(APP_SCHEDULE_RECEIPTS_V1.off);
+    expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+  });
+});
+
 it('a new Brief time moves today\'s Brief once, keeps it for every day, and a replay is the same receipt with no second change', async () => {
   await fixture(async ({ app, storage }) => {
     const day = await dayView(app);
@@ -163,6 +178,15 @@ it('a new time inside quiet hours says it waits for them to end', async () => {
     loopBook(storage.sql, { newId: () => 'x', now: Date.now }).setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
     expect(receipt((await set(app, 'card:close', '23:15', (await dayView(app)).revision)).body).message).toBe('Saved. Your Close comes at 11:15pm. That is inside your quiet hours, so it waits until they end.');
   });
+});
+
+it('before the owner confirms their zone, a new time is kept and the receipt says the cards start once they do, not that they are off', async () => {
+  await fixture(async ({ app, storage }) => {
+    const day = await dayView(app);
+    expect(day.data.schedule_controls!.find(row => row.id === 'card:brief')?.on).toBe(true);
+    expect(receipt((await set(app, 'card:brief', '07:10', day.revision)).body).message).toBe('Saved. Your Brief comes at 7:10am. Your day cards start once you confirm your time zone.');
+    expect(dayPlanBook(storage.sql).pins()).toEqual({ 'card:brief': '07:10' });
+  }, { confirmed: false });
 });
 
 it('with WAKE_BRIEF, the Brief time is the latest it comes, in the receipt and the projection', async () => {

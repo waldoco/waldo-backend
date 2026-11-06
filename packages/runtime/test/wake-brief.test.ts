@@ -84,6 +84,16 @@ describe('the wake turn moves only a Brief still to come, and never later', () =
     });
   });
 
+  it('sends the Brief now when the time the model chose passed while it answered, never cancelling it', async () => {
+    await owner(tz, midnight, async (scheduler, book) => {
+      await applyDayPlan(scheduler, book, tz, midnight, [{ card: 'card:brief', time: '08:30', reason: 'usually up at 8' }]);
+      const applied = kolkata('06:41') + 5_000;
+      expect(await applyWake(scheduler, book, tz, applied, '06:41')).toBe(true);
+      expect(scheduler.read('card:brief')?.due_at).toBe(applied);
+      expect(book.read('2026-11-04').find(row => row.card === 'card:brief')).toMatchObject({ time: '06:41', reason: MOVED_EARLIER, state: 'pending' });
+    });
+  });
+
   it('leaves a Brief sent, held, skipped, set by the owner for today, or already due', async () => {
     const cases: Record<string, (scheduler: Scheduler, book: ReturnType<typeof dayPlanBook>) => Promise<void> | void> = {
       sent: (_s, book) => book.sent('2026-11-04', 'card:brief'),

@@ -771,7 +771,7 @@ describe('schedule.set, controls revision 16', () => {
     expect(appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today: 'planned', noLaterThan: true }).message).toBe('Saved. Your Brief comes by 7:10am, earlier when you wake before then.');
     expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'now', noLaterThan: false }).message).toBe("Saved. Your Close comes at 9:30pm. Today's is on its way now.");
     expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'unchanged', noLaterThan: false }).message).toBe('Your Close already comes at 9:30pm.');
-    const todays = ['planned', 'now', 'sent', 'busy', 'passed', 'quiet', 'off', 'unchanged'] as const;
+    const todays = ['planned', 'now', 'sent', 'busy', 'passed', 'quiet', 'off', 'zone', 'unchanged'] as const;
     const messages = todays.map(today => appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today, noLaterThan: false }));
     for (const receipt of messages) { expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true); expect(receipt.message).toContain('7:10am'); }
     expect(new Set(messages.map(receipt => receipt.message)).size).toBe(todays.length);
