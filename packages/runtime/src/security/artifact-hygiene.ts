@@ -1,4 +1,4 @@
-import { asciiDigits } from './decimal-digits';
+import { asciiDigits } from './decimal-digits.ts';
 
 // E1 (issue #150): deterministic quarantine of verification artifacts - OTP codes, password-reset
 // and magic-link URLs - at communication ingress, BEFORE content reaches model-visible context.
