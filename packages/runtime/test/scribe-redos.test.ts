@@ -30,16 +30,57 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'long hex with a tail': n => 'a1'.repeat(n / 2) + 'g',
   'a street address that never ends': n => '12 a '.repeat(n / 5),
   'colon-separated hex': n => 'a1:'.repeat(n / 3),
+  'a token header repeated': n => 'eyJ-'.repeat(n / 4),
+  'a token header repeated, then a short second segment': n => 'eyJ-'.repeat(n / 4) + '.a.aaaaaaaa',
+  'a token header repeated, then a third segment with no word edge': n => 'eyJ-'.repeat(n / 4) + '.aaaa.--------',
+  'a token with its dots and a long header': n => 'eyJ' + 'a.'.repeat(n / 2),
+  'a bearer word repeated': n => 'Bearer a '.repeat(n / 9),
+  'an api key word repeated': n => 'api_key: '.repeat(n / 9),
+  'a private key header repeated': n => '-----BEGIN PRIVATE KEY-----\n'.repeat(n / 28),
+  'card-shaped digit groups': n => '1234 '.repeat(n / 5),
+  'hex ids run together': n => 'deadbeef41111111 '.repeat(n / 17),
 };
 
-describe('no redaction pattern backtracks on near-miss input', () => {
-  it.each(Object.keys(NEAR_MISSES))('%s, 80,000 characters', name => {
-    const text = NEAR_MISSES[name]!(80_000);
-    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(1_000);
+// A health word followed by a run of blanks, a word run or a colon run: the shapes where a pattern that lets two
+// neighbouring repeats share a run of whitespace costs the square or the cube of its length.
+const TRIGGERS = ['hrv', 'HRV', 'heart rate', 'resting heart rate', 'sleep', 'slept', 'deep sleep', 'REM', 'steps', 'weight', 'body weight', 'bp',
+  'blood pressure', 'systolic', 'spo2', 'blood oxygen', 'glucose', 'calorie burn', 'active energy', 'wrist temperature', 'body temperature',
+  'respiratory rate', 'breathing rate', 'body fat', 'stand hours', 'zone 2', 'awake', 'move', 'burned', 'fever', 'recovery', 'crs', 'form score',
+  'vo2 max', 'Bearer', 'password', 'api_key', 'secret', 'sk-', 'eyJ', 'hr', 'pulse'];
+const FILLERS: Readonly<Record<string, (n: number) => string>> = {
+  spaces: n => ' '.repeat(n), newlines: n => '\n'.repeat(n), 'no-break spaces': n => '\u00a0'.repeat(n), tabs: n => '\t'.repeat(n),
+  'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
+};
+
+// 300 ms for 80,000 characters is several times what a linear pass takes on a slow runner and a fraction of what the
+// patterns this file guards took before they were fixed (1 to 4 s), so a regression fails instead of passing by luck.
+describe('the patterns sanitise() runs stay linear on the near-miss and whitespace inputs tried here', () => {
+  // These take longer per character for a reason that is the same at every size (about 5 microseconds each, twice the size
+  // is twice the time), so they are read at a quarter of the length.
+  const HEAVY = new Set(['a bearer word repeated', 'an api key word repeated', 'a private key header repeated']);
+  it.each(Object.keys(NEAR_MISSES))('%s, up to 80,000 characters', name => {
+    const text = NEAR_MISSES[name]!(HEAVY.has(name) ? 20_000 : 80_000);
+    for (const destination of ['send_message', 'internal_context'] as const) expect(millis(() => scan(text, destination)), destination).toBeLessThan(300);
+  });
+
+  it.each(['hrv', 'slept', 'wrist temperature'])('%s followed by 500 blanks of each kind is read in a moment', word => {
+    for (const filler of ['spaces', 'newlines', 'no-break spaces']) expect(millis(() => scan(`${word}${FILLERS[filler]!(500)}`)), filler).toBeLessThan(100);
+  });
+
+  it('every health, secret and token word followed by 400 characters of each filler is read in a moment', () => {
+    let slowest = 0;
+    let total = 0;
+    for (const word of TRIGGERS) for (const make of Object.values(FILLERS)) {
+      const took = millis(() => scan(`${word}${make(400)}`));
+      slowest = Math.max(slowest, took);
+      total += took;
+    }
+    expect(slowest).toBeLessThan(100);
+    expect(total).toBeLessThan(3_000);
   });
 
   it('a hostile uuid-like string takes time in proportion to its length', () => {
-    const tokens = ['7e2aa0c8', '91b3', '4c2e', '8a11', 'f0e023af605', '-', '-', '.', ' ', '1', 'a', '@', '%', ':', '4111', 'ms'];
+    const tokens = ['7e2aa0c8', '91b3', '4c2e', '8a11', 'f0e023af605', '-', '-', '.', ' ', '1', 'a', '@', '%', ':', '4111', 'ms', 'eyJ', 'hrv', 'slept'];
     const nearMiss = fc.array(fc.constantFrom(...tokens), { minLength: 2, maxLength: 8 }).chain(pool =>
       fc.array(fc.constantFrom(...pool), { minLength: 12_000, maxLength: 16_000 }).map(parts => parts.join('')));
     let total = 0;

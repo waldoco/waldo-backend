@@ -93,14 +93,14 @@ const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct
 // Health phrases with a number: the free-text floor for destinations the structured checks do not cover.
 const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*mmhg\b/i,
-  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
-  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d{1,3}\b/i,
-  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?-?\d+(?:\.\d+)?["']?(?:\s*,?\s*)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
+  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
+  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
 ];
 // Health phrases without a number (a state named in words). Kept apart so a later qualitative entry can never join the
 // numeric floor by accident.
@@ -119,6 +119,10 @@ const READING_WORDS = String.raw`${STEADY_WORDS}|(?:rose|fell|dropped|dipped|cli
 const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
+// A gap that also takes some words of its own is one gap with more words, not a gap inside a repeat: a repeat around a gap
+// that can match nothing and ends in `\s*` splits a run of blanks between its turns every way there is.
+const SLEEP_GAP = gapOf(String.raw`${READING_WORDS}|at|for|a|an|less\s+than|more\s+than`);
+const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped|climbed|by`);
 const STEADY_GAP = gapOf(STEADY_WORDS);
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
@@ -166,7 +170,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
   // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}${READING_NUMBER}\s*${DURATION}`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
   // a sleep word, and REM only in capitals.
@@ -201,7 +205,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b${READING_NUMBER}\s*(?:breaths?\s*(?:per|a|\/)\s*min(?:ute)?|brpm)\b`),
   reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
   // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
-  reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?(?:${READING_GAP}|\s*\b(?:up|down|rose|fell|dropped|climbed|by)\b\s*)*[+\-−]?${READING_NUMBER}\b`),
+  reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?${WRIST_GAP}[+\-−]?${READING_NUMBER}\b`),
   reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
   // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
   reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
@@ -321,7 +325,9 @@ export const redactNumericHealth = (text: string, marker: string): string => {
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
-  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
+  // Starts at the beginning of a run of token characters and checks the rest of the token (two more segments) in one look
+  // ahead, so a long run of "eyJ-eyJ-" is read once, not once for every "eyJ" in it.
+  /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b)[A-Za-z0-9_-]*?(?<!\w)eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
@@ -368,18 +374,25 @@ function cloneRegex(pattern: RegExp): RegExp {
 const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const HEX_ID = /(?<![0-9a-z])(?:0x)?(?=[0-9a-f]*[a-f])[0-9a-f]{20,}(?![0-9a-z])/gi;
 
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  for (let at = 0; at < digits.length; at += 1) {
+    let digit = Number(digits[digits.length - 1 - at]);
+    if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+
+// A hex run that holds a card number is not an id to leave unread: "deadbeef4111111111111111" redacts the card.
+const holdsCardNumber = (hex: string): boolean => (hex.match(/\d{13,19}/g) ?? []).some(luhnValid);
+
 function cardMatches(text: string): RegExpMatchArray[] {
-  const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length)).replace(HEX_ID, id => '#'.repeat(id.length));
+  const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length))
+    .replace(HEX_ID, id => (holdsCardNumber(id) ? id : '#'.repeat(id.length)));
   return [...masked.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))].filter(match => {
     const digits = match[0].replace(/\D/g, '');
-    if (digits.length !== 15) return true;
-    let sum = 0;
-    for (let at = 0; at < 15; at += 1) {
-      let digit = Number(digits[14 - at]);
-      if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
-      sum += digit;
-    }
-    return sum % 10 === 0;
+    return digits.length !== 15 || luhnValid(digits);
   });
 }
 

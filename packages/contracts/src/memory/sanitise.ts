@@ -286,14 +286,17 @@ export type SanitiseResult = z.infer<typeof sanitiseResultSchema>;
 const QUOTE = String.raw`["']?`;
 // The number tail, and (separately) a ratio tail (140/90) used only where a ratio is a real reading
 // (blood pressure) — never grafted onto a bare weight or count.
-const RAW_NUM = String.raw`${QUOTE}\s*\d+(?:\.\d+)?`;
-const RAW_RATIO = String.raw`${QUOTE}\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
+// Whitespace runs are never ambiguous: a quote ends one, so no two neighbouring `\s*` can split a run between them (three of
+// them in a row made a long run of blanks after a health word cost O(n^3)).
+const QUOTED = String.raw`(?:["']\s*)?`;
+const RAW_NUM = String.raw`${QUOTED}\d+(?:\.\d+)?`;
+const RAW_RATIO = String.raw`${QUOTED}\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
 // Key/value separator: one colon, equals, or whitespace char, with an optional quote on either side
 // so a quoted key and a quoted value in a serialized payload are both caught, not only prose.
-const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
+const KV = String.raw`${QUOTE}(?:\s*[:=]\s*|\s+)${QUOTED}`;
 // A STRUCTURED key/value separator — colon or equals only, no bare whitespace. A serialized field (a
 // colon/equals key carrying a number) is a health value even without a unit; bare-whitespace prose is not.
-const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTE}\s*`;
+const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTED}`;
 // Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
 const UNIT = String.raw`ms|millisec|bpm|beats|breaths?(?:[\s_-]*per[\s_-]*minute)?|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?|celsius|fahrenheit|mg(?:\/|[\s_-]*per[\s_-]*)dl|mmol(?:\/|[\s_-]*per[\s_-]*)l`;
 
