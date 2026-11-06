@@ -21,9 +21,9 @@ const PLAN: StoredPlan = { day: '2026-11-05', time_zone: 'Asia/Kolkata', reason:
   { title: 'Reply to Priya', start: '2026-11-05T14:00:00+05:30', end: '2026-11-05T14:30:00+05:30' },
 ] };
 
-type Fake = { events: Map<string, CalendarItem & { status?: string }>; failCreate: Map<number, () => never>; failRead: boolean; failCancel: (() => never) | null; creates: number; loseCreateReply: number | null };
+type Fake = { events: Map<string, CalendarItem & { status?: string }>; failCreate: Map<number, () => never>; failRead: boolean; readStatus: number; failCancel: (() => never) | null; creates: number; loseCreateReply: number | null };
 const calendar = (): Fake & { client: GoogleClient } => {
-  const fake: Fake = { events: new Map(), failCreate: new Map(), failRead: false, failCancel: null, creates: 0, loseCreateReply: null };
+  const fake: Fake = { events: new Map(), failCreate: new Map(), failRead: false, readStatus: 401, failCancel: null, creates: 0, loseCreateReply: null };
   let version = 0;
   const client = {
     account: { connection_id: 'local:owner@example.test', email: 'owner@example.test' },
@@ -37,7 +37,7 @@ const calendar = (): Fake & { client: GoogleClient } => {
       return event;
     },
     async event(id: string) {
-      if (fake.failRead) throw new GoogleError(401, 'google token failed: invalid_grant');
+      if (fake.failRead) throw new GoogleError(fake.readStatus, fake.readStatus === 401 ? 'google token failed: invalid_grant' : 'backend error');
       const event = fake.events.get(id);
       if (!event) throw new GoogleError(404, 'not found');
       return { ...event };
@@ -182,8 +182,9 @@ describe('the day plan card', () => {
       await effects.execute({ operationId: 'tool:plan-1:apply:0', owner_ref: String(OWNER), tool: 'calendar_plan', payload: { ...PLAN.blocks[0], block_index: 0 } },
         { dispatch: async () => { await fake.client.createEvent({ ...PLAN.blocks[0]!, id: first, operationMarker: first }); return { provider_id: first, result: { etag: 'v1' } }; }, reconcile: async () => ({ status: 'unknown' }) });
       state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ?", NOW, id);
+      const sent = h.cards.length;
       const outs = await Promise.all([h.desk.decide(id, 'a', 'one', { surface: 'telegram' }), h.desk.decide(id, 'a', 'two', { surface: 'app' })]);
-      expect(outs.map(out => out.toast).sort()).toEqual(['Already handled.', 'Done']);
+      expect([outs.map(out => out.toast).sort(), h.cards.length]).toEqual([['Already handled.', 'Done'], sent]);
       expect([h.status(id), h.live()]).toEqual(['done', PLAN.blocks.map(block => block.title)]);
     });
   });
@@ -231,6 +232,30 @@ describe('the day plan card', () => {
       await h.desk.decide(id, 'u', 'trace', { surface: 'telegram' });
       fake.events.delete(await sha256Hex('tool:plan-1:apply:0'));
       expect([(await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast, h.status(id), fake.creates, h.live()]).toEqual(['Undone', 'undone', 3, []]);
+    });
+  });
+
+  it('read back with every block still there, the card says so: the whole plan after a failed add, and nothing removed after a failed undo', async () => {
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      // Block 2 lands but its reply is lost, and Google cannot be read: nothing can be confirmed, so all three may be left.
+      fake.loseCreateReply = 2; fake.failRead = true; fake.readStatus = 500;
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      expect([(await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast, h.live().length]).toEqual(['Outcome unknown', 3]);
+      fake.failRead = false;
+      const again = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([again.toast, h.status(id), fake.creates]).toEqual(['Outcome unknown', 'uncertain', 3]);
+      expect(again.message).toContain('All 3 blocks of the plan are on your calendar');
+    });
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      fake.failCancel = () => { throw new GoogleError(500, 'backend error'); };
+      expect([(await h.desk.decide(id, 'u', 'trace', { surface: 'telegram' })).toast, h.live().length]).toEqual(['Outcome unknown', 3]);
+      fake.failCancel = null;
+      const again = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([again.toast, h.status(id), again.message]).toEqual(['Not undone', 'done', 'Nothing was removed: all 3 blocks of the plan are still on your calendar.']);
     });
   });
 

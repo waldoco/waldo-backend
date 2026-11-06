@@ -1163,28 +1163,25 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // A day plan, all or nothing. Every block is its own effect, so an approval after an interruption finishes what the first
   // one started and adds nothing twice. Up to 24 calls to Google run here, none inside a transaction. One decision runs per
-  // plan, claimed before anything is awaited.
+  // plan: decideOnce claims it before anything is written or awaited.
   const plansRunning = new Set<string>();
   const blocksNamed = (titles: readonly string[]) => titles.map(title => `"${title}"`).join(', ');
-  const decidePlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
-    if (plansRunning.has(id)) return { toast: 'Already handled.', message: 'Already handled.' };
-    plansRunning.add(id);
-    try { return await runPlan(id, entry, action, operationRef, recovering, trace); } finally { plansRunning.delete(id); }
-  };
   const settlePlan = async (id: string, plan: StoredPlan, client: GoogleClient, operationRef: string, undoing: boolean, trace: string): Promise<ApprovalDecision> => {
     const { present, unread } = await planOnCalendar(client, operationRef, plan);
     deps.log({ trace, hop: 'calendar_plan_settle', ms: 0, ok: unread.length === 0, code: unread.length ? 'unknown' : present.length ? 'present' : 'absent' });
     const still = (titles: readonly string[]) => `${blocksNamed(titles)} ${titles.length === 1 ? 'is' : 'are'} still on your calendar`;
     if (unread.length) return { toast: 'Outcome unknown', message: `I could not read ${blocksNamed(unread)} on your calendar${present.length ? `, and ${still(present)}` : ''}. Check your calendar; approving again won't add or remove anything.` };
+    const all = present.length === plan.blocks.length;
     if (undoing) {
       if (!present.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: "Undone: none of the plan's blocks is on your calendar." }; }
       setStatus(id, 'done');
-      return { toast: 'Partly undone', message: `${still(present)}; the rest of the plan is removed. Remove any you don't want.` };
+      return all ? { toast: 'Not undone', message: `Nothing was removed: all ${present.length} blocks of the plan are still on your calendar.` }
+        : { toast: 'Partly undone', message: `${still(present)}; the rest of the plan is removed. Remove any you don't want.` };
     }
     if (!present.length) { setStatus(id, 'failed'); return { toast: 'Not done', message: 'Nothing from the plan is on your calendar.' }; }
-    return { toast: 'Outcome unknown', message: `The plan was not added whole: ${still(present)}. Remove any you don't want; approving again won't add or remove anything.` };
+    return { toast: 'Outcome unknown', message: `${all ? `All ${present.length} blocks of the plan are on your calendar, though adding it failed partway` : `The plan was not added whole: ${still(present)}`}. Remove any you don't want; approving again won't add or remove anything.` };
   };
-  const runPlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
+  const decidePlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
     const plan = JSON.parse(entry.payload_json) as StoredPlan;
     if (!deps.effects) return { toast: 'Not available', message: 'A day plan cannot be added here. Nothing was changed.' };
     if (action === 'u' && !(entry.undo_json && entry.decided_at !== null && (recovering || deps.now() <= undoUntil(entry)!)))
@@ -1281,7 +1278,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (action === 'a' && entry?.grant_json && entry.status === 'uncertain') return await settleGranted(id, trace) ?? { toast: 'Already handled.', message: 'Already handled.' };
     const operationRef = entry ? operationRefOf(entry) : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
-    if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`) || plansRunning.has(id)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && (entry.kind === 'calendar_change' && !!deps.effects.get(`${operationRef}:undo`)
       || entry.kind === 'calendar_plan' && !!deps.effects.get(`${operationRef}:undo:0`)) && !!entry.undo_json);
@@ -1794,10 +1791,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     await clearButtons(id, live, via);
   };
   const decideOnce = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }, said?: OwnerSaid): Promise<ApprovalDecision> => {
-    const before = row(id)?.status;
-    const out = await decide(id, action, trace, via, said);
-    if ((before === 'open' || before === 'review_only') && row(id)?.status !== before) await retire(id, via);
-    return out;
+    const plan = row(id)?.kind === 'calendar_plan';
+    if (plan && plansRunning.has(id)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (plan) plansRunning.add(id);
+    try {
+      const before = row(id)?.status;
+      const out = await decide(id, action, trace, via, said);
+      if ((before === 'open' || before === 'review_only') && row(id)?.status !== before) await retire(id, via);
+      return out;
+    } finally { if (plan) plansRunning.delete(id); }
   };
   const raising = new Set<string>();
   const waitingRow = (entry: LedgerRow) => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p') && (entry.status === 'open' || entry.status === 'review_only');
