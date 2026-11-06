@@ -493,13 +493,13 @@ export const APP_SCHEDULE_RECEIPTS_V1 = {
   unavailable: { state: 'rejected', message: 'That cannot be changed right now. Try again later.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
 // What a new time means for today: planned (it comes at the new time today), now (the new time has passed and today's had not
-// gone, so it goes now), sent (today's went out), busy (today's is being made, held or waiting to reach the owner), passed (the
+// gone, so it goes now), sent (today's went out), busy (today's is being made, held, waiting or paused, and is left as it is), passed (the
 // time has passed and nothing was due today), quiet (it falls in quiet hours and waits for them to end), off (daily_brief is
 // off), unchanged (that is already its time).
 export type AppScheduleTimeTodayV1 = 'planned' | 'now' | 'sent' | 'busy' | 'passed' | 'quiet' | 'off' | 'unchanged';
 const SCHEDULE_TODAY: Readonly<Record<Exclude<AppScheduleTimeTodayV1, 'unchanged'>, string>> = {
   planned: '', now: " Today's is on its way now.", sent: " Today's already went out, so this starts tomorrow.",
-  busy: " Today's is already on its way, so this starts tomorrow.", passed: ' That time has passed today, so this starts tomorrow.',
+  busy: " Today's stays as it is, so this starts tomorrow.", passed: ' That time has passed today, so this starts tomorrow.',
   quiet: ' That is inside your quiet hours, so it waits until they end.', off: ' Your day cards are off; it comes at this time once you turn them on.',
 };
 export const appScheduleTimeReceiptV1 = (outcome: Readonly<{ card: (typeof APP_SCHEDULE_TIME_IDS_V1)[number]; time: string; today: AppScheduleTimeTodayV1; noLaterThan: boolean }>) => {

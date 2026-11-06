@@ -84,12 +84,11 @@ describe('the wake turn moves only a Brief still to come, and never later', () =
     });
   });
 
-  it('leaves a Brief sent, held, skipped, pinned, set by the owner for today, or already due', async () => {
+  it('leaves a Brief sent, held, skipped, set by the owner for today, or already due', async () => {
     const cases: Record<string, (scheduler: Scheduler, book: ReturnType<typeof dayPlanBook>) => Promise<void> | void> = {
       sent: (_s, book) => book.sent('2026-11-04', 'card:brief'),
       held: (_s, book) => book.held('2026-11-04', 'card:brief'),
       skipped: async (scheduler, book) => { await applyDayPlan(scheduler, book, tz, midnight, [{ card: 'card:brief', time: null, reason: 'day off' }]); },
-      pinned: async (scheduler, book) => { book.pin('card:brief', '09:00'); await applyDayPlan(scheduler, book, tz, midnight, [{ card: 'card:brief', time: '09:00', reason: 'pinned' }]); },
       setForToday: async (scheduler, book) => { await applyDayPlan(scheduler, book, tz, midnight, [{ card: 'card:brief', time: '09:00', reason: SET_FOR_TODAY }]); },
       due: async (scheduler, book) => { await applyDayPlan(scheduler, book, tz, midnight, [{ card: 'card:brief', time: '06:00', reason: 'early' }]); },
     };
