@@ -12,7 +12,7 @@ export const BRAIN_NAMESPACES = {
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, search_history for past runs, tasks and decided cards, read_tool_output for stored tool output, chat threads, and owner_message_heard for a newer message the owner sent during this turn.',
   health: "Health logs, scores, screen time and where the owner's phones are: log a meal or workout, list what was logged, the owner's derived scores, get_device_context for each phone's time zone and city, get_weather for today's and tomorrow's weather there.",
   medicines: "The owner's medicines: track_medication for reminder times and the count on hand, log_medication when they say taken or skipped, list_medications, and stop_medication.",
-  reminders: 'Follow-ups and background work: start_task for long work that reports back later, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
+  reminders: 'Follow-ups and background work: start_task for long work that reports back later, check_task for how one stands, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
   skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
@@ -197,6 +197,8 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // from the apply turn.
   start_task: { brain: 'reminders', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'task_started', replay: { replay: 'provider_idempotent', basis: 'the job key is turn+toolCall and the job book keeps one job per key; a replay returns the job already made', evidence: { file: 'tasks/tools.ts', needle: 'idempotencyKey: key' } } },
   cancel_task: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'task_cancelled', replay: { replay: 'provider_idempotent', basis: 'cancels by job id; a second cancel finds the job settled and changes nothing', evidence: { file: 'tasks/jobs.ts', needle: 'WHERE id = ? AND status IN (${placeholders(OPEN)})' } } },
+  // scope deny: a finished task's result carries what its worker read from mail, files and the web.
+  check_task: { brain: 'reminders', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   // scope allow: the source guard is applied to the child's handlers too. claim null: it runs a read-only subagent.
   delegate_task: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: true, claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
   remember: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'memory_stored', tainted: { exempt: 'honest_origin', reason: 'under outside text it saves the owner\'s quoted words as Waldo\'s inference until the owner confirms them, and never changes what the owner told Waldo' }, replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },
@@ -265,7 +267,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', propose_standing_grant: 'calendar', revoke_standing_grant: 'settings', pause_autonomy: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
   send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
-  get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
+  get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working', check_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.
 export const toolActivity = (name: string): AppChatActivityKind => (TOOL_ACTIVITY as Partial<Record<string, AppChatActivityKind>>)[name] ?? 'working';

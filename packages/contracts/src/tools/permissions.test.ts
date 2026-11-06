@@ -142,6 +142,7 @@ describe('toolName', () => {
       'get_device_context',
       'get_weather',
       'propose_calendar_plan',
+      'check_task',
     ]);
   });
 
@@ -366,6 +367,7 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_load',
       'start_task',
       'cancel_task',
+      'check_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',
