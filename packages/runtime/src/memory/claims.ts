@@ -1110,6 +1110,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     pendingTopics(): string[] {
       return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
     },
+    // Pending purge rows whose claim is gone: nothing is left to settle, and the profile view stays blank while any pending row exists.
+    orphanPurgeRows: (): number => sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM purge_pending WHERE claim_id NOT IN (SELECT id FROM claims)').one().n,
     // An owner-requested forget that ran to completion closes a legacy hold on the same topic, so consolidation never waits on it forever.
     finishPendingTopic(topic: string): void {
       sql.exec('DELETE FROM topic_purge_pending WHERE topic = ?', topic);

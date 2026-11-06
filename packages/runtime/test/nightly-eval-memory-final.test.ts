@@ -52,11 +52,11 @@ describe('the memory final-pass cases', () => {
   it('m22 fails the moment the forgotten name reaches the model, a memory read or a reply, in full or as a stub', () => {
     const receipt = scenario('m22-forgotten-holds-across-surfaces').receipts![1]!;
     expect(receipt.holds(evidence({ model_inputs: [sent('[c2005 · fact] The owner lives in Pune.')], transcript: [said('I have nothing to share about that.')] }))).toBe(true);
-    expect(receipt.holds(evidence({ model_inputs: [sent('[c2004 · fact] The owner\'s pottery teacher is called Marisol Duarte.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2004 · fact] The owner\'s pottery teacher is called Zephyrine Quillon.')] }))).toBe(false);
     expect(receipt.holds(evidence({ model_inputs: [sent('[c2004 stub · fact] The owner\'s pottery tea…')] }))).toBe(false);
-    expect(receipt.holds(evidence({ model_inputs: [sent('The teacher is Marisol.')] }))).toBe(false);
-    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"teacher Marisol Duarte"}]}')] }))).toBe(false);
-    expect(receipt.holds(evidence({ transcript: [said('Her name was Duarte, I think.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ model_inputs: [sent('The teacher is Zephyrine.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"teacher Zephyrine Quillon"}]}')] }))).toBe(false);
+    expect(receipt.holds(evidence({ transcript: [said('Her name was Quillon, I think.')] }))).toBe(false);
   });
 
   it('m24 needs the inferred claim in front of the model: a reply that ignores memory fails', () => {
@@ -64,6 +64,7 @@ describe('the memory final-pass cases', () => {
     expect(receipt.holds(evidence({ model_inputs: [sent('[c2006 · preference] The owner probably prefers morning meetings.')] }))).toBe(true);
     expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"The owner probably prefers morning meetings."}]}')] }))).toBe(true);
     expect(receipt.holds(evidence({ model_inputs: [sent('Nothing about meeting times.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"The vendor call is one of this week meetings."}]}')] }))).toBe(false);
   });
 
   it('m21 fails when Leeds is still current or no Pune claim was saved, and passes on the move', () => {
