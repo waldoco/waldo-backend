@@ -16,7 +16,8 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-21T08:20:00Z') };
 
 it('a child holds every read tool by default, page reads included, and nothing that acts', () => {
-  expect(CHILD_TOOL_NAMES).toEqual(CHILD_READ_TOOLS);
+  // The owner's readings stay with the parent: a child's report is outside data, where readings are withheld.
+  expect(CHILD_READ_TOOLS.filter((tool) => !CHILD_TOOL_NAMES.includes(tool)).sort()).toEqual(['get_crs', 'get_health', 'get_master_metrics', 'list_health_logs', 'list_medications']);
   expect(CHILD_TOOL_NAMES).toEqual(expect.arrayContaining(['browse_page', 'web_search', 'read_thread', 'query_calendar', 'read_memory']));
   for (const tool of ['delegate_task', 'read_tool_output', 'browse_act', 'send_message', 'workspace_write', 'set_reminder', 'start_task']) expect(CHILD_TOOL_NAMES).not.toContain(tool);
   // One page read at a time: the loop never batches a tool that is not concurrent.
