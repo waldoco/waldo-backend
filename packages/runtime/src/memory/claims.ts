@@ -2,7 +2,7 @@ import { fuseRanked } from './semantic-recall';
 import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
 import { LIFE_AREAS, replaceLiteralText, type LifeArea } from '@waldo/contracts';
-import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
+import { carriesTopic, forgettableTopic, hidesTopic, startsTopic } from './forget-guard';
 import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
@@ -772,7 +772,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     // one repeats them, it loses only the words. words (a forgotten claim's evidence, which may be a citation other claims share) are held the same way and
     // leave only the episode index. Every text is redacted longest first, so a shorter text redacted first cannot cut a longer
     // one into a fragment the longer one no longer matches; texts returns them all for the stores outside this table.
-    purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> }; deletedClaims: readonly number[] } {
+    purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; refused: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> }; deletedClaims: readonly number[] } {
       // Before anything is removed: if the count cannot move, nothing is forgotten either.
       forgetLanded();
       // An earlier version of a forgotten claim goes with it: what it replaced would otherwise stay as history that says the
@@ -782,8 +782,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
       // The owner's forget topic is redacted from retained text like a claim's text, so forgetting a topic whose claim is
-      // already gone still clears episodes and backups. Literal, case-insensitive; a hard floor of 3 characters keeps a
-      // stray short word from redacting everything.
+      // already gone still clears episodes and backups. Literal, case-insensitive; a topic too short to forget safely
+      // (forgettableTopic) is refused and returned in refused.
       // A claim's text is usually a paraphrase; retained history holds the owner's own words. The quoted evidence span (the
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
@@ -803,7 +803,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         } catch { failed.push('pending_topic'); return false; }
       });
       const longestFirst = (list: readonly string[]) => [...new Set(list.map((text) => text.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
-      const named = longestFirst(custody(longestFirst(topics).filter((topic) => topic.length >= 3), 'everywhere'));
+      const refused = longestFirst(topics).filter((topic) => !forgettableTopic(topic));
+      const named = longestFirst(custody(longestFirst(topics).filter(forgettableTopic), 'everywhere'));
       const spoken = custody(longestFirst([...forgotten.map((claim) => claim.text), ...quotedEvidence]).filter((text) => !named.includes(text)), 'history');
       const cleaned = longestFirst([...named, ...spoken]);
       const texts = longestFirst([...cleaned, ...custody(longestFirst(words).filter((text) => !cleaned.includes(text)), 'history')]);
@@ -1101,7 +1102,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt, deletedClaims };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, refused, receipt, deletedClaims };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
@@ -1698,7 +1699,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     for (const pin of (ops.pin ?? []).filter(pinOp)) if (store.pin(pin.id, pin.block, pin.order)) pinned += 1;
   }
   const blockedPins = curates ? 0 : (ops.pin ?? []).length + (ops.unpin ?? []).length;
-  const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
+  const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`), ...(purge.refused.length ? ['topic(too-short)'] : [])] : [];
   onOutcome?.({
     written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
     confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
