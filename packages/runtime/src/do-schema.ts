@@ -496,6 +496,20 @@ export const HISTORY_ARCHIVE_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS history_archive_by_ref;', 'DROP INDEX IF EXISTS history_archive_by_source;', 'DROP TABLE IF EXISTS history_archive;'],
 };
 
+// The notes one owner message's reply looked at: claim ids only, never text, read back as the claims stand now. The writer
+// runs this DDL itself too and keeps only the newest rows.
+export const REPLY_MEMORY_USED_TABLE_SCHEMA = [
+  'CREATE TABLE IF NOT EXISTS reply_memory_used (turn_id TEXT PRIMARY KEY, claim_ids TEXT NOT NULL, at INTEGER NOT NULL);',
+  'CREATE INDEX IF NOT EXISTS reply_memory_used_by_time ON reply_memory_used (at);',
+] as const;
+
+export const REPLY_MEMORY_USED_MIGRATION: DoMigration = {
+  version: 17,
+  name: 'reply-memory-used',
+  up: REPLY_MEMORY_USED_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS reply_memory_used_by_time;', 'DROP TABLE IF EXISTS reply_memory_used;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -509,6 +523,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   CALENDAR_LAST_SEEN_MIGRATION,
   SCHEDULE_RUNS_RUNNING_MIGRATION,
   HISTORY_ARCHIVE_MIGRATION,
+  REPLY_MEMORY_USED_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

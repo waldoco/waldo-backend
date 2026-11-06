@@ -11,14 +11,15 @@ import { ensureSchema } from '../src/tracer/schema';
 // Which notes a reply looked at: recorded against the owner message as ids, shown by chat revision 7, and read back as the
 // claims stand now.
 const REPLY = 'Synthetic reply marker quartz-heron';
-const seen = vi.hoisted(() => ({ prompts: [] as string[] }));
+const seen = vi.hoisted(() => ({ prompts: [] as string[], calls: [] as { name: string; arguments: string }[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     seen.prompts.push(JSON.stringify(request));
-    const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
+    const done = (text: string, calls?: { call_id: string; name: string; arguments: string }[]) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0, ...(calls ? { tool_calls: calls } : {}) } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
-    return done(REPLY);
+    const call = seen.calls.shift();
+    return call ? done('', [{ call_id: `call-${seen.prompts.length}`, ...call }]) : done(REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -52,13 +53,14 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 type Owner = InstanceType<typeof OwnerDO>;
 // One owner with `exchanges` exchanges in main chat; `run` gets the owner object, its storage and the newest pair's ids.
-const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}) =>
+const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}, seeds: readonly { text: string; kind?: string; quiet?: boolean }[] = []) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...config });
     claimStore(state.storage.sql).add({ kind: 'fact', text: 'Lives in Leeds near the canal', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed' }, '2026-10-01T00:00:00.000Z');
+    for (const { quiet, ...seed } of seeds) { const store = claimStore(state.storage.sql); store.add({ kind: 'fact', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed', ...seed }, '2026-10-01T00:00:00.000Z'); if (quiet) store.bringUpLess(store.allClaims().find(claim => claim.text === seed.text)!.id, '2026-10-02T00:00:00.000Z', true); }
     try {
       for (let index = 1; index <= exchanges; index += 1) {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: `rating-client-0${index}`, text: 'Remind me what I said about the canal near Leeds' }) }));
@@ -77,7 +79,7 @@ const page = async (owner: Owner, name: string, contract?: string) =>
 const replyOf = async (owner: Owner, name: string, contract?: string) => (await page(owner, name, contract)).messages.find(message => message.role === 'assistant')!;
 const ON = { MEMORY_USED_SHOWN: '1' };
 
-beforeEach(() => { seen.prompts = []; });
+beforeEach(() => { seen.prompts = []; seen.calls = []; });
 
 it('names the notes a turn looked at, only to chat revision 7 and only with the switch on', async () => {
   await withExchange('app-memory-used-golden', async (owner, state) => {
@@ -88,6 +90,46 @@ it('names the notes a turn looked at, only to chat revision 7 and only with the 
     for (const contract of [undefined, 'chat=6', 'chat=3']) expect(await replyOf(owner, 'app-memory-used-golden', contract)).not.toHaveProperty('memory_used');
     expect(appHistoryResultV1Schema.safeParse({ messages: (await page(owner, 'app-memory-used-golden', 'chat=7')).messages, next_cursor: null }).success).toBe(true);
   }, 1, ON);
+});
+
+const BEES = { text: 'Keeps bees on an allotment' };
+it('does not name a note nothing in the turn looked at', async () => {
+  await withExchange('app-memory-used-control', async (owner) => {
+    expect((await replyOf(owner, 'app-memory-used-control', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
+  }, 1, ON, [BEES]);
+});
+
+it('records a claim the model opened with read_memory, as the tool answers it', async () => {
+  seen.calls = [{ name: 'read_memory', arguments: JSON.stringify({ query: 'bees', limit: 5 }) }];
+  await withExchange('app-memory-used-read', async (owner, state) => {
+    expect((await replyOf(owner, 'app-memory-used-read', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }, { id: 'memory:claim:2', text: 'Keeps bees on an allotment' }]);
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1,2]' }]);
+  }, 1, ON, [BEES]);
+});
+
+it('never records or shows a health claim the model read', async () => {
+  seen.calls = [{ name: 'read_memory', arguments: JSON.stringify({ query: 'heart rate', limit: 5 }) }];
+  await withExchange('app-memory-used-health', async (owner, state) => {
+    expect(seen.prompts.join(' ')).toContain('51 bpm');
+    expect((await replyOf(owner, 'app-memory-used-health', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
+  }, 1, ON, [{ text: 'Resting heart rate was 51 bpm last week', kind: 'health' }]);
+});
+
+it('never records or shows a health claim recall brought into the turn', async () => {
+  await withExchange('app-memory-used-health-recall', async (owner, state) => {
+    expect(seen.prompts.join(' ')).toContain('51 bpm');
+    expect((await replyOf(owner, 'app-memory-used-health-recall', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
+  }, 1, ON, [{ text: 'Resting heart rate was 51 bpm near the Leeds canal', kind: 'health' }]);
+});
+
+it('does not name a note the owner asked Waldo to bring up less, though the turn used it', async () => {
+  await withExchange('app-memory-used-quiet', async (owner, state) => {
+    expect(seen.prompts.join(' ')).toContain('quiet canal habit');
+    expect(await replyOf(owner, 'app-memory-used-quiet', 'chat=7')).toMatchObject({ memory_used: [{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }] });
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
+  }, 1, ON, [{ text: 'A quiet canal habit near Leeds', quiet: true }]);
 });
 
 it('records and shows nothing while the switch is off', async () => {
@@ -107,6 +149,16 @@ it('stops naming a claim the owner forgot, and one a forget is still clearing', 
   }, 1, ON);
 });
 
+describe('the book', () => {
+  it('keeps only the newest rows', () => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('app-memory-used-bound')), async (_instance, state) => {
+    const book = memoryUsedBook(state.storage.sql);
+    for (let index = 0; index < 2005; index += 1) book.record(`turn-${index}`, [1], index);
+    expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reply_memory_used').one().n).toBe(2000);
+    expect(book.ids('turn-0')).toEqual([]);
+    expect(book.ids('turn-2004')).toEqual([1]);
+  }));
+});
+
 describe('the reader', () => {
   const claim = (id: number, over: object = {}) => ({ id, kind: 'fact', text: `Note ${id}`, source: 'stated', evidence: 'e', origin: 'owner', status: 'active', created_at: 'x', last_seen_at: 'x', seen_count: 1, source_ref: null, ...over }) as never;
   it('keeps the newest few, drops untrusted and held claims, and carries text as one plain line', () => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('app-memory-used-reader')), async (_instance, state) => {
@@ -120,6 +172,8 @@ describe('the reader', () => {
     expect(memoryUsedFor(book, () => live, () => [])('t2')).toEqual([{ id: 'memory:claim:1', text: 'Note 1' }]);
     expect(memoryUsedFor(book, () => live, () => ['Note 1'])('t2')).toBeUndefined();
     expect(memoryUsedFor(book, () => live, () => [])('never')).toBeUndefined();
+    expect(memoryUsedFor(book, () => [claim(5, { text: `${'a'.repeat(299)}😀tail` })], () => [])('t1')).toEqual([{ id: 'memory:claim:5', text: `${'a'.repeat(299)}😀` }]);
+    expect(memoryUsedFor(book, () => [claim(5, { kind: 'health', text: 'Resting heart rate was 51 bpm' })], () => [])('t1')).toBeUndefined();
     book.record('t3', [], 1);
     expect(memoryUsedFor(book, () => live, () => [])('t3')).toBeUndefined();
   }));
