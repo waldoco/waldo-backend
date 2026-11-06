@@ -164,6 +164,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
+  // '1': a card whose buttons fit WhatsApp's three reply buttons goes out as an interactive message; any other card stays text.
+  WHATSAPP_REPLY_BUTTONS?: string;
   // The approved template for a message the owner did not ask for (a day card, an update); unset, such a message waits without a knock.
   WHATSAPP_PROACTIVE_TEMPLATE?: string;
   WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string;

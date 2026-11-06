@@ -105,7 +105,34 @@ export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
 // onSent hears each part of what Waldo wrote to the owner, with its wamid, so a later reaction or swipe-reply naming it can be
 // read: a turn's own reply, and whatever the delivery outbox sends (the Brief, Check-in and Close, reminders, follow-ups,
 // notices). Direct system sends (sign-in and connect links among them) are never heard.
-export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void }>;
+export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void;
+  // WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message.
+  replyButtons?: boolean }>;
+
+// Meta's limits for an interactive reply-buttons message, read on 6 Nov 2026 from
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages
+// (updated 21 May 2026): up to 3 buttons, a unique title of at most 20 characters, an id of at most 256 characters and a body of
+// at most 1,024 characters. A reply button carries no link, and a message that cannot meet every limit goes out as text.
+export const WHATSAPP_REPLY_BUTTONS_MAX = 3;
+export const WHATSAPP_REPLY_BUTTON_TITLE_MAX = 20;
+export const WHATSAPP_REPLY_BUTTON_ID_MAX = 256;
+export const WHATSAPP_REPLY_BODY_MAX = 1024;
+// The ids the approval desk reads (approvals.ts callback): an action letter and the card's id.
+const CALLBACK_ID = /^([aseud]):(\S+)$/;
+type ShimButton = Readonly<{ text: string; callback_data?: string; url?: string }>;
+// The interactive body for a card whose every button is a callback button that fits, or null when it must go as text.
+const replyButtonsBody = (text: string, buttons: readonly ShimButton[]): { type: 'interactive'; interactive: object } | null => {
+  const body = text.trim();
+  if (buttons.length === 0 || buttons.length > WHATSAPP_REPLY_BUTTONS_MAX || body === '' || body.length > WHATSAPP_REPLY_BODY_MAX) return null;
+  const titles = new Set<string>();
+  for (const button of buttons) {
+    const title = button.text.trim();
+    if (button.url || !button.callback_data || !CALLBACK_ID.test(button.callback_data) || button.callback_data.length > WHATSAPP_REPLY_BUTTON_ID_MAX
+      || title === '' || title.length > WHATSAPP_REPLY_BUTTON_TITLE_MAX || titles.has(title)) return null;
+    titles.add(title);
+  }
+  return { type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: buttons.map(button => ({ type: 'reply', reply: { id: button.callback_data, title: button.text.trim() } })) } } };
+};
 
 export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch, options: WhatsAppShimOptions = {}): TelegramShimCall => {
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
@@ -140,6 +167,24 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
     if (method === 'sendMessage') {
       const b = body as { text: string; fallback_text?: string; quote_message_id?: string; turn_reply?: boolean; link_preview_options?: { is_disabled?: boolean }; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
+      // One interactive message carries the whole card: it is a single message, so a longer text or any button it cannot hold
+      // keeps the text-with-instructions form, which every WhatsApp client shows.
+      const interactive = options.replyButtons === true ? replyButtonsBody(b.fallback_text ?? b.text, buttons) : null;
+      if (interactive) {
+        // Meta refusing the interactive form (a 4xx that is not the window's 131047) falls back to the text form once, so the
+        // owner still gets the card. A timeout or a 5xx may have gone out, and a window refusal must reach the window layer: both propagate.
+        let ack: unknown;
+        try { ack = await call({ to, ...(b.quote_message_id ? { context: { message_id: b.quote_message_id } } : {}), ...interactive }); }
+        catch (error) {
+          if (!(error instanceof WhatsAppApiError) || error.status >= 500 || error.code === 131047) throw error;
+          console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, code: 'interactive_refused_text_fallback', status: error.status }));
+        }
+        if (ack !== undefined) {
+          const id = ackId(ack);
+          if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, (b.fallback_text ?? b.text).trim());
+          return ack;
+        }
+      }
       const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
       // A text message carries at most 4,096 characters, so a longer one goes in parts on the same split as the surface adapter.
       const parts = splitTelegramText((b.fallback_text ?? b.text) + suffix, WHATSAPP_TEXT_MAX_CHARS);
@@ -298,6 +343,15 @@ export const WA_UPDATE_BASE = 9_000_000_000_000;
 
 // The Cloud API marks a forward in a message's context, which can also carry reply context: the id of the message the owner
 // swiped to reply to.
+// The webhook's description of a tap on a reply button (button_reply), as Meta documents it. Only a button this runtime could
+// have sent counts: its id is an approval callback, whatever else the payload says.
+export const waButtonReplySchema = z.object({
+  type: z.literal('interactive'),
+  interactive: z.object({
+    type: z.literal('button_reply'),
+    button_reply: z.object({ id: z.string().max(WHATSAPP_REPLY_BUTTON_ID_MAX).regex(CALLBACK_ID), title: z.string().max(WHATSAPP_REPLY_BUTTON_TITLE_MAX * 4).optional() }),
+  }),
+});
 const waForwardContextSchema = z.object({ forwarded: z.boolean().optional(), frequently_forwarded: z.boolean().optional(), id: z.string().optional(), from: z.string().optional() });
 
 type WaLocation = { latitude?: unknown; longitude?: unknown; name?: unknown; address?: unknown };
@@ -308,6 +362,7 @@ export type WaIngressMessage = Readonly<{
   document?: { id?: string; filename?: string; mime_type?: string; caption?: string }; location?: WaLocation; contacts?: WaContactCard[];
   sticker?: { id?: string; mime_type?: string; animated?: boolean }; reaction?: { message_id?: string; emoji?: string };
   video?: { id?: string; mime_type?: string; caption?: string };
+  interactive?: unknown;
 }>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
@@ -410,6 +465,17 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     if (message.type === 'location' || message.type === 'contacts') {
       const text = message.type === 'location' ? locationText(message.location) : contactsText(message.contacts);
       push(text ? { text: quarantined(text).slice(0, 4096) } : { whatsapp_type: message.type });
+      continue;
+    }
+    if (message.type === 'interactive') {
+      const tapped = forwarded ? null : waButtonReplySchema.safeParse(message);
+      // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that
+      // approval. A tap that names no card cannot be checked, so it is not a decision.
+      const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? message.context.id : null;
+      if (tapped?.success && cardRef !== null) {
+        seq += 1;
+        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, card_ref: cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
+      } else push({ whatsapp_type: 'interactive' });
       continue;
     }
     if (message.type !== 'text') {
