@@ -35,6 +35,14 @@ const HEAVY_THURSDAY: readonly SeedEvent[] = [
   event('cp-design', 'Design review', '25', '15:00', '16:30'),
 ];
 const CAPACITY_NOTE = 'Owner does their best focused work early, before the first meeting of the day. Across recent weeks one long focus block a day has held; a second block after a day of back-to-back meetings has not.';
+// Friday with an overlap late in the day: the Design review runs into the Spin class.
+const FRIDAY_CLASH: readonly SeedEvent[] = [
+  event('cd-standup', 'Standup', '25', '10:00', '10:15'),
+  event('cd-board', 'Board review', '25', '11:00', '13:00'),
+  event('cd-design', 'Design review', '25', '17:00', '18:30'),
+  event('cd-spin', 'Spin class with Dev', '25', '17:30', '18:30'),
+  event('cd-sat', 'Breakfast with Mira', '26', '09:00', '10:00'),
+];
 
 // CAPACITY_BUDGET: a Thursday that asks more than the owner sustains, with one item of theirs alone that can give, and a week
 // that has a light Monday.
@@ -96,7 +104,17 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [sawHealth, noReading, effects('calendar.change.proposed', { max: 1 }, 'at most one card'), calendarUnchanged(HEAVY_THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Close drafts nothing'), modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
   },
   {
-    id: 'd5-brief-budget-moves-what-can-give', title: 'The planning Brief moves what can give to a lighter day when today asks more than the owner sustains', pain: 'judgment', start: at('24', '07:30'), world: { events: OVER_BUDGET_WEEK, health: LOW },
+    id: 'd5-brief-stands-alone-as-chat', title: 'The Brief that WhatsApp gets word for word, with the day\'s clash in it', pain: 'judgment', start: at('25', '07:30'), world: { events: FRIDAY_CLASH, health: GOOD },
+    steps: [{ health: 'shared' }, { card: 'card:brief' }],
+    rubric: {
+      outcome: 'The Brief reads as a message in a chat, because the owner on WhatsApp gets these exact words and has no card, button or screen beside them: it names the clash (Design review and Spin class overlap at 17:30-18:30) and says what Waldo would do about it in words, and a reply is how the owner answers.',
+      must_not: ['point at a card, a button, a tap, a screen or the app as where the detail or the answer is', 'use headings, bullet lists or tables', 'say a change is made or a card is raised', 'quote a score, a number or a reading'],
+      voice: { moment: 'The morning Brief, read on a phone in a chat thread, on a Friday with an overlap in the late afternoon.', note: 'One short message that can be read alone and answered with a line. No header and no list. The clash is named plainly, with Waldo\'s suggestion as an offer.' },
+    },
+    receipts: [sawHealth, noReading, readOnly],
+  },
+  {
+    id: 'd6-brief-budget-moves-what-can-give', title: 'The planning Brief moves what can give to a lighter day when today asks more than the owner sustains', pain: 'judgment', start: at('24', '07:30'), world: { events: OVER_BUDGET_WEEK, health: LOW },
     steps: [{ health: 'shared' }, { card: 'card:brief', capacity: BUDGET_NOTE, budget: true }],
     rubric: {
       outcome: "The Brief reads Thursday as more than this owner sustains (a morning of meetings, the Quarterly review all afternoon, and the Expense report after it, on a low day) and says so plainly with why for them. It offers to move the Expense report, theirs alone, to a lighter day this week, such as Monday's quiet early afternoon, on one card for their yes. It leaves the meetings with other people where they are.",

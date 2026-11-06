@@ -166,6 +166,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
+  // '1': a card whose buttons fit WhatsApp's three reply buttons goes out as an interactive message; any other card stays text.
+  WHATSAPP_REPLY_BUTTONS?: string;
+  // The approved template for a message the owner did not ask for (a day card, an update); unset, such a message waits without a knock.
+  WHATSAPP_PROACTIVE_TEMPLATE?: string;
+  WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
   // The Google Cloud project holding Waldo's Gmail push topic in this environment; unset keeps Gmail push off.
   GMAIL_PUSH_PROJECT?: string;
@@ -192,6 +197,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_CLAIM_CONTROLS?: string;
+  MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
@@ -215,6 +221,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
   // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
   PROACTIVE_ACT_AHEAD?: string;
+  // An owner who chose no proactive surface and has WhatsApp bound gets proactive work on the app and WhatsApp both.
+  PROACTIVE_BOTH_DEFAULT?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;

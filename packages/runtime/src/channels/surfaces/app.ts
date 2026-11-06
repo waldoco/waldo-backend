@@ -1,6 +1,6 @@
 import { REPLY_TEXT_MAX_CHARS, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema } from '@waldo/contracts';
 import type { z } from 'zod';
-import { APP_REPLIES, APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
+import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
 
 export type AppApprovalPart = z.infer<typeof replyApprovalPartV1Schema>;
 export const APP_REVIEW_MAX_CHARS = REPLY_TEXT_MAX_CHARS;
@@ -34,7 +34,7 @@ export const WHATSAPP_CONNECT_GUIDANCE = 'No connect button was sent: WhatsApp c
 // is never kept for later on another surface.
 // thread: the app thread the message belongs in, while that thread is open; main otherwise. replies: answers the owner can
 // tap under the message.
-export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[] }>;
+export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[]; copyUntil?: number }>;
 export type ScheduledAppDelivery = (text: string, send?: AppSend) => Promise<string>;
 // A surface whose turn replies leave through an outbox of their own (iMessage) acknowledges a plain send only during its
 // turn: outside one, a send with no delivery bound has nowhere to go, so it returns no message, which producers read as
@@ -45,9 +45,10 @@ export const appCaller = (scheduledDelivery: () => ScheduledAppDelivery | null =
   if ((markup?.inline_keyboard ?? []).some(row => row.length > 0)) return undefined;
   const deliver = scheduledDelivery();
   if (!deliver && !inTurn()) return undefined;
-  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown; [APP_REPLIES]?: unknown };
+  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown; [APP_REPLIES]?: unknown; [APP_COPY_UNTIL]?: unknown };
   const thread = typeof marks[APP_THREAD] === 'string' ? marks[APP_THREAD] : undefined;
   const replies = Array.isArray(marks[APP_REPLIES]) && marks[APP_REPLIES].length ? marks[APP_REPLIES] as readonly string[] : undefined;
-  const row = deliver ? await deliver(text ?? '', { nowOnly: marks[SEND_NOW_ONLY] === true, ...(thread ? { thread } : {}), ...(replies ? { replies } : {}) }) : undefined;
+  const row = deliver ? await deliver(text ?? '', { nowOnly: marks[SEND_NOW_ONLY] === true, ...(thread ? { thread } : {}), ...(replies ? { replies } : {}),
+    ...(typeof marks[APP_COPY_UNTIL] === 'number' ? { copyUntil: marks[APP_COPY_UNTIL] } : {}) }) : undefined;
   return { message_id: 1, chat: { id: chatId ?? 0 }, ...(row === undefined ? {} : { app_row_id: row }) };
 };
