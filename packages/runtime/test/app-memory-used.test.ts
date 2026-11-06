@@ -53,14 +53,14 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 type Owner = InstanceType<typeof OwnerDO>;
 // One owner with `exchanges` exchanges in main chat; `run` gets the owner object, its storage and the newest pair's ids.
-const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}, seeds: readonly { text: string; kind?: string }[] = []) =>
+const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}, seeds: readonly { text: string; kind?: string; quiet?: boolean }[] = []) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...config });
     claimStore(state.storage.sql).add({ kind: 'fact', text: 'Lives in Leeds near the canal', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed' }, '2026-10-01T00:00:00.000Z');
-    for (const seed of seeds) claimStore(state.storage.sql).add({ kind: 'fact', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed', ...seed }, '2026-10-01T00:00:00.000Z');
+    for (const { quiet, ...seed } of seeds) { const store = claimStore(state.storage.sql); store.add({ kind: 'fact', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed', ...seed }, '2026-10-01T00:00:00.000Z'); if (quiet) store.bringUpLess(store.allClaims().find(claim => claim.text === seed.text)!.id, '2026-10-02T00:00:00.000Z', true); }
     try {
       for (let index = 1; index <= exchanges; index += 1) {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: `rating-client-0${index}`, text: 'Remind me what I said about the canal near Leeds' }) }));
@@ -122,6 +122,14 @@ it('never records or shows a health claim recall brought into the turn', async (
     expect((await replyOf(owner, 'app-memory-used-health-recall', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
   }, 1, ON, [{ text: 'Resting heart rate was 51 bpm near the Leeds canal', kind: 'health' }]);
+});
+
+it('does not name a note the owner asked Waldo to bring up less, though the turn used it', async () => {
+  await withExchange('app-memory-used-quiet', async (owner, state) => {
+    expect(seen.prompts.join(' ')).toContain('quiet canal habit');
+    expect(await replyOf(owner, 'app-memory-used-quiet', 'chat=7')).toMatchObject({ memory_used: [{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }] });
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
+  }, 1, ON, [{ text: 'A quiet canal habit near Leeds', quiet: true }]);
 });
 
 it('records and shows nothing while the switch is off', async () => {

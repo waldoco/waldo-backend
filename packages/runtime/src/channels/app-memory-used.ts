@@ -33,7 +33,7 @@ export const memoryUsedFor = (book: ReturnType<typeof memoryUsedBook>, live: () 
     if (!wanted.length) return undefined;
     const holds = holdsIn(held());
     const claims = new Map(live().map(claim => [claim.id, claim]));
-    const shown = wanted.flatMap(id => { const claim = claims.get(id); return claim && !holds(claim.text, claim.evidence, claim.source_ref) && claim.origin !== 'untrusted' && outsideSafe(claim) ? [{ id: `memory:claim:${id}`, text: [...claim.text.replace(/\s+/g, ' ').trim()].slice(0, 300).join('') }] : []; })
+    const shown = wanted.flatMap(id => { const claim = claims.get(id); return claim && !holds(claim.text, claim.evidence, claim.source_ref) && claim.origin !== 'untrusted' && outsideSafe(claim) && !claim.bring_up_less_at ? [{ id: `memory:claim:${id}`, text: [...claim.text.replace(/\s+/g, ' ').trim()].slice(0, 300).join('') }] : []; })
       .filter(item => item.text.length > 0).slice(-APP_CHAT_MEMORY_USED_MAX_V1);
     return shown.length ? shown : undefined;
   };
