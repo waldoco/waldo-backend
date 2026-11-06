@@ -54,8 +54,9 @@ const calendar = (): Fake & { client: GoogleClient } => {
 
 const harness = (state: DurableObjectState, fake: ReturnType<typeof calendar>, now = () => NOW) => {
   let n = 0;
-  const cards: string[] = [];
+  const cards: string[] = [], notices: string[] = [];
   const desk = approvalDesk(state.storage.sql, {
+    notice: async (_key: string, text: string) => { notices.push(text); },
     owner: OWNER, surface: 'telegram', appIdentity: () => true,
     call: async (method: string, body: object) => { if (method === 'sendMessage') cards.push((body as { text: string }).text); return { message_id: cards.length, chat: { id: OWNER } }; },
     google: async () => fake.client, newId: () => String(++n), now, timezone: 'Asia/Kolkata', log: () => undefined,
@@ -63,7 +64,7 @@ const harness = (state: DurableObjectState, fake: ReturnType<typeof calendar>, n
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
   const live = () => [...fake.events.values()].filter(event => event.status !== 'cancelled').map(event => event.title);
-  return { desk, cards, status, live };
+  return { desk, cards, notices, status, live };
 };
 const owner = (work: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`calendar-plan-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -295,8 +296,55 @@ describe('the day plan card', () => {
     await owner(async state => {
       const fake = calendar(), h = harness(state, fake, () => Date.parse('2026-11-05T04:01:00Z'));
       const id = await h.desk.proposeCalendarPlan(PLAN);
-      expect((await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast).not.toBe('Done');
-      expect(fake.creates).toBe(0);
+      const out = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([out.toast, out.message, h.status(id), fake.creates]).toEqual(['This proposal expired',
+        'That proposal expired, so nothing happened: Add 3 blocks to your calendar on Thu 5 Nov. Ask me again if you still want it.', 'expired', 0]);
+    });
+  });
+
+  it('an outcome-unknown plan approved after its first block started is read back, never called expired', async () => {
+    await owner(async state => {
+      let at = NOW;
+      const fake = calendar(), h = harness(state, fake, () => at);
+      fake.failCreate.set(2, () => { fake.failRead = true; fake.failCancel = () => { throw new GoogleError(401, 'google token failed: invalid_grant'); }; throw new GoogleError(401, 'google token failed: invalid_grant'); });
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      expect((await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast).toBe('Outcome unknown');
+      fake.failRead = false; fake.failCancel = null;
+      at = Date.parse('2026-11-05T04:30:00Z');
+      const late = await h.desk.decide(id, 'a', 'trace', { surface: 'whatsapp' });
+      expect([late.toast, h.status(id), fake.creates, h.live()]).toEqual(['Outcome unknown', 'uncertain', 3, ['Write the board memo', 'Lunch and a walk']]);
+      expect(late.message).toContain('"Write the board memo", "Lunch and a walk" are still on your calendar');
+    });
+  });
+
+  it('an add interrupted yesterday is not finished today: approving reads back what landed', async () => {
+    await owner(async state => {
+      let at = NOW;
+      const fake = calendar(), h = harness(state, fake, () => at);
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      const effects = ownerEffectLedger(state.storage, () => NOW), first = await sha256Hex('tool:plan-1:apply:0');
+      await effects.execute({ operationId: 'tool:plan-1:apply:0', owner_ref: String(OWNER), tool: 'calendar_plan', payload: { ...PLAN.blocks[0], block_index: 0 } },
+        { dispatch: async () => { await fake.client.createEvent({ ...PLAN.blocks[0]!, id: first, operationMarker: first }); return { provider_id: first, result: { etag: 'v1' } }; }, reconcile: async () => ({ status: 'unknown' }) });
+      state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ?", NOW, id);
+      at = Date.parse('2026-11-06T03:00:00Z');
+      const out = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([out.toast, h.status(id), fake.creates, h.live()]).toEqual(['Outcome unknown', 'uncertain', 1, ['Write the board memo']]);
+      expect(out.message).toContain('"Write the board memo" is still on your calendar');
+    });
+  });
+
+  it('every reply that names the plan says what it is: expiry, modify, withdrawal and its notice, and a replay receipt', async () => {
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      const what = 'Add 3 blocks to your calendar on Thu 5 Nov';
+      const edit = await h.desk.proposeCalendarPlan(PLAN);
+      expect((await h.desk.decide(edit, 'e', 'trace', { surface: 'telegram' })).message).toBe(`What should I change? (${what})`);
+      const withdrawn = await h.desk.proposeCalendarPlan({ ...PLAN, operation_ref: 'tool:plan-2' });
+      await h.desk.withdraw(withdrawn, 'A newer plan is coming.', { outside: true });
+      expect(h.notices.at(-1)).toContain(`email or web page: ${what}. Nothing was sent or done.`);
+      expect((await h.desk.decide(withdrawn, 'a', 'trace', { surface: 'telegram' })).message).toContain(`so nothing was done: ${what}.`);
+      expect(h.desk.replayReceipt(edit, 'skipped', '')).toBe(`Stopped before it ran, so nothing was done: ${what}.`);
+      for (const text of [...h.notices, ...h.cards]) expect(text).not.toContain('Cancel the event');
     });
   });
 });

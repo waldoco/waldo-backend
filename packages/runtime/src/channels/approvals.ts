@@ -17,7 +17,7 @@ import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
-import { addPlan, planOnCalendar, planReview, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
+import { addPlan, planOnCalendar, planReview, planSummary, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
 import { appWhy, storedWhy, whyJson, type TrailStep } from '../tools/why-trail';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
@@ -998,14 +998,20 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
     if (entry.kind === 'tainted_action') return describeTaintedAction(JSON.parse(entry.payload_json) as TaintedActionProposal);
     if (entry.kind === 'google_task_change') return describeGoogleTaskChange(googleTaskProposalSchema.parse(JSON.parse(entry.payload_json)));
+    if (entry.kind === 'calendar_plan') return planSummary(JSON.parse(entry.payload_json) as StoredPlan);
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
   const keyHolder = (key: string, selfId: string, kind: 'message_send' | 'agent_mail_send' = 'message_send') =>
     sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = ? AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", kind, selfId, key).toArray()[0];
-  // Once the apply effect is on record the change may have happened, so expiry never closes that request.
-  const applyOnRecord = (entry: LedgerRow) => !!deps.effects?.get(`${operationRefOf(entry)}:apply`);
+  // Once the apply effect is on record the change may have happened, so expiry never closes that request. A plan's blocks
+  // are each their own effect.
+  const applyOnRecord = (entry: LedgerRow) => {
+    const ref = operationRefOf(entry);
+    if (entry.kind !== 'calendar_plan') return !!deps.effects?.get(`${ref}:apply`);
+    return (JSON.parse(entry.payload_json) as StoredPlan).blocks.some((_, index) => !!deps.effects?.get(`${ref}:apply:${index}`));
+  };
   // A request closes at its expiry the first time a read or a decision sees it. Only its status changes: every reader
   // gates on status, and a messaging card keeps its buttons until a tap, which answers with the expiry.
   const expireDue = (id?: string) => {
@@ -1208,8 +1214,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const lost = claimOpen(id);
       if (lost) return lost;
     }
+    // A plan past its close is never finished late, and once a removal began it is never added again: both read back instead.
     const removal = (kind: 'rollback' | 'undo') => plan.blocks.some((_, index) => deps.effects!.get(`${operationRef}:${kind}:${index}`));
-    if (action === 'a' && recovering && (removal('rollback') || removal('undo'))) return settlePlan(id, plan, client, operationRef, removal('undo'), trace);
+    if (action === 'a' && recovering && (removal('rollback') || removal('undo') || pastExpiry(entry, deps.now()))) return settlePlan(id, plan, client, operationRef, removal('undo'), trace);
     const started = deps.now();
     if (action === 'u') {
       const undone = await undoPlan({ client, effect, operationRef, undo: JSON.parse(entry.undo_json!) as PlanUndo });

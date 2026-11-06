@@ -39,10 +39,14 @@ export const planBlocks = (input: Readonly<{ day: string; blocks: readonly Reado
 
 const clock = (iso: string) => iso.slice(11, 16);
 const KIND: Readonly<Record<NonNullable<PlanBlock['block']>, string>> = { rest: ' (rest)', deep_work: ' (deep work)' };
+// The plan in one line, for every reply that names it.
+export const planSummary = (plan: StoredPlan): string => {
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(`${plan.day}T12:00:00Z`));
+  return `Add ${plan.blocks.length} blocks to your calendar${plan.account ? ` (${plan.account})` : ''} on ${day}`;
+};
 // The card's words: the day, then each block at its own time. The same text reads true before the owner decides and after.
 export const planReview = (plan: StoredPlan): string => {
-  const day = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(`${plan.day}T12:00:00Z`));
-  return [`Add ${plan.blocks.length} blocks to your calendar${plan.account ? ` (${plan.account})` : ''} on ${day}:`,
+  return [`${planSummary(plan)}:`,
     ...plan.blocks.map(block => `${clock(block.start)}–${clock(block.end)} ${block.title}${block.block ? KIND[block.block] : ''}`),
     '', `No one is invited. ${plan.reason}`].join('\n');
 };

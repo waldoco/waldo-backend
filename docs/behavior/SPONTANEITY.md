@@ -46,7 +46,7 @@ New moments are inputs to that layer, never a second path to the owner.
   - Approving is one tap in chat, like a single block. The add is all or nothing:
     - each block is its own effect, with a fixed event id;
     - a block added before another failed is removed again, and the card reads not done;
-    - a block that can't be shown removed leaves the card's outcome unknown, naming it. Once a removal has begun, approving again never adds: it reads the calendar back and says what is on it.
+    - a block that can't be shown removed leaves the card's outcome unknown, naming it. Once a removal has begun, or the plan's first block has started, approving again never adds: it reads the calendar back and says what is on it.
   - Undo removes every block that is still as the plan wrote it.
   - An app build below revision 9 never gets the card; its chat carries the card's words and asks it to update.
   - Source: `channels/calendar-plan.ts`; the `calendar_plan` branch of the approval desk.
