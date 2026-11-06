@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest';
+import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
+import { callBudget } from '../evals/nightly/budget';
+import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
+import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
+import { TESTER_TYPES, TONE_SCENARIOS } from '../evals/nightly/tone-scenarios';
+import { runTrial } from '../evals/nightly/trial';
+
+// The deterministic half of the tone set: the cases are registered across the three tester types, the eval world feeds them
+// what the runtime would (a one-day blood-oxygen signal waking the health check, three nights of readings under the owner's
+// usual), and their receipts tell an honest message from a bad one. Whether the tone fits the day is the live judges' call.
+// Replies here are scripted; every reading is synthetic.
+const scenario = (id: string) => TONE_SCENARIOS.find((entry) => entry.id === id)!;
+const run = async (id: string, rules: readonly ScriptRule[]) => {
+  const gateway = scriptedGateway({ rules, unmatchedText: 'ok' });
+  const record = await runTrial(scenario(id), { gateway, budget: callBudget(80) });
+  expect(record.status).toBe('ran');
+  const failed = failedReceipts([...STATE_INVARIANTS, ...scenario(id).receipts!], record);
+  const asked = (match: RegExp) => gateway.requests().map((request) => JSON.stringify(request)).filter((text) => match.test(text));
+  return { record, failed, asked };
+};
+const reply = (match: RegExp, text: string): ScriptRule[] => [{ match, rounds: [{ text }] }];
+const NOTE = /\[Health check,/;
+
+describe('the tone set in the catalogue', () => {
+  it('runs every case nightly, across all three tester types, each held by a receipt', () => {
+    expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
+    for (const entry of TONE_SCENARIOS) {
+      expect(NIGHTLY_SCENARIOS).toContain(entry);
+      expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
+      expect(entry.rubric.must_not.length, entry.id).toBeGreaterThan(0);
+    }
+    const types = new Set(TONE_SCENARIOS.flatMap((entry) => entry.world.memory ?? []).map((claim) => claim.id));
+    for (const type of Object.values(TESTER_TYPES)) expect(types.has(type.id), type.text).toBe(true);
+  });
+});
+
+describe('a message is plain: no exclamation marks, no emoji', () => {
+  it('tn02: a quiet Saturday answer holds, and one with an exclamation mark or an emoji fails', async () => {
+    const said = /Anything I need to deal with today/;
+    expect((await run('tn02-loose-saturday', reply(said, "Nothing. The calendar's empty and the inbox can wait till Monday."))).failed).toEqual([]);
+    expect((await run('tn02-loose-saturday', reply(said, 'Nothing at all today!'))).failed).toEqual([expect.stringContaining('exclamation mark')]);
+    expect((await run('tn02-loose-saturday', reply(said, 'Nothing today 🎉'))).failed).toEqual([expect.stringContaining('emoji')]);
+  });
+});
+
+describe('the health gate on a one-day signal', () => {
+  it('tn04: the health check is woken by the new signal and told of it, and staying quiet holds', async () => {
+    const { failed, asked } = await run('tn04-oxygen-one-day-silent', reply(NOTE, JSON.stringify({ kind: 'no_op', text: '' })));
+    expect(asked(NOTE)).toHaveLength(1);
+    expect(asked(NOTE)[0]).toContain('blood oxygen below usual');
+    expect(failed).toEqual([]);
+  });
+
+  it('tn04: a note about the one-day signal fails', async () => {
+    const note = JSON.stringify({ kind: 'notice', text: "Blood oxygen's a little below your usual today, while recovery still reads excellent." });
+    expect((await run('tn04-oxygen-one-day-silent', reply(NOTE, note))).failed).toEqual([expect.stringContaining('no note')]);
+  });
+});
+
+describe('the health loop over three nights', () => {
+  it('tn05: get_health returns the three nights under the usual ones, and a reply that never read them fails', async () => {
+    const said = /Anything about my body I should know/;
+    const read = { name: 'get_health', arguments: { signals: ['spo2'], from: '2026-09-11', to: '2026-09-24', aggregation: 'daily' } };
+    const { record, failed } = await run('tn05-oxygen-three-nights-loop', [{ match: said, rounds: [{ toolCalls: [read] }, { text: 'Blood oxygen has run a touch under your usual for three nights. Nothing to change today; I\'ll keep an eye on it.' }] }]);
+    const output = record.toolOutputs.find((entry) => entry.name === 'get_health')?.output ?? '';
+    for (const night of ['94.4', '94.2', '94.1', '97.1']) expect(output).toContain(night);
+    expect(failed).toEqual([]);
+    expect((await run('tn05-oxygen-three-nights-loop', reply(said, 'Nothing to worry about.'))).failed).toEqual([expect.stringContaining('read the readings')]);
+  });
+});

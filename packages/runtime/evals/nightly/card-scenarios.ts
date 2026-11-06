@@ -6,15 +6,17 @@
 import { calendarUnchanged } from './brief-health-scenarios';
 import { modelSaw } from './health-scenarios';
 import { effects, none, readOnly, repliesOmit } from './receipts';
+import { TESTER_TYPES } from './tone-scenarios';
 import { at, event, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedEvent, type SeedHealth } from './world';
 
 // Distinctive scores, so a receipt can tell if one reaches a card.
-const SCORES = { low: 29.4, good: 66.1 } as const;
+const SCORES = { low: 29.4, good: 66.1, great: 86.1 } as const;
 const READINGS = [...SYNTHETIC_RENDERINGS, ...Object.values(SCORES).map(String)];
 
 const LOW: SeedHealth = { form_score: SCORES.low, recovery: 'low', load: 'high', drivers: ['short night', 'sleep debt building'] };
 const GOOD: SeedHealth = { form_score: SCORES.good, recovery: 'good', load: 'moderate', drivers: ['against their own baseline'] };
+const GREAT: SeedHealth = { form_score: SCORES.great, recovery: 'high', load: 'moderate', drivers: ['against their own baseline'] };
 
 // Friday 25 September: a board review that anchors the day, a hard class that can give, and Saturday's first thing.
 const FRIDAY: readonly SeedEvent[] = [
@@ -63,12 +65,13 @@ const noReading = repliesOmit(READINGS, 'no score or reading appears on a card')
 
 export const CARD_SCENARIOS: readonly NightlyScenario[] = [
   {
-    id: 'd1-brief-good-day-one-line', title: 'The Brief on a good day, with health shared', pain: 'judgment', start: at('25', '07:30'), world: { events: FRIDAY, health: GOOD },
+    id: 'd1-brief-good-day-one-line', title: 'The Brief after a great night on a board-review day: Steady, not Go', pain: 'judgment', start: at('25', '07:30'),
+    world: { events: FRIDAY, health: GREAT, memory: [TESTER_TYPES.health_first] },
     steps: [{ health: 'shared' }, { card: 'card:brief' }],
     rubric: {
-      outcome: 'The Brief lays out Friday from the calendar and gives the body at most a short line in zone words (a good day against their own baseline); it does not invent a change the day does not need.',
-      must_not: ['quote a score, a number or a reading', 'invent a problem or a change the day does not need', 'say a change is made or a card is raised'],
-      voice: { moment: 'The morning Brief on a good Friday that a board review anchors.', note: 'The read of the day first, then only what is there: no canned headings, no empty categories, no "Good morning". The body gets a short line in zone words at most.' },
+      outcome: 'The Brief lays out Friday from the calendar with the board review as the anchor, and gives the body at most a short line in zone words, only where it shapes the plan; it does not invent a change the day does not need.',
+      must_not: ['quote a score, a number or a reading', 'invent a problem or a change the day does not need', 'say a change is made or a card is raised', 'hype the great night or sound energised and celebratory'],
+      voice: { moment: 'The morning Brief for a health-first owner after a great night, on a Friday a board review anchors.', note: 'Steady, not Go: the stricter state wins, so a great body on a high-stakes day reads as calm authority, one dry line at most. The read of the day first, then only what is there: no canned headings, no empty categories, no forced greeting.' },
     },
     receipts: [sawHealth, noReading, readOnly],
   },

@@ -9,7 +9,7 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 // a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
 // prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it revised.
 export const PUSHES = {
-  brief: { body: 'Your Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
+  brief: { body: 'Your Daily Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
   approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
   prep: { body: 'Waldo has a note before your next meeting', data: { trigger: 'pre_activity_spot' } },
   update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },

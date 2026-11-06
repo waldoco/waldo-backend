@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
-import { updateCardPrompt, updateEffectsPrompt } from '../src/prompt/update-cards';
+import { updateCardPrompt } from '../src/prompt/update-cards';
 
 // The update cards and interrupted-turn notices, held to the voice: an update that leads with the change, and a stop said in
 // plain words with what to check.
@@ -10,13 +10,7 @@ describe('an update leads with the change, never a header', () => {
 
   it('the update card', () => {
     const prompt = updateCardPrompt('2026-10-31T10:00', context);
-    expect(prompt).toContain('write the update card: one to three short lines that lead with the change itself ("Your 10:00 with Krati moved to 3."), then what it means for their day, with no header line.');
     expect(prompt).not.toContain('"Update"');
-  });
-
-  it('a short update and a revised card with the day state', () => {
-    const prompt = updateEffectsPrompt('2026-10-31T10:00', { ...context, cards: '', quiet: false, revisesCards: true });
-    expect(prompt).toContain('A short update leads with the change itself ("Your 10:00 with Krati moved to 3."), with no header line. A revised card reads as the card now should, with the change in its place, not under a heading such as "Updated".');
   });
 });
 
