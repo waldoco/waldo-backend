@@ -9,7 +9,7 @@ import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
 import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import { numericHealthIn } from '../src/scribe/sanitiser';
-import { consentLedger } from '../src/onboarding/consent-ledger';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
 import { recordSignupName } from '../src/onboarding/first-run';
 import { episodeIndex } from '../src/channels/episodes';
@@ -59,6 +59,21 @@ describe('first run', () => {
     expect(await (await send('/app/v1/consents')).json()).toMatchObject({ age_attested_18_plus: true, consents: [
       { purpose: 'terms', status: 'granted', version: 1 }, { purpose: 'privacy_notice', status: 'granted', version: 1 }, { purpose: 'owner_lookup', status: 'granted', version: 1 }] });
   }));
+  it('lists the copy version each agreement is at now, only to a build that reads onboarding revision 3', () => owner(async ({ send, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    const keys = ['active', 'granted_at', 'purpose', 'status', 'version', 'withdrawn_at'];
+    for (const contract of [undefined, 'onboarding=2', 'approvals=3']) {
+      const list = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', contract)).json());
+      for (const consent of list.consents) expect(Object.keys(consent).sort(), contract).toEqual(keys);
+    }
+    const current = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
+    expect(current.consents.map(consent => [consent.purpose, consent.current_version])).toEqual(Object.entries(CURRENT_CONSENT_VERSION));
+  }));
+  it('names the copy that would be required while the agreements are held back', () => owner(async ({ send }) => {
+    const list = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
+    expect(list.agreements_offered).toBe(false);
+    expect(list.consents.map(consent => consent.current_version)).toEqual(Object.values(CURRENT_CONSENT_VERSION));
+  }, { agreementsOffered: false }));
   it('keeps the three answers as owner memory, never as a fourth question', () => owner(async ({ storage, act }) => {
     await act({ action: 'start' }); await act(agree);
     await act({ action: 'name.set', name: 'Sam' });

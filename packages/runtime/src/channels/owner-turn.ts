@@ -230,9 +230,9 @@ export const createOwnerResponder = (
   // re-billed the whole prompt on the next call. get_context gives the model the exact time mid-turn.
   let turnClockLine: string | undefined;
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
-  // Earlier turns' tool results, without anything the owner removed or is forgetting.
+  // What earlier turns' tools returned that a later turn may read, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
-    const fragments = await toolLedger?.recent(heldTopics(), thread) ?? [];
+    const fragments = await toolLedger?.carried(heldTopics(), thread) ?? [];
     return barrier().texts(fragments, fragment => fragment.text, (fragment, text) => ({ ...fragment, text }));
   };
   const earlierOwnerResults = async () => {
@@ -978,7 +978,8 @@ export const createOwnerResponder = (
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const answered = tree.get(publication.leafId)!;
       const told = notice ? { ...answered, modelPayload: `${answered.modelPayload}\n\n${notice.modelLine}` } : answered;
-      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
+      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       if (told !== answered) tree.replace(told);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
-import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type McpCatalogueTile, type ProactiveSurface } from './controls-model';
+import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type McpCatalogueTile, type ProactiveSurface, type ScheduleControl } from './controls-model';
 import { ConnectorMark, Icon, Logo, type IconName } from './icons';
 import { Explained, InfoTip } from './InfoTip';
 import { Patch } from '@lucasmarkes/hairline/react';
@@ -55,6 +55,32 @@ function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: Proacti
   </div></details>;
 }
 
+const SCHEDULE_NAMES: Readonly<Record<ScheduleControl['id'], string>> = {
+  daily_brief: 'Day cards', followups: 'Follow-ups', event_briefs: 'Prep before events', nightly: 'Overnight memory pass', heartbeat: 'Check-backs',
+  'card:brief': 'Brief time', 'card:close': 'Close time',
+};
+const SCHEDULE_ABOUT: Readonly<Record<ScheduleControl['id'], string>> = {
+  daily_brief: 'The Brief, the Check-in and the Close, together.', followups: 'Nudges on mail and calendar left open.', event_briefs: 'A note before an event that needs one.',
+  nightly: 'Waldo tidies what it learned overnight. It sends nothing.', heartbeat: 'Waldo checks back on things it took on.',
+  'card:brief': 'Every day; today’s moves now unless it is already on its way.', 'card:close': 'Every day; today’s moves now unless it is already on its way.',
+};
+function ScheduleTime({ row, busy, onAction }: { row: ScheduleControl } & ActionProps) {
+  const [time, setTime] = useState(row.time ?? '');
+  const shown = minutesLabel(clockMinutes(row.time) ?? 0);
+  return <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('schedule.set', { id: row.id, value: time }); }}>
+    <p><span className="label key">{SCHEDULE_NAMES[row.id]}</span> <span className="value">{row.no_later_than ? `By ${shown}, earlier when you wake` : shown}</span>{row.on ? '' : ' (day cards are off)'}</p><p className="meta">{SCHEDULE_ABOUT[row.id]}</p>
+    <div className="control-actions"><input type="time" required aria-label={SCHEDULE_NAMES[row.id]} value={time} disabled={busy} onChange={event => setTime(event.target.value)}/><button className="primary" disabled={busy || !time}>Save {SCHEDULE_NAMES[row.id]}</button></div>
+  </form>;
+}
+function ScheduleSetting({ rows, busy, onAction }: { rows: ScheduleControl[] } & ActionProps) {
+  const on = rows.filter(row => row.accepts === 'on_off' && row.on).length, all = rows.filter(row => row.accepts === 'on_off').length;
+  return <details name="day-settings" className="disclosure"><summary><Icon name="calendarClock"/><span className="label key">What Waldo sends</span><span className="value">{on} of {all} on</span></summary><div className="disclosure-body">
+    {rows.map(row => row.accepts === 'time' ? <ScheduleTime key={row.id} row={row} busy={busy} onAction={onAction}/>
+      : <div key={row.id} className="control-actions"><p><span className="label key">{SCHEDULE_NAMES[row.id]}</span> <span className="value">{row.on ? 'On' : 'Off'}</span></p><p className="meta">{SCHEDULE_ABOUT[row.id]}</p>
+        <button disabled={busy} onClick={() => onAction('schedule.set', { id: row.id, value: row.on ? 'off' : 'on' })}>{`${row.on ? 'Turn off' : 'Turn on'} ${SCHEDULE_NAMES[row.id]}`}</button></div>)}
+  </div></details>;
+}
+
 // One tap either way. What the owner asks Waldo to remember is kept whatever this says.
 function HealthMemorySetting({ on, busy, onAction }: { on: boolean } & ActionProps) {
   return <details name="day-settings" className="disclosure"><summary><Icon name="memory"/><span className="label key">Health notes</span><span className="value">{on ? 'On' : 'Off'}</span></summary><div className="disclosure-body"><p>When older chat leaves Waldo’s view, and each night, Waldo keeps what you said that stays true. With this on, that includes what you tell Waldo about your health: how you feel, your goals, and readings you mention, each kept with the day you said it. Readings from your wearable are never copied into memory. A note kept as older chat leaves its view is named in its next reply to you. Every note shows in Profile, where you can correct or forget it.</p>
@@ -94,6 +120,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
         <label>Volume<select value={volume} disabled={busy} onChange={event => setVolume(event.target.value as typeof volume)}><option value="low">Low: only the three day cards</option><option value="normal">Normal: plus updates that change your day</option><option value="high">High: plus smaller useful updates</option></select></label><button className="primary" disabled={busy}>Save quiet hours &amp; volume</button>
       </form>
     </div></details>
+    {record.data.schedule_controls && <ScheduleSetting key={record.revision} rows={record.data.schedule_controls} busy={busy} onAction={onAction}/>}
     {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
     {record.data.health_memory !== undefined && <HealthMemorySetting on={record.data.health_memory} busy={busy} onAction={onAction}/>}
     </div>
