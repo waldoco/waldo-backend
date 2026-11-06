@@ -42,7 +42,7 @@ const harness = (throttleAllows = true, graphStatus = 200, routeEverySubject = f
   const byPresence = vi.fn<OwnerDirectory['byPresence']>(async (_provider, subject) => routeEverySubject ? { doName: `do-${subject}`, subject, timezone: null } : subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null);
   const redeem = vi.fn<OwnerDirectory['redeem']>(async () => null);
   const env: WhatsAppWebhookEnv = {
-    WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+    WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1',
     SUPABASE_PROJECT_URL: 'https://fictional.supabase.test', SUPABASE_PUBLISHABLE_KEY: 'fictional-key', WALDO_ROUTER_HMAC_SECRET: 'fictional-secret',
     OWNER_DO: {
       idFromName: (name: string) => { doNames.push(name); return name; },
