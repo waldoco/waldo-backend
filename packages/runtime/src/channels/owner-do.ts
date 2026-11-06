@@ -1936,7 +1936,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
-            chatLinks:()=>this.proactiveLinks(auth),
+            chatLinks:()=>this.proactiveLinks(auth),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
@@ -2860,7 +2860,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
-              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','node.forget','node.confirm','node.correct'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','spot.quiet','spot.unquiet','node.forget','node.confirm','node.correct'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConsoleStart():null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin,action.id||undefined));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
@@ -6183,18 +6183,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', evidence: where, source_ref: where }, at)) return 'spot.edit.failed';
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
-          // must be able to select it. Dismiss/confirm stay active-only.
+          // must be able to select it, and a promoted claim can be forgotten like an active one. Dismiss/confirm stay active-only.
           const claim = memory.claims().find((row) => row.id === spotId)
-            ?? (action === 'spot.forget' ? memory.claims('purging').find((row) => row.id === spotId) : undefined);
+            ?? (action === 'spot.forget' ? [...memory.claims('promoted'), ...memory.claims('purging')].find((row) => row.id === spotId) : undefined);
           if (!claim) return false;
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
-          else if (action === 'spot.confirm') memory.ownerGround(spotId, new Date(now).toISOString(), 'owner, console');
+          else if (action === 'spot.confirm') memory.ownerGround(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console'}`);
           else {
             // The claim goes to purging and its texts into custody now; the forget purge job cleans every other store and
             // settles it. A claim already purging is the owner's retry, so the job runs again now.
             const result = memory.purge([spotId], new Date(now).toISOString());
             await this.forgetPurgeJob().track(result.texts);
           }
+        } else if (action === 'spot.quiet' || action === 'spot.unquiet') {
+          // The owner's own wish about one claim: Waldo stops raising it unprompted, or may again. The claim stays either way.
+          if (![...memory.claims(), ...memory.claims('promoted')].some((row) => row.id === spotId)) return false;
+          if (!memory.bringUpLess(spotId, new Date(now).toISOString(), action === 'spot.quiet')) return 'spot.quiet.failed';
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
           if (!node) return false;
