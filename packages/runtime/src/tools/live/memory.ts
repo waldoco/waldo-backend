@@ -11,7 +11,7 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
-import { importSourceOf } from '../../memory/import-ref';
+import { importedQuote, importSourceOf } from '../../memory/import-ref';
 
 export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
@@ -170,7 +170,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // exactly the selected claims: their sentences and evidence may be repeated or cited by other claims, so they only
         // leave the transcript and the stores outside the table.
         const purged = [...texts];
-        const words = [...selected.values()].flatMap(claim => claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]);
+        // An imported claim's quote is the owner's words from their export: it is barred and hidden with the claim, so the same
+        // passage is not brought back by importing that export again.
+        const words = [...selected.values()].flatMap(claim => [...(claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]), ...[importedQuote(claim)].filter((quote): quote is string => quote !== null)]);
         for (const word of words) texts.add(word);
         // With no claim selected, earlier chat the episode index holds counts as memory touched; the owner's current message,
         // which always names the topic, does not. Read before the commit, which redacts both.

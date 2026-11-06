@@ -20,9 +20,9 @@ export const readImportArgsSchema = z.strictObject({
 });
 export type ReadImportArgs = z.infer<typeof readImportArgsSchema>;
 
-// Health stays out: a reading in an old chat is neither current nor the health plane's, and kept health statements are the
-// owner's to make in their own words now.
-export const importClaimKindSchema = z.enum(['fact', 'preference', 'routine', 'goal', 'followup', 'event']);
+// A health condition the owner described is kind health, so it keeps health's fences in memory; a reading in an old chat is
+// neither current nor the health plane's, and the handler refuses one in any kind.
+export const importClaimKindSchema = z.enum(['fact', 'preference', 'routine', 'goal', 'followup', 'event', 'health']);
 export const importMemoriesArgsSchema = z.strictObject({
   ...exportFile,
   claims: z.array(z.strictObject({

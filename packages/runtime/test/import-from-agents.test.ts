@@ -6,7 +6,8 @@ import { workspaceStore, type Provenance, type WorkspaceState } from '@waldo/wor
 import { dispatchTool } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { claimStore, memoryPrompt } from '../src/memory/claims';
-import { importHandlers, readExport } from '../src/memory/imports';
+import { importHandlers, quotedIn, readExport } from '../src/memory/imports';
+import { outsideSafe } from '../src/memory/outside-view';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { claimHeldAs, appClaimActions } from '../src/channels/dashboard-memory-actions';
 import { TOOL_RECORDS } from '../src/tools/records';
@@ -123,7 +124,7 @@ describe('reading another assistant\'s chat export', () => {
     expect(last.messages).toHaveLength(1);
     const huge = await t.upload('uploads/y/conversations.json', bytes([{ uuid: 'h', name: 'n', created_at: '2026-01-01T00:00:00Z', chat_messages: [{ sender: 'human', text: `${'a'.repeat(10_000)}${'b'.repeat(5_000)}` }] }]));
     const parts = dataOf<{ messages: { text: string; part?: string }[]; next_cursor: number | null }>(await t.run('read_import', { source: 'claude', file_id: huge.file_id, revision: 1, conversation_ids: ['h'] }));
-    expect(parts.messages.map(m => [m.part, m.text.length])).toEqual([['1/2', 10_000]]);
+    expect(parts.messages.map(m => [m.part, m.text.length])).toEqual([['1/2', 12_000]]);
     expect(parts.next_cursor).toBe(1);
     const [reader] = importHandlers({ open: async () => t.workspace, store: t.claims, sql: storage.sql });
     expect(reader!.turn_only_output).toBe(true);
@@ -157,7 +158,7 @@ describe('importing memories from the export', () => {
     expect(goal.source_ref).toBe(`import:chatgpt:${digest}:gpt-run`);
     expect(claimHeldAs(goal)).toBe('waldo_thinks');
     expect(appClaimActions(goal)).toContain('claim.confirm');
-    expect(memoryPrompt(t.claims)).toContain('a chat export they imported, perhaps out of date, so Waldo\'s read until the owner confirms it');
+    expect(memoryPrompt(t.claims)).toContain('quoted from the owner\'s side of a chat export they imported, which may hold text they pasted and may be out of date, so Waldo\'s read until the owner confirms it');
   }));
 
   it('refuses a quote that is the other assistant\'s, a conversation the export lacks, a health reading and a forged file, claim by claim', () => withStorage(async storage => {
@@ -239,4 +240,80 @@ describe('forgetting an import by its source', () => {
     const forget = await t.run('forget_memory', { import_source: 'claude', scope_note: 'my Claude import' }, 'Forget my Claude import.', null);
     expect(forget).toMatchObject({ ok: false });
   }));
+});
+
+// Each case below was a failure an independent review demonstrated against the first version of this slice.
+describe('what a re-import, a pasted log, a pasted secret and loose quoting cannot do', () => {
+  const work = { kind: 'fact', text: 'Works at Acme Corp as a designer', evidence_quote: 'I run a small design studio in Pune', conversation_id: 'gpt-me' };
+  const goal = { kind: 'goal', text: 'Training for the Pune half marathon in December', evidence_quote: 'training for the Pune half marathon in December', conversation_id: 'gpt-run' };
+
+  it('does not bring back a claim the owner dismissed or corrected when the same export is imported again', () => withStorage(async storage => {
+    const t = await setup(storage);
+    const file = await t.upload('uploads/x/conversations.json', bytes(chatgptExport));
+    const [first, second] = dataOf<Imported>(await t.run('import_memories', { source: 'chatgpt', file_id: file.file_id, revision: 1, claims: [work, goal] })).results;
+    t.claims.setStatus(second!.id!, 'dismissed');
+    expect(t.claims.correct(first!.id!, { kind: 'fact', text: 'Works at Beta Inc', source: 'stated', evidence: 'I work at Beta Inc', origin: 'owner', source_ref: 'owner, m9' }, '2026-11-06T00:00:00Z')).toBe(true);
+    const again = dataOf<Imported>(await t.run('import_memories', { source: 'chatgpt', file_id: file.file_id, revision: 1, claims: [work, goal, { ...goal, text: 'Preparing for a December half marathon in Pune' }] })).results;
+    expect(again.map(r => r.reason)).toEqual(['owner_already_decided', 'owner_already_decided', 'owner_already_decided']);
+    expect(t.claims.claims().map(c => c.text)).toEqual(['Works at Beta Inc']);
+  }));
+
+  it('does not bring a forgotten import back in other words with the same quote', () => withStorage(async storage => {
+    const t = await setup(storage);
+    const file = await t.upload('uploads/x/conversations.json', bytes(chatgptExport));
+    dataOf<Imported>(await t.run('import_memories', { source: 'chatgpt', file_id: file.file_id, revision: 1, claims: [goal] }));
+    dataOf(await t.run('forget_memory', { import_source: 'chatgpt', scope_note: 'my ChatGPT import' }, 'Forget my ChatGPT import.', null));
+    expect(t.hidden).toContain('training for the Pune half marathon in December');
+    const reworded = dataOf<Imported>(await t.run('import_memories', { source: 'chatgpt', file_id: file.file_id, revision: 1, claims: [{ ...goal, text: 'Preparing for a December half marathon in Pune' }] })).results;
+    expect(reworded).toEqual([{ index: 0, status: 'refused', reason: 'forgotten' }]);
+  }));
+
+  it('reads a pasted log whose escaping doubles its length in parts that each fit inline, never splitting a character', () => withStorage(async storage => {
+    const t = await setup(storage);
+    const log = `${'"\n'.repeat(5_000)}😀${'\u0001'.repeat(3_000)}`;
+    const file = await t.upload('uploads/x/conversations.json', bytes([{ uuid: 'c', name: 't'.repeat(5_000), created_at: '2026-01-01T00:00:00Z', chat_messages: [{ sender: 'human', text: log }] }]));
+    const seen: string[] = [];
+    for (let cursor: number | null = 0; cursor !== null;) {
+      const result = await t.run('read_import', { source: 'claude', file_id: file.file_id, revision: 1, conversation_ids: ['c'], cursor });
+      const data = dataOf<{ messages: { text: string; title: string }[]; next_cursor: number | null }>(result);
+      expect(JSON.stringify(data).length).toBeLessThan(16_384);
+      expect(data.messages.every(m => m.title.length === 200)).toBe(true);
+      seen.push(...data.messages.map(m => m.text));
+      cursor = data.next_cursor;
+    }
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.join('')).toBe(log.trim());
+  }));
+
+  it('withholds only the message that carries a secret, so the rest of the conversation still reads', () => withStorage(async storage => {
+    const t = await setup(storage);
+    const key = `sk-proj-${'A1b2C3d4'.repeat(6)}`;
+    const file = await t.upload('uploads/x/conversations.json', bytes([{ uuid: 'c', name: 'Deploy help', created_at: '2026-01-01T00:00:00Z', chat_messages: [
+      { sender: 'human', text: `My config is OPENAI_API_KEY=${key} and it fails` }, { sender: 'human', text: 'I am moving my startup to Bengaluru next spring.' },
+    ] }]));
+    const data = dataOf<{ messages: { text: string }[] }>(await t.run('read_import', { source: 'claude', file_id: file.file_id, revision: 1, conversation_ids: ['c'] }));
+    expect(data.messages.map(m => m.text)).toEqual(['[withheld: this message carries a secret]', 'I am moving my startup to Bengaluru next spring.']);
+  }));
+
+  it('keeps a health condition as kind health, behind health\'s fence from outside content, and still refuses a reading', () => withStorage(async storage => {
+    const t = await setup(storage);
+    const file = await t.upload('uploads/x/conversations.json', bytes([{ uuid: 'c', name: 'n', created_at: '2026-01-01T00:00:00Z', chat_messages: [{ sender: 'human', text: 'I have had asthma since I was a child and my resting heart rate was 52 bpm today.' }] }]));
+    const results = dataOf<Imported>(await t.run('import_memories', { source: 'claude', file_id: file.file_id, revision: 1, claims: [
+      { kind: 'health', text: 'Has had asthma since childhood', evidence_quote: 'I have had asthma since I was a child', conversation_id: 'c' },
+      { kind: 'health', text: 'Resting heart rate was 52 bpm', evidence_quote: 'my resting heart rate was 52 bpm today', conversation_id: 'c' },
+    ] })).results;
+    expect(results.map(r => r.status)).toEqual(['stored', 'refused']);
+    const kept = t.claims.claims()[0]!;
+    expect(kept.kind).toBe('health');
+    expect(outsideSafe(kept)).toBe(false);
+  }));
+
+  it('takes a quote only as the owner wrote it, on word edges, and stores it that way', () => {
+    const said = 'I do not   drink alcohol at work dinners.';
+    expect(quotedIn(said, 'I do not drink alcohol')).toBe(true);
+    expect(quotedIn(said, 'I DO NOT DRINK ALCOHOL')).toBe(false);
+    expect(quotedIn(said, 'o not drink alcoh')).toBe(false);
+    expect(quotedIn('Unbelievable results', 'believable results')).toBe(false);
+    expect(quotedIn(said, 'drink alcohol at work dinners.')).toBe(true);
+  });
 });

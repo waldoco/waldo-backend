@@ -1251,7 +1251,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content, and
 // the background passes do when the quote answers a reply that carried outside content.
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
-  : importSourceOf(claim.source_ref) ? ' (the owner\'s words in a chat export they imported, perhaps out of date, so Waldo\'s read until the owner confirms it)'
+  : importSourceOf(claim.source_ref) ? ' (quoted from the owner\'s side of a chat export they imported, which may hold text they pasted and may be out of date, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content or said in answer to a reply that carried it, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 

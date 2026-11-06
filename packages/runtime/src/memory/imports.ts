@@ -4,8 +4,8 @@ import {
 } from '@waldo/contracts';
 import { WorkspaceError, type WorkspaceStore } from '@waldo/workspace';
 import { normalizeForGrounding, textFingerprint, type ClaimStore } from './claims';
-import { IMPORT_SOURCE_NAMES, importRef } from './import-ref';
-import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
+import { IMPORT_SOURCE_NAMES, importEvidence, importRef, importSourceOf } from './import-ref';
+import { carriesSecretOrCanary, HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { SemanticRecall } from './semantic-recall';
 import type { MemoryToolContext } from '../tools/live/memory';
 
@@ -63,16 +63,39 @@ export const readExport = (source: ImportSource, bytes: Uint8Array): readonly Im
   return parsed.length > 0 && conversations.length === 0 ? null : conversations;
 };
 
-const squash = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
+const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
+// The quote is the owner's own words: the same characters, whitespace aside, starting and ending on word edges.
+const WORD = /[\p{L}\p{M}\p{N}]/u;
+export const quotedIn = (said: string, quote: string): boolean => {
+  const text = collapse(said), wanted = collapse(quote);
+  for (let at = text.indexOf(wanted); at !== -1; at = text.indexOf(wanted, at + 1)) {
+    const before = text.slice(0, at).slice(-1), after = text.slice(at + wanted.length, at + wanted.length + 1);
+    if (!(WORD.test(before) && WORD.test(wanted[0]!)) && !(WORD.test(after) && WORD.test(wanted.slice(-1)))) return true;
+  }
+  return false;
+};
 const day = (at: number | null) => at === null ? null : new Date(at).toISOString().slice(0, 10);
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
 type Taint = 'external' | null;
+const WITHHELD = '[withheld: this message carries a secret]';
 const fail = (code: 'invalid_args' | 'not_found' | 'forbidden' | 'oversize' | 'transient', error: string, taint: Taint): ToolResult<never> => ({ ok: false, code, error, source_taint: taint });
 
 // A page fits under the dispatcher's inline result size, and a message longer than a page is read in parts, so nothing read
 // from an export is ever stored behind read_tool_output: an old chat may hold health readings, which stay in the turn.
 const PAGE_JSON_CHARS = 14_000;
-const PART_CHARS = 10_000;
+// Measured as JSON, since escaping can multiply a pasted log's length; cut on code points, never inside a character.
+const PART_JSON_CHARS = 12_000;
+const TITLE_MAX = 200;
+const parts = (text: string): string[] => {
+  const out: string[] = [];
+  let part = '', size = 0;
+  for (const char of text) {
+    const cost = JSON.stringify(char).length - 2;
+    if (size + cost > PART_JSON_CHARS && part) { out.push(part); part = ''; size = 0; }
+    part += char; size += cost;
+  }
+  return part ? [...out, part] : out;
+};
 const page = <T>(items: readonly T[], start: number): Readonly<{ items: T[]; next_cursor: number | null }> => {
   const out: T[] = [];
   let size = 0, at = start;
@@ -132,9 +155,14 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
         const read = await load(args, ctx, 'external');
         if (!loaded(read)) return read;
         const start = args.cursor ?? 0;
+        // A secret the owner once pasted withholds that message alone, so the rest of the page still reads; Scribe would refuse
+        // the whole page and leave no way past it.
+        const canaries = ctx.session?.canary_tokens ?? [];
+        const clean = (value: string) => carriesSecretOrCanary(value, canaries) ? WITHHELD : value;
+        const titled = (title: string) => clean(Array.from(title).slice(0, TITLE_MAX).join(''));
         if (!args.conversation_ids) {
           const newest = [...read.conversations].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).map(conversation => ({
-            conversation_id: conversation.id, title: conversation.title, started: day(conversation.at),
+            conversation_id: conversation.id, title: titled(conversation.title), started: day(conversation.at),
             owner_messages: conversation.messages.length, owner_chars: conversation.messages.reduce((sum, message) => sum + message.text.length, 0),
           }));
           const listed = page(newest, start);
@@ -143,9 +171,9 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
         const chosen = args.conversation_ids.map(id => read.conversations.find(conversation => conversation.id === id));
         const missing = args.conversation_ids.filter((_, index) => !chosen[index]);
         const all = chosen.flatMap(conversation => conversation ? conversation.messages.flatMap(message => {
-          const parts = Math.ceil(message.text.length / PART_CHARS);
-          const base = { conversation_id: conversation.id, title: conversation.title, at: day(message.at) };
-          return parts <= 1 ? [{ ...base, text: message.text }] : Array.from({ length: parts }, (_, index) => ({ ...base, part: `${index + 1}/${parts}`, text: message.text.slice(index * PART_CHARS, (index + 1) * PART_CHARS) }));
+          const base = { conversation_id: conversation.id, title: titled(conversation.title), at: day(message.at) };
+          const pieces = parts(clean(message.text));
+          return pieces.length <= 1 ? [{ ...base, text: pieces[0] ?? '' }] : pieces.map((text, index) => ({ ...base, part: `${index + 1}/${pieces.length}`, text }));
         }) : []);
         const shown = page(all, start);
         return { ok: true, source_taint: 'external', data: { messages: shown.items, missing_conversation_ids: missing, next_cursor: shown.next_cursor } };
@@ -156,7 +184,7 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
       description: [
         'Keep what matters from the owner\'s ChatGPT or Claude export as memory: people in their life, goals, preferences, routines, events and open threads they were still working on.',
         'Each claim quotes the owner\'s own words from one conversation (read them with read_import first); a quote from the other assistant\'s replies is refused.',
-        'Leave out health conditions and readings, passing questions, and anything that was only true then. Up to 20 claims per call.',
+        'Copy the quote exactly as the owner wrote it. Leave out health readings, passing questions, and anything that was only true then; a health condition the owner described about themselves is kind health. Up to 20 claims per call.',
         'Each claim is kept as Waldo\'s read, marked as imported, until the owner confirms or corrects it in "What Waldo knows"; it is context, never permission.',
         'The owner can forget a whole import with forget_memory import_source.',
       ].join(' '),
@@ -169,7 +197,6 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
         if (!ctx.memoryTurn || ctx.memoryTurn.ownerId !== ctx.authenticatedUserId) return fail('forbidden', 'Importing runs only in the owner\'s own chat turn.', null);
         const read = await load(args, ctx, null);
         if (!loaded(read)) return read;
-        const name = IMPORT_SOURCE_NAMES[args.source];
         type Outcome = { status: 'stored' | 'duplicate'; id: number } | { status: 'refused'; reason: string };
         const outcomes: Outcome[] = [];
         const accepted: { index: number; claim: Parameters<ClaimStore['add']>[0] }[] = [];
@@ -178,21 +205,27 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
           if (!conversation) { outcomes[index] = { status: 'refused', reason: 'conversation_not_in_export' }; continue; }
           // The dispatcher has already withheld a reading it found in the arguments, so this runs before the quote is matched.
           if ([item.text, item.evidence_quote].some(value => numericHealthIn(value) || value.includes(HEALTH_SPAN_MARKER))) { outcomes[index] = { status: 'refused', reason: 'health_value' }; continue; }
-          if (!conversation.messages.some(message => squash(message.text).includes(squash(item.evidence_quote)))) { outcomes[index] = { status: 'refused', reason: 'quote_not_in_owner_messages' }; continue; }
+          if (!conversation.messages.some(message => quotedIn(message.text, item.evidence_quote))) { outcomes[index] = { status: 'refused', reason: 'quote_not_in_owner_messages' }; continue; }
           if (blocked(item.text) || blocked(item.evidence_quote)) { outcomes[index] = { status: 'refused', reason: 'forgotten' }; continue; }
           accepted.push({ index, claim: {
-            kind: item.kind, text: item.text, source: 'inferred', origin: 'agent', evidence: `the owner in their ${name} export: "${item.evidence_quote}"`,
+            kind: item.kind, text: item.text, source: 'inferred', origin: 'agent', evidence: importEvidence(args.source, collapse(item.evidence_quote)),
             source_ref: importRef(args.source, read.digest, conversation.id), ...(item.area ? { area: item.area } : {}),
           } });
         }
         await ready(ctx);
-        // One commit for the batch. The same claim already held, from this export or from anywhere else, is not added twice.
+        // One commit for the batch. Every row counts, whatever its status: the same claim held, from this export or from
+        // anywhere else, or the same quote already brought in, is not added twice; and a text the owner dismissed, retired or
+        // corrected is their decision, which a later import does not undo. A row being forgotten is the barrier's to hold.
         const write = () => {
+          const rows = deps.store.allClaims().filter(row => row.status !== 'purging');
           for (const { index, claim } of accepted) {
-            const same = deps.store.claims().find(row => row.kind === claim.kind && normalizeForGrounding(row.text) === normalizeForGrounding(claim.text));
-            if (same) { outcomes[index] = { status: 'duplicate', id: same.id }; continue; }
+            const same = rows.find(row => normalizeForGrounding(row.text) === normalizeForGrounding(claim.text) || (row.evidence === claim.evidence && importSourceOf(row.source_ref) === args.source));
+            if (same && (same.status === 'active' || same.status === 'promoted')) { outcomes[index] = { status: 'duplicate', id: same.id }; continue; }
+            if (same) { outcomes[index] = { status: 'refused', reason: 'owner_already_decided' }; continue; }
             deps.store.add(claim, now());
-            outcomes[index] = { status: 'stored', id: deps.sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id };
+            const id = deps.sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id;
+            outcomes[index] = { status: 'stored', id };
+            rows.push({ ...claim, id, status: 'active' } as (typeof rows)[number]);
           }
         };
         const atomic = () => deps.transaction ? deps.transaction(write) : write();

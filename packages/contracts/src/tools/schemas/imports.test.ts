@@ -20,9 +20,10 @@ describe('import from other agents: tool arguments', () => {
   it('imports a bounded batch of claims, each with a quote and the conversation it came from, and no authority-bearing field', () => {
     expect(importMemoriesArgsSchema.safeParse({ ...file, claims: [claim] }).success).toBe(true);
     expect(importMemoriesArgsSchema.safeParse({ ...file, claims: [{ ...claim, kind: 'followup', area: 'work' }] }).success).toBe(true);
+    expect(importMemoriesArgsSchema.safeParse({ ...file, claims: [{ ...claim, kind: 'health', text: 'Has asthma', area: 'body' }] }).success).toBe(true);
     for (const bad of [
       { ...file, claims: [] }, { ...file, claims: Array.from({ length: 21 }, () => claim) },
-      { ...file, claims: [{ ...claim, kind: 'health' }] }, { ...file, claims: [{ ...claim, kind: 'permission' }] }, { ...file, claims: [{ ...claim, kind: 'pattern' }] },
+      { ...file, claims: [{ ...claim, kind: 'permission' }] }, { ...file, claims: [{ ...claim, kind: 'pattern' }] },
       { ...file, claims: [{ ...claim, evidence_quote: 'my half' }] }, { ...file, claims: [{ ...claim, text: ' ' }] }, { ...file, claims: [{ ...claim, conversation_id: '' }] },
       { ...file, claims: [{ ...claim, origin: 'owner' }] }, { ...file, claims: [{ ...claim, source: 'stated' }] }, { ...file, claims: [claim], source_ref: 'owner, m1' },
       (({ claims: _c, ...rest }) => rest)({ ...file, claims: [claim] }),
