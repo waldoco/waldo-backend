@@ -45,9 +45,6 @@ export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
   { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', url: 'https://mcp.notion.com/mcp', issuer: 'https://mcp.notion.com' },
   { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', issuer: 'https://todoist.com' },
   { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.', url: 'https://mcp.linear.app/mcp', issuer: 'https://mcp.linear.app' },
-  // Otter's server (announced 28 April 2026) names otter.ai as its authorization server, which registers clients openly and
-  // grants read scopes only (profile:read, conversations:read).
-  { id: 'otter', label: 'Otter', about: 'Search and read your meeting transcripts and notes.', url: 'https://mcp.otter.ai/mcp', issuer: 'https://otter.ai' },
   {
     // docs.fireflies.ai documents api.fireflies.ai/mcp with OAuth. Its tools carry no read-only labels, and some act for the
     // owner towards other people (sharing a meeting, revoking access), so the reads are named here and every other tool asks first.

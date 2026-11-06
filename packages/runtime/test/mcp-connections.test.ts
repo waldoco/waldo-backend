@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { connectorsLine, EVERY_READ_ONLY_HINT, mcpConnections, McpRefusal, McpToolFailed, mcpState, readMcpState, type McpConnections } from '../src/connectors/mcp-connections';
+import { connectorsLine, EVERY_READ_ONLY_HINT, mcpConnections, McpRefusal, McpToolFailed, mcpState, readMcpState, sendTargetOf, type McpConnections } from '../src/connectors/mcp-connections';
 import { oauthProxy } from '../src/connectors/oauth-proxy-client';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../src/tools/live/mcp';
 import type { McpCallProposal } from '../src/channels/approvals';
@@ -689,7 +689,22 @@ describe('Official servers from the catalogue', () => {
     const tile = catalogueTiles([]).find((entry) => entry.id === 'fireflies')!;
     expect(tile.consent).toContain('Messages Waldo sends go out as you');
     expect(tile.consent).toContain('Connecting here lets the Fireflies reads Waldo knows run without asking');
-    expect(catalogueTiles([]).find((entry) => entry.id === 'otter')!.consent).toContain('Connecting here lets the tools Otter labels read-only run without asking');
+  });
+
+  it('logs where a send went for a list of recipients too: the first that fit and how many more, in the target\'s room', () => {
+    const keys = ['emails', 'email'];
+    expect(sendTargetOf(keys, { meetingId: 'm1', emails: ['a@example.test', 'b@example.test'] })).toBe('a@example.test, b@example.test');
+    const many = Array.from({ length: 12 }, (_, i) => `person${i}@example.test`);
+    const shown = sendTargetOf(keys, { emails: many })!;
+    expect(shown.length).toBeLessThanOrEqual(80);
+    expect(shown).toMatch(/^person0@example\.test, person1@example\.test, .* \+\d+$/);
+    expect(Number(/\+(\d+)$/.exec(shown)![1]) + shown.split(', ').length).toBe(12);
+    expect(sendTargetOf(keys, { emails: [`${'x'.repeat(100)}@example.test`, 'b@example.test'] })).toMatch(/^x+ \+1$/);
+    expect(sendTargetOf(keys, { emails: ['\u0007bell@example.test'] })).toBe('bell@example.test');
+    expect(sendTargetOf(keys, { email: 'c@example.test' })).toBe('c@example.test');
+    expect(sendTargetOf(keys, { emails: [], email: 'c@example.test' })).toBe('c@example.test');
+    expect(sendTargetOf(keys, { emails: [3, null] })).toBeNull();
+    expect(sendTargetOf(['channel_id', 'channel'], { channel: 'C0PRIVATE' })).toBe('C0PRIVATE');
   });
 
   it('keeps what Slack sends as the owner in its consent, beside the reads it allows, and only the description in front', () => {
@@ -805,10 +820,7 @@ describe('Official servers from the catalogue', () => {
     expect(catalogueEntry('https://mcp.notion.com/mcp/other', NOTION.issuer)).toBeUndefined();
     expect(catalogueEntry('https://MCP.NOTION.COM/mcp', NOTION.issuer)?.id).toBe('notion');
     expect(catalogueEntry(GRANOLA_MCP_URL, GRANOLA_AUTH_ORIGIN)?.id).toBe('granola');
-    const OTTER = MCP_CATALOGUE.find((entry) => entry.id === 'otter')!, FIREFLIES = MCP_CATALOGUE.find((entry) => entry.id === 'fireflies')!;
-    expect(catalogueEntry('https://mcp.otter.ai/mcp', 'https://otter.ai/')?.id).toBe('otter');
-    expect(catalogueEntry(OTTER.url, 'https://mcp.otter.ai')).toBeUndefined();
-    expect(catalogueEntry('https://mcp.otter.ai/', OTTER.issuer)).toBeUndefined();
+    const FIREFLIES = MCP_CATALOGUE.find((entry) => entry.id === 'fireflies')!;
     expect(catalogueEntry('https://api.fireflies.ai/mcp', 'https://api.fireflies.ai/')?.id).toBe('fireflies');
     // Fireflies also answers at mcp.fireflies.ai with its own sign-in, which its documentation does not name.
     expect(catalogueEntry('https://mcp.fireflies.ai/mcp', 'https://mcp.fireflies.ai/')).toBeUndefined();
