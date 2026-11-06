@@ -19,9 +19,9 @@ describe('reminder time', () => {
 describe('reminder tools', () => {
   const calls: string[] = [];
   const book: ReminderBook = {
-    async set(args) {
+    async set(args, written) {
       if (args.at < '2026') throw new Error('already past');
-      calls.push(`set:${args.note}`);
+      calls.push(`set:${args.note}${written?.outside ? ':outside' : ''}`);
       return { id: 'reminder:1', ...args };
     },
     list: () => [{ id: 'reminder:1', note: 'water', at: '2026-09-23T18:30', repeat: 'daily' }],
@@ -29,6 +29,7 @@ describe('reminder tools', () => {
     async cancel(id) { calls.push(`cancel:${id}`); return id === 'reminder:1'; },
     async cancelAll() { return 0; },
     note: () => null,
+    outside: () => false,
     fired: () => undefined,
   };
   const [set, list, cancel] = reminderHandlers(book);
@@ -45,6 +46,14 @@ describe('reminder tools', () => {
     expect(await list!.handle({} as never)).toMatchObject({ ok: true, data: { reminders: [{ note: 'water' }] } });
     expect(await cancel!.handle({ id: 'reminder:1' } as never)).toMatchObject({ ok: true, data: { cancelled: true } });
     expect(calls).toEqual(['set:water', 'cancel:reminder:1']);
+  });
+
+  // Outside text may have chosen the note, so the reminder carries that and fires as outside text (check-back-turn).
+  it('marks a reminder set after the turn read outside text, and only that one', async () => {
+    calls.length = 0;
+    await set!.handle({ note: 'pay', at: '2026-09-23T18:30', repeat: 'none' } as never, { toolArgSourceTaint: 'external' } as never);
+    await set!.handle({ note: 'walk', at: '2026-09-23T18:30', repeat: 'none' } as never, { toolArgSourceTaint: null } as never);
+    expect(calls).toEqual(['set:pay:outside', 'set:walk']);
   });
 
   it('returns a readable error for a past time', async () => {

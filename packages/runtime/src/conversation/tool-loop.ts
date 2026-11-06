@@ -1,4 +1,5 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
+import { inwardReceipt, withInwardReceipts } from './inward-receipts';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
@@ -194,6 +195,8 @@ export async function runToolLoop(input: Readonly<{
   const deadline = turnDeadline(input.budget, runScope);
   // Tools that ran this loop and succeeded, for the reply when the budget ends with no words from the model.
   const done: string[] = [];
+  // The owner-inward writes this turn made after it read outside text, listed under whatever reply the loop returns.
+  const inward: string[] = [];
   let dispatched = 0;
   const readRuns = new Map<string, Readonly<{ dispatched: number; at: number }>>();
   // An exact call that ran again and came back byte-identical, and how many runs in a row did. The model hears the count as
@@ -275,7 +278,7 @@ export async function runToolLoop(input: Readonly<{
     // With no time left even for the answer, say so instead of starting a model call that cannot finish.
     if (!offer && !repairEmptyCeiling && timeLeft <= 0) {
       input.onSettle?.('time_exhausted');
-      return unfinishedReply('time_exhausted', done);
+      return withInwardReceipts(unfinishedReply('time_exhausted', done), inward);
     }
     if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
@@ -286,7 +289,7 @@ export async function runToolLoop(input: Readonly<{
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
       input.onSettle?.('time_exhausted');
-      return unfinishedReply('time_exhausted', done);
+      return withInwardReceipts(unfinishedReply('time_exhausted', done), inward);
     }
     input.ctx.runScope?.admit();
     if (response.model !== undefined) answeredAt.set(PROVIDER_OF[response.model], Date.now());
@@ -298,9 +301,9 @@ export async function runToolLoop(input: Readonly<{
     }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
-      return guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
+      return withInwardReceipts(guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
         ? unfinishedReply(exit, done)
-        : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls);
+        : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls), inward);
     }
     let firstCall = true;
     roundStarts.push(turns.length);
@@ -366,6 +369,11 @@ export async function runToolLoop(input: Readonly<{
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
         if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
+        // A write runs one at a time, so the turn's taint here is the taint it was dispatched under.
+        if (result.ok && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external') {
+          const line = inwardReceipt(call.name, call.arguments);
+          if (line !== null) inward.push(line);
+        }
         if (result.ok) recordRead(input.ctx.turnReads, call.name, call.arguments, result.data, started);
       }
       // A call whose arguments missed the schema gets the definition back when its function list lacks it (a call through
