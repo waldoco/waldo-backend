@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { LLMToolTurn, ToolName } from '@waldo/contracts';
@@ -429,7 +430,7 @@ describe('the console watchdog read for an owner the watchdog never ran for', ()
 
 describe('WALDO_WATCHDOG in the Worker config', () => {
   it('is off in production and on in staging', () => {
-    const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+    const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
     expect(parsed.vars.WALDO_WATCHDOG).toBe('0');
     expect(parsed.env.staging.vars.WALDO_WATCHDOG).toBe('1');
   });

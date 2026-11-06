@@ -8,6 +8,7 @@ import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
 import { lightChatEnabled } from '../channels/async-tools';
 import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import { withSwitches } from '../switches';
 
 // A task worker: one object per job attempt, holding nothing but the ticket it was started with. It runs the attempt from
 // its own alarm and calls the owner's object for everything else. Its alarm never throws, so the platform's alarm retry
@@ -30,6 +31,8 @@ export const TASK_ALARM_SLICE_MS = 10 * 60_000;
 export const taskWorkerName = (ownerDoId: string, ticket: TaskTicket): string => `job:${ownerDoId}:${ticket.jobId}:${ticket.attempt}`;
 
 export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv) { super(ctx, withSwitches(env)); }
+
   // One provider breaker for the attempt's slices, seeded from the owner's breaker at each claim.
   private readonly health = new TaskBreaker();
 

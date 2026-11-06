@@ -75,6 +75,12 @@ Secret names only. No value appears in this repo, in this document or in any com
 
 ### 1.2 Worker vars
 
+Cloudflare allows a Worker 128 variables, secrets and text vars counted together, and refuses an upload past that ("Too many text bindings", code 10055). Feature switches and tuning knobs are therefore nested in one JSON var, `WALDO_SWITCHES`, in each environment's `vars` block of `wrangler.jsonc`. Every entry seam (the Worker's `fetch`, `email` and `scheduled` handlers and each Durable Object's constructor) passes its env through `withSwitches` (`packages/runtime/src/switches.ts`), so the runtime reads `env.<NAME>` as before. A name set directly on env wins, so a `--var` at upload still overrides a switch.
+
+The table below names each var as the runtime reads it. Identity, origin, provider config and the privacy and security controls the dry run reads stay flat; `scripts/guards/guard-switches-binding.mjs` lists them with their reasons (`FLAT_VARS`). Everything else, every new switch included, goes in `WALDO_SWITCHES`, with the same name, as a string, in both environments.
+
+The guard also caps bindings at 118 per environment: the flat vars plus every secret named in §1.3's table, which is an upper bound on what is deployed (at `1808c6ed` the table named 40 secrets, while Cloudflare counted 32). It refuses a `WALDO_SWITCHES` over 4,500 bytes, under Cloudflare's 5 KB per variable, and any env read that skips the seam: a Durable Object or entrypoint whose constructor does not call `super(ctx, withSwitches(env))`, a default-export handler that does not flatten, `env` imported from `cloudflare:workers`, or `process.env` outside `src/cli`. A new secret needs a row in §1.3, so the count stays honest.
+
 | Var | Staging | Production today | Production for the alpha |
 | --- | --- | --- | --- |
 | `WALDO_ENVIRONMENT` | `staging` | `production` | `production`. It forces Langfuse text off. |

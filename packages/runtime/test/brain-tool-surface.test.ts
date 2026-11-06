@@ -19,6 +19,7 @@ import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { TOOL_DEFINITION_BUDGET_TOKENS } from './helpers/tool-budget';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
@@ -281,14 +282,14 @@ describe('the brain tool surface', () => {
 // The deployed switch: off in both. OpenAI refused the tool-search request shape on every staging round (400 on `tools`),
 // so each round paid a refused request before the full-menu resend; on comes back once a live round is accepted.
 it('neither staging nor production runs tool search', () => {
-  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
   expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
 
 // Staging loads tools through the harness (find_tools/use_tool), the same on any provider; production keeps the full menu.
 it('staging loads tools through the harness and production does not', () => {
-  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
   expect(parsed.env.staging.vars.WALDO_TOOL_LOADER).toBe('harness');
   expect(parsed.vars.WALDO_TOOL_LOADER).toBe('off');
 });
