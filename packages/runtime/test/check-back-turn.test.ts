@@ -138,6 +138,21 @@ describe('a due reminder runs a fresh check-back turn', () => {
     });
   });
 
+  // A check-back runs inside the alarm's own budget, so a careful one that needs more than 25 tool rounds (two minutes' worth)
+  // finishes instead of stopping at a flat two-minute cap.
+  it('runs on the alarm\'s time: more rounds than a flat two minutes allows', async () => {
+    await withOwner('check-back-reminder-long', async (owner, state) => {
+      await dueReminder(state);
+      fixture.script = (request) => (request.tool_turns?.length ?? 0) < 30
+        ? { text: '', calls: [{ call_id: `look-${request.tool_turns?.length ?? 0}`, name: 'get_context', arguments: '{}' }] }
+        : { text: FOUND };
+      await schedulePass(owner, state);
+      expect(checkBackRequests().at(-1)!.tool_turns).toHaveLength(30);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([FOUND]);
+    });
+  });
+
   it('can end silent when the model decides nothing needs saying, and never falls back to the note', async () => {
     await withOwner('check-back-reminder-silent', async (owner, state) => {
       const reminder = await dueReminder(state);
