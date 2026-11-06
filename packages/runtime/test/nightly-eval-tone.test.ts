@@ -47,29 +47,28 @@ describe('a message is plain: no exclamation marks, no emoji', () => {
   });
 });
 
-describe('the health gate on a one-day signal', () => {
-  it('tn03: the health check is woken by the new signal and told of it, and staying quiet holds', async () => {
-    const { failed, asked } = await run('tn03-oxygen-one-day-silent', reply(NOTE, JSON.stringify({ kind: 'no_op', text: '' })));
+describe('the health gate on a one-day signal, then the loop when asked', () => {
+  const said = /Anything about my body I should know/;
+  const read = { name: 'get_health', arguments: { signals: ['spo2'], from: '2026-09-11', to: '2026-09-24', aggregation: 'daily' } };
+  const quiet = reply(NOTE, JSON.stringify({ kind: 'no_op', text: '' }));
+  const loop: ScriptRule = { match: said, rounds: [{ toolCalls: [read] }, { text: 'Blood oxygen has run a touch under your usual for three nights. Nothing to change today; I\'ll keep an eye on it as your watch syncs.' }] };
+
+  it('tn03: the health check is woken by the new signal and told of it, the question reaches the model with it, and get_health returns the three nights under the usual ones', async () => {
+    const { record, failed, asked } = await run('tn03-oxygen-quiet-then-loop', [...quiet, loop]);
     expect(asked(NOTE)).toHaveLength(1);
     expect(asked(NOTE)[0]).toContain('blood oxygen below usual');
-    expect(failed).toEqual([]);
-  });
-
-  it('tn03: a note about the one-day signal fails', async () => {
-    const note = JSON.stringify({ kind: 'notice', text: "Blood oxygen's a little below your usual today, while recovery still reads excellent." });
-    expect((await run('tn03-oxygen-one-day-silent', reply(NOTE, note))).failed).toEqual([expect.stringContaining('no note')]);
-  });
-});
-
-describe('the health loop over three nights', () => {
-  it('tn04: the owner\'s question reaches the model with the signal, get_health returns the three nights under the usual ones, and a reply that never read them fails', async () => {
-    const said = /Anything about my body I should know/;
-    const read = { name: 'get_health', arguments: { signals: ['spo2'], from: '2026-09-11', to: '2026-09-24', aggregation: 'daily' } };
-    const { record, failed, asked } = await run('tn04-oxygen-three-nights-loop', [{ match: said, rounds: [{ toolCalls: [read] }, { text: 'Blood oxygen has run a touch under your usual for three nights. Nothing to change today; I\'ll keep an eye on it.' }] }]);
     expect(asked(said)[0]).toContain('blood oxygen below usual');
     const output = record.toolOutputs.find((entry) => entry.name === 'get_health')?.output ?? '';
     for (const night of ['94.4', '94.2', '94.1', '97.1']) expect(output).toContain(night);
     expect(failed).toEqual([]);
-    expect((await run('tn04-oxygen-three-nights-loop', reply(said, 'Nothing to worry about.'))).failed).toEqual([expect.stringContaining('read the readings')]);
+  });
+
+  it('tn03: a note about the one-day signal fails', async () => {
+    const note = reply(NOTE, JSON.stringify({ kind: 'notice', text: "Blood oxygen's a little below your usual today, while recovery still reads excellent." }));
+    expect((await run('tn03-oxygen-quiet-then-loop', [...note, loop])).failed).toEqual([expect.stringContaining('no note')]);
+  });
+
+  it('tn03: a reply that never read the readings fails', async () => {
+    expect((await run('tn03-oxygen-quiet-then-loop', [...quiet, ...reply(said, 'Nothing to worry about.')])).failed).toEqual([expect.stringContaining('read the readings')]);
   });
 });

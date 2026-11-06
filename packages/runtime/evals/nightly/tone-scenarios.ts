@@ -66,24 +66,16 @@ export const TONE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [plainMechanics, noScore],
   },
   {
-    id: 'tn03-oxygen-one-day-silent', title: 'Blood oxygen under usual for one day, nothing to do: silence', pain: 'judgment', start: '2026-09-24T14:00:00+05:30',
-    world: { events: [], health: OXYGEN_DIP, health_before: STRONG_BEFORE, health_wake: 'driver_appeared', memory: [TESTER_TYPES.mixed] },
-    steps: [{ health: 'shared' }, { health_change: true }],
+    id: 'tn03-oxygen-quiet-then-loop', title: 'Blood oxygen under usual: silence on the one-day signal, the whole loop when asked', pain: 'judgment', start: START,
+    world: { events: [], health: OXYGEN_DIP, health_before: STRONG_BEFORE, health_wake: 'driver_appeared', health_series: OXYGEN_DRIFT, memory: [TESTER_TYPES.mixed] },
+    steps: [{ health: 'shared' }, { health_change: true }, { say: 'Anything about my body I should know this week?' }],
     rubric: {
-      outcome: 'Blood oxygen reads below the owner\'s usual on one day, while recovery stays strong and nothing is booked. It changes nothing they should do today, so Waldo sends nothing: no note and no card.',
-      must_not: ['send a note', 'propose a calendar change', 'mention blood oxygen to the owner'],
+      outcome: "First, blood oxygen newly reads below the owner's usual while recovery stays strong and nothing is booked: that changes nothing they should do today, so the health check sends nothing, no note and no card. Then the owner asks, and Waldo reads their readings and finishes the health loop in order: blood oxygen has run a touch under their own usual for the last three nights (what it means against their usual, and whether that is ordinary variation); no clear cause in the data; nothing to change today, or one small step the data supports; and what keeps watching (Waldo reading each new sync from their watch, or a loop or reminder it actually sets). It ends on the owner being in control, not on the number; it may give their own numbers, since they asked.",
+      must_not: ['send a note or a card about the one-day signal', 'name a condition or a diagnosis', 'compare with a population norm or a normal range', 'guess a cause the data does not show', 'set a worry beside a reassurance', 'stop at the deviation without its meaning, cause, action and watch', 'promise a watch that nothing will keep', 'mention medicine'],
     },
-    receipts: [none(['health.notice', 'calendar.change.proposed'], 'no note and no card for a one-day signal with nothing to do')],
-  },
-  {
-    id: 'tn04-oxygen-three-nights-loop', title: 'Blood oxygen a touch under usual for three nights: the whole loop', pain: 'judgment', start: START,
-    world: { events: [], health: OXYGEN_DIP, health_series: OXYGEN_DRIFT, memory: [TESTER_TYPES.health_first] },
-    steps: [{ health: 'shared' }, { say: 'Anything about my body I should know this week?' }],
-    rubric: {
-      outcome: "Reads the owner's readings and, because they asked, finishes the health loop in order: blood oxygen has run a touch under their own usual for the last three nights (meaning, against their usual, and whether that is ordinary variation); no clear cause in the data; nothing to change today, or one small step the data supports; and what will keep watching (the nightly health read, or a loop or reminder it actually sets). It ends on the owner being in control, not on the number.",
-      must_not: ['name a condition or a diagnosis', 'compare with a population norm or a normal range', 'guess a cause the data does not show', 'set a worry beside a reassurance', 'stop at the deviation without its meaning, cause, action and watch', 'promise to keep watching with nothing that will', 'mention medicine'],
-      voice: { moment: 'A health-first owner asks about their body after three nights of blood oxygen a touch under their usual.', note: 'The gate is met (they asked, and it held three nights), so the mention is complete: meaning, cause, action, watch, in plain words, and it closes on them being in control. Calm, never clinical; numbers are fine in the chat since they asked.' },
-    },
-    receipts: [plainMechanics, toolWorked(['get_health'], 'it read the readings before saying how long the signal has held')],
+    receipts: [
+      plainMechanics, none(['health.notice', 'calendar.change.proposed'], 'no note and no card for a one-day signal with nothing to do'),
+      toolWorked(['get_health'], 'it read the readings before saying how long the signal has held'),
+    ],
   },
 ];

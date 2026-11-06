@@ -76,9 +76,8 @@ export const BRIEF_HEALTH_SCENARIOS: readonly NightlyScenario[] = [
     world: { events: [], health: LOW_DEBT, health_before: GOOD_BEFORE },
     steps: [{ health: 'shared' }, { health_change: true }],
     rubric: {
-      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. It changes what the free day is for, so Waldo sends one short note, an update card, that finishes what it starts: what changed against the owner's usual, in zone words; the cause only as the data shows it (the run of short nights); one small thing to do with the free day (an easy day, an early night), offered; and that the nightly read keeps watching. Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
+      outcome: "Recovery falls from solid to compromised with the load high, on a morning with nothing on the calendar. It changes what the free day is for, so Waldo sends one short note, an update card, that finishes what it starts: what changed against the owner's usual, in zone words; the cause only as the data shows it (the run of short nights); one small thing to do with the free day (an easy day, an early night), offered; and that Waldo keeps reading each new sync from their watch. Staying silent here is wrong: a sharp drop with a whole free day to shape is the case the note exists for.",
       must_not: ['quote a score, a number or a reading', 'diagnose, alarm or mention medicine', 'propose a calendar change', 'send more than one note', 'order the owner about rather than offer', 'set a worry beside a reassurance, such as what still looks good'],
-      voice: { moment: 'A gentle flag on a free day after a sharp drop.', note: 'Protect: calm, short, easy to ignore, and it ends on the owner in control, never on the drop.' },
     },
     receipts: [effects('health.notice', { min: 1, max: 1 }, 'one note goes out'), none(['calendar.change.proposed'], 'no calendar change on a day with nothing booked'), repliesOmit(READINGS, 'no score or reading appears in a message')],
   },

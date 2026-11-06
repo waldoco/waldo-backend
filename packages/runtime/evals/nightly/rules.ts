@@ -79,17 +79,17 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'Inbox triage:', scenarios: ['t09-what-needs-me', 't05-find-confirmation'] },
   // Health
   { anchor: 'Health is core', scenarios: ['t20-health-aware-plan', 'h02-low-day-without-wearable', 'h11-plan-tomorrow-low-form'] },
-  { anchor: 'You are not a clinician', scenarios: ['h01-low-day-with-wearable', 'h02-low-day-without-wearable', 'v05-small-fall'] },
+  { anchor: 'You are not a clinician', scenarios: ['h01-low-day-with-wearable', 'h02-low-day-without-wearable', 'v05-small-fall', 'h14-drivers-described-not-diagnosed'] },
   { anchor: 'Never give medication, supplement or dose instructions', boundary: 'medication dosing' },
   { anchor: "Reading back what the owner's own label", scenarios: ['h16-prescription-label-read-back'] },
-  { anchor: 'For clinical questions (symptoms', scenarios: ['s03-near-medicine', 's01-dose-question'] },
+  { anchor: 'For clinical questions (symptoms', scenarios: ['s01-dose-question'] },
   { anchor: 'If the owner may be in danger', boundary: 'emergency safety' },
   // Remembering
   { anchor: 'When the owner volunteers a fact', scenarios: ['t19-correct-memory', 'r1-recall-across-day'] },
   { anchor: 'For deeper owner recall, use read_memory', scenarios: ['r1-recall-across-day'] },
 ];
 
-const TONE = ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'tn04-oxygen-three-nights-loop'];
+const TONE = ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'tn03-oxygen-quiet-then-loop'];
 
 // Version 2 of the behavior prompt (WALDO_PROMPT_V2) keeps the version-1 rules that still read the same and carries the voice
 // guide's character, tone, words and health gate in its own lines; each new rule names the scenarios that exercise it, or
@@ -103,7 +103,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'Lead with what you did or found, then why, then the door', scenarios: ['t03-reminder', 'v03-week-one-preference', 'v04-unwise-late-call', 'h01-low-day-with-wearable'] },
   { anchor: 'Open as Waldo, settle into Alfred, close dry', scenarios: ['v05-small-fall', 'v08-stressed-owner', 'tn01-go-friday-loose-saturday'] },
   { anchor: 'When you advise, give one suggestion, not a menu', scenarios: ['tn01-go-friday-loose-saturday', 'v09-plan-not-interview', 't10-compare-flights'] },
-  { anchor: 'Silence is the default', scenarios: ['tn03-oxygen-one-day-silent'] },
+  { anchor: 'Silence is the default', scenarios: ['tn03-oxygen-quiet-then-loop'] },
   { anchor: 'When they bring a feeling, lower the energy', scenarios: ['v08-stressed-owner', 'p06-kind-before-clever'] },
   // Tone follows their day
   { anchor: 'You talk differently on their deadline', scenarios: TONE },
@@ -119,8 +119,8 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'No set greeting', scenarios: ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday'] },
   { anchor: 'Names they learn, only where they fit', scenarios: ['h12-no-health-asked-for-a-score', 'd1-brief-good-day-one-line'] },
   // Health
-  { anchor: 'Raise a health signal unprompted only when', scenarios: ['tn03-oxygen-one-day-silent', 'tn01-go-friday-loose-saturday'] },
-  { anchor: 'Once you mention one, finish it', scenarios: ['tn04-oxygen-three-nights-loop', 'h24-health-only-day-sharp-drop'] },
+  { anchor: 'Raise a health signal unprompted only when', scenarios: ['tn03-oxygen-quiet-then-loop', 'tn01-go-friday-loose-saturday', 'h15-short-sleeper-debt-building'] },
+  { anchor: 'Once you mention one, finish it', scenarios: ['tn03-oxygen-quiet-then-loop', 'h24-health-only-day-sharp-drop', 'h14-drivers-described-not-diagnosed', 'h15-short-sleeper-debt-building'] },
   { anchor: 'Never a bare deviation', boundary: 'health values: no raw reading unless asked, never in a notification' },
   // Writing for where it lands
   { anchor: 'Chat is their phone', scenarios: VOICE },

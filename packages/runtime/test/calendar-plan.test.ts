@@ -92,7 +92,7 @@ describe('a plan\'s blocks from the model\'s local times', () => {
   });
 
   it('reads as a card: the day, then each block at its own time, and no one invited', () => {
-    expect(planReview(PLAN)).toBe('Add 3 blocks to your calendar on Thu 5 Nov:\n09:30–11:30 Write the board memo (deep work)\n13:00–14:00 Lunch and a walk (rest)\n14:00–14:30 Reply to Priya\n\nNo one is invited. your day, laid out');
+    expect(planReview(PLAN)).toBe('Add 3 blocks to your calendar on Thu 5 Nov:\n9:30–11:30am Write the board memo (deep work)\n1–2pm Lunch and a walk (rest)\n2–2:30pm Reply to Priya\n\nNo one is invited. your day, laid out');
   });
 });
 
@@ -102,7 +102,7 @@ describe('the day plan card', () => {
       const fake = calendar(), h = harness(state, fake);
       const id = await h.desk.proposeCalendarPlan(PLAN);
       expect(fake.events.size).toBe(0);
-      expect(h.cards[0]).toContain('09:30–11:30 Write the board memo');
+      expect(h.cards[0]).toContain('9:30–11:30am Write the board memo');
       const [item] = await h.desk.approvals(NOW, { id });
       expect(item).toMatchObject({ kind: 'calendar_plan', state: 'open', exact: { plan: { day: '2026-11-05', blocks: PLAN.blocks, time_zone: 'Asia/Kolkata' } } });
       const out = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
@@ -382,7 +382,7 @@ describe('an app build older than approvals revision 9', () => {
       const old = appApprovalParts(state.storage.sql, 8)('r1'), current = appApprovalParts(state.storage.sql, 9)('r1');
       expect(old.live).toEqual([]);
       expect(old.withheld).toHaveLength(1);
-      expect(old.withheld![0]).toContain('09:30–11:30 Write the board memo');
+      expect(old.withheld![0]).toContain('9:30–11:30am Write the board memo');
       expect(old.withheld![0]).toContain('Update the Waldo app to review and approve it.');
       expect(current.live.map(part => part.kind)).toEqual(['calendar_plan']);
       expect(current.withheld).toBeUndefined();
