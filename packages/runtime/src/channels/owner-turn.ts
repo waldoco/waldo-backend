@@ -44,7 +44,8 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt } from '../memory/claims';
+import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
@@ -418,7 +419,11 @@ export const createOwnerResponder = (
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
   // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
   // any memory block or in recall. Every other turn reads the store as it is.
-  const memoryFor = (store: ClaimStore): ClaimStore => backgroundSourceTaint !== 'external' ? store : outsideView(store);
+  // A turn that speaks unprompted never sees a claim the owner asked Waldo to bring up less; the nightly review reads memory whole.
+  const memoryFor = (store: ClaimStore): ClaimStore => {
+    const read = backgroundSourceTaint !== 'external' ? store : outsideView(store);
+    return ownerTurnActive ? read : withoutBringUpLess(read);
+  };
   // Option B's core, in the same shape as the block it replaces; its room is capped whatever the caller leaves.
   const selectedCore = (view: ClaimStore, _text: string, room: number) => coreMemory(view, Math.min(room, CORE_ROOM), privateOwner!.memorySelection!.reviewed());
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
@@ -703,7 +708,7 @@ export const createOwnerResponder = (
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
           const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
-            const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) : '')
+            const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) + (cut.recalled.includes(QUIET_TAG) ? `\n${QUIET_NOTE}\n` : '') : '')
               + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
               + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
             const turnPrompt = assembleTurnPrompt({
@@ -1153,6 +1158,14 @@ export const createOwnerResponder = (
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
+    // The capacity note's input carries the owner's body as zone words: the memory_ purpose keeps it out of every trace. It runs
+    // on the chat model, as the owner's health planning does.
+    async capacity(trace, input) {
+      const asOwner = await asOwnerJob(trace, job => job.capacity!(trace, input));
+      if (asOwner !== undefined) return asOwner;
+      const visible = promptMemory();
+      return ask(trace, 'memory_capacity', CAPACITY_INSTRUCTION, [...(visible ? [memoryPrompt(visible), barrierPrompt(visible)] : []), input].join('\n\n'), { name: 'capacity', schema: CAPACITY_SCHEMA });
+    },
     async migrate(trace, input, policy) {
       const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input, policy));
       if (asOwner !== undefined) return asOwner;
@@ -1193,7 +1206,7 @@ export const createOwnerResponder = (
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))
-      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory, auxiliaryModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, auxiliaryModel),
+      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory ? memoryFor(promptMemory()!) : undefined, auxiliaryModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, auxiliaryModel),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(modelAccess, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, auxiliaryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);

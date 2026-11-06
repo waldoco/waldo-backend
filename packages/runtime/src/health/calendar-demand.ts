@@ -6,7 +6,8 @@ import { daysBetween, isDay, isTimeZone, localDayWindow, shiftDay } from './scor
 // counts are kept, never titles, attendees or event ids.
 export type DemandClient = Pick<GoogleClient, 'freeBusy' | 'calendarListsPage' | 'restBlocks'>;
 export type DemandRequest = Readonly<{ from: string; to: string; timezone: string }>;
-// `partial` marks a day read without a calendar Google reported as permanently gone.
+// `partial` marks a day read without a calendar Google reported as permanently gone, or without a subscribed calendar it
+// could not read.
 export type DemandDay = Readonly<{ day: string; busy_minutes: number | null; partial: boolean }>;
 export type DemandAnswer =
   | Readonly<{ state: 'available'; days: readonly DemandDay[] }>
@@ -16,6 +17,8 @@ export type CalendarDemandDeps = Readonly<{
   accounts: () => Promise<readonly Readonly<{ email: string; scopes: readonly string[] | null; error: string | null }>[]>;
   client: (email: string) => Promise<DemandClient | null>;
   now: () => number;
+  // Why a stretch went unknown, as a code that names no calendar.
+  voided?: (code: string) => void;
 }>;
 
 const MINUTE_MS = 60_000;
@@ -28,6 +31,10 @@ const LIST_PAGES = 4;
 const WRITABLE: ReadonlySet<CalendarListItem['access_role']> = new Set(['owner', 'writer']);
 // A calendar Google no longer finds is left out and the day is marked partial; any other calendar error is unknown.
 const GONE = 'notFound';
+// A calendar the owner only subscribes to (a public holidays calendar, a colleague's shared calendar) that errors is left out
+// too: one calendar the owner does not keep should not cost every day its reading. One they own or can write to never is.
+const SUBSCRIBED: ReadonlySet<CalendarListItem['access_role']> = new Set(['reader', 'freeBusyReader']);
+const errorCode = (reason: string | undefined) => reason && /^[A-Za-z]{1,40}$/.test(reason) ? reason : 'other';
 
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
@@ -119,24 +126,26 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
   };
 
   // Every account's selected calendars for one stretch of days. A calendar the provider could not read makes the whole
-  // stretch unknown, since an unread calendar is not a free one; only a calendar reported gone is left out. A stretch
-  // whose rest blocks could not be read counts them.
-  const fetchStretch = async (sources: readonly Readonly<{ client: DemandClient; ids: readonly string[]; writable: ReadonlySet<string> }>[], days: readonly string[], timezone: string): Promise<Readonly<{ minutes: Map<string, number>; partial: boolean; unconfirmed: boolean }> | null> => {
+  // stretch unknown, since an unread calendar is not a free one; only a calendar reported gone, or a subscribed one, is left
+  // out. A stretch whose rest blocks or subscribed calendars could not be read is read again within the half hour.
+  const fetchStretch = async (sources: readonly Readonly<{ client: DemandClient; ids: readonly string[]; writable: ReadonlySet<string>; subscribed: ReadonlySet<string> }>[], days: readonly string[], timezone: string): Promise<Readonly<{ minutes: Map<string, number>; partial: boolean; unconfirmed: boolean }> | null> => {
     const from = new Date(localDayWindow(days[0]!, timezone).start).toISOString();
     const to = new Date(localDayWindow(days.at(-1)!, timezone).end).toISOString();
     const busy: { start: string; end: string }[] = [];
     let partial = false, unconfirmed = false;
     try {
-      for (const { client, ids, writable } of sources) {
+      for (const { client, ids, writable, subscribed } of sources) {
         for (let i = 0; i < ids.length; i += CALENDARS_PER_CALL) {
           const batch = ids.slice(i, i + CALENDARS_PER_CALL);
           const observed = await client.freeBusy(from, to, batch, timezone);
           for (const id of batch) {
             const row = observed.calendars?.[id];
-            if (!validFreeBusyCalendar(row)) return null;
+            if (!validFreeBusyCalendar(row)) { deps.voided?.('invalid_answer'); return null; }
             if (row.errors?.length) {
-              if (!row.errors.every(error => error.reason === GONE)) return null;
+              const gone = row.errors.every(error => error.reason === GONE);
+              if (!gone && !subscribed.has(id)) { deps.voided?.(`calendar_error:${errorCode(row.errors.find(error => error.reason !== GONE)?.reason)}`); return null; }
               partial = true;
+              if (!gone) unconfirmed = true;
               continue;
             }
             const rest = writable.has(id) && row.busy.length ? await restOnly(client, id, from, to, timezone) : [];
@@ -146,6 +155,7 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
         }
       }
     } catch {
+      deps.voided?.('read_failed');
       return null;
     }
     return { minutes: busyMinutesByDay(busy, days, timezone), partial, unconfirmed };
@@ -166,7 +176,7 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
       if (accounts.some(account => account.error)) return { state: 'unavailable', reason: 'provider_error' };
       // The read uses free/busy and the calendar list. An account with calendar access but not both cannot be read.
       if (accounts.some(account => !googleHas(account.scopes, 'availability') || !googleHas(account.scopes, 'calendar_list'))) return { state: 'unavailable', reason: 'scope_gap' };
-      const listed: { email: string; client: DemandClient; ids: string[]; writable: ReadonlySet<string> }[] = [];
+      const listed: { email: string; client: DemandClient; ids: string[]; writable: ReadonlySet<string>; subscribed: ReadonlySet<string> }[] = [];
       try {
         for (const account of accounts) {
           const client = await deps.client(account.email);
@@ -174,7 +184,8 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
           if (!client || !calendars) return { state: 'unavailable', reason: 'provider_error' };
           // Reading events needs event access; an account without it cannot hold one of Waldo's blocks.
           const lists = googleHas(account.scopes, 'calendar') && client.restBlocks !== undefined;
-          listed.push({ email: account.email, client, ids: calendars.map(item => item.id), writable: new Set(lists ? calendars.filter(item => WRITABLE.has(item.access_role)).map(item => item.id) : []) });
+          listed.push({ email: account.email, client, ids: calendars.map(item => item.id), writable: new Set(lists ? calendars.filter(item => WRITABLE.has(item.access_role)).map(item => item.id) : []),
+            subscribed: new Set(calendars.filter(item => SUBSCRIBED.has(item.access_role)).map(item => item.id)) });
         }
       } catch {
         return { state: 'unavailable', reason: 'provider_error' };
