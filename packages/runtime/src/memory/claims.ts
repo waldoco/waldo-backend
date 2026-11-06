@@ -1277,6 +1277,8 @@ export const withoutBringUpLess = (store: ClaimStore): ClaimStore => {
     ...store,
     claims: (status) => store.claims(status).filter((claim) => !claim.bring_up_less_at),
     recall: (query, limit, near) => store.recall(query, limit, near).filter((claim) => !claim.bring_up_less_at),
+    recallReplaced: (query, limit) => store.recallReplaced(query, limit).filter((claim) => !claim.bring_up_less_at),
+    replacedClaims: (limit) => store.replacedClaims(limit).filter((claim) => !claim.bring_up_less_at),
     nodes,
     edges: () => { const kept = new Set(nodes().map((node) => node.id)); return store.edges().filter((edge) => kept.has(edge.from_id) && kept.has(edge.to_id)); },
     statements: () => { const statements = store.statements(), kept = new Set(nodes().flatMap((node) => nodeStatementIds(statements, node.id))); return statements.filter((claim) => kept.has(claim.id)); },
