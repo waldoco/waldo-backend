@@ -233,6 +233,7 @@ describe('hook registry', () => {
         'get_health',
         'get_screen_time',
         'get_device_context',
+        'get_weather',
         'query_calendar',
         'connect_service',
         'get_communication',

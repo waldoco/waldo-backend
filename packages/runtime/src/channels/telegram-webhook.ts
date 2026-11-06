@@ -98,6 +98,13 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" with DEVICE_PLACE "1" and the four WeatherKit secrets set offers get_weather: today's and tomorrow's weather where the
+  // owner's phones last were, from WeatherKit asked with the cell's centre only. Off unless "1".
+  DEVICE_WEATHER?: string;
+  WEATHERKIT_TEAM_ID?: string;
+  WEATHERKIT_SERVICE_ID?: string;
+  WEATHERKIT_KEY_ID?: string;
+  WEATHERKIT_PRIVATE_KEY?: string;
   // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
   // Off unless "1".
   BROWSER_FORM_SUBMIT?: string;

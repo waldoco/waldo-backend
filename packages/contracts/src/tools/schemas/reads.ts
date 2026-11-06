@@ -163,6 +163,50 @@ export const getDeviceContextResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema>;
 
+// Today's and tomorrow's weather where the owner's most recently placed phone is, from the provider the place consent names
+// (WeatherKit), asked with the cell's centre only. Metric units as the provider gives them. condition is the provider's own
+// condition code (for example PartlyCloudy, Rain). place names the city the forecast is for and how old that reading is.
+// The provider requires attribution: say the forecast is from Apple Weather when sharing it.
+export const getWeatherArgsSchema = z.strictObject({});
+export type GetWeatherArgs = z.infer<typeof getWeatherArgsSchema>;
+// The provider's condition code, such as Clear or ScatteredThunderstorms: a word, never free text.
+const weatherCondition = z.string().regex(/^[A-Z][A-Za-z]{0,39}$/);
+const celsius = z.number().min(-90).max(60);
+export const weatherToolDaySchema = z.strictObject({
+  date: healthReadDaySchema,
+  condition: weatherCondition,
+  high_c: celsius,
+  low_c: celsius,
+  precipitation_chance: z.number().min(0).max(1).optional(),
+  precipitation_mm: z.number().min(0).max(2000).optional(),
+  uv_max: z.int().min(0).max(20),
+  sunrise: z.iso.datetime({ offset: true }).optional(),
+  sunset: z.iso.datetime({ offset: true }).optional(),
+});
+export const getWeatherResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    source: z.literal('Apple Weather'),
+    place: z.strictObject({
+      locality: z.string().min(1).max(80).optional(),
+      region: z.string().min(1).max(80).optional(),
+      country: z.string().regex(/^[A-Z]{2}$/).optional(),
+      // The zone the phone last reported, which can be newer than the place; the days' dates are in it.
+      phone_timezone: z.string().min(1).max(64),
+      observed_at: z.iso.datetime(),
+      age_minutes: deviceContextAge,
+    }),
+    now: z.strictObject({ temperature_c: celsius, condition: weatherCondition, uv_index: z.int().min(0).max(20) }).optional(),
+    days: z.array(weatherToolDaySchema).min(1).max(2),
+    read_at: z.iso.datetime({ offset: true }),
+  }),
+  z.strictObject({
+    state: z.literal('unavailable'),
+    reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_place', 'provider_unavailable', 'read_failed']),
+  }),
+]);
+export type GetWeatherResult = z.infer<typeof getWeatherResultSchema>;
+
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   account: z.email().optional(),
