@@ -95,7 +95,18 @@ export const spendHold = (now: Date): ToolError => {
 // public (useless as tripwires) and a false-positive source for any tool output quoting it.
 export const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-const EXTERNAL_DATA_MAX_BYTES = 4096;
+// Earlier turns' tool results and the saved-file receipts each join the owner turn up to this size. They ride the owner's
+// message suffix, which a turn builds once and resends unchanged, so the provider's cached prefix is untouched; at most about
+// 8k tokens per request each.
+const EXTERNAL_DATA_MAX_BYTES = 32_768;
+// Outside data joins the owner turn item by item: each item passes the gate on its own or is left out, and the newest items
+// are kept whole within maxBytes.
+export const admitEach = async (items: readonly string[], admits: (item: string) => Promise<boolean>, maxBytes: number): Promise<string[]> => {
+  const kept: string[] = [];
+  for (const item of items) if (await admits(item)) kept.push(item);
+  while (kept.length && utf8Bytes(kept.join('\n')) > maxBytes) kept.shift();
+  return kept;
+};
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -671,15 +682,17 @@ export const createOwnerResponder = (
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
             const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
-            while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
-            const earlierShown = await admitsExternal(earlier.join('\n'));
-            if (!earlierShown && earlier.length && !withheldLogged) {
+            const earlierShown = await admitEach(earlier, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
+            if (earlierShown.length < earlier.length && !withheldLogged) {
               withheldLogged = true;
-              log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
+              log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length - earlierShown.length}` });
             }
+            // The receipts block is one receipt per line between Waldo's own lead and closing lines; with no receipt left, none.
+            const receiptLines = rawTaskContext ? rawTaskContext.split('\n') : [];
+            const receiptsShown = await admitEach(receiptLines, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
             return {
-              recalled, earlier: earlierShown ? earlier.join('\n') : '',
-              receipts: await admitsExternal(rawTaskContext) ? rawTaskContext : '',
+              recalled, earlier: earlierShown.join('\n'),
+              receipts: receiptsShown.length === receiptLines.length || receiptsShown.some(line => line.startsWith('{')) ? receiptsShown.join('\n') : '',
               // A committed receipt authenticates identity, not user/provider-authored path text. Externally authored path text
               // never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
               taskContext: rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '',
