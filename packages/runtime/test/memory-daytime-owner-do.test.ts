@@ -59,7 +59,7 @@ const withOwner = (name: string, flags: Flags, work: (run: Run) => Promise<void>
       claimStore(state.storage.sql).add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I live in Pune"', origin: 'owner', source_ref: 'owner, tg-1' }, new Date(NINE - 86_400_000).toISOString());
       const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture', GOOGLE_CLIENT_ID: 'daytime-fixture', GOOGLE_CLIENT_SECRET: 'fixture',
         MEMORY_DAYTIME_CONSOLIDATOR: flags.daytime, MEMORY_NIGHTLY_SOURCE_UPDATES: flags.sources });
-      const runtime = (owner as unknown as { setup(): { ready: Promise<unknown>; updateCheck(trace: string): Promise<void> } }).setup();
+      const runtime = (owner as unknown as { setup(channel: string): { ready: Promise<unknown>; updateCheck(trace: string): Promise<void> } }).setup('telegram');
       await runtime.ready;
       state.storage.sql.exec('DELETE FROM schedule');
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
