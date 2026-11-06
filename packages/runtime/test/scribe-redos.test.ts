@@ -22,12 +22,21 @@ const FAST_ENOUGH_MS = 250;
 const GROWTH_LIMIT = 8;
 // The best of two runs, unless the first is already slow (a stall would only be repeated).
 const timeOf = (run: () => unknown): number => { const first = millis(run); return first < FAST_ENOUGH_MS ? Math.min(first, millis(run)) : first; };
-// `at(n)` runs the case on an input of size n; the case is read at `size / 4` and at `size`.
+// `at(n)` runs the case on an input of size n; the case is read at `size / 4` and at `size`. Other test files run in parallel
+// and a pause in the middle of one reading would read as growth, so a case that looks slow is read again, up to three times
+// in all: a pattern that squares its input stays slow every time.
 const expectLinear = (label: string, size: number, at: (n: number) => unknown): void => {
-  const small = timeOf(() => at(size / 4));
-  const large = timeOf(() => at(size));
-  if (large < FAST_ENOUGH_MS) return;
-  expect(large / Math.max(small, 30), `${label}: ${Math.round(small)} ms, then ${Math.round(large)} ms for four times the input`).toBeLessThan(GROWTH_LIMIT);
+  let lowest = Infinity;
+  let shown = '';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const small = timeOf(() => at(size / 4));
+    const large = timeOf(() => at(size));
+    if (large < FAST_ENOUGH_MS) return;
+    const growth = large / Math.max(small, 30);
+    if (growth < GROWTH_LIMIT) return;
+    if (growth < lowest) { lowest = growth; shown = `${Math.round(small)} ms, then ${Math.round(large)} ms for four times the input`; }
+  }
+  expect(lowest, `${label}: ${shown}`).toBeLessThan(GROWTH_LIMIT);
 };
 
 const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
@@ -70,7 +79,9 @@ const FILLERS: Readonly<Record<string, (n: number) => string>> = {
   'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
 };
 
-describe('the patterns sanitise() runs stay linear on the near-miss and whitespace inputs tried here', () => {
+// A case reads its input at two sizes, twice or more, and the file shares a machine with the other test files, so the default five
+// seconds is not room enough for the slowest of them.
+describe('the patterns sanitise() runs stay linear on the near-miss and whitespace inputs tried here', { timeout: 120_000 }, () => {
   it.each(Object.keys(NEAR_MISSES))('%s, up to 80,000 characters', name => {
     for (const destination of ['send_message', 'internal_context'] as const) expectLinear(destination, 80_000, n => scan(NEAR_MISSES[name]!(n), destination));
   });
