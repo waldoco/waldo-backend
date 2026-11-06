@@ -1,4 +1,4 @@
-import { applyClaimOps, type ClaimStore } from '../memory/claims';
+import { applyClaimOps, fence, type ClaimStore } from '../memory/claims';
 import { localDayWindow, shiftDay } from '../health/scores/time';
 import type { CalendarItem, GoogleClient } from '../connectors/google';
 import { budgetContext, capacityInput, NO_CALENDAR } from '../prompt/capacity';
@@ -95,8 +95,12 @@ export const weekAhead = (now: number, timezone: string): Readonly<{ from: numbe
   return { from: localDayWindow(shiftDay(today, 1), timezone).start, to: localDayWindow(shiftDay(today, WEEK_AHEAD_DAYS), timezone).end };
 };
 // What the planning Brief reads beside the capacity note: a failed read says so, and the model then moves nothing.
-export const capacityBudgetContext = async (now: number, timezone: string, google: GoogleClient | null): Promise<string> =>
-  budgetContext(await readCalendar(weekAhead(now, timezone), timezone, google, false, WEEK_AHEAD_EVENTS));
+// connectable: Google is set up but not connected, said the way the card's own calendar says it.
+export const capacityBudgetContext = async (now: number, timezone: string, google: GoogleClient | null, connectable: boolean, moves: string): Promise<string> =>
+  budgetContext(await readCalendar(weekAhead(now, timezone), timezone, google, connectable, WEEK_AHEAD_EVENTS), moves);
+
+const outcome = (status: string): string =>
+  status === 'open' || status === 'card_unconfirmed' ? 'waiting on them' : status === 'done' ? 'they said yes' : status === 'skipped' ? 'they said no' : status;
 
 // The protected blocks Waldo proposed lately, as kind, day and what became of each: no title or time leaves the ledger.
 export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14): string => {
@@ -105,7 +109,17 @@ export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14)
     `SELECT json_extract(payload_json, '$.block') AS block, status, created_at, json_extract(payload_json, '$.start') AS start FROM ledger
      WHERE kind = 'calendar_change' AND json_extract(payload_json, '$.block') IN ('rest', 'deep_work') AND created_at >= ? ORDER BY created_at`,
     now - days * 24 * 60 * MINUTE_MS,
-  ).toArray().map(row => `- ${row.block === 'rest' ? 'rest' : 'deep work'} block${row.start ? ` for ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${row.status === 'open' || row.status === 'card_unconfirmed' ? 'waiting on them' : row.status === 'done' ? 'they said yes' : row.status === 'skipped' ? 'they said no' : row.status}`).join('\n');
+  ).toArray().map(row => `- ${row.block === 'rest' ? 'rest' : 'deep work'} block${row.start ? ` for ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${outcome(row.status)}`).join('\n');
+};
+
+// CAPACITY_BUDGET: the moves Waldo proposed lately, with the item's name, so one the owner turned down is not offered again.
+export const recentMoves = (sql: Sql, now: number, timezone: string, days = 14): string => {
+  if (!sql.exec('PRAGMA table_info(ledger)').toArray().length) return '';
+  return sql.exec<{ title: string | null; status: string; created_at: number; start: string | null }>(
+    `SELECT json_extract(payload_json, '$.title') AS title, status, created_at, json_extract(payload_json, '$.start') AS start FROM ledger
+     WHERE kind = 'calendar_change' AND json_extract(payload_json, '$.action') = 'move' AND created_at >= ? AND created_at <= ? ORDER BY created_at`,
+    now - days * 24 * 60 * MINUTE_MS, now,
+  ).toArray().map(row => `- move of "${fence(row.title ?? 'an event')}"${row.start ? ` to ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${outcome(row.status)}`).join('\n');
 };
 
 export type CapacityOutcome = 'kept' | 'unchanged' | 'held' | 'retired' | 'owner_held' | 'set_aside' | 'health_unknown' | 'health_notes_off' | 'no_memory';

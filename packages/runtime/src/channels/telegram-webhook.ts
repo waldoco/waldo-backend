@@ -69,6 +69,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   CAPACITY_PLAN?: string;
   // "1" has the Close name tomorrow's best hours for focus and put what would protect them on approval cards. Off unless "1".
   TOMORROW_TODAY?: string;
+  // "1" has the planning Brief, with CAPACITY_PLAN on, move what can give on an overloaded day to a lighter day this week, on its one card. Off unless "1".
   CAPACITY_BUDGET?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
