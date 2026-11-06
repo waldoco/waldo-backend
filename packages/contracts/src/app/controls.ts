@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { APP_SESSION_LABEL_MAX_V1, appSessionKindV1Schema } from './core';
 import { appProactiveSurfaceV1Schema } from './onboarding';
 import { messagingSurfaceV1Schema } from './surfaces';
 import { appWhyV1Schema } from './why';
@@ -166,6 +167,9 @@ export const APP_CONTROLS_DAY_CARD_REVISION = 9;
 // Controls revision 14 (`controls=14`): a day card whose writing proposed changes carries why, the steps behind those
 // proposals ("Why this changed", ./why), the same steps their approval cards carry. Below 14 it is never sent.
 export const APP_CONTROLS_WHY_REVISION = 14;
+// Controls revision 19 (`controls=19`): each signed-in session on the connections view says what device holds it (kind,
+// label) and when it was last used (last_active). See the sessions item below.
+export const APP_CONTROLS_SESSION_DEVICE_REVISION = 19;
 const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
@@ -263,7 +267,13 @@ export const appControlConnectionsDataV1Schema = z.strictObject({
   granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
   apps: z.array(appConnectorTileV1Schema).max(64).optional(),
   telegram: z.strictObject({ linked: z.boolean(), unlinkAvailable: z.boolean() }),
-  sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean(), session_ref: sessionRef.optional() })) }),
+  // Controls revision 19: every item carries kind, label once the device is known (the app's own description of itself, or
+  // the browser and system a web sign-in named, e.g. "Chrome on macOS"), and last_active, when that session last reached
+  // Waldo, as ISO time. A session from before revision 19's backend, or one whose app never said, reads kind unknown with
+  // no label. None of the three is part of the view's revision. Builds below 19 never receive them.
+  sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean(), session_ref: sessionRef.optional(),
+    kind: appSessionKindV1Schema.optional(), label: text.min(1).max(APP_SESSION_LABEL_MAX_V1).optional(), last_active: text.optional() })
+    .refine(item => item.label === undefined || item.kind !== undefined, { error: 'label comes with kind', path: ['label'] })) }),
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
     .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });

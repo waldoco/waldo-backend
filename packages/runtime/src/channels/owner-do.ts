@@ -120,6 +120,8 @@ import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } 
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, fromAnotherSite, OWNER_COOKIE, presenceRecheck, sessionFamily, signedInRecently, type OwnerSettings } from '../identity/console-auth';
+import { APP_SESSION_DEVICE_PATH, SESSION_DEVICE_PATH, appSessionDevice, applySessionDeviceNote, sessionDevices } from '../identity/session-device';
+import { appSessionDeviceRequestV1Schema, appSessionDeviceResultV1Schema } from '../../../contracts/src/app/core';
 import { consoleStepUpRefusal } from './console-step-up';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
@@ -1884,6 +1886,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(knownPrincipal!==undefined&&knownPrincipal!==principal)return fail();
     this.ctx.storage.kv.put('do_name',name);if(knownPrincipal===undefined)this.ctx.storage.kv.put('owner_principal_ref',principal);
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
+    // Which device holds this session is account metadata, not the owner's content, so the agreements hold does not wait on it.
+    if(path===APP_SESSION_DEVICE_PATH){
+      if(request.method!=='PUT')return fail(405);
+      const asked=appSessionDeviceRequestV1Schema.safeParse(await request.json().catch(()=>null)),device=asked.success?appSessionDevice(asked.data):null;
+      if(!device)return Response.json({error:'invalid_request'},{status:400,headers:{'cache-control':'no-store'}});
+      sessionDevices(this.ctx.storage.kv).record(hash,device);
+      return Response.json(appSessionDeviceResultV1Schema.parse(device),{headers:{'cache-control':'no-store'}});
+    }
     // An owner who joined openly writes nothing outside the first run and the consents until they accept the agreements.
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
@@ -1951,7 +1961,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
             chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const listed=await auth.listSessions(name),rows=listed.filter(row=>row.rotated_to===null),devices=sessionDevices(this.ctx.storage.kv);devices.keepOnly(new Set(listed.map(row=>row.session)));return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`,device:devices.read(row.session),last_active:new Date(Date.parse(row.last_seen_at)).toISOString()}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
             cardsWhy:(date:string)=>dayCardsWhy(dayPlanBook(this.ctx.storage.sql),date),
             days:(date?:string)=>this.appDays(runtime,name,hash,date),
@@ -2089,6 +2099,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.ctx.storage.kv.put('do_name', doName);
     }
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant(sessionCookie(request)));
+    if (new URL(request.url).pathname === SESSION_DEVICE_PATH && request.method === 'POST') return new Response(null, { status: applySessionDeviceNote(this.ctx.storage.kv, await request.json().catch(() => null)) ? 204 : 400 });
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
     if (new URL(request.url).pathname === '/signup-profile' && request.method === 'POST') return this.signupProfile(body);

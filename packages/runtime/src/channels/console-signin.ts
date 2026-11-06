@@ -18,6 +18,7 @@ import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut 
 import { fenceSession, ownerSessionHash } from './session-fence';
 import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { markOpenOwner } from '../identity/open-owner-hold';
+import { noteBrowserSession } from '../identity/session-device';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -264,6 +265,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event(hop, false, 'session_unavailable');
       return withCookies(retry('Sign-in is having trouble. Try again in a moment.'));
     }
+    await noteBrowserSession(owners, doName, ownerCookieValue, request);
     const terminal = target && !redirectReturnTarget([target]) ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
     const headers = new Headers(terminal?.headers ?? { location: target ?? CONSOLE_PATH });
     headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, await grant.text()));

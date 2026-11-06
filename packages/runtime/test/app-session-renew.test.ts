@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
-import { appRenewResultV1Schema, appSessionV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
+import { appRenewResultV1Schema, appSessionDeviceResultV1Schema, appSessionV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
 import { OwnerDO } from '../src/channels/owner-do';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
@@ -18,7 +18,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 beforeEach(() => { directory.rows.clear(); directory.migrated = true; directory.calls = []; directory.pushRevoked = []; });
 afterEach(() => { vi.restoreAllMocks(); });
 
-const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, state: DurableObjectState, owner: OwnerDO) => Promise<void>) =>
+type Extra = { method?: string; headers?: Record<string, string> };
+const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string, extra?: Extra) => Promise<Response>, state: DurableObjectState, owner: OwnerDO) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_unused, state) => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY);
@@ -62,8 +63,8 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
       RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
     const owner = new OwnerDO(state, settings as never); state.storage.kv.put('do_name', name); state.storage.kv.put('origin', 'https://app.fixture.invalid');
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => owner.fetch(r) }) } } as never;
-    const app = async (path: string, body?: unknown, credential?: string) => (await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST',
-      headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed))!;
+    const app = async (path: string, body?: unknown, credential?: string, extra: Extra = {}) => (await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: extra.method ?? (body === undefined ? 'GET' : 'POST'),
+      headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}), ...extra.headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed))!;
     try { await work(app, state, owner); } finally { (owner as any).ownerBrowser.stop(); await (owner as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); }
   });
 const signIn = async (app: (path: string, body?: unknown) => Promise<Response>) => {
@@ -208,5 +209,32 @@ it('a session renewed three hours after its sign-in still needs a new code to de
     const deleted = await app('/actions', { view: 'account', action: 'account.delete', confirmation: 'DELETE', revision: account.revision, request_id: 'renew-delete-0001' }, next.credential);
     expect([deleted.status, await deleted.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
     expect((await app('/controls?view=day', undefined, next.credential)).status).toBe(200);
+  });
+});
+
+it('names each session by the device that holds it, keeps the name through a renewal, and shows it from controls revision 19', async () => {
+  await withOwner('session-device', async (app) => {
+    const phone = await signIn(app), tablet = await signIn(app);
+    const put = (body: unknown, credential: string) => app('/session/device', body, credential, { method: 'PUT' });
+    const named = await put({ platform: 'ios', model: 'iPhone 17 Pro\u202e\u0000', os_version: '26.0.1' }, phone.credential);
+    expect(named.status).toBe(200);
+    expect(appSessionDeviceResultV1Schema.parse(await named.json())).toEqual({ kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
+    for (const refused of [{ platform: 'ios', model: '\u0007\u200b', os_version: '26' }, { platform: 'ios', model: 'iPhone', os_version: '26', name: "Sam's iPhone" }, { platform: 'web', model: 'Mac', os_version: '15' }, { platform: 'ios', model: 'x'.repeat(61), os_version: '26' }])
+      expect((await put(refused, tablet.credential)).status).toBe(400);
+    expect((await app('/session/device', { platform: 'ios', model: 'iPhone', os_version: '26' }, tablet.credential)).status).toBe(405);
+    expect((await put({ platform: 'ios', model: 'iPhone', os_version: '26' }, 'not-a-credential-at-all-000000')).status).toBe(401);
+    type Item = { current: boolean; session_ref?: string; kind?: string; label?: string; last_active?: string };
+    const read = async (credential: string, controls?: number) => appControlProjectionV1Schema.parse(await (await app('/controls?view=connections', undefined, credential, controls ? { headers: { 'x-waldo-app-contract': `controls=${controls}` } } : {})).json());
+    const items = (view: { data: unknown }) => (view.data as { sessions: { items: Item[] } }).sessions.items;
+    for (const older of [undefined, 18]) for (const item of items(await read(phone.credential, older))) expect(Object.keys(item).sort()).toEqual(['current', 'signed_in', 'until']);
+    const shown = await read(phone.credential, 19);
+    expect(shown.revision).toBe((await read(phone.credential)).revision);
+    const mine = items(shown).find(item => item.current)!, other = items(shown).find(item => !item.current)!;
+    expect(mine).toMatchObject({ session_ref: phone.session_ref, kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
+    expect(Date.parse(mine.last_active!)).toBeGreaterThan(Date.now() - HOUR);
+    expect(other).toMatchObject({ session_ref: tablet.session_ref, kind: 'unknown' });
+    expect(other.label).toBeUndefined();
+    const next = await renew(app, phone.credential);
+    expect(items(await read(next.credential, 19)).find(item => item.current)).toMatchObject({ session_ref: next.session_ref, kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
   });
 });

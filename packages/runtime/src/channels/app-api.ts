@@ -24,6 +24,7 @@ import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin'
 import { APP_RATING_SUFFIX } from './app-rating';
 import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
 import { markOpenOwner } from '../identity/open-owner-hold';
+import { APP_SESSION_DEVICE_PATH, credentialSessionHash, noteSessionDevice } from '../identity/session-device';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -326,7 +327,18 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.renewAppCredential(who.doName, sessionId); } catch { return fail(503); }
     if (!credential) return fail(401);
+    const [from, to] = await Promise.all([linkCodeHash(sessionId), credentialSessionHash(credential)]);
+    if (to) await noteSessionDevice(owners, who.doName, { session: to, from });
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
+  }
+
+  if (url.pathname === APP_SESSION_DEVICE_PATH) {
+    if (request.method !== 'PUT') return fail(405);
+    const body = await readBoundedBody(request, 1024);
+    if (!body) return fail(413);
+    const forwarded = new Request(`https://telegram-owner${APP_SESSION_DEVICE_PATH}`, { method: 'PUT', body,
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'content-type': 'application/json' } });
+    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
   }
 
   // One read for the surfaces outside the app: the owner's own calendar day, approvals and day view, each asked of the Durable

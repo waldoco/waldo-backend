@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_SESSION_DEVICE_REVISION, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -82,6 +82,14 @@ const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBui
 };
 const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
 // The owner's Google sign-in account while it can be connected and is not yet: left out when the directory cannot say.
+// Controls revision 19 says which device holds each session, when it was last used, and its session_ref for session.revoke.
+// The items are the view's sessions in order. Outside the revision, like the sign-in account: last_active moves with every use.
+type SessionItems={until:string;count:number;items:readonly {signed_in:string;until:string;current:boolean}[]};
+const sessionsForRevision=(request:Request,sessions:SessionItems,view:ConsoleView|undefined)=>{
+  if(!view||appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_SESSION_DEVICE_REVISION)return {};
+  return {sessions:{...sessions,items:sessions.items.map((item,index)=>{const row=view.sessions[index];return {...item,...(row?.ref?{session_ref:row.ref}:{}),
+    kind:row?.device?.kind??'unknown',...(row?.device?.label?{label:row.device.label}:{}),...(row?.last_active?{last_active:row.last_active}:{})};})}};
+};
 const googleSignin=async(env:PhoneSmsEnv,owner:string,google:{connectAvailable:boolean;accounts:readonly {email:string}[]})=>{
   if(!google.connectAvailable)return {};
   const signin=await ownerGoogleSignin(env,owner);
@@ -211,7 +219,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
-    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)}}:{};
+    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)},...sessionsForRevision(request,(day.data as {sessions:SessionItems}).sessions,built)}:{};
     const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }

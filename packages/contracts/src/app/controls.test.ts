@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_SESSION_LABEL_MAX_V1 } from './core';
+import { APP_CONTROLS_SESSION_DEVICE_REVISION, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -365,6 +366,20 @@ describe('signing out another device from the app', () => {
     expect(appControlActionV1Schema.safeParse({ ...revoke, value: 'c'.repeat(64) }).success).toBe(false);
     expect(appControlActionV1Schema.safeParse({ ...revoke, view: 'day' }).success).toBe(false);
     expect(appControlActionV1Schema.safeParse({ ...revoke, id: 'telegram' }).success).toBe(false);
+  });
+});
+
+describe('what device holds each session (controls revision 19)', () => {
+  const item = { signed_in: '2026-11-01T09:00:00Z', until: '2026-12-01T09:00:00Z', current: false, session_ref: `sess_${'d'.repeat(64)}` };
+  const listed = (items: object[]) => projection({ ...connections, sessions: { until: '2026-12-01T09:00:00Z', count: items.length, items } });
+  it('takes kind, label and last_active, and reads an unnamed session as unknown', () => {
+    expect(APP_CONTROLS_SESSION_DEVICE_REVISION).toBe(19);
+    for (const extra of [{ kind: 'phone', label: 'iPhone 17 Pro · iOS 26', last_active: '2026-11-06T08:00:00.000Z' }, { kind: 'computer', label: 'Chrome on macOS' }, { kind: 'unknown' }, {}])
+      expect(appControlProjectionV1Schema.safeParse(listed([{ ...item, ...extra }])).success).toBe(true);
+  });
+  it('refuses a label without a kind, an empty or overlong label, and a kind outside the four', () => {
+    for (const extra of [{ label: 'Chrome on macOS' }, { kind: 'phone', label: '' }, { kind: 'phone', label: 'x'.repeat(APP_SESSION_LABEL_MAX_V1 + 1) }, { kind: 'watch' }])
+      expect(appControlProjectionV1Schema.safeParse(listed([{ ...item, ...extra }])).success).toBe(false);
   });
 });
 
