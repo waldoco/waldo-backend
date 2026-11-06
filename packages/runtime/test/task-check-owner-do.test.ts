@@ -108,3 +108,17 @@ it('the owner asks how a task is going: the turn calls check_task once, reads it
   });
   expect(wire.telegramSent).toBe(0);
 });
+
+it('the in-flight line rides in this turn\'s context with the task\'s age, never in the static system prompt', async () => {
+  await withAppOwner('task-inflight-owner', async ({ state, call }) => {
+    model.jobId = running(state);
+    const sent = await call('POST', '/chat/main/messages', { client_message_id: 'inflight-client-01', text: 'Anything new?' });
+    expect(sent.status, JSON.stringify(sent.body)).toBe(202);
+    await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${sent.body.message_id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+    const request = model.requests.map(text => JSON.parse(text) as { system: string; messages: { content: unknown }[] }).find(r => JSON.stringify(r.messages).includes('Anything new?'))!;
+    const line = `- ${model.jobId} (reader, 3 steps so far, started under a minute ago): title "Vendor research"`;
+    expect(JSON.stringify(request.messages.at(-1)!.content)).toContain(JSON.stringify(line).slice(1, -1));
+    expect(request.system).not.toContain('Background tasks you started');
+    expect(request.system).not.toContain(model.jobId);
+  });
+});
