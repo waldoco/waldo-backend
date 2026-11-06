@@ -55,6 +55,33 @@ function runDoMigrationGuardOn(root, baseRef) {
   return spawnSync('node', args, { encoding: 'utf8', env });
 }
 
+function runDoMigrationGuardForPullRequest(root, baseBranch) {
+  const env = { ...process.env, GITHUB_BASE_REF: baseBranch };
+  delete env.WALDO_DO_MIGRATION_BASE_REF;
+  return spawnSync('node', [DO_MIGRATION_GUARD, '--root', root], { encoding: 'utf8', env });
+}
+
+// GitHub's pull_request checkout: the PR head merged onto the base as it stood (baseRef), while origin/<base> has since moved
+// on by one commit. checkout picks what HEAD is: the merge ref, the PR head itself, or the PR head merged with base the other
+// way round (the base as second parent).
+function runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, checkout) {
+  runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+  writeFileSync(join(root, 'later-on-base.txt'), 'later\n');
+  runFixtureGit(root, ['add', '.']);
+  runFixtureGit(root, ['commit', '--quiet', '-m', 'later on base']);
+  runFixtureGit(root, ['update-ref', 'refs/remotes/origin/beta-mvp', runFixtureGit(root, ['rev-parse', 'HEAD'])]);
+  if (checkout === 'merge-ref') {
+    runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+    runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge ref', headRef]);
+  } else if (checkout === 'head-merged-with-base') {
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+    runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge base into head', 'refs/remotes/origin/beta-mvp']);
+  } else {
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+  }
+  return runDoMigrationGuardForPullRequest(root, 'beta-mvp');
+}
+
 function runDoMigrationGuardWithoutFixtureMode(root) {
   const env = { ...process.env };
   delete env.GITHUB_BASE_REF;
@@ -738,6 +765,60 @@ if (!reportsClean(inlineCommentDoMigration)) {
     'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on inline comment:\n' +
       inlineCommentDoMigration.stderr,
   );
+  failures += 1;
+}
+
+const FIRST_ONLY = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`;
+const FIRST_RESERVED = { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }] };
+const appendsSecond = [
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }] },
+];
+const rewritesFirst = [
+  `export const FIRST: DoMigration = { version: 1, name: 'rewritten', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'rewritten' }] },
+];
+
+const staleMergeRefAppend = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...appendsSecond, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'merge-ref'));
+if (!reportsClean(staleMergeRefAppend)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-migration-lineage FALSE POSITIVE on a pull request merged onto a base that has since moved:\n${staleMergeRefAppend.stderr}`,
+  );
+  failures += 1;
+}
+
+const staleMergeRefRewrite = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...rewritesFirst, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'merge-ref'));
+if (staleMergeRefRewrite.status === 0 || !staleMergeRefRewrite.stderr.includes('historical migration 1 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED historical rewrite in a stale pull request merge\n');
+  failures += 1;
+}
+
+for (const checkout of ['head', 'head-merged-with-base']) {
+  const staleOtherHead = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...appendsSecond, (root, baseRef, headRef) =>
+    runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, checkout));
+  const expected = checkout === 'head' ? 'must be a strict ancestor of HEAD' : null;
+  if (expected ? staleOtherHead.status === 0 || !staleOtherHead.stderr.includes(expected) : !reportsClean(staleOtherHead)) {
+    process.stderr.write(
+      `guards-selftest: guard-do-migration-lineage wrong on a pull request checkout of ${checkout} with a moved base:\n${staleOtherHead.stderr}`,
+    );
+    failures += 1;
+  }
+}
+
+// A PR head that merged the base in has its own earlier commit as first parent; that commit is not a base to check against.
+const headMergedWithBaseRewrite = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...rewritesFirst, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'head-merged-with-base'));
+if (headMergedWithBaseRewrite.status === 0 || !headMergedWithBaseRewrite.stderr.includes('historical migration 1 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED historical rewrite in a PR head that merged its base\n');
   failures += 1;
 }
 
