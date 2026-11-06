@@ -25,7 +25,7 @@ const app = (run: (o: { read(): Call; act(body: Record<string, unknown>): Call; 
     });
   });
 const receipt = (body: Record<string, unknown>) => appControlResultV1Schema.parse(body).receipt;
-const improve = (value: string, revision: unknown, request_id: string, notice = VERSION) => ({ view: 'agreements', action: 'improve_waldo.set', value, notice, revision, request_id });
+const improve = (value: string, revision: unknown, request_id: string, notice: string = VERSION) => ({ view: 'agreements', action: 'improve_waldo.set', value, notice, revision, request_id });
 
 it('is off until the owner gives it, then gives, withdraws and records each choice with receipts the app can read back', async () => {
   await app(async ({ read, act, storage }) => {

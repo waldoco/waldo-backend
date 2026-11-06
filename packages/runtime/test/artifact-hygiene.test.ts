@@ -76,6 +76,29 @@ describe('artifact hygiene quarantine', () => {
   });
 });
 
+describe('separators between a code keyword and its code', () => {
+  it.each([
+    ['Your code: 482913'],
+    ['Your code is 482913'],
+    ['Your code is: 482913'],
+    ['Your code - 482913'],
+    ['Your code is - 482913'],
+    ['Your code is : 482913'],
+    ['Your code-482913'],
+    ['Your login code is: 482913'],
+    ['Your login code is - 482913'],
+    ['OTP is: #482913'],
+  ])('relays and hides the code in %s', (text) => {
+    const { text: redacted, artifacts } = extractArtifacts(text);
+    expect(artifacts).toEqual([{ kind: 'otp', value: '482913' }]);
+    expect(redacted).not.toContain('482913');
+  });
+
+  it('takes digits after "code -" as a code even when the hyphen could be a minus sign', () => {
+    expect(extractArtifacts('error code -4821').artifacts).toEqual([{ kind: 'otp', value: '4821' }]);
+  });
+});
+
 describe('extractArtifacts (owner-ruled OTP parity)', () => {
   it('captures the bare code from the surrounding phrase, deduped by value', () => {
     const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your otp is 123456.');

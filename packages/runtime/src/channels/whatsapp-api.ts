@@ -519,7 +519,8 @@ export const burstOwnerMessage = (update: WaSyntheticUpdate | null): boolean => 
 // A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier
 // than Meta's first attempt, so a retry cannot outlive the record. A message is marked as it is accepted
 // (at-most-once): a replayed turn could repeat effects. A message waits in the owner's inbox until its turn runs; a turn that
-// started and failed is reported to the owner by a fixed notice (whatsappNotice), since it may have had effects.
+// started and failed is reported to the owner by a fixed notice (whatsappNotice), since it may have had effects. Meta gives
+// every message an id; one without an id could not be told apart from its redelivery, so it is never claimed or run.
 export const WHATSAPP_PARTIAL_NOTICE = 'I may have only partly handled your last message. Check what went through before you send it again.';
 export const WAMID_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 type WamidKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
@@ -527,7 +528,7 @@ export const claimNewWhatsAppMessages = <M extends Readonly<{ id?: string }>>(kv
   for (const [key, seen] of [...kv.list<number>({ prefix: 'wamid:' })]) if (now - seen >= WAMID_RETENTION_MS) kv.delete(key);
   const fresh: M[] = [];
   for (const message of messages) {
-    if (typeof message.id !== 'string' || message.id === '') { fresh.push(message); continue; }
+    if (typeof message.id !== 'string' || message.id === '') continue;
     const key = `wamid:${message.id}`;
     if (kv.get<number>(key) !== undefined) continue;
     kv.put(key, now);
