@@ -77,6 +77,9 @@ describe('phone numbers outside the US', () => {
     ['call +91-9876543210 now', 'call [REDACTED_PHONE] now'],
     ['call +91 98765-43210.', 'call [REDACTED_PHONE].'],
     ['call 98765 43210 now', 'call [REDACTED_PHONE] now'],
+    ['call 098765 43210 now', 'call [REDACTED_PHONE] now'],
+    ['call 09876543210 now', 'call [REDACTED_PHONE] now'],
+    ['call+447911123456', 'call[REDACTED_PHONE]'],
     ['tel:+49 151 23456789;', 'tel:[REDACTED_PHONE];'],
     ['wa.me/+971501234567', 'wa.me/[REDACTED_PHONE]'],
   ])('redacts the number in %j', (input, expected) => {
@@ -112,6 +115,9 @@ describe('phone numbers outside the US', () => {
     'call 98765-43210 now',
     'the sum 1+23456789 is not a number',
     'a +12345678 points bonus',
+    'id 00123456789012',
+    'ref 06123456789012',
+    'ref 0987654 32100',
   ])('leaves %j alone', text => {
     expect(bodyOf(run(text, 'send_message'))).toBe(text);
   });

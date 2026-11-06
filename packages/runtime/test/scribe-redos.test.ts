@@ -71,6 +71,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'a plus sign, then a long run of digits': n => '+' + '1'.repeat(n),
   'a plus sign and digits with brackets': n => '+4 (('.repeat(n / 6),
   'five-digit phone groups': n => '98765 '.repeat(n / 6),
+  'zero-led five-digit phone groups': n => '098765 '.repeat(n / 7),
+  'a long run of zeros, then a national number': n => '0'.repeat(n) + '98765 43210',
   'five-digit phone groups with hyphens': n => '98765-'.repeat(n / 6),
   'a token header glued to a letter, repeated': n => 'aeyJ'.repeat(n / 4),
   'a token header glued to an underscore, then its segments': n => '_eyJ'.repeat(n / 4) + '.aaaa.aaaaaaaa',
