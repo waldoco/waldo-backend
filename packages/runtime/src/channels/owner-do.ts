@@ -1,4 +1,6 @@
 import { appControlsRequest } from './app-controls';
+import { appGooglePicture, googlePictures } from './app-google-picture';
+import { wearablesCatalogue } from '../health/wearables';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
@@ -107,7 +109,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type PinBlock } from '../memory/claims';
-import { APP_CLAIM_TEXT_MAX_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_GOOGLE_PICTURE_PATH_V1, APP_NODE_CORRECTION_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
@@ -450,7 +452,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating' | 'app_calendar_day', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating' | 'app_calendar_day' | 'app_google_picture', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -1947,6 +1949,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
             chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',
+            googlePictures:async()=>googlePictures(await this.ctx.storage.get<Record<string,GoogleProfileFact>>('google:profiles')),
+            wearables:()=>wearablesCatalogue({whoopConfigured:whoopConfig(this.env)!==null,whoop:async()=>{const whoop=this.providerOwner();return {state:(await whoop.status(true)).state,connected_at:whoop.connectedAt()};}}),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView,revised:boolean)=>this.appCardsLatest(view,name,hash,revised),
@@ -1967,6 +1971,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
+    }
+    if(path.startsWith(APP_GOOGLE_PICTURE_PATH_V1+'/')){
+      try{return await appGooglePicture(request,async()=>googlePictures(await this.ctx.storage.get<Record<string,GoogleProfileFact>>('google:profiles')));}catch(error){logAppReadFailure('app_google_picture','read',error);return fail(503);}
     }
     if(path===APP_CALENDAR_DAY_PATH){
       let step='read';

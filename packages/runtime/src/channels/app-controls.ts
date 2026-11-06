@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -17,6 +17,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
+import { googlePicturePaths } from './app-google-picture';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
 export type AppControlsHost = Readonly<{
@@ -52,6 +53,10 @@ export type AppControlsHost = Readonly<{
   chatLinks?():Promise<ChatLinks>;
   // Whether this deployment serves the claim controls of controls revision 15 (MEMORY_CLAIM_CONTROLS); absent means it does not.
   claimControls?:boolean;
+  // Controls revision 17: each connected Google account's picture address, by account id; absent means none are served.
+  googlePictures?():Promise<ReadonlyMap<string,string>>;
+  // Controls revision 17: every source of body readings Waldo lists on Connections; absent means the view carries none.
+  wearables?():Promise<readonly AppWearableV1[]>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -120,6 +125,17 @@ const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
 const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
 const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit','claim.confirm':'spot.confirm','claim.forget':'spot.forget','claim.dismiss':'spot.dismiss','claim.quiet':'spot.quiet','claim.unquiet':'spot.unquiet'};
+// Controls revision 17 gives each Google account its picture and lists the wearables; builds below it never receive either.
+// Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
+const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
+const withPictures=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[])=>{
+  const paths=await (async()=>{try{return await googlePicturePaths(await host.googlePictures?.()??new Map());}catch{return new Map<string,string>();}})();
+  return accounts.map(account=>({...account,picture:paths.get(account.id)??null}));
+};
+const wearablesOf=async(host:AppControlsHost)=>{
+  if(!host.wearables)return {};
+  try{return {wearables:await host.wearables()};}catch{return {};}
+};
 // Controls revision 15's claim controls are served to a build that asks for them, on a deployment that has them on.
 const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControls===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
 const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
@@ -210,8 +226,9 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv,host.bothDefault),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
-    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
-    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)}}:{};
+    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
+    const catalogue=google!==null&&listsCatalogue(request);
+    const connections=google?{google:{...google,...(catalogue?{accounts:await withPictures(host,google.accounts)}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
     const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }

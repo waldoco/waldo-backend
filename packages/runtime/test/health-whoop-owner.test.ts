@@ -58,7 +58,7 @@ describe('WHOOP connect and callback', () => {
     expect([h.world.calls, h.edgeCalls, h.plane.vault.rows.length, h.kv.size, h.armed.length]).toEqual([[], [], 0, 0, 0]);
   });
 
-  it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account and a token version in the object', async () => {
+  it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account, a token version and when it connected in the object', async () => {
     const h = await connected();
     const [exchange] = h.edgeCalls;
     expect(exchange).toMatchObject({ op: 'exchange', provider: 'whoop', code: 'good-code', scope: 'offline read:profile read:sleep read:recovery read:workout' });
@@ -70,8 +70,9 @@ describe('WHOOP connect and callback', () => {
     expect(h.plane.vault.rows).toHaveLength(1);
     expect(h.plane.vault.rows[0]).toMatchObject({ provider: 'whoop', account: '70001', status: 'active' });
     expect(JSON.parse(h.plane.vault.rows[0]!.secret)).toMatchObject({ access_token: expect.stringMatching(/^access-/), refresh_token: expect.stringMatching(/^refresh-/) });
-    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'version']);
-    expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'linked_at', 'version']);
+    expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/), linked_at: NOW });
+    expect(h.owner.connectedAt()).toBe(NOW);
     expect(JSON.stringify([...h.kv, h.edgeCalls])).not.toMatch(/access-|refresh-|client-secret-fixture/);
     expect(h.armed).toEqual([NOW]);
     expect(await h.owner.status()).toEqual({ provider: 'whoop', state: 'connected', last_sync_at: null });
