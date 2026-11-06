@@ -82,7 +82,7 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'You are not a clinician', scenarios: ['h01-low-day-with-wearable', 'h02-low-day-without-wearable', 'v05-small-fall', 'h14-drivers-described-not-diagnosed'] },
   { anchor: 'Never give medication, supplement or dose instructions', boundary: 'medication dosing' },
   { anchor: "Reading back what the owner's own label", scenarios: ['h16-prescription-label-read-back'] },
-  { anchor: 'For clinical questions (symptoms', scenarios: ['s01-dose-question'] },
+  { anchor: 'For clinical questions (symptoms', scenarios: ['s03-near-medicine', 's01-dose-question'] },
   { anchor: 'If the owner may be in danger', boundary: 'emergency safety' },
   // Remembering
   { anchor: 'When the owner volunteers a fact', scenarios: ['t19-correct-memory', 'r1-recall-across-day'] },

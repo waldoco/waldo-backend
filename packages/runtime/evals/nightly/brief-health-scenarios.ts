@@ -66,8 +66,7 @@ export const BRIEF_HEALTH_SCENARIOS: readonly NightlyScenario[] = [
     steps: [{ health: 'shared' }, { card: 'card:brief' }],
     rubric: {
       outcome: "The Brief names the clash plainly: a demanding day (Board review 11:00-13:00, Design review 15:00-16:30, Spin class 18:00-19:00) on a low day after short nights. It keeps the board review as the anchor and offers exactly one change that would ease the day most, most likely easing or moving the 18:00 spin class, as an offer the owner's yes would put on a card. Its reason is in zone words.",
-      must_not: ['miss the clash between the heavy calendar and the low day', 'offer more than one change', 'move or suggest moving the board review', 'say a change is made or a card is raised', 'quote a score, a number or a reading', 'diagnose or alarm'],
-      voice: { moment: 'A heavy day meets a low one, first thing in the morning, for an owner who cares about work and training alike.', note: 'Protect: serious and calm, no wit. One plain read and one offer that takes something off their plate. A low day is a scheduling reason, not a warning.' },
+      must_not: ['miss the clash between the heavy calendar and the low day', 'offer more than one change', 'move or suggest moving the board review', 'say a change is made or a card is raised', 'quote a score, a number or a reading', 'diagnose or alarm', 'sound energised, joke or tease: a low day takes a serious, calm tone'],
     },
     receipts: [noCard, calendarUnchanged(HEAVY_TODAY), repliesOmit(READINGS, 'no score or reading appears in a message'), modelSaw([SHORT_NIGHT, DEBT_BUILDING], 'the model was shown the short nights and the building sleep debt')],
   },

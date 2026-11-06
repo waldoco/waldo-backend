@@ -344,7 +344,7 @@ describe('the voice world', () => {
 
 describe('the nightly catalogue', () => {
   it('holds the research tasks, the owner\'s two, the voice and safety set and the runnable errands, at the gate\'s floor', () => {
-    expect(VOICE_SCENARIOS).toHaveLength(14);
+    expect(VOICE_SCENARIOS).toHaveLength(15);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
     // (h1-health-change-card), the stale health reading case (h2-stale-health-reading), the look-up case (k1-owner-lookup),

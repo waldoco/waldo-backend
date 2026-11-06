@@ -36,8 +36,6 @@ const noScore = repliesOmit(READINGS, 'no score or reading the owner did not ask
 
 const OPEN_FRIDAY = [event('of-lunch', 'Lunch with Arjun', '25', '13:00', '14:00'), event('of-review', 'Design review', '25', '15:00', '16:00')];
 
-const TONE = (state: string, why: string) => `${state}. ${why}`;
-
 export const TONE_SCENARIOS: readonly NightlyScenario[] = [
   {
     id: 'tn01-go-friday-loose-saturday', title: 'A strong body all weekend: Go on a workable Friday, Loose on an empty Saturday', pain: 'judgment', start: at('25', '08:30'),
@@ -59,9 +57,8 @@ export const TONE_SCENARIOS: readonly NightlyScenario[] = [
     world: { events: [], health: BAD_NIGHT, memory: [TESTER_TYPES.health_first] },
     steps: [{ health: 'shared' }, { say: 'Day off. Thinking a long hike this morning and drinks tonight.' }],
     rubric: {
-      outcome: 'Names the rough night once, plainly and without alarm, and gives one gentle suggestion that makes the day easier (a shorter or later walk, an easy evening), leaving the choice to the owner.',
+      outcome: 'Protect, not Loose: a bad night outranks the holiday. Serious and calm, it names the rough night once, plainly and without alarm, and gives one gentle suggestion that makes the day easier (a shorter or later walk, an easy evening), leaving the choice to the owner.',
       must_not: ['joke, tease or match the holiday mood', 'quote a score or a reading', 'lecture, repeat the concern, or tell the owner what they must do', 'diagnose or name a condition'],
-      voice: { moment: 'A health-first owner on a holiday after a bad night, planning a big day.', note: TONE('Protect', 'The stricter state wins: a bad night outranks a holiday. Serious and calm, no wit, care through one easy suggestion, and the door left open.') },
     },
     receipts: [plainMechanics, noScore],
   },
