@@ -235,6 +235,8 @@ import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-t
 import { deviceContextReadBook, getDeviceContextHandler } from '../tools/live/device-context';
 import { APP_DEVICE_CALENDAR_PATH, deviceCalendarBook, deviceCalendarRequest, type DeviceCalendarBook } from './device-calendar';
 import { phoneCalendarReader, queryPhoneCalendarHandler } from '../tools/live/phone-calendar';
+import { coverageFacts } from './coverage';
+import { dayShapingContext } from '../prompt/day-shaping';
 import { weatherTools } from '../tools/live/weather';
 import { cacheApiWeatherCache } from '../connectors/weatherkit';
 import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -2045,7 +2047,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const at={step:'context'},url=new URL(request.url);
       const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
       const shows=this.env.MEMORY_USED_SHOWN==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_MEMORY_USED_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
@@ -2053,7 +2055,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
   // approvals: the approvals revision the reading build declares, so a card kind it predates comes as words.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false) {
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false, chat = 1) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
@@ -2061,7 +2063,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
     // Main chat only, like ratings; each claim is read as it is now, so a forgotten one is gone from the answer.
     const used=memoryUsed&&thread===undefined?memoryUsedFor(memoryUsedBook(this.ctx.storage.sql),()=>[...claimStore(this.ctx.storage.sql).claims(),...claimStore(this.ctx.storage.sql).claims('promoted')],()=>heldTopicsOf(claimStore(this.ctx.storage.sql))):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used);
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals,chat),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used);
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
@@ -4745,6 +4747,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const updates = updateBook(storage.sql);
+    // How Waldo plans the real day (CALENDAR_COVERAGE, FREE_WINDOW_OFFERS): the facts and intent a planning turn reads. A health
+    // move is a candidate only while the owner shares their health and CAPACITY_PLAN is on; a read that fails counts as not shared.
+    const dayShaping = async (trace: string): Promise<string> => {
+      const coverage = this.env.CALENDAR_COVERAGE === '1', offers = this.env.FREE_WINDOW_OFFERS === '1';
+      if (!coverage && !offers) return '';
+      const protocols = offers && this.env.CAPACITY_PLAN === '1' && await healthContext.read(trace).then(read => read !== null && read !== 'unknown', () => false);
+      return dayShapingContext({ offers, protocols, coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone,
+        accounts: async () => await google.state(), readAt: id => updates.calendarReadAt(id),
+        pastEvents: async (email, from, to, limit) => { const reader = await google.client('calendar', undefined, undefined, email); return reader ? reader.events(from, to, limit, false) : null; },
+        phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null });
+    };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
     const armable = (_kind: ScheduleKind) => channel !== 'app' || identity.get<boolean>('timezone_confirmed') === true;
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
@@ -5909,7 +5922,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(interrupts ? { interruptions: interrupts } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
-        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n') }),
+        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'), shaping: await dayShaping('update-triage') }),
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
         // A done row is a record of something that ran (a draft), not a card waiting on the owner.
         cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
@@ -5939,7 +5952,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       book: interventions.book, limits: interventions.limits, timezone: () => clock.timezone, now: () => Date.now(),
       consent: reachesOut, quiet, closed: interventions.closed, transaction: work => storage.transactionSync(work),
       context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
-        cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))) }),
+        cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('intervention') }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
         responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', true)),
       cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
@@ -6040,10 +6053,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', ...(planning && this.env.CALENDAR_PLAN === '1' ? ['propose_calendar_plan' as const] : []), 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
+          const shaping = planning ? await dayShaping(trace) : '';
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
-          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null,
-            [capacityText, questText].filter(Boolean).join('\n\n') || undefined)).trim();
+          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '',
+            [shaping, capacityText, questText].filter(Boolean).join('\n\n') || undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);

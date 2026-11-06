@@ -112,6 +112,11 @@ export const updateBook = (sql: Sql) => {
       setState(`cursor:${source}`, to);
     },
     readAt(source: string): number | null { const value = state(`read:${source}`); return value === null ? null : Number(value); },
+    // When any of an account's calendars was last read by the delta reads, or the shared calendar watermark without them.
+    calendarReadAt(account: string): number | null {
+      const latest = sql.exec<{ at: number | null }>('SELECT max(CAST(value AS INTEGER)) AS at FROM watch_state WHERE substr(key, 1, ?) = ?', `read:cal:${account}:`.length, `read:cal:${account}:`).one().at;
+      return latest ?? (state('calendar_since') === null ? null : Number(state('calendar_since')));
+    },
     pendingAt(source: string): string | null { return state(`pending:${source}`); },
     pend(source: string, at: number): void { setState(`pending:${source}`, String(at)); },
     sourceDue(source: string, now: number): boolean {

@@ -43,6 +43,20 @@ export const replyQuickRepliesPartV1Schema = z.strictObject({
     .min(1).max(QUICK_REPLY_MAX_CHOICES).refine(choices => distinct(choices.map(choice => choice.id)), 'choice ids repeat'),
   fallback_text: fallbackTextV1Schema,
 });
+// A free-window offer (chat revision 9): a window that opens soon and the one thing Waldo suggests for it, as one line with
+// its answers. It always sits beside the calendar_change approval part it names, which carries the review, the digest and the
+// actions, so a build that cannot read this part still shows the full card. A build that reads it may show the line instead
+// and decides through that approval: approve adds the block, defer is "not now", skip is "keep it free".
+export const replyFreeWindowPartV1Schema = z.strictObject({
+  type: z.literal('free_window'),
+  approval_id: approvalIdV1Schema,
+  line: visibleText(200).regex(/^[^\n\r\u2028\u2029]*$/),
+  start: epochMsV1Schema,
+  end: epochMsV1Schema,
+  choices: z.array(z.strictObject({ action: z.enum(['approve', 'defer', 'skip']), label: visibleText(QUICK_REPLY_LABEL_MAX_CHARS) })).min(2).max(3)
+    .refine(choices => distinct(choices.map(choice => choice.action)), 'actions repeat'),
+  fallback_text: fallbackTextV1Schema,
+}).refine(offer => offer.end > offer.start, { error: 'the window ends after it starts', path: ['end'] });
 export const replyChartSeriesPartV1Schema = z.strictObject({
   type: z.literal('chart_series'), title: visibleText(120), unit: z.string().max(24),
   series: z.array(z.strictObject({

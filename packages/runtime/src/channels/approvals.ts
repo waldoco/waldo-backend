@@ -15,7 +15,10 @@ import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
 import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import type { z } from 'zod';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
+import { APP_CHAT_FREE_WINDOW_REVISION } from '../../../contracts/src/app/core';
+import { replyFreeWindowPartV1Schema } from '../../../contracts/src/app/parts';
 import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { addPlan, planOnCalendar, planReview, planSummary, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
@@ -553,10 +556,34 @@ const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
 const NOT_CHANGED_IN_APP = "It can't be changed in the Waldo app either. Ask me for a fresh one instead.";
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
+// A free-window offer (propose_calendar_change with offer free_window): a block for a window that opens soon. Its card asks its
+// one line and names its answers by what they do to the window: Do it adds the block, Not now lets it pass, Keep it free says
+// the owner wants the time left open.
+const OFFER_LABELS: Readonly<Partial<Record<AppApprovalPart['actions'][number], string>>> = { approve: 'Do it', defer: 'Not now', skip: 'Keep it free' };
+const QUESTION_CHARS = 120;
+const offerOf = (entry: LedgerRow): Readonly<{ line: string; start: number; end: number }> | null => {
+  if (entry.kind !== 'calendar_change') return null;
+  const p = JSON.parse(entry.payload_json) as Partial<Stored>;
+  if (p.offer !== 'free_window' || !p.start || !p.end || !p.reason) return null;
+  const line = p.reason.replace(/\s+/g, ' ').trim();
+  return { line: line.length > QUESTION_CHARS ? `${line.slice(0, QUESTION_CHARS - 1).trimEnd()}…` : line, start: Date.parse(p.start), end: Date.parse(p.end) };
+};
+const offerLabels = (actions: AppApprovalPart['actions']) => Object.fromEntries(actions.flatMap(action => OFFER_LABELS[action] ? [[action, OFFER_LABELS[action]!]] : []));
 const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
-  const review = appReview(entry);
+  const review = appReview(entry), offer = offerOf(entry);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
-    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text };
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text,
+    ...(offer ? { question: offer.line, labels: offerLabels(shown.actions) } : {}) };
+};
+// Chat revision 9's line for an offer's live card: the same approval, its answers in the order the owner reads them.
+export type AppFreeWindowPart = z.infer<typeof replyFreeWindowPartV1Schema>;
+const freeWindowPartOf = (entry: LedgerRow, part: AppApprovalPart): AppFreeWindowPart | null => {
+  const offer = offerOf(entry);
+  if (!offer) return null;
+  const choices = (['approve', 'defer', 'skip'] as const).filter(action => part.actions.includes(action)).map(action => ({ action, label: OFFER_LABELS[action]! }));
+  const parsed = replyFreeWindowPartV1Schema.safeParse({ type: 'free_window', approval_id: part.approval_id, line: offer.line, start: offer.start, end: offer.end, choices,
+    fallback_text: `${offer.line} ${choices.map(choice => choice.label).join(' / ')}` });
+  return parsed.success ? parsed.data : null;
 };
 // An app card approves only while today's app review still shows the full content; a stored flag alone never does.
 const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
@@ -2323,11 +2350,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 // state of each approval comes from the approvals list. One row that cannot render drops only its card.
 // withheld: the text of each live card whose kind the reading build's approvals revision predates. Such a build would drop the
 // part unread, so the card's words go in the message text instead, never a card hidden without a word.
-export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[] }>;
+export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[]; offers?: readonly AppFreeWindowPart[] }>;
 const UPDATE_TO_REVIEW = 'Update the Waldo app to review and approve it.';
-export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION) => (parentId: string): AppApprovalCards => {
+export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
-  const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [];
+  const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [], offers: AppFreeWindowPart[] = [];
   let dropped = 0;
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
@@ -2338,9 +2365,13 @@ export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROV
       const unread = waiting && !appApprovalKindShownAt(part.data.kind, approvalsRevision), text = unread ? `${part.data.fallback_text} ${UPDATE_TO_REVIEW}` : part.data.fallback_text;
       fallbacks.push(text);
       if (unread) withheld.push(text);
-      else if (waiting) live.push(part.data);
+      else if (waiting) {
+        live.push(part.data);
+        const offer = chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
+        if (offer) offers.push(offer);
+      }
     } catch { dropped++; }
   }
   if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
-  return withheld.length ? { live, fallbacks, withheld } : { live, fallbacks };
+  return { live, fallbacks, ...(withheld.length ? { withheld } : {}), ...(offers.length ? { offers } : {}) };
 };
