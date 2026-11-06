@@ -41,20 +41,26 @@ describe('the app naming its own session', () => {
     expect(appSessionDevice({ platform: 'ios', model: 'iPad Air 11-inch (M3)', os_version: '26.1', kind: 'tablet' })).toEqual({ kind: 'tablet', label: 'iPad Air 11-inch (M3) · iPadOS 26' });
     expect(appSessionDevice({ platform: 'android', model: 'Pixel 9 Pro', os_version: '15' })).toEqual({ kind: 'phone', label: 'Pixel 9 Pro · Android 15' });
   });
-  it('strips control, format and separator characters, and refuses a model left empty', () => {
-    expect(appSessionDevice({ platform: 'ios', model: '‮iPhone\u0000\n  17​ Pro ', os_version: '26' })?.label).toBe('iPhone 17 Pro · iOS 26');
-    expect(appSessionDevice({ platform: 'ios', model: '\u0007​‮ \t', os_version: '26' })).toBeNull();
+  it('strips control, format, lone surrogate and separator characters, and refuses a model left empty', () => {
+    expect(appSessionDevice({ platform: 'ios', model: '\u202eiPhone\u0000\n  17\u200b Pro\u2028', os_version: '26' })?.label).toBe('iPhone 17 Pro · iOS 26');
+    expect(appSessionDevice({ platform: 'ios', model: 'iPhone\ud800 17', os_version: '26' })?.label).toBe('iPhone 17 · iOS 26');
+    expect(appSessionDevice({ platform: 'ios', model: '\u0007\u200b\u202e \t', os_version: '26' })).toBeNull();
   });
 });
 
 describe('the owner object\'s record of each session\'s device', () => {
   it('records, carries a description to the renewed session, and drops sessions no longer listed', () => {
-    const { kv, map } = kvOf(), devices = sessionDevices(kv);
+    let clock = 1_000_000;
+    const { kv, map } = kvOf(), devices = sessionDevices(kv, () => clock);
     devices.record(A, { kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
     devices.record('not-a-hash', { kind: 'phone', label: 'x' });
     devices.carry(A, B); devices.carry(C, A);
     expect(devices.read(B)).toEqual({ kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
     expect(devices.read(A)).toEqual(devices.read(B));
+    // A description written after the list was read is kept until it is old enough to be sure its session is gone.
+    devices.keepOnly(new Set([B]));
+    expect([...map.keys()].sort()).toEqual([`session_device:${A}`, `session_device:${B}`]);
+    clock += 10 * 60_000;
     devices.keepOnly(new Set([B]));
     expect([...map.keys()]).toEqual([`session_device:${B}`]);
   });

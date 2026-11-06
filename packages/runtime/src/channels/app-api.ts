@@ -327,8 +327,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.renewAppCredential(who.doName, sessionId); } catch { return fail(503); }
     if (!credential) return fail(401);
+    // The renewed credential goes back at once: a credential renews only once, so an answer the app never receives signs it out.
     const [from, to] = await Promise.all([linkCodeHash(sessionId), credentialSessionHash(credential)]);
-    if (to) await noteSessionDevice(owners, who.doName, { session: to, from });
+    if (to) { const carried = noteSessionDevice(owners, who.doName, { session: to, from }); if (defer) defer(carried); else await carried; }
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 

@@ -12,8 +12,8 @@ type Kv = Pick<SyncKvStorage, 'get' | 'put' | 'delete' | 'list'>;
 const PREFIX = 'session_device:';
 const SESSION_HASH = /^[a-f0-9]{64}$/;
 
-// Control, format (bidi overrides, zero-width) and line or paragraph separators never reach a label.
-const printable = (value: string) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').replace(/\s+/gu, ' ').trim();
+// Control, format (bidi overrides, zero-width), lone surrogate and line or paragraph separators never reach a label.
+const printable = (value: string) => value.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, '').replace(/\s+/gu, ' ').trim();
 
 // "iPhone 17 Pro · iOS 26": the model the platform reports and the OS's major version. null when nothing printable is left.
 export const appSessionDevice = (device: AppSessionDeviceV1): (SessionDevice & { kind: 'phone' | 'tablet' }) | null => {
@@ -45,15 +45,21 @@ export const browserSessionDevice = (userAgent: string | null): SessionDevice | 
   return { kind: system[2], label: `${browser ?? 'Browser'} on ${system[1]}` };
 };
 
-export const sessionDevices = (kv: Kv) => {
-  const read = (hash: string): SessionDevice | null => kv.get<SessionDevice>(`${PREFIX}${hash}`) ?? null;
+type Stored = SessionDevice & Readonly<{ at: number }>;
+const PRUNE_GRACE_MS = 10 * 60_000;
+export const sessionDevices = (kv: Kv, now: () => number = Date.now) => {
+  const stored = (hash: string) => kv.get<Stored>(`${PREFIX}${hash}`);
+  const write = (hash: string, device: SessionDevice) => { if (SESSION_HASH.test(hash)) kv.put(`${PREFIX}${hash}`, { kind: device.kind, label: device.label, at: now() } satisfies Stored); };
   return {
-    read,
-    record(hash: string, device: SessionDevice): void { if (SESSION_HASH.test(hash)) kv.put(`${PREFIX}${hash}`, device); },
+    read(hash: string): SessionDevice | null { const device = stored(hash); return device ? { kind: device.kind, label: device.label } : null; },
+    record: write,
     // A renewal opens a new session for the same device: it keeps the device's description.
-    carry(from: string, to: string): void { const device = SESSION_HASH.test(to) ? read(from) : null; if (device) kv.put(`${PREFIX}${to}`, device); },
-    // Descriptions of sessions the directory no longer lists are dropped when the list is read.
-    keepOnly(live: ReadonlySet<string>): void { for (const [key] of kv.list({ prefix: PREFIX })) if (!live.has(key.slice(PREFIX.length))) kv.delete(key); },
+    carry(from: string, to: string): void { const device = stored(from); if (device) write(to, device); },
+    // Descriptions of sessions the directory no longer lists are dropped when the list is read. A description younger than
+    // the grace may belong to a session opened after that list was read, so it waits for a later read.
+    keepOnly(live: ReadonlySet<string>): void {
+      for (const [key, device] of kv.list<Stored>({ prefix: PREFIX })) if (!live.has(key.slice(PREFIX.length)) && !(now() - (device?.at ?? 0) < PRUNE_GRACE_MS)) kv.delete(key);
+    },
   };
 };
 
@@ -63,13 +69,14 @@ export const credentialSessionHash = async (value: string): Promise<string | nul
   return sessionDot > 0 ? linkCodeHash(value.slice(sessionDot + 1, sigDot)) : null;
 };
 
+const NOTE_TIMEOUT_MS = 3_000;
 export type SessionDeviceNote = Readonly<{ session: string; device: SessionDevice } | { session: string; from: string }>;
 // Records a web sign-in's device, or carries a renewed session's, in the owner object. Best effort: a sign-in or renewal
 // never fails over its description, which only costs the owner a named row.
 export const noteSessionDevice = async (owners: DurableObjectNamespace | undefined, doName: string, note: SessionDeviceNote): Promise<void> => {
   try {
     const answer = await owners?.get(owners.idFromName(doName)).fetch(new Request(`https://telegram-owner${SESSION_DEVICE_PATH}`, {
-      method: 'POST', headers: { 'x-waldo-do-name': doName, 'content-type': 'application/json' }, body: JSON.stringify(note) }));
+      method: 'POST', headers: { 'x-waldo-do-name': doName, 'content-type': 'application/json' }, body: JSON.stringify(note), signal: AbortSignal.timeout(NOTE_TIMEOUT_MS) }));
     if (answer?.ok) return;
   } catch { /* reported below */ }
   console.error(JSON.stringify({ hop: 'session_device', ok: false }));
