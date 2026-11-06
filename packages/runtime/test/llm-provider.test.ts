@@ -2179,8 +2179,8 @@ describe('sanitiseRequest structural degradation', () => {
     expect(turns[1]!.output).toContain('Deluxe Twin');
   });
 
-  // The owner's own readings (synthetic) beside an outside read in one request: the turn goes on, and no reading reaches
-  // the model once outside content is in the same request.
+  // The owner's own readings (synthetic) beside an outside read in one request: the turn goes on with the readings in view.
+  // What keeps them in the account is the tool loop's fence on every call that sends text out (health-egress-fence).
   const ownerReadings = JSON.stringify({ ok: true, data: { state: 'available', timezone: 'UTC', from: '2026-10-12', to: '2026-10-12', read_at: '2026-10-13T06:00:00.000Z', signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-12', value: 67.4 }] }, { signal: 'sleep', unit: 'minutes', source: 'apple', method: 'asleep', days: [{ day: '2026-10-12', value: 431 }] }], freshness: 'fresh', coverage: 1 } });
   const healthTurn = { call: { call_id: 'h1', name: 'get_health', arguments: '{"signals":["hrv","sleep"],"from":"2026-10-12","to":"2026-10-12"}' }, output: ownerReadings };
   const calendarTurn = { call: { call_id: 'c1', name: 'query_calendar', arguments: '{}' }, output: JSON.stringify({ ok: true, data: { events: [{ title: 'Board call', start: '2026-10-14T09:00:00Z' }] } }) };
@@ -2193,16 +2193,12 @@ describe('sanitiseRequest structural degradation', () => {
     return { result, sent: gateway.requests.at(-1)?.request.tool_turns };
   };
 
-  it('withholds the owner\'s own readings when an outside read shares the request, and the turn goes on', async () => {
+  it('keeps the owner\'s own readings in view when an outside read shares the request, in either order', async () => {
     for (const order of [[healthTurn, calendarTurn], [calendarTurn, healthTurn]]) {
       const { result, sent } = await planWith(order);
       expect(result).toMatchObject({ ok: true });
       expect(sent).toHaveLength(2);
-      const health = sent!.find((turn) => turn.call.call_id === 'h1')!;
-      expect(health.call).toEqual({ call_id: 'h1', name: 'get_health', arguments: '{}' });
-      expect(health.output).toContain('hidden because outside content was read');
-      expect(health.output).not.toMatch(/\d/);
-      expect(JSON.stringify(sent)).not.toMatch(/67\.4|431|hrv/i);
+      expect(sent!.find((turn) => turn.call.call_id === 'h1')).toEqual(healthTurn);
       expect(sent!.find((turn) => turn.call.call_id === 'c1')!.output).toContain('Board call');
     }
   });
@@ -2219,7 +2215,7 @@ describe('sanitiseRequest structural degradation', () => {
     const { result, sent } = await planWith([{ call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: ownerReadings }, healthTurn]);
     expect(result.ok).toBe(true);
     expect(sent!.find((turn) => turn.call.call_id === 'c2')!.output).toContain('withheld by the health-data filter');
-    expect(JSON.stringify(sent)).not.toMatch(/67\.4|431/);
+    expect(JSON.stringify(sent!.find((turn) => turn.call.call_id === 'c2'))).not.toMatch(/67\.4|431/);
   });
 
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {

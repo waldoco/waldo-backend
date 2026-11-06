@@ -269,6 +269,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     },
     cancelAll: async () => { effect('reminder.cancel_all', { count: reminders.length }); return reminders.splice(0).length; },
     note: (id) => reminders.find((reminder) => reminder.id === id)?.note ?? null,
+    outside: () => false,
     fired: () => undefined,
   };
   const orders: StandingOrder[] = [];

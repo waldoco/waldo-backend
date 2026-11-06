@@ -98,6 +98,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       return reminderRows.splice(0).length;
     },
     note: (id: string) => reminderRows.find((reminder) => reminder.id === id)?.note ?? null,
+    outside: () => false,
     fired: () => undefined,
     unreadable: () => 0,
   } satisfies ReminderBook;
