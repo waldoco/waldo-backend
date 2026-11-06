@@ -21,6 +21,8 @@ import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proa
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
+  // PROACTIVE_BOTH_DEFAULT: an owner who chose nothing and has WhatsApp bound reads and gets both surfaces.
+  bothDefault?:boolean;
   // The session row's created_at: the proof of a recent email code that a gated action needs.
   signedInAt:string;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
@@ -205,7 +207,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
     const day=query.data.view==='day'?explainCards(request,host,dayForRevision(request,shown)):shown;
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
-    const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
+    const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv,host.bothDefault),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
@@ -273,7 +275,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
       act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-      act:async(action,fields)=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!())):action.action==='google.connect'?host.act(action,fields):host.act(action);}});
+      act:async(action,fields)=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!(),host.bothDefault)):action.action==='google.connect'?host.act(action,fields):host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.

@@ -17,8 +17,13 @@ const WANTED: Readonly<Record<ProactiveSurface, readonly ProactiveTarget[]>> = {
 };
 // What a surface shows the owner: the app shows the day's cards beside a message; a chat shows the message alone.
 const READS: Readonly<Record<ProactiveTarget, ReadsAs>> = { app: 'cards', whatsapp: 'chat', imessage: 'chat' };
-// How the owner reads the proactive work an app owner's runtime sends: by the surface that takes it first.
-export const proactiveReads = (kv: Pick<Kv, 'get'>): ReadsAs => READS[wantedTargets(proactiveSurface(kv))[0] ?? 'app'];
+// How the owner reads the proactive work an app owner's runtime sends: by the surface that takes it first. Under
+// PROACTIVE_BOTH_DEFAULT, one message goes to a chat too when the surface names one, and that chat has no card to lean on, so
+// it is written to stand alone. With the switch off, owners who chose a surface before it read as they always did.
+export const proactiveReads = (kv: Pick<Kv, 'get'>, bothDefault = false): ReadsAs => {
+  const wanted = wantedTargets(proactiveSurface(kv, bothDefault));
+  return bothDefault && wanted.some(target => READS[target] === 'chat') ? 'chat' : READS[wanted[0] ?? 'app'];
+};
 // Whether a surface can take the work itself, so that its delivery settles the job; one that cannot only gets copies.
 const SETTLES: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: true, imessage: false };
 // The stored choice read as a list of surfaces, the one that takes the work first and then each that gets a copy. This is
@@ -29,9 +34,13 @@ export const PROACTIVE_SURFACE_KEY = 'proactive_surface_v1';
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
 const known = (value: unknown): value is ProactiveSurface => (PROACTIVE_SURFACES as readonly unknown[]).includes(value);
 
-export const proactiveSurface = (kv: Pick<Kv, 'get'>): ProactiveSurface => {
+// PROACTIVE_BOTH_DEFAULT: an owner who has chosen nothing and has a WhatsApp number bound gets proactive work on the app and
+// WhatsApp both, instead of the app alone. A stored choice, whatever it is, always wins; the switch changes only the default.
+export const proactiveBothDefault = (env: Readonly<{ PROACTIVE_BOTH_DEFAULT?: string }>): boolean => env.PROACTIVE_BOTH_DEFAULT === '1';
+export const proactiveSurface = (kv: Pick<Kv, 'get'>, bothDefault = false): ProactiveSurface => {
   const stored = kv.get<unknown>(PROACTIVE_SURFACE_KEY);
-  return known(stored) ? stored : 'app';
+  if (known(stored)) return stored;
+  return bothDefault && kv.get<string>('whatsapp_subject') ? 'both' : 'app';
 };
 export const setProactiveSurface = (kv: Kv, value: string): boolean => {
   if (!known(value)) return false;
@@ -53,13 +62,14 @@ export const proactiveSurfaceChoices = (links: ChatLinks): readonly ProactiveSur
 export type ProactiveSurfaceChoice = 'saved' | 'unchanged' | 'unchecked' | 'invalid' | `${Chat}_not_linked`;
 // The owner choosing a surface in the app or the console: what proactiveSurfaceChoices offers is stored, through the one
 // writer, and nothing else. The first run's channel.set comes before any chat is linked, so it stores its choice as is.
-export const chooseProactiveSurface = (kv: Kv, value: string, links: ChatLinks): ProactiveSurfaceChoice => {
+export const chooseProactiveSurface = (kv: Kv, value: string, links: ChatLinks, bothDefault = false): ProactiveSurfaceChoice => {
   if (!known(value)) return 'invalid';
   const missing = unlinkedChats(value, links);
   const unlinked = missing.find(chat => links[chat] === false);
   if (unlinked) return `${unlinked}_not_linked`;
   if (missing.length) return 'unchecked';
-  if (proactiveSurface(kv) === value) return 'unchanged';
+  // Under the default, choosing what is shown still stores it, so the owner's choice outlives the switch.
+  if (proactiveSurface(kv, bothDefault) === value && (known(kv.get<unknown>(PROACTIVE_SURFACE_KEY)) || !bothDefault)) return 'unchanged';
   setProactiveSurface(kv, value);
   return 'saved';
 };
@@ -105,11 +115,11 @@ export const WHATSAPP_COPY_FRESH_MS = 24 * 60 * 60 * 1000;
 // Delivers to the app first, and only a message the app took is copied, under that app message's id. A send worth delivering
 // only now (a one-time code, a short-lived link) is never queued for a chat surface, which may hold it for days. A copy that
 // cannot be queued is reported by its code alone and never fails or repeats the app delivery.
-export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
+export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string, until?: number) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
   async (text: string, send?: AppSend) => {
     const row = await deliver(text, send);
     if (send?.nowOnly) return row;
-    try { await queue(`${prefix}${row}`, text); } catch { report('copy_failed'); }
+    try { await queue(`${prefix}${row}`, text, send?.copyUntil); } catch { report('copy_failed'); }
     return row;
   };
 
@@ -122,6 +132,12 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
   if (seen.at(-1) !== subject) kv.put(WHATSAPP_SUBJECTS_KEY, [...seen.filter(earlier => earlier !== subject), subject].slice(-SUBJECTS_KEPT));
 };
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
+
+// Whether a message is Waldo's own initiative, which the owner did not ask for: a day card, an update, meeting prep, a pause
+// notice, a mail follow-up, a health note, or a copy of one of those the app already has. This is where a message comes from,
+// not what it says, and it picks the door-knock template (whatsapp-window.ts): the reply template says the owner asked.
+const unaskedKind = (record: FinalRecord): boolean => !!(record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.healthNotice);
+export const unaskedRecord = (record: FinalRecord): boolean => unaskedKind(record) || record.id.startsWith(WHATSAPP_COPY_PREFIX);
 
 // What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, an update card,
 // meeting prep, a pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,

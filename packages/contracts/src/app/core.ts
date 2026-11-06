@@ -113,6 +113,14 @@ export const appMessagePartV1Schema = z.union([
 // Chat revision 6 (`chat=6`): a main-chat reply the owner rated carries `rating`, so a rating survives a relaunch. An unrated
 // reply, a user row and every thread row leave the key out, and revisions below 6 never receive it.
 export const APP_CHAT_RATING_REVISION = 6;
+// Chat revision 7 (`chat=7`): a main-chat reply carries `memory_used`, the notes Waldo had in front of it for that message:
+// the claims its recall matched to the message and the ones it opened with read_memory. It is what the turn looked up, not
+// proof it relied on each one, so the app shows it as "memory looked at: X, Y". Each is a claim as it reads now (a claim the
+// owner has since forgotten or retired is left out), at most APP_CHAT_MEMORY_USED_MAX_V1, newest-shown last, text as plain
+// text. A reply that looked up nothing, a user row, a thread row and revisions below 7 leave the key out.
+export const APP_CHAT_MEMORY_USED_REVISION = 7;
+export const APP_CHAT_MEMORY_USED_MAX_V1 = 8;
+export const appMemoryUsedV1Schema = z.strictObject({ id: z.string().regex(/^memory:claim:[1-9][0-9]{0,15}$/), text: z.string().min(1).max(300) });
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
 // was kept have none, and no time is ever invented for them.
@@ -121,6 +129,7 @@ export const appMessageV1Schema = z.strictObject({
   channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
   created_at: z.int().nonnegative().optional(),
   rating: z.enum(['up', 'down']).optional(),
+  memory_used: z.array(appMemoryUsedV1Schema).min(1).max(APP_CHAT_MEMORY_USED_MAX_V1).optional(),
 });
 // The history row `id`, URL-encoded in a path.
 export const appMessageIdV1Schema = z.string().min(1).max(256);

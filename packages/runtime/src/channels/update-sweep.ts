@@ -240,7 +240,7 @@ export type UpdateSweepApplyDeps = Readonly<{
   turn(trace: string, text: string, current: () => Promise<void>, tools?: readonly ToolName[]): Promise<string>;
   // Queues the card under its key for the update record, `commit` in the same transaction; a key already queued only commits.
   // With the day state it may be a revision of a day card, and carry the push line to raise once it is delivered.
-  deliver(id: string, trace: string, text: string, recordId: number, commit: () => void, effect?: Readonly<{ revision?: string; push?: string }>): Promise<void>;
+  deliver(id: string, trace: string, text: string, recordId: number, commit: () => void, effect?: Readonly<{ revision?: string; push?: string; inPlace?: true }>): Promise<void>;
   // Set when the day state is on.
   dayState?: Readonly<{
     // The owner's quiet hours: a revision still lands, a message and a push do not.
@@ -308,7 +308,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const push = chosen.push && !quiet && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
-        { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
+        { ...(chosen.revise ? { revision: chosen.revise.card, ...(effect === 'revise' ? { inPlace: true as const } : {}) } : {}), ...(push ? { push } : {}) });
       return 'delivered';
   };
   // The triage outcome is what the turn did, held to the owner's limits by code: a card it raised is the act, whatever it
@@ -348,14 +348,14 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!chosen.revise || !day.revisesCards) return settle(`held_${held}`);
       // Only the revision in place still lands, silently.
       day.chose(io.trace, `held_${held}`);
-      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise.text, recordId, commit, { revision: chosen.revise.card });
+      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise.text, recordId, commit, { revision: chosen.revise.card, inPlace: true });
       return 'delivered' as const;
     }
     // A push goes only from a surface that raises one; elsewhere the message is the notification.
     const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
     day.chose(io.trace, !interrupts ? 'revise' : interrupts && charge() === 'urgent' ? 'tell+urgent' : push ? 'tell+push' : 'tell');
     await deps.deliver(`update:${row.id}`, io.trace, chosen.say ?? chosen.revise!.text, recordId, () => { if (interrupts) spend(); commit(); },
-      { ...(chosen.revise ? { revision: chosen.revise.card } : {}), ...(push ? { push } : {}) });
+      { ...(chosen.revise ? { revision: chosen.revise.card, ...(!interrupts ? { inPlace: true as const } : {}) } : {}), ...(push ? { push } : {}) });
     return 'delivered' as const;
   };
   return {
