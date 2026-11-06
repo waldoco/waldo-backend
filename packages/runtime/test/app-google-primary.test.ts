@@ -13,6 +13,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 // account, and the owner chooses it with google.set_primary. Builds below it read and do what they did.
 const OWNER_ID = '6d7e8f9a-0b1c-4d2e-8f3a-4b5c6d7e8f9a';
 const HASH = 'c'.repeat(64);
+const signinEmail: { value: string | null } = { value: null };
 const SIGNED_IN = new Date(Date.now() - 60_000).toISOString(), SESSION_ENDS = new Date(Date.now() + 3_600_000).toISOString();
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const PICTURE = 'https://lh3.googleusercontent.com/a/ACg8oc-synthetic-fixture=s96-c';
@@ -20,6 +21,7 @@ const PIXEL = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const wire: { whoopRows: unknown; picture: () => Response; pictureCalls: string[] } = { whoopRows: [], picture: () => new Response(PIXEL, { headers: { 'content-type': 'image/png' } }), pictureCalls: [] };
 
 beforeEach(() => {
+  signinEmail.value = null;
   wire.whoopRows = [];
   wire.picture = () => new Response(PIXEL, { headers: { 'content-type': 'image/png' } });
   wire.pictureCalls = [];
@@ -31,6 +33,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'console_session_inventory') return Response.json([{ session: HASH, created_at: SIGNED_IN, last_seen_at: SIGNED_IN, expires_at: SESSION_ENDS, rotated_to: null, signed_in_at: SIGNED_IN }]);
+    if (fn === 'owner_account_email') return Response.json(signinEmail.value);
     if (fn === 'connection_list') return wire.whoopRows === 'down' ? new Response('unavailable', { status: 503 }) : Response.json(wire.whoopRows);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
@@ -92,6 +95,26 @@ describe('the primary Google account', () => {
       expect([chosen.status, appControlResultV1Schema.parse({ ...chosen.body }).receipt.state]).toEqual([200, 'recorded']);
       expect(primaryOf(await read(ctx))).toEqual(['local:second@example.test']);
       expect((await ctx.owner.setup('app').google.client('calendar'))!.account.email).toBe('second@example.test');
+    }, GOOGLE);
+  });
+
+  it("is the account the owner signs in with, when nothing is chosen and it is connected and healthy, and Waldo uses it", async () => {
+    await appOwner('app-google-primary-signin', async (ctx) => {
+      await ctx.state.storage.put('google:accounts', accounts);
+      await ctx.state.storage.put('origin', 'https://worker.fixture.invalid');
+      signinEmail.value = 'second@example.test';
+      expect(primaryOf(await read(ctx))).toEqual(['local:second@example.test']);
+      expect(await ctx.state.storage.get('google:primary')).toBe('local:second@example.test');
+      expect((await ctx.owner.setup('app').google.client('calendar'))!.account.email).toBe('second@example.test');
+    }, GOOGLE);
+  });
+
+  it('keeps the first account when the sign-in account is not connected', async () => {
+    await appOwner('app-google-primary-signin-absent', async (ctx) => {
+      await ctx.state.storage.put('google:accounts', accounts);
+      signinEmail.value = 'elsewhere@example.test';
+      expect(primaryOf(await read(ctx))).toEqual(['local:first@example.test']);
+      expect(await ctx.state.storage.get('google:primary')).toBeUndefined();
     }, GOOGLE);
   });
 

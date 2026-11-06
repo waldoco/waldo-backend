@@ -133,8 +133,16 @@ const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim
 // Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
 // Controls revision 20 names the primary Google account and takes google.set_primary; builds below it never receive either.
 const namesPrimary=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_GOOGLE_PRIMARY_REVISION;
-const withPrimary=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[])=>{
-  const primary=primaryAccountId(accounts,await host.storage.get<string>(GOOGLE_PRIMARY_KEY));
+// With no choice stored, the account the owner signs in with becomes primary when it is connected and healthy, and is stored
+// so the runtime uses the same one; otherwise the first connected account is primary, as the runtime already picks.
+const withPrimary=async<T extends {id:string;email:string;health:string}>(host:AppControlsHost,accounts:readonly T[])=>{
+  let chosen=await host.storage.get<string>(GOOGLE_PRIMARY_KEY);
+  if(chosen===undefined&&accounts.length>1){
+    const signin=await ownerAccountEmail(host.phone,host.account.owner);
+    const own=signin?accounts.find(account=>account.email.toLowerCase()===signin&&account.health==='access_granted'):undefined;
+    if(own){await host.storage.put(GOOGLE_PRIMARY_KEY,own.id);chosen=own.id;}
+  }
+  const primary=primaryAccountId(accounts,chosen);
   return accounts.map(account=>({...account,primary:account.id===primary}));
 };
 const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
@@ -240,7 +248,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
     const catalogue=google!==null&&listsCatalogue(request);
-    const connections=google?{google:{...google,...(catalogue?{accounts:await (async()=>{const shown=await withRevision17(host,google.accounts,built?.google.accounts??[]);return namesPrimary(request)?withPrimary(host,shown):shown;})()}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
+    const connections=google?{google:{...google,...(catalogue?{accounts:await (async()=>{const shown=await withRevision17(host,google.accounts as {id:string;email:string;health:string}[],built?.google.accounts??[]);return namesPrimary(request)?withPrimary(host,shown):shown;})()}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
     const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
