@@ -137,9 +137,12 @@ export const localDayOf = (now: Date, timeZone: string): string => {
 
 type Group = Readonly<{ source: string; method: Method | null; readings: readonly Reading[] }>;
 // One source per signal, the one with the most readings; for a signal with methods one method as well, so they never blend.
+// A part of a reading (a food entry's protein) is given for a day only when every reading that day carries it, so a day's
+// sum is never a partial one.
 export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
   const spec = SIGNALS[signal];
   const groups = new Map<string, { source: string; method: Method | null; readings: Reading[] }>();
+  const partial = new Set<string>();
   for (const source of sources) {
     for (const reading of source.readings) {
       if (reading.signal !== spec.stored) continue;
@@ -147,14 +150,15 @@ export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly
       const method = spec.methods?.find(known => known === reading.method) ?? null;
       if (spec.methods && method === null) continue;
       const value = spec.value ? spec.value(reading) : reading.value;
-      if (value === null) continue;
+      if (value === null) { partial.add(`${source.source}\u0000${reading.day}`); continue; }
       const key = `${source.source}\u0000${method ?? ''}`;
       const group = groups.get(key) ?? { source: source.source, method, readings: [] };
       group.readings.push({ ...reading, value });
       groups.set(key, group);
     }
   }
-  return [...groups.values()].sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
+  const whole = [...groups.values()].map(group => ({ ...group, readings: group.readings.filter(reading => !partial.has(`${group.source}\u0000${reading.day}`)) })).filter(group => group.readings.length > 0);
+  return whole.sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
 };
 
 export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
@@ -171,7 +175,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; they are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; a macro is missing on a day when some entry did not carry it. They are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,

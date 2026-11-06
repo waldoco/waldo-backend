@@ -305,17 +305,34 @@ describe('get_health', () => {
 describe('get_health food from the owner\'s app', () => {
   const food = (id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', '2026-10-12', kcal, {
     start_at: `2026-10-12T0${id}:00:00Z`, end_at: `2026-10-12T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
-  it('sums the day\'s food energy and each macro the entries carry, from the one source, and asks for nutrition', async () => {
+  it('sums the day\'s food energy and its macros, from the one source, and asks for nutrition', async () => {
     const meals = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
-      food(1, 612.4, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), food(2, 410, { protein_g: 22 }), food(3, 180, {}),
+      food(1, 612.4, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), food(2, 410, { protein_g: 22, carbohydrate_g: 30, fat_g: 9 }),
     ] }] };
     const { calls, handler } = fake({ series: meals });
     const result = await handler.handle({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
     if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
     expect(getHealthResultSchema.parse(result.data).state).toBe('available');
     expect(result.data.signals.map(entry => [entry.signal, entry.unit, entry.days?.[0]?.value])).toEqual([
-      ['food_energy', 'kcal', 1202], ['protein', 'g', 61], ['carbs', 'g', 64], ['fat', 'g', 21],
+      ['food_energy', 'kcal', 1022], ['protein', 'g', 61], ['carbs', 'g', 94], ['fat', 'g', 30],
     ]);
     expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['nutrition']);
+  });
+
+  it('gives a macro for a day only when every entry that day carries it, so a day total is never a partial one', async () => {
+    const day = (date: string, id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', date, kcal, {
+      start_at: `${date}T0${id}:00:00Z`, end_at: `${date}T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
+    const meals = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      day('2026-10-11', 1, 500, { protein_g: 30, carbohydrate_g: 50, fat_g: 10 }), day('2026-10-11', 2, 400, { protein_g: 20, carbohydrate_g: 40, fat_g: 15 }),
+      day('2026-10-12', 1, 612, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), day('2026-10-12', 2, 410, { protein_g: 22 }),
+    ] }] };
+    const { handler } = fake({ series: meals });
+    const result = await handler.handle({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-11', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+    const { signals } = result.data;
+    const valueOn = (signal: string, date: string) => signals.find(entry => entry.signal === signal)?.days?.find(d => d.day === date)?.value ?? null;
+    expect(['food_energy', 'protein', 'carbs', 'fat'].map(signal => [signal, valueOn(signal, '2026-10-11'), valueOn(signal, '2026-10-12')])).toEqual([
+      ['food_energy', 900, 1022], ['protein', 50, 61], ['carbs', 90, null], ['fat', 25, null],
+    ]);
   });
 });

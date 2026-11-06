@@ -289,7 +289,7 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('stand_hour'), unit: z.literal('count'), value: z.union([z.literal(0), z.literal(1)]) }),
   // Revision 7. One food entry, a point record under its store id.
   z.strictObject({
-    ...sampleCommon, signal: z.literal('nutrition'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(10_000),
+    ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('nutrition'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(10_000),
     protein_g: grams.optional(), carbohydrate_g: grams.optional(), fat_g: grams.optional(), meal: z.enum(['breakfast', 'lunch', 'dinner', 'snack', 'unknown']).optional(),
   }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')

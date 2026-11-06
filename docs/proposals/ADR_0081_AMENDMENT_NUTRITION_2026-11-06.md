@@ -24,7 +24,8 @@ its store record id, so re-sending it is idempotent, as for every other point re
 | `meal` | `breakfast`, `lunch`, `dinner`, `snack` or `unknown`, optional | |
 
 - **A food's name never travels.** It is another app's text, so leaving it out means nothing needs Scribe at ingress. Both
-  the Worker (strict contract) and the database (key allowlist) refuse an entry that carries it, or any key not listed above.
+  the Worker (strict contract) and the database (key allowlist) refuse an entry that carries it, or any key not listed above,
+  including the night context other signals take, whose free-text references would otherwise ride along.
 - **No micronutrients, water or caffeine.** Each would be its own signal, under its own amendment.
 
 ### 2. Storage and readers
@@ -36,8 +37,15 @@ its store record id, so re-sending it is idempotent, as for every other point re
 - **Reader:** the model reads nutrition only through the consented `get_health` reader. Each of four read signals is a day's
   sum: `food_energy` in kcal, and `protein`, `carbs` and `fat` in grams. The output is turn-only, as for every `get_health`
   result.
-- **The numeric health floor** recognises food readings ("2,100 kcal eaten", "120 g of protein"), so a relayed food reading
-  is withheld from traces like any other reading. A gram of flour in a recipe is not a reading.
+  - A macro is given for a day only when every entry that day carries it, so a partial sum never reads as the day's total.
+  - The onboarding (welcome) read of the owner's health leaves nutrition out. Its output becomes what Waldo knows, and food
+    is never compiled into memory.
+- **The numeric health floor** recognises a food reading said of the owner or of a day ("you logged 1,202 kcal", "your
+  protein was 61 g", "protein intake 120 g", "61 g protein yesterday"). A relayed reading is withheld from traces, and a
+  stored summary that holds one is dropped, like any other reading.
+  - Grams on a label, in a recipe or in someone else's meal ("25 g protein per serving", "the dog ate 200 calories") are
+    not a reading. The floor favours precision: a false match drops a whole task result.
+  - A bare macro with no owner or day framing ("61 g protein") is not caught.
 - **No derived use:** no score, driver, Load or trigger reads nutrition.
 - **Tone:** the reader's description tells the model that food is context for a plan, never a judgement of what the owner ate.
 
@@ -51,6 +59,12 @@ existing consent. The 27 October rule still holds: Health Connect is a transport
 
 - A build below revision 7 never sends a food entry.
 - A backend that does not know the signal rejects the reading alone, from revision 3 onwards (per-sample).
+
+## Rollback
+
+Revert the PR, and remove the stored entries before restoring the earlier signal check. The old check is validated, so it
+fails while any `nutrition` row exists. A rollback migration deletes `signal = 'nutrition'` from `waldo.health_samples` first,
+then re-creates `health_ingest` and `health_series_read` from `20261031120000`.
 
 ## Not covered
 

@@ -167,12 +167,15 @@ describe('the numeric health floor', () => {
     body_fat: ['body fat 14.2%', 'body fat percentage 14.2', '14% body fat', 'body fat was 14.2 percent'],
     lean_body_mass: ['lean body mass 61.9 kg', 'lean mass 61.9 kg', 'lean mass was 62'],
     stand_hours: ['stand hours 9', '9 stand hours', 'stood in 9 of 12 hours'],
-    food_energy: ['food energy 2,100 kcal', 'ate 2100 kcal', '2100 calories eaten', 'calorie intake 2100', 'intake was 2100 kcal', '2,100 kcal of food'],
-    protein: ['protein 120 g', '120 g of protein', '120g protein', 'protein: 120 grams'],
-    carbs: ['carbs 250 g', '250 g of carbs', 'carbohydrates 250g', '250 grams of carbohydrate'],
-    fat: ['fat 70 g', '70 g of fat', '70g fat', 'fat was 70 grams'],
+    food_energy: ['food energy 2,100 kcal', 'you ate 2100 kcal', '2100 calories eaten', 'calorie intake 2100', 'intake was 2100 kcal', '2,100 kcal of food',
+      'You logged 1,202 kcal yesterday', 'your lunch was 612 kcal', 'food_energy 1202 kcal', 'your food app had 1,202 kcal', "I've had 1800 calories", '1202 kcal logged'],
+    protein: ['protein intake 120 g', 'you had 120 g of protein', 'your protein was 61 g', '61 g protein yesterday', 'protein 120 g today', 'I logged 120g protein'],
+    carbs: ['carb intake 250 g', '250 g of carbs today', 'your carbs were 250g', 'you had 250 grams of carbohydrate'],
+    fat: ['fat intake was 70 g', '70 g fat yesterday', 'your fat was 70 grams', 'you logged 70g fat'],
   };
-  it.each(['the recipe needs 120 g of flour', 'carbs are fine before a run', 'fat chance by 3pm', 'protein bar at 4', 'ate at 8 with the team', 'ate 3 apples', 'intake form 2', 'body fat jokes', '500 calories of work emails'])('leaves an ordinary food sentence alone: %s', (text) => {
+  // A label, a recipe or someone else's meal is not the owner's reading: a false match would drop a whole task result.
+  it.each(['the recipe needs 120 g of flour', 'carbs are fine before a run', 'fat chance by 3pm', 'protein bar at 4', 'ate at 8 with the team', 'ate 3 apples', 'intake form 2', 'body fat jokes', '500 calories of work emails',
+    'Each serving: 25 g protein', 'the recipe calls for 70 g of fat', 'this bar has 20g protein', 'nutrition label: carbs 45 g', 'Sale: protein 500 g tub', 'the dog ate 200 calories of kibble', 'Team ate 3,000 calories of pizza'])('leaves an ordinary food sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
   // A workout session as get_health lists it, relayed: its heart rate and its minutes in each zone.

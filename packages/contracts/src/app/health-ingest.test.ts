@@ -623,7 +623,12 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
 describe('health revision 7: nutrition from the phone\'s health store', () => {
   // One food entry as the store holds it, written by the owner's food app: energy, its grams and the meal, and never its name.
   const entry = { ...common, sample_id: 'HK:food-1', signal: 'nutrition', unit: 'kilocalories', value: 612, protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2, meal: 'lunch' };
+  const night = { source_ref: 'Chicken salad from Joe', session_ref: 'HK:meal', waking_day: '2026-10-10', reducer_version: 'asleep-interval-union.v1', contributor_ids: ['HK:a'],
+    intervals: [{ contributor_id: 'HK:a', start_at: common.start_at, end_at: common.end_at, kind: 'asleep' }] };
   it('is revision 7', () => expect(HEALTH_NUTRITION_REVISION_V1).toBe(7));
+  it('has a night context that another signal takes, so the refusal below is the food entry\'s own', () => {
+    expect(healthSampleV1Schema.safeParse({ ...common, signal: 'sleep_efficiency', unit: 'ratio', value: 0.91, sleep_context: night }).success).toBe(true);
+  });
   it('takes a food entry with its energy, and its grams and meal when the store has them', () => {
     expect(healthSampleV1Schema.safeParse(entry).success).toBe(true);
     expect(healthSampleV1Schema.safeParse({ ...common, signal: 'nutrition', unit: 'kilocalories', value: 0 }).success).toBe(true);
@@ -633,6 +638,8 @@ describe('health revision 7: nutrition from the phone\'s health store', () => {
     rejected(healthSampleV1Schema, [
       { ...entry, unit: 'kilojoules' }, { ...entry, value: 10_001 }, { ...entry, value: -1 }, { ...entry, protein_g: 1_001 }, { ...entry, carbohydrate_g: -1 },
       { ...entry, fat_g: Number.NaN }, { ...entry, meal: 'brunch' }, { ...entry, name: 'Chicken salad' }, { ...entry, sodium_mg: 400 },
+      // A night's context is free text from the writing app, and a food entry never has a night.
+      { ...entry, sleep_context: night },
     ]);
   });
   it('lets a deletion name nutrition and checks an entry on its own', () => {
