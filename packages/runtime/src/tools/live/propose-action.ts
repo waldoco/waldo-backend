@@ -16,7 +16,6 @@ export type TaintedActionDesk = Readonly<{
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
-const OUTCOME_CHARS = 300;
 
 // The owner-confirm route the taint gate points at (ADR-0049). The handler only freezes the call: the tool, its
 // arguments validated against that tool's own schema, and their digest, on a card. Nothing runs here; the approval
@@ -139,12 +138,13 @@ export const taintedActionReplay = (input: Readonly<{
     approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest },
   };
   const result = await dispatchTool({ id: callRef, name: tool.data, args: proposal.args }, ctx, { handlers });
-  if (result.ok) {
-    const shown = JSON.stringify(result.data);
-    return { status: 'done', message: shown.length > OUTCOME_CHARS ? `${shown.slice(0, OUTCOME_CHARS - 1)}…` : shown };
-  }
-  if (!ran) return { status: 'rejected', message: result.error };
-  return { status: result.reason === 'tool_result_error' ? 'failed' : 'uncertain', message: result.error };
+  // The owner reads the outcome. The tool's payload and its error text were written for the model and can carry readings, ids
+  // or internal names, so the owner gets a fixed line and the trace keeps only the typed code.
+  if (result.ok) return { status: 'done', message: '' };
+  if (!ran) return { status: 'rejected', message: 'It was refused before it ran.', code: result.code };
+  return result.reason === 'tool_result_error'
+    ? { status: 'failed', message: result.code === 'rejected' ? 'It ran and changed nothing.' : 'It ran and failed.', code: result.code }
+    : { status: 'uncertain', message: 'Its result could not be confirmed.', code: result.code };
 };
 
 // The dispatcher context an approved replay runs under: the owner's identity and the host's own approval line,
