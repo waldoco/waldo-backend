@@ -38,7 +38,9 @@ const squash = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
 // Whether a page is about the owner or a namesake is not decided here: no string rule can tell, and a handle rule refuses the
 // owner's own pages that print no handle. The model judges what to record, and the owner decides each finding. What code
 // holds is grounding: the page was read in this run and the quote is on it.
-export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten';
+// The app shows a finding's page address as plain text up to this length, so the store keeps none longer.
+export const FINDING_URL_MAX = 2048;
+export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten' | 'url_too_long';
 const newId = () => `fnd_${crypto.randomUUID().replaceAll('-', '')}`;
 const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.category, text: row.text, source: { url: row.source_url, title: row.source_title.slice(0, 300) }, state: row.state, found_at: row.found_at, decided_at: row.decided_at });
 
@@ -121,8 +123,9 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     lookup: () => { const status = consent.state('owner_lookup').status; return status === 'granted' && !consent.active('owner_lookup') ? 'not_granted' as const : status; },
     // Whether this server offers the look-up at all; off, nobody can say yes to it, so the model must not ask.
     offered: () => consent.offered('owner_lookup'),
-    record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' {
+    record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' | 'url_too_long' {
       if (!consent.active('owner_lookup')) return 'consent_required';
+      if (args.source_url.length > FINDING_URL_MAX) return 'url_too_long';
       settle();
       if (barred(args.text) || barred(args.evidence_quote)) return 'forgotten';
       const existing = sql.exec<Row>('SELECT * FROM owner_findings WHERE source_url = ?', args.source_url).toArray().find(row => squash(row.text) === squash(args.text));
@@ -203,6 +206,7 @@ const REFUSAL: Readonly<Record<RecordRefusal, string>> = {
   quote_not_on_page: 'The evidence quote does not appear in what that page returned. Quote the page exactly.',
   health_value: 'Findings never hold health values. Nothing was stored.',
   forgotten: 'The owner asked Waldo to forget this, or withdrew the look-up that found it. Nothing was stored.',
+  url_too_long: 'That page address is too long to keep. Nothing was stored.',
 };
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
@@ -239,7 +243,7 @@ export const ownerLookupHandlers = (deps: Deps): ToolHandler<any, unknown, Memor
         const write = () => deps.store.record(args, page.title, now());
         const atomic = () => deps.transaction ? deps.transaction(write) : write();
         const result = ctx.runScope ? ctx.runScope.commit(atomic) : atomic();
-        if (result === 'consent_required' || result === 'forgotten') return refuse(result);
+        if (result === 'consent_required' || result === 'forgotten' || result === 'url_too_long') return refuse(result);
         return { ok: true, data: { finding_id: result.id, state: 'unconfirmed', duplicate: result.duplicate }, source_taint: null };
       },
     } satisfies ToolHandler<RecordOwnerFindingArgs, unknown, MemoryToolContext>,
