@@ -401,10 +401,11 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
   outbox: { raw_sensor: 'reject', derived_score: 'reject' },
 };
 
-// A number written with a country code (a plus sign and, after the first digit, seven to fourteen more, which is the most E.164
-// allows), or an Indian mobile written in two groups of five. Each digit is read once, so a long run of digits and signs
+// A number written with a country code (a plus sign and, after the first digit, eight to fourteen more, which is the most E.164
+// allows), or an Indian mobile written in two groups of five with a space between them (a hyphen would take every price or
+// salary range such as 75000-80000). Each digit is read once, so a long run of digits and signs
 // cannot slow the scan: it starts at a plus sign or at a lookbehind-checked digit and never reads past fifteen digits.
-export const PHONE_OUTSIDE_US = /\+[1-9](?:[\s.()-]{0,2}\d){7,14}(?!\d)|(?<![\d+])[6-9]\d{4}[\s.-]\d{5}(?!\d)/g;
+export const PHONE_OUTSIDE_US = /(?<![\w+])\+[1-9](?:[\s.()-]{0,2}\d){8,14}(?!\d)|(?<![\d+])[6-9]\d{4}\s\d{5}(?!\d)/g;
 
 // Check 3 — PII is redacted, never rejected (ADR-0024 false-positive policy: uncertainty
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by

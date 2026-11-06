@@ -55,6 +55,12 @@ describe('readings the free-text floor used to miss', () => {
     'a wrist watch 3 straps',
     'I could use sleep. 8 people are coming',
     'the sleep clinic opens at 9am',
+    'sleep on it for 3m',
+    'Sleep Number bed is 2m wide',
+    'I will sleep 6 months',
+    'wrist temperature feature in iOS 17',
+    'wrist temperature feature in iOS 17.2',
+    'a wrist temp sensor, model 3',
     'rmssd is a measure of variation',
   ])('leaves %s alone', text => {
     expect(bodyOf(run(text, 'send_message'))).toBe(text);
@@ -71,12 +77,20 @@ describe('phone numbers outside the US', () => {
     ['call +91-9876543210 now', 'call [REDACTED_PHONE] now'],
     ['call +91 98765-43210.', 'call [REDACTED_PHONE].'],
     ['call 98765 43210 now', 'call [REDACTED_PHONE] now'],
-    ['call 98765-43210 now', 'call [REDACTED_PHONE] now'],
     ['tel:+49 151 23456789;', 'tel:[REDACTED_PHONE];'],
     ['wa.me/+971501234567', 'wa.me/[REDACTED_PHONE]'],
   ])('redacts the number in %j', (input, expected) => {
     expect(bodyOf(run(input, 'send_message'))).toBe(expected);
     expect(bodyOf(run(input, 'memory_block'))).toBe(expected);
+  });
+
+  // Text that reaches the Scribe base64- or percent-encoded is decoded and read again; the wider pattern is what finds the number.
+  it.each(['call +44 20 7946 0958 now', '98765 43210', '+447911123456', '+91-9876543210'])('redacts %j written in base64 or with percent escapes', number => {
+    for (const encoded of [Buffer.from(number).toString('base64'), encodeURIComponent(number)]) {
+      for (const destination of ['send_message', 'memory_block'] as const) {
+        expect(bodyOf(run(`x ${encoded}`, destination)), `${encoded} to ${destination}`).toBe('x [REDACTED_PHONE]');
+      }
+    }
   });
 
   it('keeps the US forms it already redacted', () => {
@@ -91,6 +105,13 @@ describe('phone numbers outside the US', () => {
     'order 98765',
     'items +12 and +34',
     'ref 98765 4321',
+    'price 75000-80000',
+    'salary 60000-90000 per month',
+    'budget ₹75000-90000',
+    'order 98765-43210 shipped',
+    'call 98765-43210 now',
+    'the sum 1+23456789 is not a number',
+    'a +12345678 points bonus',
   ])('leaves %j alone', text => {
     expect(bodyOf(run(text, 'send_message'))).toBe(text);
   });
