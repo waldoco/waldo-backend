@@ -10,6 +10,9 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { DASHBOARD_OVERVIEW_PATH } from '../src/channels/dashboard-overview';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { traceBook } from '../src/channels/harness';
+import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
+import { reminderBook } from '../src/channels/reminders';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { readConsentState } from '../src/connectors/google';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
@@ -17,14 +20,16 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const BRIEF = 'Brief fixture: two meetings, a free hour after lunch.';
+// Every free-text model turn answers the same: the tests read what was delivered and recorded, not what a prompt says.
+const REPLY = 'Fixture reply: two meetings, a free hour after lunch.';
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const reply = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
-    return reply(String(request.messages.at(-1)?.content ?? '').includes('[Scheduled card "The Brief"') ? BRIEF : 'Noted.');
+    return reply(REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -61,7 +66,8 @@ beforeEach(() => {
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string } };
       if (body.type === 'text') world.texts.push(body.text!.body);
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${world.texts.length}` }] });
+      // Graph answers with the contact as bare digits, whatever form the request named it in.
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${world.texts.length}` }] });
     }
     // Google's code exchange and every Google call go through the directory's connector proxy, as deployed.
     if (url === 'https://directory.fixture.invalid/functions/v1/connector-proxy') {
@@ -125,11 +131,24 @@ describe('an owner whose only surface is WhatsApp, on a deploy with no Telegram 
       expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
       expect(world.texts).toContain('Event - uptime: Deploy finished');
 
-      dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned by the fixture' });
-      await new Scheduler(state.storage.sql, state.storage, productionDeps())
-        .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: null });
-      for (let pass = 0; pass < 3; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 200)); }
-      expect(world.texts).toContain(BRIEF);
+      const today = new Date().toISOString().slice(0, 10), scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      dayPlanBook(state.storage.sql).save(today, { card: 'card:brief', time: '00:00', reason: 'planned by the fixture' });
+      await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: null });
+      state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
+      await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-surface')
+        .set({ note: 'water the plants', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+      const before = world.texts.length;
+      const passes = async (count: number) => { for (let pass = 0; pass < count; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 200)); } };
+      await passes(4);
+      // A WhatsApp send settles on Meta's report that it arrived, as in production.
+      const accepted = (state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.status === 'accepted').flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+      expect(accepted.length).toBeGreaterThan(0);
+      expect((await owner.fetch(new Request('https://telegram-owner/whatsapp-status', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': WA_SUBJECT },
+        body: JSON.stringify({ delivered: accepted.map(id => ({ id, at: Date.now() })) }) }))).status).toBe(200);
+      await passes(1);
+      expect(dayPlanBook(state.storage.sql).read(today).find(card => card.card === 'card:brief')?.sent).toBe(true);
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM schedule WHERE kind = 'reminder'").toArray().map(row => row.status)).not.toContain('armed');
+      expect(world.texts.slice(before).filter(text => text === REPLY)).toHaveLength(2);
 
       expect(telegram.sends).toEqual([]);
       expect(world.unlisted).toEqual([]);
@@ -156,7 +175,40 @@ describe('an owner whose only surface is WhatsApp, on a deploy with no Telegram 
   });
 });
 
+describe('a harness command an owner sends on WhatsApp, on a deploy with no Telegram bot', { timeout: 30_000 }, () => {
+  it('is answered on WhatsApp with the switch on', async () => {
+    await ownerOn('surface-whatsapp-harness', { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 60_000 }, ON, async (owner) => {
+      const admitted = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': WA_SUBJECT },
+        body: JSON.stringify({ messages: [{ from: WA_SUBJECT, id: 'wamid.in.trace', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: '/trace' } }] }) }));
+      expect(admitted.status).toBe(200);
+      await drainWhatsAppTurns(owner);
+      expect(world.texts.length).toBeGreaterThan(0);
+      expect(world.texts).not.toContain(REPLY);
+      expect(telegram.sends).toEqual([]);
+    });
+  });
+});
+
 describe('the surface a caller without one reaches, with the switch on', () => {
+  it('follows the owner\'s own choice of surface for proactive work over the app-first default', async () => {
+    const name = 'surface-chose-whatsapp';
+    await ownerOn(name, { app_subject: String(appSubjectFor(name)), ...whatsappOnly, [PROACTIVE_SURFACE_KEY]: 'whatsapp' }, ON, async (owner, state) => {
+      expect((await event(owner, 'chose-1')).status).toBe(200);
+      expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
+      expect(world.texts).toContain('Event - uptime: Deploy finished');
+    });
+  });
+
+  // An iMessage send outside the owner's own turn has no route; its caller acknowledges a send it only drops while a turn
+  // runs, so a notice there is never recorded as sent.
+  it('never acknowledges a notice on iMessage, even while an iMessage turn is running', async () => {
+    await ownerOn('surface-imessage-turn', {}, ON, async (owner) => {
+      const inner = owner as unknown as { activeIMessage: unknown; setup(channel: string): unknown; notifyOwner(surface: string, runtime: unknown, text: string): Promise<string> };
+      inner.activeIMessage = { updateId: 1 };
+      expect(await inner.notifyOwner('imessage', inner.setup('imessage'), 'Event - uptime: Deploy finished')).toBe('unroutable');
+    });
+  });
+
   it('stays Telegram for an owner still linked there', async () => {
     await ownerOn('surface-telegram-linked', { telegram_subject: '7' }, { ...ON, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' }, async (owner, state) => {
       expect((await event(owner, 'tg-1')).status).toBe(200);

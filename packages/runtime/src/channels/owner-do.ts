@@ -761,18 +761,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The surface for a caller with none of its own: the console, Google consent, an event notice, the owner's runs. With
   // OWNER_SURFACE_DEFAULT on, Telegram only while the owner is linked there on a deploy that runs it; then the app, WhatsApp or
   // iMessage they are bound on; the app when none is yet, where no owner is bound and a send goes nowhere.
+  // Among the surfaces they are bound on, the owner's own choice for proactive work comes first.
   private ownerSurface(): ChannelKind {
-    if (this.env.OWNER_SURFACE_DEFAULT !== '1') return 'telegram';
+    if (!this.surfaceRouting()) return 'telegram';
     const kv = this.ctx.storage.kv;
     if (this.env.TELEGRAM_BOT_TOKEN && kv.get<boolean>('telegram_unlinked') !== true
       && resolveOwnerTelegramId(kv.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null) > 0) return 'telegram';
-    return this.appBound() ? 'app' : this.whatsappBound() ? 'whatsapp' : this.imessageBound() ? 'imessage' : 'app';
+    const bound: Readonly<Record<ProactiveTarget, boolean>> = { app: this.appBound(), whatsapp: this.whatsappBound(), imessage: this.imessageBound() };
+    return wantedTargets(proactiveSurface(kv, proactiveBothDefault(this.env))).find(target => bound[target])
+      ?? (bound.app ? 'app' : bound.whatsapp ? 'whatsapp' : bound.imessage ? 'imessage' : 'app');
   }
+  private surfaceRouting(): boolean { return this.env.OWNER_SURFACE_DEFAULT === '1'; }
   // A notice outside any turn, on `surface` through its runtime. The app has no caller that delivers outside a turn, so the
-  // notice is written into the transcript of the owner the directory admits. 'blocked': it certainly did not leave (the gate
-  // refused, or the directory does not admit the owner or cannot say); 'held': WhatsApp keeps it until it can deliver. A throw
-  // is an outcome nobody can know.
-  private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string): Promise<'sent' | 'held' | 'blocked'> {
+  // notice is written into the transcript of the owner the directory admits; the caller holds the turn queue for that write,
+  // as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused, or the directory
+  // does not admit the owner or cannot say); 'unroutable': iMessage takes no send outside its own turn, and its caller would
+  // acknowledge one it only drops while a turn runs; 'held': WhatsApp keeps it until it can deliver. A throw is an outcome
+  // nobody can know.
+  private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string): Promise<'sent' | 'held' | 'blocked' | 'unroutable'> {
+    if (surface === 'imessage') return 'unroutable';
     if (surface === 'app') {
       const found = await this.appOwnerLookup();
       if (found.kind !== 'admitted') return 'blocked';
@@ -1436,7 +1443,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async settleRetiredWhatsApp(retired: readonly string[], channel?: ChannelKind): Promise<void> {
     if (!retired.length) return;
     try {
-      const runtime = this.setup(channel ?? this.ownerSurface());
+      const runtime = this.setup(channel ?? (this.surfaceRouting() ? 'whatsapp' : 'telegram'));
       await runtime.ready;
       await runtime.finalOutbox.settleEnded(retired, runtime.settleFinal);
     } catch { console.error('whatsapp unlink settlement deferred'); }
@@ -2679,16 +2686,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const surface = this.ownerSurface(), runtime = this.setup(surface), { runs, log } = runtime;
     const run = runs.start('event', null);
     const summary = `${source}: ${envelope.title}`.slice(0, 180);
-    let sent: 'sent' | 'held' | 'blocked' | null = null;
+    let sent: Awaited<ReturnType<OwnerDO['notifyOwner']>> | null = null;
     try {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
-        sent = await this.notifyOwner(surface, runtime, `Event - ${summary}${url ? `\n${url}` : ''}`);
-        // Refused at the gate (its own line names why) or by the directory: nothing left the Worker, a definite non-send, not an unknown one.
-        if(sent==='blocked'){
+        const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
+        sent = surface === 'app' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
+        // a definite non-send, not an unknown one.
+        if(sent==='blocked'||sent==='unroutable'){
           inbox.undelivered(source,delivery);
-          runs.finish(run.id,'stopped',`${source}: notification not sent; refused at the ownership check`.slice(0,180));
-          log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:'notification_blocked' });
+          runs.finish(run.id,'stopped',`${source}: notification not sent; ${sent==='blocked'?'refused at the ownership check':'the owner\'s surface takes no notice outside a conversation'}`.slice(0,180));
+          log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:sent==='blocked'?'notification_blocked':'notification_unroutable' });
           return new Response('ok');
         }
       }
@@ -3106,8 +3115,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { outcome, bot, fresh } = await google.finish(input);
     if (fresh && outcome.kind === 'linked') {
       const can = [googleHas(outcome.scopes, 'calendar') ? 'read your calendar' : '', googleHas(outcome.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
-      await this.notifyOwner(surface, runtime, `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}`)
-        .then(sent => { if (sent === 'blocked') log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, code: 'send_blocked' }); })
+      const text = `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}`;
+      await (this.surfaceRouting()
+        ? this.notifyOwner(surface, runtime, text).then(sent => { if (sent === 'blocked' || sent === 'unroutable') log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, code: `send_${sent}` }); })
+        : runtime.api.sendMessage({ chat_id: runtime.owner, text }))
         .catch((error: unknown) => log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, error: String(error), code: 'send_failed' }));
     }
     return { outcome, bot };
@@ -3839,7 +3850,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number, channel: ChannelKind): Promise<string> {
-    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup(channel);
+    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup(this.surfaceRouting() ? channel : 'telegram');
     if (command.kind === 'trace') return traces.recent(timezone, command.filter);
     if (command.kind === 'e2e') return traces.checklist(timezone);
     if (command.kind === 'usage') return traces.usage();
