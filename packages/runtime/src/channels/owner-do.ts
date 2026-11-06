@@ -23,7 +23,7 @@ import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
 import { reactToMessageHandler, type TapbackPort } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
@@ -1138,7 +1138,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeIMessage: IMessageInboxRecord | null = null;
   private iMessageProgress: ProgressPacer | null = null;
   // The running iMessage turn's parts beyond its text (its files, opened before it started, and the owner's tapbacks); held in memory for that turn only.
-  private iMessageOpened: ReturnType<typeof iMessageTurnParts> = null;
+  private iMessageOpened: (NonNullable<ReturnType<typeof iMessageTurnParts>> & { runId: string }) | null = null;
   // The running WhatsApp burst's earlier messages, keyed by the update its turn runs as; the turn reads them with its own.
   private whatsappEarlier: Readonly<{ updateId: number; turns: readonly import('./telegram-polling').TelegramInboundTurn[] }> | null = null;
   private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
@@ -1188,7 +1188,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const media = await openIMessageTurnMedia(this.imessageHost, record, scope);
         if (media.kind !== 'answered') {
-          this.iMessageOpened = iMessageTurnParts(record, media.kind === 'opened' ? media : null);
+          const parts = iMessageTurnParts(record, media.kind === 'opened' ? media : null);
+          this.iMessageOpened = parts && { ...parts, runId: scope.runId };
           this.iMessageProgress = this.startIMessageProgress(record, scope);
           const subject = appSubjectFor(record.ownerDoName);
           await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: iMessageTurnText(record) } }, 'imessage', true, scope);
@@ -4993,7 +4994,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
         if (earlier.length) turn = { ...turn, earlier };
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
-        const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
+        const opened = openedForTurn(this.iMessageOpened, turn);
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
         const notes = turnHooks?.notes(turn) ?? [];
         if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
