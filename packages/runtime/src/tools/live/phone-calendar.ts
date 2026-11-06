@@ -66,7 +66,10 @@ export const phoneCalendarReader = (book: Pick<DeviceCalendarBook, 'read'>, goog
     for (const account of accounts) {
       const client = await google.client('calendar', undefined, undefined, account.email);
       if (!client) return null;
-      for (const event of await client.events(from, to, GOOGLE_EVENTS_PER_ACCOUNT, true)) if (event.ical_uid) uids.add(event.ical_uid);
+      const events = await client.events(from, to, GOOGLE_EVENTS_PER_ACCOUNT, true);
+      // A read that filled its page may have left events out: the comparison is unknown, not partial.
+      if (events.length >= GOOGLE_EVENTS_PER_ACCOUNT) return null;
+      for (const event of events) if (event.ical_uid) uids.add(event.ical_uid);
     }
     return uids;
   },

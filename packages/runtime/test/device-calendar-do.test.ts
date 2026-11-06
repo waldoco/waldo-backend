@@ -41,7 +41,7 @@ describe('the owner object\'s phone-calendar routes', () => {
     expect((await ask(post('/nowhere', {}))).status).toBe(404);
   }));
 
-  it('a phone change waits for the update sweep and becomes part of its one job; a revoked consent leaves nothing to judge', () => inObject(async (state) => {
+  it('a phone change waits for the update sweep and becomes part of its one job, once', () => inObject(async (state) => {
     const sql = state.storage.sql, phone = deviceCalendarBook(sql, () => NOW), tx = <T,>(work: () => T) => state.storage.transactionSync(work);
     phone.grant(grant, 'g');
     phone.ingest(snapshot([meeting, standup]) as never, 'a');
@@ -69,12 +69,18 @@ describe('the owner object\'s phone-calendar routes', () => {
       state: async () => [{ id: 'acct-1', email: 'owner@example.test', error: null, calendar: true, mail: true, tasks: false }],
       client: async () => (uids === null ? null : { events: async () => uids.map((uid, index) => ({ id: `g${index}`, title: 'x', start: meeting.start, end: meeting.end, all_day: false, ical_uid: uid })) }),
     }) as never;
+    const full = ({
+      state: async () => [{ id: 'acct-1', email: 'owner@example.test', error: null, calendar: true, mail: true, tasks: false }],
+      client: async () => ({ events: async () => Array.from({ length: 250 }, (_, index) => ({ id: `g${index}`, title: 'x', start: meeting.start, end: meeting.end, all_day: false, ical_uid: index === 0 ? 'shared-uid@example.test' : `u${index}` })) }),
+    }) as never;
     const compared = await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google(['shared-uid@example.test'])), clock));
     expect(compared).toMatchObject({ state: 'available', on_google: 1, google_compared: true, more: 0, phones: [{ phone: 1, age_minutes: 30, complete: true }] });
     expect((compared as { events: { title: string; may_be_on_google: boolean }[] }).events.map(event => [event.title, event.may_be_on_google])).toEqual([['Standup', true]]);
     const unknown = await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google(null)), clock));
     expect(unknown).toMatchObject({ on_google: 0, google_compared: false });
     expect((unknown as { events: unknown[] }).events).toHaveLength(2);
+    // A Google read that filled its page may have missed events: the comparison is unknown, never partial.
+    expect(await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, full), clock))).toMatchObject({ on_google: 0, google_compared: false });
     book.withdraw({ request_id: 'dcal-wd-0001', purpose: 'storage_compute', expected_epoch: 1 }, 'w');
     expect(await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google([])), clock))).toEqual({ state: 'unavailable', reason: 'consent_required' });
   }));

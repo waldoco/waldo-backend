@@ -161,12 +161,14 @@ export type DeviceContextConsentV1 = z.infer<typeof deviceContextConsentV1Schema
 //   phone: no attendees, notes or links. Events that end more than a day ago are dropped; a phone not heard from in 30 days
 //   is dropped whole. Account deletion removes it with the owner's object.
 // - Egress: the events reach the owner's model context when a turn reads them (query_phone_calendar), and the change
-//   between two snapshots reaches the day's update judge as calendar changes; titles reach the owner's own pushes as Google
-//   titles do. Nothing reaches logs: they carry counts and codes only. Calendar text is other people's words: it is data in
-//   every prompt, never instructions.
+//   between two snapshots reaches the day's update judge as calendar changes (a push about one says only that the day changed).
+//   Withdrawing also removes those changes from what the next day card reads; what already reached the owner as a message
+//   stays in their history. Nothing reaches logs: they carry counts and codes only. Calendar text is other people's words: it
+//   is data in every prompt, never instructions.
 // - Google: the same meeting often sits on a phone calendar and a connected Google calendar. When the phone gives an event's
-//   iCal UID and a connected Google event has the same one, the read leaves the phone's copy out. Without a UID the model is
-//   told the two may be the same event; code never guesses by title or time.
+//   iCal UID and a connected Google event has the same one, the read leaves the phone's copy out, and so does the update judge
+//   when a Google change in the same batch names it. Otherwise the model is told the two may be the same event; code never
+//   guesses by title or time. An event on a calendar the owner stops sharing is dropped, never reported as cancelled.
 export const DEVICE_CALENDAR_PURPOSES_V1 = ['storage_compute', 'model_processing'] as const;
 export const DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1 = 262_144;
 export const DEVICE_CALENDAR_MAX_EVENTS_V1 = 500;

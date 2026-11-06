@@ -81,7 +81,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   let checked: SweepChecked;
   let changes = read.changes;
   try { checked = deps.transaction((): SweepChecked => {
-    changes = [...writeChanges(updates, read), ...(deps.phone?.takeChanges() ?? [])];
+    changes = withPhoneChanges(writeChanges(updates, read), deps.phone?.takeChanges() ?? []);
     let recordId = changes.length ? updates.record(deps.day, deps.now, changes, null) : null;
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
@@ -105,6 +105,13 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   if (changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
   const coded = read.delta?.codes.length ? { ...checked, delta: read.delta.codes } : checked;
   return read.seen?.seedCapped ? { ...coded, seedCapped: true } : coded;
+};
+
+// A phone change to a meeting a Google change in the same batch already names by its iCal UID is left out, so the owner hears
+// it once. Any other phone change may still be a Google event under another id, and says so.
+export const withPhoneChanges = (google: readonly Change[], phone: readonly Change[]): readonly Change[] => {
+  const uids = new Set(google.flatMap(change => change.uid ? [change.uid] : []));
+  return [...google, ...phone.filter(change => !(change.uid && uids.has(change.uid)))];
 };
 
 // The harness's wake hint after an ingestion commits: ids only, never text, emitted outside the transaction. Each consumer

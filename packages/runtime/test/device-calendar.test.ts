@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { DeviceCalendarSnapshotV1 } from '../../contracts/src/app/device-context';
 import { deviceCalendarBook, phoneEventRef } from '../src/channels/device-calendar';
-import { touchesDay, type Change } from '../src/channels/update-cards';
+import { touchesDay, updateBook, type Change } from '../src/channels/update-cards';
+import { withPhoneChanges } from '../src/channels/update-sweep';
 
 // Synthetic phone calendars: made-up names, ids and times.
 const NOW = Date.parse('2026-11-09T06:00:00Z');
@@ -16,10 +17,10 @@ const snap = (over: Partial<DeviceCalendarSnapshotV1> = {}, at = NOW): DeviceCal
   observed_at: new Date(at).toISOString(), window: { from: new Date(at - 86_400_000).toISOString(), to: new Date(at + 14 * 86_400_000).toISOString() },
   times_only: false, complete: true, calendars: [{ calendar_id: '7', name: 'Work', account_type: 'exchange' }], events: [meeting, lunch], ...over,
 });
-const withBook = (work: (book: ReturnType<typeof deviceCalendarBook>, clock: { now: number }) => void | Promise<void>) =>
+const withBook = (work: (book: ReturnType<typeof deviceCalendarBook>, clock: { now: number }, sql: SqlStorage) => void | Promise<void>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`device-calendar-${seq += 1}`)), async (_instance, state) => {
     const clock = { now: NOW };
-    await work(deviceCalendarBook(state.storage.sql, () => clock.now), clock);
+    await work(deviceCalendarBook(state.storage.sql, () => clock.now), clock, state.storage.sql);
   });
 const granted = (book: ReturnType<typeof deviceCalendarBook>) => book.grant({ request_id: 'dcal-grant-0001', purposes: [
   { purpose: 'storage_compute', expected_epoch: 0 }, { purpose: 'model_processing', expected_epoch: 0 }] }, 'grant-digest');
@@ -142,5 +143,62 @@ describe('phone calendar snapshots', () => {
     expect(book.takeChanges()).toEqual([]);
     const day = book.read(Date.parse('2026-11-01T04:00:00Z'), Date.parse('2026-11-02T05:00:00Z'))!;
     expect(day.events.map(event => [event.all_day, event.start])).toEqual([[true, '2026-11-01'], [false, '2026-11-02T04:30:00Z']]);
+  }));
+
+  it('a calendar the owner stops sharing is dropped, never reported as cancelled', () => withBook((book) => {
+    granted(book);
+    const personal = { device_event_id: '501', calendar_id: '3', start: '2026-11-09T16:00:00Z', end: '2026-11-09T17:00:00Z', all_day: false, title: 'Dentist', availability: 'busy' } as const;
+    book.ingest(snap({ calendars: [{ calendar_id: '7', name: 'Work', account_type: 'exchange' }, { calendar_id: '3', name: 'Personal', account_type: 'local' }], events: [meeting, lunch, personal] }), 'a');
+    book.ingest(snap(), 'b');
+    expect(book.takeChanges()).toEqual([]);
+    expect(book.read(NOW, NOW + 86_400_000)!.events.map(event => event.title)).toEqual(['Ops review', 'Lunch with team']);
+  }));
+
+  it('a snapshot cut at its cap keeps what it did not send, so the next complete one reports no false news', () => withBook((book) => {
+    granted(book);
+    book.ingest(snap(), 'a');
+    book.ingest(snap({ complete: false, events: [meeting] }), 'b');
+    expect(book.read(NOW, NOW + 86_400_000)!.events).toHaveLength(2);
+    book.ingest(snap(), 'c');
+    expect(book.takeChanges()).toEqual([]);
+  }));
+
+  it('an all-day event lasts the phone\'s whole local day, read in a narrow window west of UTC', () => withBook((book, clock) => {
+    granted(book);
+    // 17:00 in Los Angeles on 9 November is 01:00Z on the 10th: the day's out-of-office has not ended there.
+    clock.now = Date.parse('2026-11-10T01:00:00Z');
+    const away = { device_event_id: '90', calendar_id: '7', start: '2026-11-09', end: '2026-11-10', all_day: true, title: 'Out of office', availability: 'free' } as const;
+    book.ingest(snap({ timezone: 'America/Los_Angeles', events: [away] }, clock.now), 'a');
+    expect(book.read(clock.now, clock.now + 3_600_000)!.events.map(event => event.title)).toEqual(['Out of office']);
+    expect(book.read(Date.parse('2026-11-09T00:00:00Z'), Date.parse('2026-11-09T07:00:00Z'))!.events).toEqual([]);
+  }));
+
+  it('refuses a snapshot whose zone is not a real one', () => withBook((book) => {
+    granted(book);
+    expect(book.ingest(snap({ timezone: 'Mars/Olympus' }), 'a')).toBe('invalid_request');
+  }));
+
+  it('withdrawing strips the phone changes the sweep already recorded for the next card, and leaves the rest', () => withBook((book, _clock, sql) => {
+    granted(book);
+    book.ingest(snap(), 'a');
+    book.ingest(snap({ events: [lunch] }), 'b');
+    const updates = updateBook(sql);
+    const google: Change = { source: 'calendar', kind: 'added', detail: '{"title":"Board call"}', ref: 'event:g1' };
+    updates.record('2026-11-09', NOW, [google, ...book.takeChanges()], null);
+    book.withdraw({ request_id: 'dcal-wd-0002', purpose: 'storage_compute', expected_epoch: 1 }, 'w');
+    const kept = sql.exec<{ changes: string }>('SELECT changes FROM update_cards').toArray().map(row => JSON.parse(row.changes) as Change[]);
+    expect(kept).toEqual([[google]]);
+    expect(updates.unfolded('UTC')).not.toContain('Ops review');
+  }));
+
+  it('a phone change a Google change in the same batch names by iCal UID is said once; any other says it may be on Google', () => withBook((book) => {
+    granted(book);
+    book.ingest(snap({ events: [{ ...meeting, ical_uid: 'uid-1@example.test' }, lunch] }), 'a');
+    book.ingest(snap({ events: [] }), 'b');
+    const phone = book.takeChanges();
+    const google: Change = { source: 'calendar', kind: 'cancelled', detail: '{"title":"Ops review"}', ref: 'event:g1', uid: 'uid-1@example.test' };
+    const batch = withPhoneChanges([google], phone);
+    expect(batch.map(change => change.ref)).toEqual(['event:g1', phoneEventRef(DEVICE, '1043')]);
+    expect(JSON.parse(batch[1]!.detail)).toMatchObject({ may_be_on_google: true, title: 'Lunch with team' });
   }));
 });

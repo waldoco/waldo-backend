@@ -25,6 +25,7 @@ describe('device calendar', () => {
     expect(deviceContextSignalV1Schema.options).toEqual(['place', 'calendar']);
     const row = (purpose: string) => ({ signal: 'calendar', purpose, version: 1, status: 'granted', epoch: 1, granted_at: '2026-11-08T08:00:00.000Z', withdrawn_at: null });
     expect(deviceContextConsentListV1Schema.safeParse({ consents: [row('storage_compute'), row('model_processing')] }).success).toBe(true);
+    expect(deviceContextConsentListV1Schema.safeParse({ consents: [row('storage_compute'), row('storage_compute')] }).success).toBe(false);
   });
 
   it('the calendar consent screen grants storage and model use together, and withdraws one at a time', () => {

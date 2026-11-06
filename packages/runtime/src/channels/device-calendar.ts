@@ -3,6 +3,7 @@ import {
   deviceCalendarConsentGrantBatchV1Schema, deviceCalendarConsentWithdrawV1Schema, deviceCalendarSnapshotV1Schema,
   type DeviceCalendarSnapshotV1, type DeviceCalendarStoredV1, type DeviceContextConsentV1,
 } from '../../../contracts/src/app/device-context';
+import { isTimeZone, localDayWindow } from '../health/scores/time';
 import { md5Hex } from './md5';
 import type { Change } from './update-cards';
 
@@ -34,9 +35,11 @@ export type PhoneEvent = Readonly<{ phone: number; calendar: string | null; acco
 export type PhoneCalendarRead = Readonly<{ phones: readonly Readonly<{ phone: number; observed_at: number; times_only: boolean; complete: boolean }>[]; events: readonly PhoneEvent[] }>;
 
 const iso = (at: number | null) => (at === null ? null : new Date(at).toISOString());
-const instantOf = (time: string) => Date.parse(time.length === 10 ? `${time}T00:00:00Z` : time);
+// An all-day event's dates are the phone's own days: each starts at its local midnight in the phone's zone.
+const instantOf = (time: string, timezone: string) => (time.length === 10 ? localDayWindow(time, timezone).start : Date.parse(time));
 // The id a change names an event by: stable across snapshots, and no OS id reaches a prompt.
-export const phoneEventRef = (deviceId: string, eventId: string) => `phone:${md5Hex(`${deviceId}\u0000${eventId}`).slice(0, 16)}`;
+const PHONE_REF = 'phone:';
+export const phoneEventRef = (deviceId: string, eventId: string) => `${PHONE_REF}${md5Hex(`${deviceId}\u0000${eventId}`).slice(0, 16)}`;
 
 export const deviceCalendarBook = (sql: Sql, now: () => number) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS device_calendar_consent (purpose TEXT PRIMARY KEY, epoch INTEGER NOT NULL, granted_at INTEGER, withdrawn_at INTEGER)`);
@@ -70,9 +73,15 @@ export const deviceCalendarBook = (sql: Sql, now: () => number) => {
     sql.exec('DELETE FROM device_calendar_requests WHERE at < ?', now() - RECEIPTS_KEPT_MS);
     sql.exec('INSERT INTO device_calendar_requests (request_id, operation, digest, response, at) VALUES (?, ?, ?, ?, ?)', requestId, operation, digest, JSON.stringify(response), now());
   };
+  // Everything the phones sent, including the changes the update sweep already recorded for the next card: those rows keep
+  // only the changes that came from elsewhere. What already reached the owner as a message stays in their history.
   const purge = () => {
     for (const table of ['device_calendar_phones', 'device_calendar_events', 'device_calendar_changes']) sql.exec(`DELETE FROM ${table}`);
     sql.exec("DELETE FROM device_calendar_requests WHERE operation = 'ingest'");
+    if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'update_cards'").toArray().length) {
+      sql.exec(`UPDATE update_cards SET changes = (SELECT json_group_array(json(value)) FROM json_each(update_cards.changes) WHERE coalesce(json_extract(value, '$.ref'), '') NOT LIKE '${PHONE_REF}%')
+        WHERE EXISTS (SELECT 1 FROM json_each(update_cards.changes) WHERE json_extract(value, '$.ref') LIKE '${PHONE_REF}%')`);
+    }
   };
   const dropPhone = (deviceId: string) => {
     sql.exec('DELETE FROM device_calendar_events WHERE device_id = ?', deviceId);
@@ -126,7 +135,7 @@ export const deviceCalendarBook = (sql: Sql, now: () => number) => {
       if (refused !== null) return refused;
       if (consent('storage_compute')!.epoch !== snapshot.expected_epoch) return 'epoch_conflict';
       const at = now(), observed = Date.parse(snapshot.observed_at), from = Date.parse(snapshot.window.from), to = Date.parse(snapshot.window.to);
-      if (observed > at + 10 * 60_000 || observed < at - DAY_MS || from > at + HOUR_MS || to < at || from < at - 2 * DAY_MS || to > at + 16 * DAY_MS) return 'invalid_request';
+      if (!isTimeZone(snapshot.timezone) || observed > at + 10 * 60_000 || observed < at - DAY_MS || from > at + HOUR_MS || to < at || from < at - 2 * DAY_MS || to > at + 16 * DAY_MS) return 'invalid_request';
       prune();
       const answer = (status: 'accepted' | 'superseded') => { const response = { request_id: snapshot.request_id, replayed: false, status }; keep(snapshot.request_id, 'ingest', digest, response); return response; };
       const phone = sql.exec<{ observed_at: number }>('SELECT observed_at FROM device_calendar_phones WHERE device_id = ?', snapshot.device_id).toArray()[0];
@@ -138,9 +147,14 @@ export const deviceCalendarBook = (sql: Sql, now: () => number) => {
       const before = new Map(sql.exec<StoredEvent>('SELECT * FROM device_calendar_events WHERE device_id = ?', snapshot.device_id).toArray().map(row => [row.device_event_id, row]));
       const names = new Map(snapshot.calendars.map(calendar => [calendar.calendar_id, calendar]));
       const changes = phone ? changesBetween(snapshot, before, names, at) : [];
-      sql.exec('DELETE FROM device_calendar_events WHERE device_id = ?', snapshot.device_id);
+      // A complete snapshot replaces the phone's events. One cut at its cap replaces only what it sent and what sat on a calendar
+      // no longer shared: the rest is unknown, so it stays as last seen.
+      if (snapshot.complete) sql.exec('DELETE FROM device_calendar_events WHERE device_id = ?', snapshot.device_id);
+      else for (const was of before.values()) if (!names.has(was.calendar_id) || snapshot.events.some(event => event.device_event_id === was.device_event_id)) {
+        sql.exec('DELETE FROM device_calendar_events WHERE device_id = ? AND device_event_id = ?', snapshot.device_id, was.device_event_id);
+      }
       for (const event of snapshot.events) {
-        if (instantOf(event.end) < at - ENDED_KEPT_MS) continue;
+        if (instantOf(event.end, snapshot.timezone) < at - ENDED_KEPT_MS) continue;
         sql.exec(`INSERT INTO device_calendar_events (device_id, device_event_id, calendar_id, start_at, end_at, all_day, title, location, availability, ical_uid, seen_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, snapshot.device_id, event.device_event_id, event.calendar_id, event.start, event.end, event.all_day ? 1 : 0,
           event.title ?? null, event.location ?? null, event.availability, event.ical_uid ?? null, at);
@@ -170,16 +184,16 @@ export const deviceCalendarBook = (sql: Sql, now: () => number) => {
     read(from: number, to: number): PhoneCalendarRead | null {
       if (refusal() !== null) return null;
       prune();
-      const phones = sql.exec<{ device_id: string; observed_at: number; times_only: number; complete: number; calendars: string }>(
-        'SELECT device_id, observed_at, times_only, complete, calendars FROM device_calendar_phones ORDER BY received_at DESC').toArray();
+      const phones = sql.exec<{ device_id: string; timezone: string; observed_at: number; times_only: number; complete: number; calendars: string }>(
+        'SELECT device_id, timezone, observed_at, times_only, complete, calendars FROM device_calendar_phones ORDER BY received_at DESC').toArray();
       const events = phones.flatMap((phone, index) => {
         const calendars = new Map((JSON.parse(phone.calendars) as { calendar_id: string; name?: string; account_type: string }[]).map(calendar => [calendar.calendar_id, calendar]));
         return sql.exec<StoredEvent>('SELECT * FROM device_calendar_events WHERE device_id = ? ORDER BY start_at', phone.device_id).toArray()
-          .filter(row => instantOf(row.start_at) < to && instantOf(row.end_at) > from)
+          .filter(row => instantOf(row.start_at, phone.timezone) < to && instantOf(row.end_at, phone.timezone) > from)
           .map((row): PhoneEvent => ({ phone: index + 1, calendar: calendars.get(row.calendar_id)?.name ?? null, account_type: calendars.get(row.calendar_id)?.account_type ?? 'other',
             start: row.start_at, end: row.end_at, all_day: row.all_day === 1, ...(row.title ? { title: row.title } : {}), ...(row.location ? { location: row.location } : {}),
             availability: row.availability, ...(row.ical_uid ? { ical_uid: row.ical_uid } : {}) }));
-      }).sort((a, b) => instantOf(a.start) - instantOf(b.start));
+      }).sort((a, b) => Date.parse(a.start.length === 10 ? `${a.start}T00:00:00Z` : a.start) - Date.parse(b.start.length === 10 ? `${b.start}T00:00:00Z` : b.start));
       return { phones: phones.map((phone, index) => ({ phone: index + 1, observed_at: phone.observed_at, times_only: phone.times_only === 1, complete: phone.complete === 1 })), events };
     },
   };
@@ -191,26 +205,31 @@ export type DeviceCalendarBook = ReturnType<typeof deviceCalendarBook>;
 // compared only when both snapshots carried one, so turning "times only" on or off is not a change.
 const changesBetween = (snapshot: DeviceCalendarSnapshotV1, before: ReadonlyMap<string, StoredEvent>, names: ReadonlyMap<string, Readonly<{ name?: string; account_type: string }>>, at: number): readonly Change[] => {
   const from = Date.parse(snapshot.window.from), to = Date.parse(snapshot.window.to);
+  const zone = snapshot.timezone, time = (value: string) => instantOf(value, zone);
+  // Every phone change may be a Google event under another id: one the batch's Google changes name by UID is dropped later.
   const detail = (id: string, event: Readonly<{ calendar_id: string; start: string; end: string; all_day: boolean; title?: string | null; location?: string | null; availability: string }>) => JSON.stringify({
     id, ...(event.title ? { title: event.title } : {}), start: event.start, end: event.end, all_day: event.all_day, ...(event.location ? { location: event.location } : {}),
-    availability: event.availability, source: 'phone', ...(names.get(event.calendar_id)?.name ? { calendar: names.get(event.calendar_id)!.name } : {}), account_type: names.get(event.calendar_id)?.account_type ?? 'other' });
+    availability: event.availability, source: 'phone', ...(names.get(event.calendar_id)?.name ? { calendar: names.get(event.calendar_id)!.name } : {}), account_type: names.get(event.calendar_id)?.account_type ?? 'other',
+    may_be_on_google: true });
+  const uid = (value: string | null | undefined) => (value ? { uid: value } : {});
   const changes: Change[] = [];
   const seen = new Set<string>();
   for (const event of snapshot.events) {
     seen.add(event.device_event_id);
-    if (instantOf(event.end) <= at) continue;
+    if (time(event.end) <= at) continue;
     const id = phoneEventRef(snapshot.device_id, event.device_event_id), was = before.get(event.device_event_id);
-    if (!was) { changes.push({ source: 'calendar', kind: 'added', detail: detail(id, event), ref: id }); continue; }
+    if (!was) { changes.push({ source: 'calendar', kind: 'added', detail: detail(id, event), ref: id, ...uid(event.ical_uid) }); continue; }
     const titleChanged = !!was.title && !!event.title && was.title !== event.title;
-    const moved = was.start_at !== event.start || was.end_at !== event.end || (was.all_day === 1) !== event.all_day;
+    const moved = time(was.start_at) !== time(event.start) || time(was.end_at) !== time(event.end) || (was.all_day === 1) !== event.all_day;
     const placeChanged = !!was.location && !!event.location && was.location !== event.location;
     if (!moved && !titleChanged && !placeChanged && was.availability === event.availability) continue;
-    changes.push({ source: 'calendar', kind: 'changed', detail: detail(id, event), ref: id, before: { start: was.start_at, end: was.end_at, all_day: was.all_day === 1, title_changed: titleChanged } });
+    changes.push({ source: 'calendar', kind: 'changed', detail: detail(id, event), ref: id, ...uid(event.ical_uid), before: { start: was.start_at, end: was.end_at, all_day: was.all_day === 1, title_changed: titleChanged } });
   }
+  // An event on a calendar the owner stopped sharing is not cancelled: it is simply no longer Waldo's to see.
   if (snapshot.complete) for (const was of before.values()) {
-    if (seen.has(was.device_event_id) || instantOf(was.end_at) <= at || instantOf(was.start_at) >= to || instantOf(was.end_at) <= from) continue;
+    if (seen.has(was.device_event_id) || !names.has(was.calendar_id) || time(was.end_at) <= at || time(was.start_at) >= to || time(was.end_at) <= from) continue;
     const id = phoneEventRef(snapshot.device_id, was.device_event_id);
-    changes.push({ source: 'calendar', kind: 'cancelled', detail: detail(id, { ...was, start: was.start_at, end: was.end_at, all_day: was.all_day === 1 }), ref: id,
+    changes.push({ source: 'calendar', kind: 'cancelled', detail: detail(id, { ...was, start: was.start_at, end: was.end_at, all_day: was.all_day === 1 }), ref: id, ...uid(was.ical_uid),
       before: { start: was.start_at, end: was.end_at, all_day: was.all_day === 1, title_changed: false } });
   }
   if (changes.length <= CHANGES_PER_SNAPSHOT) return changes;
