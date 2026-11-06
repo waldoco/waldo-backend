@@ -84,7 +84,8 @@ export type ToolRecord = Readonly<{
 //  owner_inward   it writes only into the owner's own space, sends, publishes and grants nothing, and the owner can undo it. It runs
 //                 without a card only in a turn the owner's own message started, so the reply lists it (conversation/inward-receipts);
 //                 with no owner in the turn it is carded.
-export type TaintedWriteRefusal = Readonly<{ refused: 'owner_statement'; reason: string }>;
+// unless_owner_stated: the refusal lifts for a figure the owner typed in their own words in the message that started this turn.
+export type TaintedWriteRefusal = Readonly<{ refused: 'owner_statement'; reason: string; unless_owner_stated?: 'minutes' }>;
 export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card' | 'instructions_only' | 'narrows' | 'owner_inward'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
@@ -183,7 +184,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   set_schedule_preference: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
   log_meal: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
   log_workout: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
-  set_sleep_need: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
+  set_sleep_need: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'sleep_need_set', tainted: { refused: 'owner_statement', reason: 'the stated sleep need is a health figure; a card would keep it in the owner\'s ledger', unless_owner_stated: 'minutes' }, replay: unknown(NOT_INSPECTED) },
   track_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'medication_tracked', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   log_medication: { brain: 'medicines', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'medication_logged', tainted: { refused: 'owner_statement', reason: 'the owner\'s medicines are taken only from what the owner says; a card would keep them in the owner\'s ledger' }, replay: unknown(NOT_INSPECTED) },
   list_medications: { brain: 'medicines', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: read() },
