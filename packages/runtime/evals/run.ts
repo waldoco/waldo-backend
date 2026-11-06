@@ -82,7 +82,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
   };
   const reminders = {
     set: async (args: SetReminderArgs) => ({ id: 'r1', note: args.note, at: args.at, repeat: args.repeat, ...(args.cron === undefined ? {} : { cron: args.cron }) }),
-    list: () => [], unreadable: () => 0, cancel: async () => true, cancelAll: async () => 0, note: () => null, fired: () => undefined,
+    list: () => [], unreadable: () => 0, cancel: async () => true, cancelAll: async () => 0, note: () => null, outside: () => false, fired: () => undefined,
   } satisfies ReminderBook;
   const web = {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
