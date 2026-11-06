@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, CLAIM_OPS_SCHEMA, RETIRE_RULES } from '../src/memory/claims';
+import { applyClaimOps, claimStore, CLAIM_OPS_SCHEMA, RETIRE_RULES, withoutBringUpLess } from '../src/memory/claims';
 import { recallForTurn } from '../src/memory/turn-recall';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { outsideView } from '../src/memory/outside-view';
@@ -168,6 +168,20 @@ describe('a topic purge that deletes a claim already being purged', () => {
     store.purge([], '2026-10-13T00:01:00.000Z', ['Globex']);
     expect(store.allClaims()).toEqual([]);
     expect(sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM purge_pending').one().n).toBe(0);
+  }));
+});
+
+describe('a turn that speaks unprompted', () => {
+  it('is not told what used to be true about a note the owner asked Waldo to bring up less', () => withStore(store => {
+    store.add(owned('Works at Acme'), T1);
+    store.add(owned('Plays squash on Fridays'), T1);
+    store.bringUpLess(1, T1, true);
+    store.retire(1, T2);
+    store.retire(2, T2);
+    expect(store.recallReplaced('acme')).toHaveLength(1);
+    expect(withoutBringUpLess(store).recallReplaced('acme')).toEqual([]);
+    expect(withoutBringUpLess(store).recallReplaced('squash')).toHaveLength(1);
+    expect(withoutBringUpLess(store).replacedClaims(5).map(claim => claim.text)).toEqual(['Plays squash on Fridays']);
   }));
 });
 

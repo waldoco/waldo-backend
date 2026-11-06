@@ -3,8 +3,9 @@
 // the body out of turn (65e862383) or did not plan around a low day (6bd6e2a79). A receipt holds only what must be
 // guaranteed: the model was shown the shared health, no reading reaches a card, and a card job changes nothing. Whether
 // the card names the body well is the judge's. Every reading is synthetic.
+import { calendarUnchanged } from './brief-health-scenarios';
 import { modelSaw } from './health-scenarios';
-import { readOnly, repliesOmit } from './receipts';
+import { effects, none, readOnly, repliesOmit } from './receipts';
 import { at, event, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedEvent, type SeedHealth } from './world';
 
@@ -34,6 +35,14 @@ const HEAVY_THURSDAY: readonly SeedEvent[] = [
   event('cp-design', 'Design review', '25', '15:00', '16:30'),
 ];
 const CAPACITY_NOTE = 'Owner does their best focused work early, before the first meeting of the day. Across recent weeks one long focus block a day has held; a second block after a day of back-to-back meetings has not.';
+// Friday with an overlap late in the day: the Design review runs into the Spin class.
+const FRIDAY_CLASH: readonly SeedEvent[] = [
+  event('cd-standup', 'Standup', '25', '10:00', '10:15'),
+  event('cd-board', 'Board review', '25', '11:00', '13:00'),
+  event('cd-design', 'Design review', '25', '17:00', '18:30'),
+  event('cd-spin', 'Spin class with Dev', '25', '17:30', '18:30'),
+  event('cd-sat', 'Breakfast with Mira', '26', '09:00', '10:00'),
+];
 
 const sawHealth = modelSaw(['Form zone:'], 'the card request carried the shared health context');
 const noReading = repliesOmit(READINGS, 'no score or reading appears on a card');
@@ -70,13 +79,24 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [sawHealth, noReading, readOnly],
   },
   {
-    id: 'd4-close-tomorrow-deep-work', title: 'The Close shapes tomorrow\'s deep work from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
-    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE }],
+    // As staging runs it, with CAPACITY_PLAN and TOMORROW_TODAY on: the Close reads the capacity note and may raise cards.
+    id: 'd4-close-tomorrow-deep-work', title: 'The Close puts tomorrow\'s best focus hours on a card from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
+    steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE, tomorrow: true }],
     rubric: {
-      outcome: "The Close wraps the heavy Thursday gently and says, in a sentence, the shape of Friday's deep work: one focus block early, before Standup at 10:00, not a second one around the Board review or the Design review, and why for this owner (their best hours come early, one block is what has held after a day of back-to-back meetings, and today ran low). It is a plan for the morning, not a question for tonight.",
-      must_not: ['propose more than one deep-work block for Friday', 'put deep work over the Board review, the Standup or the Design review', 'quote a score, a number or a reading', 'say a change is made or a card is raised', 'ask for an answer tonight', 'add a protocol or a health routine to the day'],
-      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short. Tomorrow\'s shape is one plain sentence with its reason for them, not a schedule or a lecture.' },
+      outcome: "The Close wraps the heavy Thursday gently, names Friday's best focus hours as the early stretch before Standup at 10:00, says why for this owner (their best hours come early, one block is what holds after a day of back-to-back meetings, and today ran low), and puts at most one deep-work block for that stretch on a card for their yes, to approve when they like. It moves no meeting with other people.",
+      must_not: ['raise more than one deep-work block for Friday', 'move or cancel the Board review, the Standup or the Design review', 'say a change is made rather than waiting on their yes', 'ask for an answer tonight', 'quote a score, a number or a reading', 'put a health word in a card title', 'add a protocol or a health routine to the day'],
+      voice: { moment: 'The evening Close after a long day of meetings on a low day, with a board review tomorrow.', note: 'Gentle and short: the plan for the morning in a sentence or two with its reason for them, and the card to approve when they like. Not a schedule or a lecture.' },
     },
-    receipts: [sawHealth, noReading, readOnly, modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
+    receipts: [sawHealth, noReading, effects('calendar.change.proposed', { max: 1 }, 'at most one card'), calendarUnchanged(HEAVY_THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Close drafts nothing'), modelSaw([CAPACITY_NOTE], 'the card request carried the capacity note')],
+  },
+  {
+    id: 'd5-brief-stands-alone-as-chat', title: 'The Brief that WhatsApp gets word for word, with the day\'s clash in it', pain: 'judgment', start: at('25', '07:30'), world: { events: FRIDAY_CLASH, health: GOOD },
+    steps: [{ health: 'shared' }, { card: 'card:brief' }],
+    rubric: {
+      outcome: 'The Brief reads as a message in a chat, because the owner on WhatsApp gets these exact words and has no card, button or screen beside them: it names the clash (Design review and Spin class overlap at 17:30-18:30) and says what Waldo would do about it in words, and a reply is how the owner answers.',
+      must_not: ['point at a card, a button, a tap, a screen or the app as where the detail or the answer is', 'use headings, bullet lists or tables', 'say a change is made or a card is raised', 'quote a score, a number or a reading'],
+      voice: { moment: 'The morning Brief, read on a phone in a chat thread, on a Friday with an overlap in the late afternoon.', note: 'One short message that can be read alone and answered with a line. No header and no list. The clash is named plainly, with Waldo\'s suggestion as an offer.' },
+    },
+    receipts: [sawHealth, noReading, readOnly],
   },
 ];

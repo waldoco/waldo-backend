@@ -9,12 +9,14 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { NIGHTLY_ID } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { setHealthMemory } from '../src/channels/health-memory';
-import { interruptBook } from '../src/channels/interruptions';
+import { interruptBook, INTERRUPTS_KEY } from '../src/channels/interruptions';
+import { loopBook } from '../src/channels/loops';
+import { standingGrants } from '../src/channels/standing-grants';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { barrierPrompt, claimStore } from '../src/memory/claims';
 import { CAPACITY_LINES, NO_NOTE, NO_SHARED_HEALTH } from '../src/prompt/capacity';
-import { PROSE_RULE } from '../src/prompt/day-cards';
+import { PROSE_RULE, TOMORROW_TODAY_INSTRUCTION } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -260,6 +262,95 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
       await card('card:brief');
       expect(model.cards[0]!.request).toContain(NO_NOTE);
       expect(model.cards[0]!.request).toContain(JSON.stringify(CAPACITY_LINES.brief).slice(1, -1));
+    });
+  });
+});
+
+// TOMORROW_TODAY: the Close names tomorrow's best hours and puts what would protect them on the owner's cards.
+describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
+  const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early and one block holds after a heavy day' };
+  it('raises a deep-work card in the chat role, under the owner\'s limits, and the calendar waits for yes; off, it offers no card', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nTomorrow your best stretch is before Standup; a block for it waits on your yes. Done for today.' }];
+    await owned('tomorrow-close-on', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      await card('card:close');
+      expect(model.cards[0]!.tools).toContain('propose_calendar_change');
+      expect(model.cards[0]!.request).toContain(JSON.stringify(TOMORROW_TODAY_INSTRUCTION).slice(1, -1));
+      expect(model.cards[0]!.model).not.toBe(WALDO_AUXILIARY_MODEL);
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open', exact: { changes: { action: 'create', title: 'Deck' } } }]);
+      expect(calendar.created).toBe(0);
+      expect(book.spent().count).toBe(0);
+      expect(book.question()).toBeNull();
+    });
+    model.cards = []; model.card = [{ text: 'The Close\nA good day.' }];
+    await owned('tomorrow-close-off', { TOMORROW_TODAY: '0' }, async ({ card, approvals }) => {
+      await card('card:close');
+      expect(model.cards[0]!.tools).not.toContain('propose_calendar_change');
+      expect(await approvals()).toEqual([]);
+    });
+  });
+
+  it('with health shared, refuses a card whose title carries a health word, and raises the clean one', async () => {
+    health.shared = true;
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...HOLD, title: 'Low recovery focus' } }] },
+      { calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block for the deck waits on your yes.' }];
+    await owned('tomorrow-close-egress', { TOMORROW_TODAY: '1' }, async ({ card, approvals }) => {
+      await card('card:close');
+      const cards = await approvals();
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ exact: { changes: { title: 'Deck' } } });
+      expect(calendar.created).toBe(0);
+    });
+  });
+
+  it('without shared health, plans from the calendar and is told there is none', async () => {
+    model.card = [{ text: 'The Close\nTomorrow is open before three.' }];
+    await owned('tomorrow-close-no-health', { TOMORROW_TODAY: '1' }, async ({ card }) => {
+      await card('card:close');
+      expect(model.cards[0]!.request).toContain('No derived health context is available for this invocation.');
+      expect(model.cards[0]!.tools).toContain('propose_calendar_change');
+    });
+  });
+});
+
+// The Close's card under the owner's own settings: quiet hours hold the Close, and a standing grant never applies a change a
+// card job proposes: the job reads outside text, so its run is not the owner's or Waldo's own.
+describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () => {
+  const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early' };
+  it('in quiet hours the Close waits: no model call and no card', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
+    await owned('tomorrow-close-quiet', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '07:00', quiet_end: '09:00', volume: 'normal' });
+      await card('card:close');
+      expect(model.cards).toEqual([]);
+      expect(await approvals()).toEqual([]);
+      expect(dayPlanBook(state.storage.sql).read(DAY).find(row => row.card === 'card:close')?.state).toBe('held');
+    });
+  });
+
+  it('with the day\'s interruptions spent and the gap not passed, the Close still goes with its card and is not charged', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
+    await owned('tomorrow-close-spent', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+      const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
+      const spent = { day: book.spent().day, count: 2, urgent: 1, last: Date.now() - 60_000 };
+      state.storage.kv.put(INTERRUPTS_KEY, spent);
+      await card('card:close');
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
+      expect(state.storage.kv.get(INTERRUPTS_KEY)).toEqual(spent);
+      expect(book.question()).toBeNull();
+    });
+  });
+
+  it('with a live standing grant for Waldo\'s own blocks, the Close\'s block still waits on a card', async () => {
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
+    await owned('tomorrow-close-grant', { TOMORROW_TODAY: '1', AUTONOMY_OWN_CALENDAR: '1' }, async ({ state, card, approvals }) => {
+      const grants = standingGrants(state.storage, { now: () => Date.now(), newId: () => 'g1', enabled: () => true, ownerRef: () => OWNER_ID });
+      grants.grant({ scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '00:00', to: '23:59' }, weekdays: [0, 1, 2, 3, 4, 5, 6], min_lead_minutes: 5 },
+        limits: { max_per_day: 5, timezone: 'UTC' }, valid_from: AT - 86_400_000, expires_at: AT + 30 * 86_400_000 }, 'app');
+      await card('card:close');
+      expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
+      expect(calendar.created).toBe(0);
+      expect(state.storage.sql.exec<{ hop: string }>("SELECT hop FROM trace_log WHERE hop LIKE 'grant_%'").toArray().map(row => row.hop)).toEqual(['grant_eval']);
     });
   });
 });

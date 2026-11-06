@@ -146,7 +146,7 @@ export const syncedClock = (start: number): { now: number } => {
   return { get now() { return at; }, set now(value: number) { at = value; vi.setSystemTime(value); } };
 };
 
-export const harness = (over: { world?: World; plane?: Plane; clock?: { now: number }; kv?: Map<string, unknown>; configured?: boolean; doName?: string; produce?: () => Promise<unknown> } = {}): Harness => {
+export const harness = (over: { world?: World; plane?: Plane; clock?: { now: number }; kv?: Map<string, unknown>; configured?: boolean; doName?: string; produce?: (woke?: boolean) => Promise<unknown>; wakeFreshMs?: number } = {}): Harness => {
   const world = over.world ?? newWorld(), plane = over.plane ?? newPlane(), clock = over.clock ?? syncedClock(NOW), kv = over.kv ?? new Map<string, unknown>();
   const logs: WhoopLog[] = [], armed: number[] = [], produced = { count: 0 }, disarmed = { count: 0 }, edgeCalls: Record<string, unknown>[] = [];
   const doName = over.doName ?? 'owner-w';
@@ -156,6 +156,7 @@ export const harness = (over: { world?: World; plane?: Plane; clock?: { now: num
     doName: () => doName, rpc: planeRpc(plane, doName), config: configured ? CONFIG : null, proxy: configured ? oauthProxy(WORKER_ENV, workerToEdge(edge, body => edgeCalls.push(body)), () => clock.now) : null,
     now: () => clock.now, timezone: () => 'Europe/Berlin',
     kv: { get: <T>(key: string) => kv.get(key) as T | undefined, put: (key, value) => { kv.set(key, value); }, delete: key => kv.delete(key), list: <T>({ prefix }: { prefix: string }) => [...kv].filter(([key]) => key.startsWith(prefix)) as [string, T][] },
+    ...(over.wakeFreshMs !== undefined ? { wakeFreshMs: over.wakeFreshMs } : {}),
     produce: over.produce ?? (async () => { produced.count += 1; }), arm: async at => { armed.push(at); }, disarm: async () => { disarmed.count += 1; }, log: line => { logs.push(line); },
   });
   return { owner, world, plane, clock, logs, armed, produced, disarmed, kv, edgeCalls };

@@ -289,6 +289,21 @@ describe('WHOOP webhooks as hints', () => {
     expect(h.produced.count).toBe(1);
   });
 
+  it('says a night just ended, only the yes, when WAKE_BRIEF gives it a window and the hint committed a fresh night', async () => {
+    const wokes: (boolean | undefined)[] = [];
+    const produce = async (woke?: boolean) => { wokes.push(woke); };
+    const fresh = await connected({ produce, wakeFreshMs: 3 * 3_600_000 });
+    fresh.clock.now = Date.parse(String(addNight(fresh.world, 0).sleep.end)) + 20 * 60_000;
+    expect(await fresh.owner.hint({ type: 'sleep.updated', id: String(fresh.world.sleeps[0]!.id), trace: 'trace-wake-0001' })).toBe('handled');
+    const later = await connected({ produce });
+    later.clock.now = fresh.clock.now;
+    expect(await later.owner.hint({ type: 'sleep.updated', id: String(addNight(later.world, 0).sleep.id), trace: 'trace-wake-0002' })).toBe('handled');
+    const old = await connected({ produce, wakeFreshMs: 3 * 3_600_000 });
+    old.clock.now = Date.parse(String(addNight(old.world, 0).sleep.end)) + 5 * 3_600_000;
+    expect(await old.owner.hint({ type: 'sleep.updated', id: String(old.world.sleeps[0]!.id), trace: 'trace-wake-0003' })).toBe('handled');
+    expect(wokes).toEqual([true, false, false]);
+  });
+
   it('takes a recovery webhook\'s id as its sleep\'s id, and a redelivery under a new trace as a harmless replay', async () => {
     const h = await connected();
     const n = addNight(h.world, 0);

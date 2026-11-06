@@ -215,7 +215,7 @@ describe('the closed window knocks only for a record the outbox would send', () 
       { kv, subject: SUBJECT, template, knock, log: vi.fn() });
     return { route, knock };
   };
-  const record = () => ({ createdAt: Date.now() }) as never;
+  const record = () => ({ id: 'record-1', createdAt: Date.now() }) as never;
 
   it('a record the route holds (quiet hours, low volume) waits for that hold and does not knock', async () => {
     const until = Date.now() + 10 * 60_000;

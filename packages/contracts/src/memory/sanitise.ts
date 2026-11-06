@@ -286,14 +286,17 @@ export type SanitiseResult = z.infer<typeof sanitiseResultSchema>;
 const QUOTE = String.raw`["']?`;
 // The number tail, and (separately) a ratio tail (140/90) used only where a ratio is a real reading
 // (blood pressure) — never grafted onto a bare weight or count.
-const RAW_NUM = String.raw`${QUOTE}\s*\d+(?:\.\d+)?`;
-const RAW_RATIO = String.raw`${QUOTE}\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
+// Whitespace runs are never ambiguous: a quote ends one, so no two neighbouring `\s*` can split a run between them (three of
+// them in a row made a long run of blanks after a health word cost O(n^3)).
+const QUOTED = String.raw`(?:["']\s*)?`;
+const RAW_NUM = String.raw`${QUOTED}\d+(?:\.\d+)?`;
+const RAW_RATIO = String.raw`${QUOTED}\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
 // Key/value separator: one colon, equals, or whitespace char, with an optional quote on either side
 // so a quoted key and a quoted value in a serialized payload are both caught, not only prose.
-const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
+const KV = String.raw`${QUOTE}(?:\s*[:=]\s*|\s+)${QUOTED}`;
 // A STRUCTURED key/value separator — colon or equals only, no bare whitespace. A serialized field (a
 // colon/equals key carrying a number) is a health value even without a unit; bare-whitespace prose is not.
-const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTE}\s*`;
+const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTED}`;
 // Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
 const UNIT = String.raw`ms|millisec|bpm|beats|breaths?(?:[\s_-]*per[\s_-]*minute)?|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?|celsius|fahrenheit|mg(?:\/|[\s_-]*per[\s_-]*)dl|mmol(?:\/|[\s_-]*per[\s_-]*)l`;
 
@@ -402,8 +405,12 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by
 // the runtime; these four are the pinned regex forms.
 export const PII_PATTERNS = {
-  email: /\b[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
+  // A match starts where its run of local-part characters starts, so each character is read once: starting on a word boundary
+  // inside the run made a long run of "a.a.a." quadratic.
+  email: /(?<![\w._%+-])[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
+  // Not for use on its own: this is a candidate, looser than a card. Mask uuids and long hex ids first and hold a fifteen-digit
+  // match to its check digit, as cardMatches does in runtime/src/scribe/sanitiser.ts.
   // A card candidate: sixteen digits in four groups of four, or an Amex 4-6-5, with a space, dot or hyphen between groups or
   // none, and no digit on either side. The runtime keeps the candidates that sit inside a uuid and holds a fifteen-digit
   // one to its check digit, so no part of an identifier is read as a card number.
@@ -415,7 +422,7 @@ export const PII_PATTERNS = {
 // Check 4 - external content cannot forge a conversation role. There is no keyword scoring:
 // the defence against injected text is structural (fences, taint -> approval, egress checks).
 // The only rule left neutralises role tags so external text cannot open a system/user turn.
-export const ROLE_TAG_PATTERN = /<\s*\/?\s*(?:system|assistant|developer|user)\s*>/gi;
+export const ROLE_TAG_PATTERN = /<\s*(?:\/\s*)?(?:system|assistant|developer|user)\s*>/gi;
 
 // ADR-0024's 2 KB memory-block cap in UTF-16 units — the single owner both the sanitiser
 // table below and memoryContentSchema (hall.ts) derive from, so the schema seam and the

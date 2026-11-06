@@ -56,7 +56,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Runtime = Readonly<{ ready: Promise<void>; briefs(entry: ScheduleEntry): Promise<void>; finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }>;
 type Internals = Readonly<{ setup(channel: string): Runtime; outboxRoute(surface: string): OutboxRoute; asOwnerJob<T>(job: string, key: string, work: () => Promise<T>): Promise<T> }>;
-const whatsappEnv = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+const whatsappEnv = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 
 const onSurface = (name: string, surface: 'whatsapp' | 'imessage', work: (o: Readonly<{ state: DurableObjectState; owner: Internals; runtime: Runtime; now(): number; advance(ms: number): void }>) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -83,7 +83,7 @@ const drain = async (owner: Internals, runtime: Runtime, surface: string) => run
 
 it.each([
   { window: 'open', lastInbound: 60 * 60_000, expected: [`text:${NOTE}`] },
-  { window: 'closed', lastInbound: 30 * 60 * 60_000, expected: ['template:waldo_update_ready'] },
+  { window: 'closed', lastInbound: 30 * 60 * 60_000, expected: ['template:waldo_proactive_update'] },
 ])('a WhatsApp owner\'s prep note goes out on WhatsApp (window $window)', async ({ window, lastInbound, expected }) => {
   await onSurface(`calendar-prep-whatsapp-${window}`, 'whatsapp', async ({ state, owner, runtime, now, advance }) => {
     state.storage.kv.put('wa_last_inbound_ms', now() - lastInbound);
