@@ -876,12 +876,35 @@ describe('welcome build v2: one source after another, no copies, late sources on
       clock.at = T0 + WELCOME_WEB_WAIT_MS;
       await runWelcome(d);
       expect(build.view()).toMatchObject({ state: 'done', stages: { web: 'empty' } });
-      expect(transaction(() => build.lateWeb())).toBe(true);
+      expect(transaction(() => build.lateWeb(1))).toBe(true);
       lookup.open = false;
       await runWelcome(d);
       expect(asked.filter((stage) => stage === 'web')).toHaveLength(1);
       expect(active(claims).map((node) => node.label)).toContain('Speaks on product design');
-      expect(transaction(() => build.lateWeb())).toBe(false);
+      expect(transaction(() => build.lateWeb(1))).toBe(false);
+    });
+  });
+
+  it('a look-up under a new yes, after the build finished, reads the web once more and writes no copy', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, build, asked, deps: d } = v2(sql, transaction, clock, { answers: { web: answer(webNode()) } });
+      build.start();
+      await runWelcome(d);
+      expect(build.view()).toMatchObject({ state: 'done', stages: { web: 'done' } });
+      const nodes = active(claims).length, supports = claims.allClaims().length;
+      // Days later the owner runs setup again and says yes to a new look-up; it ends long after the build's own wait.
+      clock.at = T0 + 3 * 86_400_000;
+      expect(transaction(() => build.lateWeb(clock.at - 600_000))).toBe(true);
+      expect(build.view().state).toBe('building');
+      await runWelcome(d);
+      expect(asked.filter((stage) => stage === 'web')).toHaveLength(2);
+      // The same finding read again is already there: nothing new, no copy of the node, no second support.
+      expect(build.view()).toMatchObject({ state: 'done', stages: { web: 'empty' } });
+      expect(active(claims)).toHaveLength(nodes);
+      expect(claims.allClaims()).toHaveLength(supports);
+      // The same grant ending again reads nothing more.
+      expect(transaction(() => build.lateWeb(clock.at - 600_000))).toBe(false);
     });
   });
 
