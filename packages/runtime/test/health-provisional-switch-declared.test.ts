@@ -108,6 +108,13 @@ describe('PLANNING_BRIEF in the Worker config', () => {
   });
 });
 
+describe('WAKE_BRIEF and BRIEF_DAY_PLAN in the Worker config', () => {
+  it('are off in production and on in staging, with the wake limits declared in both', () => {
+    for (const name of ['WAKE_BRIEF', 'BRIEF_DAY_PLAN']) expect([name, parsed.vars[name], parsed.env.staging.vars[name]]).toEqual([name, '0', '1']);
+    for (const vars of [parsed.vars, parsed.env.staging.vars]) expect([vars.WAKE_BRIEF_FRESH_MIN, vars.WAKE_BRIEF_TURNS_PER_DAY]).toEqual(['180', '3']);
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');
@@ -126,5 +133,12 @@ describe('CAPACITY_PLAN in the Worker config', () => {
   it('is on for staging and off for production', () => {
     expect(parsed.vars.CAPACITY_PLAN).toBe('0');
     expect(parsed.env.staging.vars.CAPACITY_PLAN).toBe('1');
+  });
+});
+
+describe('TOMORROW_TODAY in the Worker config', () => {
+  it('is on for staging and off for production', () => {
+    expect(parsed.vars.TOMORROW_TODAY).toBe('0');
+    expect(parsed.env.staging.vars.TOMORROW_TODAY).toBe('1');
   });
 });

@@ -20,7 +20,13 @@ export const APP_CONTROLS_MEMORY_REVISION = 2;
 // An edited claim's text, trimmed. A pinned line rides every turn, so it stays well inside the profile block's room.
 export const APP_CLAIM_TEXT_MAX_V1 = 1000;
 const claimId = /^memory:claim:[1-9][0-9]{0,15}$/;
-const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit'];
+// Controls revision 15 (`controls=15`) is the "what Waldo knows" page: the owner can also confirm, forget or dismiss a claim,
+// and ask Waldo to bring one up less (claim.quiet; claim.unquiet takes that back) without deleting it. Each of the five names
+// one claim and carries no value. A claim item then also carries held_as, bring_up, source_url and actions, below.
+// Builds below 15 never receive the fields and are refused the actions.
+export const APP_CONTROLS_CLAIM_CONTROLS_REVISION = 15;
+const CLAIM_REVISION_15_ACTIONS: readonly string[] = ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet'];
+const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit', ...CLAIM_REVISION_15_ACTIONS];
 // The owner's own word on one constellation node: confirm it, replace it with their correction, or forget it. A correction is
 // stored as what the owner said, so it is kept short like a node.
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
@@ -49,7 +55,7 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -99,6 +105,7 @@ export const appControlActionV1Schema = z.strictObject({
   if (claim && !claimId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A claim action names one claim, memory:claim:<n>' });
   if (claim && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A claim action carries only its id and value' });
   if (action.action === 'claim.pin' && action.value !== 'profile' && action.value !== 'facts') ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.pin names the block, profile or facts' });
+  if (CLAIM_REVISION_15_ACTIONS.includes(action.action) && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: `${action.action} carries no value` });
   if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
   const edited = action.value?.trim() ?? '';
   if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
@@ -285,6 +292,15 @@ const memoryClaim = z.strictObject({
   // Controls revision 2: the block this claim is pinned to, shown on every turn, or null. Revision 2 also reads source
   // waldo_confirmed for a claim the nightly model confirmed, which stays Waldo's read; revision 1 reads it as confirmed.
   pinned: z.enum(['profile', 'facts']).nullable().optional(),
+  // Controls revision 15. held_as: owner_said for a claim the owner said or confirmed, waldo_thinks for one Waldo read or
+  // inferred ("Waldo thinks...", to confirm or correct). recorded_at is when Waldo learned it. bring_up: less once the owner
+  // asked Waldo not to raise it unprompted. source_url: the page a kept look-up finding came from, shown as plain text and
+  // never as a link target to follow without the owner's tap; null for a claim with no web source. actions: what this claim
+  // can be sent now, so the app never offers confirm on something the owner said.
+  held_as: z.enum(['owner_said', 'waldo_thinks']).optional(),
+  bring_up: z.enum(['normal', 'less']).optional(),
+  source_url: z.string().max(2048).nullable().optional(),
+  actions: z.array(z.enum(['claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet'])).optional(),
 });
 // Where a node's support came from, when Waldo read it from a connected source; empty for a node resting on what the owner
 // said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote

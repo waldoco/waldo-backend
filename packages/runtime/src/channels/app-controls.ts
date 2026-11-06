@@ -1,4 +1,4 @@
-import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -7,13 +7,15 @@ import { controlAction, controlRevision, type ControlReceipt } from './dashboard
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
 import type { ConsoleAction, ConsoleView } from './console';
-import { memoryRevision } from '../memory/claims';
+import { memoryRevision, type Claim } from '../memory/claims';
+import { appClaimActions, claimHeldAs } from './dashboard-memory-actions';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof } from './dashboard-phone';
 import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
+import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
@@ -46,6 +48,8 @@ export type AppControlsHost = Readonly<{
   agentMail?:AgentMailControlsDeps;
   // Which chats are linked to the owner now, for where Waldo writes first (controls revision 11); absent where it is not offered.
   chatLinks?():Promise<ChatLinks>;
+  // Whether this deployment serves the claim controls of controls revision 15 (MEMORY_CLAIM_CONTROLS); absent means it does not.
+  claimControls?:boolean;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -57,13 +61,13 @@ const withoutLocalId=(webSources:boolean)=>({local_id:_local,...item}:Item)=>web
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
 // A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
 // revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
-const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
-  :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
-const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins:ReadonlyMap<number,string>|undefined,webSources:boolean)=>{
+const pinOf=(pins:ReadonlyMap<number,string>|undefined,extras?:ReadonlyMap<number,Item>)=>(item:Item):Item=>item.type==='interpretation'?item
+  :pins?{...item,pinned:pins.get(item.local_id!)??null,...(extras?.get(item.local_id!)??{})}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins:ReadonlyMap<number,string>|undefined,webSources:boolean,extras?:ReadonlyMap<number,Item>)=>{
   const shown=withoutLocalId(webSources);
   return {
     ...rest,memory_view:view,
-    ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(shown)}:{}),...(item?{item:shown(pinOf(pins)(item as Item))}:{}),
+    ...(Array.isArray(items)?{items:items.map(pinOf(pins,extras)).map(shown)}:{}),...(item?{item:shown(pinOf(pins,extras)(item as Item))}:{}),
     ...(center?{center:shown(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(shown)}:{}),
   };
 };
@@ -113,11 +117,23 @@ const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
 };
 const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
-const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit'};
+const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit','claim.confirm':'spot.confirm','claim.forget':'spot.forget','claim.dismiss':'spot.dismiss','claim.quiet':'spot.quiet','claim.unquiet':'spot.unquiet'};
+// Controls revision 15's claim controls are served to a build that asks for them, on a deployment that has them on.
+const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControls===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
+const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
+// Where a kept look-up finding came from: the page's own address, by the claim it became. The findings table exists once a look-up has run.
+const lookupUrlsOf=(sql:Pick<SqlStorage,'exec'>)=>sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_findings'").toArray().length
+  ?new Map(sql.exec<{claim_id:number;source_url:string}>('SELECT claim_id, source_url FROM owner_findings WHERE claim_id IS NOT NULL').toArray().filter(row=>row.source_url.length<=FINDING_URL_MAX).map(row=>[row.claim_id,row.source_url])):new Map<number,string>();
+// What each live claim shows and can be sent under controls revision 15, derived from its stored origin, source and state.
+const claimExtrasOf=(sql:Pick<SqlStorage,'exec'>):ReadonlyMap<number,Item>=>{
+  const urls=lookupUrlsOf(sql);
+  return new Map(sql.exec<Claim>("SELECT id, kind, source, origin, status, pinned, bring_up_less_at FROM claims WHERE status IN ('active','promoted')").toArray()
+    .map(claim=>[claim.id,{held_as:claimHeldAs(claim),bring_up:claim.bring_up_less_at?'less':'normal',source_url:urls.get(claim.id)??null,actions:appClaimActions(claim)}]));
+};
 // One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
-const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean,webSources:boolean)=>{
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean,webSources:boolean,extras?:ReadonlyMap<number,Item>)=>{
   const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
-  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined,webSources)}:{status:paged.status,error:paged.body.error};
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined,webSources,extras)}:{status:paged.status,error:paged.body.error};
 };
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
@@ -146,7 +162,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
       let graph:ReturnType<typeof constellationData>;
-      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request));}catch{return reply({error:'projection_unavailable'},503);}
+      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request),claimControlsFor(request,host)?claimExtrasOf(host.storage.sql):undefined);}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
@@ -225,10 +241,14 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
   if(action.success&&action.data.view==='constellation'){
     if(!showsPins(request))return reply({error:'invalid_action'},400);
+    const claimControls=claimControlsFor(request,host);
+    if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!claimControls)return reply({error:'invalid_action'},400);
+    // Only what the claim offers now: confirm names a claim Waldo inferred, never one the owner said.
+    if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!(claimExtrasOf(host.storage.sql).get(Number(action.data.id!.split(':')[2]))?.actions as readonly string[]|undefined)?.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true,namesWebSources(request));return detail.status===200?detail.data as never:null;},
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true,namesWebSources(request),claimControls?claimExtrasOf(host.storage.sql):undefined);return detail.status===200?detail.data as never:null;},
       act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});

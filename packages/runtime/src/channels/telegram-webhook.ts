@@ -64,9 +64,19 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
+  // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
+  // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
+  // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
+  WAKE_BRIEF?: string;
+  WAKE_BRIEF_FRESH_MIN?: string;
+  WAKE_BRIEF_TURNS_PER_DAY?: string;
+  // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
+  BRIEF_DAY_PLAN?: string;
   // "1" keeps a nightly capacity note in memory (how much real work the owner sustains, and when they think best) and has the
   // Brief and the Close plan deep work and a weekly reset from it. Off unless "1".
   CAPACITY_PLAN?: string;
+  // "1" has the Close name tomorrow's best hours for focus and put what would protect them on approval cards. Off unless "1".
+  TOMORROW_TODAY?: string;
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;
@@ -84,7 +94,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
-  // "1" serves /app/v1/device-context: the owner's place consent and the latest coarse place per phone. Off unless "1".
+  // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
+  // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
   // "1" lets browse_act send a form from the owner's Cloudflare browser after the owner approves its card, one POST per card.
   // Off unless "1".
@@ -179,6 +190,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_VALIDITY?: string;
+  MEMORY_CLAIM_CONTROLS?: string;
+  MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
