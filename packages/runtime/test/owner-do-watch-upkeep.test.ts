@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { APP_SCHEDULE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
@@ -435,7 +436,7 @@ describe('Gmail and Calendar watch upkeep', () => {
     await world('upkeep-owner-controls', {}, async w => {
       await w.connect('conn-1', [...MAIL, CALENDAR]);
       const runtime = w.owner.setup('telegram');
-      expect(await runtime.act({ action: 'schedule.set', id: 'event_briefs', value: 'off' })).toBe(true);
+      expect(await runtime.act({ action: 'schedule.set', id: 'event_briefs', value: 'off' })).toEqual(APP_SCHEDULE_RECEIPTS_V1.off);
       expect(w.row(WATCH_UPKEEP_ID)).toMatchObject({ status: 'armed' });
       expect(await runtime.act({ action: 'proactivity.set', value: '00:00|23:59|low' })).toBe(true);
       expect(await runtime.act({ action: 'schedule.reset' })).toBe(true);
@@ -575,7 +576,7 @@ describe('the brief sweep follows the Google grant', () => {
     });
     await world('sweep-on-without-grant', { off: ['event_briefs'] }, async w => {
       await boot(w);
-      expect(await w.owner.setup('telegram').act({ action: 'schedule.set', id: 'event_briefs', value: 'on' })).toBe(true);
+      expect(await w.owner.setup('telegram').act({ action: 'schedule.set', id: 'event_briefs', value: 'on' })).toEqual(APP_SCHEDULE_RECEIPTS_V1.on);
       expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
       await w.connect('conn-1', MAIL);
       expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
