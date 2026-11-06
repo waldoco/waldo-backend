@@ -1246,9 +1246,10 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // render as before; nothing is hidden or promoted. The label is applied by both renderers:
 // turnMemoryPrompt (its recall excludes 'untrusted' rows) and memoryPrompt (maps all active
 // claims with no origin filter, so it can render 'untrusted' rows; those stay unlabelled here).
-// remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content.
+// remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content, and
+// the background passes do when the quote answers a reply that carried outside content.
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
-  : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content, so Waldo\'s read until the owner confirms it)'
+  : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content or said in answer to a reply that carried it, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 
 // The owner's pinned blocks for a system prompt: <owner_profile> and <owner_facts>, each in pin order within its budget, then
@@ -1512,7 +1513,14 @@ export const withoutHealthClaims = (raw: string): string => {
 // sits whole in one of them names that message as its source, as remember does for the message in hand.
 // outside: the whole input was outside content (the day's calendar and mail changes), so an ungrounded paraphrase of it is
 // untrusted too, never Waldo's read.
-export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string; ownerMessages?: readonly Readonly<{ ref: string; text: string }>[]; outside?: boolean }>;
+// answersOutside marks an owner message that answers a reply from a turn that read outside content: the words are the owner's,
+// but what they agree to there ("ok") may be the outside content's, so evidence found only in such messages is Waldo's read
+// until the owner confirms it, as remember writes in a turn that read outside content.
+export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string; ownerMessages?: readonly Readonly<{ ref: string; text: string; answersOutside?: true }>[]; outside?: boolean }>;
+const onlyAnswersOutside = (evidence: string, grounding: ClaimGrounding | undefined): boolean => {
+  const messages = grounding?.ownerMessages ?? [];
+  return messages.some(message => message.answersOutside) && ground(evidence, { owner: messages.filter(message => !message.answersOutside).map(message => message.text).join('\n') }) !== 'owner';
+};
 const ownerSourceRef = (evidence: string, grounding: ClaimGrounding | undefined): string | undefined => {
   const message = grounding?.ownerMessages?.find(candidate => ground(evidence, { owner: candidate.text }) === 'owner');
   return message ? `owner, ${message.ref}` : undefined;
@@ -1594,7 +1602,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
-    const owned = grounding !== undefined && ground(correction.evidence, grounding) === 'owner';
+    const owned = grounding !== undefined && ground(correction.evidence, grounding) === 'owner' && !onlyAnswersOutside(correction.evidence, grounding);
     const ref = owned ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
     // closed reason, so the reply can say the memory was not updated instead of the skip being silent. A replacement
@@ -1624,11 +1632,14 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // Origin is the gate's provenance column: where the evidence actually lives. The model
     // proposes; only code writes it (OpenClaw's origin classes - untrusted never promotes).
     let origin: string | null = null;
-    const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
+    const grounded = grounding === undefined ? undefined : ground(claim.evidence, grounding);
+    const answering = grounded === 'owner' && onlyAnswersOutside(claim.evidence, grounding);
+    const verdict = answering ? 'answering' : grounded;
     if (replacement === 'held' && verdict !== 'owner') continue;
     // A health reading is kept only as something the owner said: stated, on evidence in their own words, with every number
     // of the reading in the words that evidence quotes. A number only in shared content (forwarded mail, a file), Waldo's
-    // reply (a relayed device reading) or something else the owner typed is held, keyed on that source, never on wording;
+    // reply (a relayed device reading), the owner's answer to outside content or something else the owner typed is held,
+    // keyed on that source, never on wording;
     // so is a reading from an ungrounded paraphrase or an inference. One whose evidence grounds only in Waldo's reply is
     // held below as a self-report.
     const texts = [claim.text, claim.evidence, ...(claim.aliases ?? [])];
@@ -1657,7 +1668,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
     const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
-    const sourceRef = origin !== 'owner' ? undefined : ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence);
+    const sourceRef = origin === 'owner' ? ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence) : answering ? ownerSourceRef(claim.evidence, grounding) : undefined;
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef, area: claim.area }, at);
     written += 1;
   }
@@ -1666,7 +1677,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   let retired = 0;
   if (retireAllowed === true && grounding?.owner !== undefined) {
     for (const op of ops.retire ?? []) {
-      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner') continue;
+      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner' || onlyAnswersOutside(op.evidence, grounding)) continue;
       const next = typeof op.replaced_by_text === 'string' && op.replaced_by_text.trim()
         ? store.claims().find((claim) => claim.id !== op.id && claim.origin === 'owner' && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
       if (store.retire(op.id, at, next)) retired += 1;
