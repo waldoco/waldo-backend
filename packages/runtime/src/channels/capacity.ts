@@ -99,8 +99,11 @@ export const weekAhead = (now: number, timezone: string): Readonly<{ from: numbe
 export const capacityBudgetContext = async (now: number, timezone: string, google: GoogleClient | null, connectable: boolean, moves: string): Promise<string> =>
   budgetContext(await readCalendar(weekAhead(now, timezone), timezone, google, connectable, WEEK_AHEAD_EVENTS), moves);
 
-const outcome = (status: string): string =>
-  status === 'open' || status === 'card_unconfirmed' ? 'waiting on them' : status === 'done' ? 'they said yes' : status === 'skipped' ? 'they said no' : status;
+const OUTCOME: Readonly<Record<string, string>> = {
+  open: 'waiting on them', card_unconfirmed: 'waiting on them', done: 'they said yes', skipped: 'they said no',
+  expired: 'it expired unanswered', stale: 'the calendar changed before it could apply',
+};
+const outcome = (status: string): string => OUTCOME[status] ?? status;
 
 // The protected blocks Waldo proposed lately, as kind, day and what became of each: no title or time leaves the ledger.
 export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14): string => {
@@ -112,14 +115,19 @@ export const recentBlocks = (sql: Sql, now: number, timezone: string, days = 14)
   ).toArray().map(row => `- ${row.block === 'rest' ? 'rest' : 'deep work'} block${row.start ? ` for ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${outcome(row.status)}`).join('\n');
 };
 
-// CAPACITY_BUDGET: the moves Waldo proposed lately, with the item's name, so one the owner turned down is not offered again.
-export const recentMoves = (sql: Sql, now: number, timezone: string, days = 14): string => {
+// CAPACITY_BUDGET: the latest moves Waldo proposed, newest first, with the item's name, so one the owner turned down is not
+// offered again. A title is outside text: it is written as a JSON string, so a quote or a line break in it stays inside it.
+export const recentMoves = (sql: Sql, now: number, timezone: string, days = 14, limit = 10): string => {
   if (!sql.exec('PRAGMA table_info(ledger)').toArray().length) return '';
-  return sql.exec<{ title: string | null; status: string; created_at: number; start: string | null }>(
-    `SELECT json_extract(payload_json, '$.title') AS title, status, created_at, json_extract(payload_json, '$.start') AS start FROM ledger
-     WHERE kind = 'calendar_change' AND json_extract(payload_json, '$.action') = 'move' AND created_at >= ? AND created_at <= ? ORDER BY created_at`,
-    now - days * 24 * 60 * MINUTE_MS, now,
-  ).toArray().map(row => `- move of "${fence(row.title ?? 'an event')}"${row.start ? ` to ${weekday(localIso(Date.parse(row.start), timezone).slice(0, 10))}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${outcome(row.status)}`).join('\n');
+  const day = (iso: string) => weekday(localIso(Date.parse(iso), timezone).slice(0, 10));
+  return sql.exec<{ title: string | null; status: string; created_at: number; start: string | null; seen_start: string | null }>(
+    `SELECT json_extract(payload_json, '$.title') AS title, status, created_at, json_extract(payload_json, '$.start') AS start, json_extract(payload_json, '$.seen_start') AS seen_start
+     FROM ledger WHERE kind = 'calendar_change' AND json_extract(payload_json, '$.action') = 'move' AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?`,
+    now - days * 24 * 60 * MINUTE_MS, now, limit,
+  ).toArray().map(row => {
+    const what = row.title !== null ? JSON.stringify(row.title) : row.seen_start ? `the event at ${day(row.seen_start)} ${localIso(Date.parse(row.seen_start), timezone).slice(11, 16)}` : 'an event';
+    return `- move of ${what}${row.start ? ` to ${day(row.start)}` : ''}, proposed ${weekday(localIso(row.created_at, timezone).slice(0, 10))}: ${outcome(row.status)}`;
+  }).join('\n');
 };
 
 export type CapacityOutcome = 'kept' | 'unchanged' | 'held' | 'retired' | 'owner_held' | 'set_aside' | 'health_unknown' | 'health_notes_off' | 'no_memory';

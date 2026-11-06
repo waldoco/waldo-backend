@@ -368,7 +368,7 @@ const CHAT_APPROVABLE_KINDS: readonly string[] = [...DRAFT_SEND_KINDS, 'calendar
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
-// The timed events, other than the one moving, in a move's new time on the owner's calendar, by id.
+// The timed events, other than the one moving, in a move's new time on the owner's main calendar, by id.
 const targetEvents = async (client: GoogleClient, p: Stored): Promise<string[]> => {
   const from = Date.parse(p.start!), to = Date.parse(p.end!);
   const events = await client.events(p.start!, p.end!, 50, false);
@@ -1117,7 +1117,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const undo = receipt.result as Undo | 'stale' | 'taken' | null;
       if (undo === 'taken') {
         setStatus(id, 'stale');
-        out = { toast: 'The time is taken', message: `${span(proposal.start!, proposal.end!)} is no longer free in your calendar, so I didn't move it: ${describe(proposal)}. Ask me again and I'll find another time.` };
+        out = { toast: 'The time is taken', message: `${span(proposal.start!, proposal.end!)} is no longer free in your main calendar, so I didn't move it: ${describe(proposal)}. Ask me again and I'll find another time.` };
       } else if (undo === 'stale') {
         setStatus(id, 'stale');
         out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
