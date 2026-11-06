@@ -118,7 +118,7 @@ it('a waiting close card is not raised twice, and tapping it after the owner clo
       await deliver({ update_id: 303, callback_query: { id: 'close-late', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card!) + 1, chat: { id: 7, type: 'private' } } } });
       const answer = said().slice(before).join('\n');
       expect(answer).toContain('Nothing was done');
-      expect(answer).toContain('already closed as done');
+      expect(answer).toContain('It ran and changed nothing.');
       expect(answer).not.toContain('Done:');
       expect(proof.telegram.find(entry => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'close-late')?.body.text).not.toBe('Done');
       expect(status()).toBe('done');
