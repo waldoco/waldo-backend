@@ -160,6 +160,17 @@ describe('forgetting a topic forgets the versions its claims replaced', () => {
   }));
 });
 
+describe('a topic purge that deletes a claim already being purged', () => {
+  it('leaves no pending row behind', () => withStore((store, sql) => {
+    store.add(owned('Works at Globex'), T1);
+    store.purge([1], '2026-10-13T00:00:00.000Z');
+    expect(sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM purge_pending').one().n).toBe(1);
+    store.purge([], '2026-10-13T00:01:00.000Z', ['Globex']);
+    expect(store.allClaims()).toEqual([]);
+    expect(sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM purge_pending').one().n).toBe(0);
+  }));
+});
+
 describe('forgetting a claim forgets the versions it replaced', () => {
   const history = (store: ReturnType<typeof claimStore>) => {
     store.add(owned('Allergic to cobalt'), T1);

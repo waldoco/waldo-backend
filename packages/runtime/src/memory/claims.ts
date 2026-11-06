@@ -891,7 +891,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray()) {
             if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) {
               // The earlier versions it replaced go with it, read before the row is deleted: a deleted row no longer says what it replaced.
-              for (const id of lineageOf(sql, [row.rid])) if (sql.exec('DELETE FROM claims WHERE id = ? RETURNING id', id).toArray().length) { tally('deleted', 'claims'); deletedClaims.push(id); }
+              for (const id of lineageOf(sql, [row.rid])) if (sql.exec('DELETE FROM claims WHERE id = ? RETURNING id', id).toArray().length) { sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id); tally('deleted', 'claims'); deletedClaims.push(id); }
               continue;
             }
             const redacted = [ci(row.text), ci(row.evidence), row.aliases === null ? null : ci(row.aliases), row.source_ref === null ? null : ci(row.source_ref)] as const;
