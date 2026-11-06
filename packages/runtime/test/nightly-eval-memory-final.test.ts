@@ -35,6 +35,37 @@ describe('the memory final-pass cases', () => {
     expect((await memoryOf('m22-forgotten-holds-across-surfaces')).some((claim) => claim.id === 2004 && (claim.status === 'active' || claim.status === 'promoted'))).toBe(false);
   });
 
+  // What the model was sent and read, as the receipts see it: model_inputs by turn, tool outputs by name, Waldo's replies.
+  const evidence = (over: Partial<Record<'model_inputs' | 'toolOutputs' | 'transcript', unknown[]>>) => ({ ...held, final_state: {}, model_inputs: [], ...over }) as never;
+  const sent = (text: string, turn = 1) => ({ turn, text });
+  const read = (output: string) => ({ name: 'read_memory', output });
+  const said = (text: string) => ({ role: 'waldo', text });
+
+  it('m20 needs the dated Leeds claim in front of the model on the question\'s turn or read with read_memory', () => {
+    const receipt = scenario('m20-time-question-replaced-fact').receipts![1]!;
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2001 · NO LONGER TRUE, held until 2026-09-10] The owner lives in Leeds, near the canal.')] }))).toBe(true);
+    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"id":2001,"text":"the owner lives in leeds, near the canal."}]}')] }))).toBe(true);
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2002 · fact] The owner lives in Pune, near the river.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2001 · NO LONGER TRUE] The owner lives in Leeds.', 2)] }))).toBe(false);
+  });
+
+  it('m22 fails the moment the forgotten name reaches the model, a memory read or a reply, in full or as a stub', () => {
+    const receipt = scenario('m22-forgotten-holds-across-surfaces').receipts![1]!;
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2005 · fact] The owner lives in Pune.')], transcript: [said('I have nothing to share about that.')] }))).toBe(true);
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2004 · fact] The owner\'s pottery teacher is called Marisol Duarte.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2004 stub · fact] The owner\'s pottery tea…')] }))).toBe(false);
+    expect(receipt.holds(evidence({ model_inputs: [sent('The teacher is Marisol.')] }))).toBe(false);
+    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"teacher Marisol Duarte"}]}')] }))).toBe(false);
+    expect(receipt.holds(evidence({ transcript: [said('Her name was Duarte, I think.')] }))).toBe(false);
+  });
+
+  it('m24 needs the inferred claim in front of the model: a reply that ignores memory fails', () => {
+    const receipt = scenario('m24-inferred-shown-as-guess').receipts![1]!;
+    expect(receipt.holds(evidence({ model_inputs: [sent('[c2006 · preference] The owner probably prefers morning meetings.')] }))).toBe(true);
+    expect(receipt.holds(evidence({ toolOutputs: [read('{"claims":[{"text":"The owner probably prefers morning meetings."}]}')] }))).toBe(true);
+    expect(receipt.holds(evidence({ model_inputs: [sent('Nothing about meeting times.')] }))).toBe(false);
+  });
+
   it('m21 fails when Leeds is still current or no Pune claim was saved, and passes on the move', () => {
     const pune = row(9, { text: 'The owner lives in Pune.' });
     expect(holds('m21-update-then-what-changed', { memory: [row(2003, { status: 'superseded', seeded: true }), pune] })).toBe(true);
@@ -57,7 +88,7 @@ describe('the memory final-pass cases', () => {
   it('m25 fails the moment any finding is recorded for a namesake', () => {
     expect(holds('m25-namesake-page-not-recorded', { findings: [] })).toBe(true);
     expect(holds('m25-namesake-page-not-recorded', {})).toBe(true);
-    expect(holds('m25-namesake-page-not-recorded', { findings: [{ url: 'https://braces.example/dr-priya-raman' }] })).toBe(false);
+    expect(holds('m25-namesake-page-not-recorded', { findings: [{ url: 'https://braces.example/dr-orla-quillbright' }] })).toBe(false);
   });
 
   it('m26 fails when any claim holds a reading, in any state', () => {

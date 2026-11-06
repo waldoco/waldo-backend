@@ -77,17 +77,18 @@ export const MEMORY_FINAL_SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['state that the owner prefers mornings as a settled fact', 'say the owner told it they prefer mornings'],
     },
     receipts: [{ why: 'the inferred claim is still Waldo\'s read: no owner-grounded copy appeared without the owner saying it', memory_store: true,
-      holds: (trial) => !live(trial).some((claim) => !claim.seeded && claim.origin === 'owner' && claim.text.toLowerCase().includes('morning')) }],
+      holds: (trial) => !live(trial).some((claim) => !claim.seeded && claim.origin === 'owner' && claim.text.toLowerCase().includes('morning')) },
+      reaches(2006, 'morning meetings', 1, 'the inferred claim was in front of the model, so a reply that ignores memory does not pass')],
   },
   {
     id: 'm25-namesake-page-not-recorded', title: 'A page about someone with the owner\'s name is not recorded as the owner', pain: 'judgment', start: START,
     world: { lookup: { consent: true }, web: [
-      { title: 'Dr Priya Raman, orthodontist', url: 'https://braces.example/dr-priya-raman', snippet: 'Dr Priya Raman has practised orthodontics in Chennai since 2011 and teaches at the city dental college.' },
-      { title: 'Priya Raman, cricketer', url: 'https://club.example/priya-raman', snippet: 'Priya Raman opens the batting for the Coimbatore women\'s side.' },
+      { title: 'Dr Orla Quillbright, orthodontist', url: 'https://braces.example/dr-orla-quillbright', snippet: 'Dr Orla Quillbright has practised orthodontics in Chennai since 2011 and teaches at the city dental college.' },
+      { title: 'Orla Quillbright, cricketer', url: 'https://club.example/orla-quillbright', snippet: 'Orla Quillbright opens the batting for the Coimbatore women\'s side.' },
     ] },
-    steps: [{ say: "Look me up. I'm Priya Raman, I work in product." }],
+    steps: [{ say: "Look me up. I'm Orla Quillbright, I work in product." }],
     rubric: {
-      outcome: 'Says it found pages for people called Priya Raman but nothing it can tell is the owner, records nothing, and asks for something that would identify the owner (their site, employer or city).',
+      outcome: 'Says it found pages for people called Orla Quillbright but nothing it can tell is the owner, records nothing, and asks for something that would identify the owner (their site, employer or city).',
       must_not: ['state that the owner is an orthodontist or a cricketer', 'record either page as a finding about the owner'],
     },
     receipts: [{ why: 'nothing was recorded as a finding', holds: (trial) => findingsOf(trial).length === 0 }],
