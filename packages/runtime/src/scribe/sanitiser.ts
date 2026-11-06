@@ -530,13 +530,51 @@ function decodeJsonEscapes(text: string): string | undefined {
   );
 }
 
-function decodePercent(text: string): string | null | undefined {
-  if (!PERCENT_ESCAPE.test(text)) return undefined;
+// decodeURIComponent throws a URIError for bytes that are not UTF-8: that is its answer, "not a character".
+function utf8FromEscapes(escapes: string): string | undefined {
   try {
-    return decodeURIComponent(text);
+    return decodeURIComponent(escapes);
   } catch {
-    return null;
+    return undefined;
   }
+}
+
+// A run of %XX escapes decodes on its own. An escape that does not start a valid UTF-8 sequence of one to four bytes
+// stays literal, so a cut-off or stray byte does not hide the characters encoded after it.
+function decodePercentRun(run: string): string {
+  const whole = utf8FromEscapes(run);
+  if (whole !== undefined) return whole;
+  let output = '';
+  let at = 0;
+  while (at < run.length) {
+    let taken = 3;
+    let character = run.slice(at, at + 3);
+    for (let bytes = 1; bytes <= 4 && at + bytes * 3 <= run.length; bytes += 1) {
+      const decoded = utf8FromEscapes(run.slice(at, at + bytes * 3));
+      if (decoded !== undefined) {
+        taken = bytes * 3;
+        character = decoded;
+        break;
+      }
+    }
+    output += character;
+    at += taken;
+  }
+  return output;
+}
+
+// Every escape run decodes where it sits. A "%" that is not an escape ("50% off"), or an escape that is not UTF-8
+// ("20%DEALS"), is plain text: it neither turns decoding off for the rest of the string nor makes the string a pending
+// decode layer (#152). Undefined when nothing decodes.
+function decodePercent(text: string): string | undefined {
+  if (!PERCENT_ESCAPE.test(text)) return undefined;
+  let changed = false;
+  const decoded = text.replace(PERCENT_RUNS, (run) => {
+    const value = decodePercentRun(run);
+    if (value !== run) changed = true;
+    return value;
+  });
+  return changed ? decoded : undefined;
 }
 
 function printableUtf8FromBase64(token: string): string | undefined {
@@ -572,9 +610,7 @@ function decodeBase64Tokens(text: string): string | undefined {
 }
 
 function canDecodeAgain(text: string): boolean {
-  // Percent is only "decodable again" when the strict decoder actually accepts it - a malformed
-  // escape (issue #152) is plain text, not a pending decode layer.
-  if (JSON_ESCAPE.test(text) || (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string')) return true;
+  if (JSON_ESCAPE.test(text) || decodePercent(text) !== undefined) return true;
   BASE64_TOKEN.lastIndex = 0;
   for (const match of text.matchAll(BASE64_TOKEN)) {
     if (printableUtf8FromBase64(match[0]) !== undefined) return true;
@@ -588,12 +624,10 @@ function encodedSpans(text: string): EncodedSpan[] {
     const decoded = String.fromCharCode(Number.parseInt(match[0].slice(2), 16));
     spans.push({ key: `json:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
   }
-  if (typeof decodePercent(text) === 'string') {
-    for (const match of text.matchAll(PERCENT_RUNS)) {
-      const decoded = decodePercent(match[0]);
-      if (typeof decoded !== 'string') continue;
-      spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
-    }
+  for (const match of text.matchAll(PERCENT_RUNS)) {
+    const decoded = decodePercentRun(match[0]);
+    if (decoded === match[0]) continue;
+    spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
   }
   for (const match of text.matchAll(BASE64_TOKEN)) {
     const decoded = printableUtf8FromBase64(match[0]);
@@ -646,14 +680,10 @@ function decodedViews(text: string): DecodeBundle {
   for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
     const next: DecodeNode[] = [];
     for (const node of frontier) {
-      // A percent sequence the strict decoder rejects is not an encoding - the model cannot
-      // decode it either, so no obfuscation channel exists. The raw string stays in views[0]
-      // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
-      const percent = decodePercent(node.text) ?? undefined;
       const generated = [
         { value: decodeLayer(node), allSpans: true, kind: 'mixed' },
         { value: decodeJsonEscapes(node.text), allSpans: false, kind: 'json' },
-        { value: percent, allSpans: false, kind: 'percent' },
+        { value: decodePercent(node.text), allSpans: false, kind: 'percent' },
         { value: decodeBase64Tokens(node.text), allSpans: false, kind: 'base64' },
       ] as const;
       for (const { value, allSpans, kind } of generated) {
@@ -682,7 +712,7 @@ function decodedViews(text: string): DecodeBundle {
 // The encoding still decodable after the last pass, named in canDecodeAgain's order.
 function pendingKind(text: string): SanitiseDecodeFailure['kind'] {
   if (JSON_ESCAPE.test(text)) return 'json';
-  if (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string') return 'percent';
+  if (decodePercent(text) !== undefined) return 'percent';
   return 'base64';
 }
 
