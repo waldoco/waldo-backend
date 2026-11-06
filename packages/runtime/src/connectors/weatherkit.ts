@@ -1,7 +1,8 @@
 // WeatherKit REST, the weather provider the place consent names. The Worker asks it for one cell's weather with the cell's centre
 // only: no owner, device or place name leaves with the request. A developer token signed with the team's WeatherKit key (ES256)
 // authorises each call. Answers are cached by cell, zone and hour with no owner id, which keeps within Apple's "temporary and
-// limited" caching for performance and holds no history. Field names and units follow Apple's REST reference: temperatures in
+// limited" caching for performance and holds no history. The hour is the owner's local hour, so a forecast fetched before
+// local midnight is not served as today's after it. Field names and units follow Apple's REST reference: temperatures in
 // degrees Celsius, precipitation in millimetres.
 
 export type WeatherKitCredentials = Readonly<{ teamId: string; serviceId: string; keyId: string; privateKey: string }>;
@@ -51,23 +52,32 @@ export const weatherKitToken = async (credentials: WeatherKitCredentials, now: n
 };
 
 const localDate = (instant: string, timezone: string) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(instant));
+// The local hour as YYYY-MM-DDTHH and the seconds left in it, in the owner's zone (some zones sit 30 or 45 minutes off the hour).
+const localHour = (at: number, timezone: string) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(at)).map(part => [part.type, part.value]));
+  return { hour: `${parts.year}-${parts.month}-${parts.day}T${parts.hour}`, secondsLeft: 3600 - (Number(parts.minute) * 60 + Number(parts.second)) };
+};
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
-// Today and tomorrow from the provider's daily forecast, and the current conditions when given. A day missing a field the tool
-// needs is left out, never filled in; the chance of rain is kept only on the 0 to 1 scale.
+// Today and tomorrow from the provider's daily forecast, and the current conditions when given. A day before the owner's local
+// today, or missing a field the tool needs, is left out, never filled in; the chance of rain is kept only on the 0 to 1 scale.
 const forecastOf = (body: unknown, timezone: string, fetchedAt: string): Forecast | null => {
   const { currentWeather: current, forecastDaily: daily } = (body ?? {}) as { currentWeather?: Record<string, unknown>; forecastDaily?: { days?: unknown; metadata?: { readTime?: unknown } } };
-  const days = (Array.isArray(daily?.days) ? daily.days : []).slice(0, 2).flatMap((raw): ForecastDay[] => {
+  const today = localDate(fetchedAt, timezone);
+  const days = (Array.isArray(daily?.days) ? daily.days : []).flatMap((raw): ForecastDay[] => {
     const day = (raw ?? {}) as Record<string, unknown>;
     if (!text(day.forecastStart) || !text(day.conditionCode) || !finite(day.temperatureMax) || !finite(day.temperatureMin) || !Number.isInteger(day.maxUvIndex)) return [];
+    if (localDate(day.forecastStart, timezone) < today) return [];
     return [{
       date: localDate(day.forecastStart, timezone), condition: day.conditionCode, high_c: day.temperatureMax, low_c: day.temperatureMin, uv_max: day.maxUvIndex as number,
       ...(finite(day.precipitationChance) && day.precipitationChance >= 0 && day.precipitationChance <= 1 ? { precipitation_chance: day.precipitationChance } : {}),
       ...(finite(day.precipitationAmount) && day.precipitationAmount >= 0 ? { precipitation_mm: day.precipitationAmount } : {}),
       ...(text(day.sunrise) ? { sunrise: day.sunrise } : {}), ...(text(day.sunset) ? { sunset: day.sunset } : {}),
     }];
-  });
+  }).slice(0, 2);
   if (days.length === 0) return null;
   const now = current && finite(current.temperature) && text(current.conditionCode) && Number.isInteger(current.uvIndex)
     ? { temperature_c: current.temperature, condition: current.conditionCode, uv_index: current.uvIndex as number } : undefined;
@@ -85,25 +95,28 @@ export const cacheApiWeatherCache = (cache: Cache): WeatherCache => ({
   },
 });
 
-export type WeatherKit = Readonly<{ forecast(cell: string, timezone: string): Promise<Forecast | null> }>;
+export type WeatherKit = Readonly<{ forecast(cell: string, timezone: string, signal?: AbortSignal): Promise<Forecast | null> }>;
 
-// null when the provider cannot be asked or answers anything else; the failure is logged by a fixed code, never the cell.
+const fault = (code: string) => console.error(JSON.stringify({ hop: 'weatherkit', code }));
+
+// null when the provider cannot be asked, does not answer before the signal aborts, or answers anything else; the failure is
+// logged by a fixed code, never the cell.
 export const weatherKit = (credentials: WeatherKitCredentials, cache: WeatherCache | null, fetcher: typeof fetch = fetch, now = () => Date.now()): WeatherKit => ({
-  async forecast(cell, timezone) {
-    const at = now(), hour = Math.floor(at / 3_600_000);
-    const key = `https://weather-cache.waldo.invalid/v1/${cell}/${encodeURIComponent(timezone)}/${hour}`;
-    try { const hit = await cache?.get(key); if (hit) return hit; } catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'cache_read' })); }
+  async forecast(cell, timezone, signal) {
+    const at = now(), { hour, secondsLeft } = localHour(at, timezone);
+    const key = `https://weather-cache.waldo.invalid/v2/${cell}/${encodeURIComponent(timezone)}/${hour}`;
+    try { const hit = await cache?.get(key); if (hit) return hit; } catch { fault('cache_read'); }
     const { latitude, longitude } = geohashCentre(cell);
     const url = `https://weatherkit.apple.com/api/v1/weather/en/${latitude.toFixed(4)}/${longitude.toFixed(4)}?dataSets=currentWeather,forecastDaily&timezone=${encodeURIComponent(timezone)}`;
     let token: string, response: Response;
-    try { token = await weatherKitToken(credentials, at); } catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'token' })); return null; }
-    try { response = await fetcher(url, { headers: { authorization: `Bearer ${token}` } }); }
-    catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'fetch_failed' })); return null; }
-    if (!response.ok) { console.error(JSON.stringify({ hop: 'weatherkit', code: `status_${response.status}` })); return null; }
+    try { token = await weatherKitToken(credentials, at); } catch { fault('token'); return null; }
+    try { response = await fetcher(url, { headers: { authorization: `Bearer ${token}` }, ...(signal ? { signal } : {}) }); }
+    catch { fault(signal?.aborted ? 'timeout' : 'fetch_failed'); return null; }
+    if (!response.ok) { fault(`status_${response.status}`); return null; }
     let forecast: Forecast | null;
     try { forecast = forecastOf(await response.json(), timezone, new Date(at).toISOString()); } catch { forecast = null; }
-    if (!forecast) { console.error(JSON.stringify({ hop: 'weatherkit', code: 'shape' })); return null; }
-    try { await cache?.put(key, forecast, 3600 - Math.floor((at % 3_600_000) / 1000)); } catch { console.error(JSON.stringify({ hop: 'weatherkit', code: 'cache_write' })); }
+    if (!forecast) { fault(signal?.aborted ? 'timeout' : 'shape'); return null; }
+    try { await cache?.put(key, forecast, secondsLeft); } catch { fault('cache_write'); }
     return forecast;
   },
 });

@@ -1,7 +1,8 @@
 import {
-  getWeatherArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  getWeatherArgsSchema, getWeatherResultSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type GetWeatherArgs, type GetWeatherResult, type ToolHandler,
 } from '@waldo/contracts';
+import { effectSignal } from '../../channels/run-effect-scope';
 import { devicePlaceStoredV1Schema } from '../../../../contracts/src/app/device-context';
 import { invokeDeviceContext } from '../../channels/app-device-context';
 import { weatherKit, weatherKitCredentials, type WeatherCache, type WeatherKit, type WeatherKitEnv } from '../../connectors/weatherkit';
@@ -11,7 +12,9 @@ import type { OwnerClock } from './get-context';
 // Today's and tomorrow's weather where the owner's most recently placed phone is. The cell comes from the health plane's weather
 // read, which the database grants only while storage, model use and provider lookup are all granted; the Worker sends the cell's
 // centre to WeatherKit and gives the model the forecast with the city's names, never the cell. The result lives in the turn that
-// asked (turn_only_output), so neither the place nor the forecast reaches the tool ledger, memory, logs or storage.
+// asked (turn_only_output), so neither the place nor the forecast reaches the tool ledger, memory, logs or storage. The forecast
+// is the provider's text, so it is checked against the result contract and marks the turn as carrying external content.
+const WEATHER_CEILING_MS = 8_000;
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 export type WeatherPlaceBook = Readonly<{ places(): Promise<unknown> }>;
 
@@ -29,12 +32,12 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getWeatherHandler = (book: WeatherPlaceBook, provider: WeatherKit, clock: OwnerClock): ToolHandler<GetWeatherArgs, GetWeatherResult, ToolDispatcherContext> => ({
   name: 'get_weather',
   description:
-    "Today's and tomorrow's weather where the owner's phones last placed them (the most recent place), from Apple Weather: each day's condition, high and low in Celsius, chance of rain (0 to 1) and millimetres, the highest UV index, sunrise and sunset, and the current temperature, condition and UV when given. place names the city it is for and how many minutes ago the phone was there; an old place may no longer be where the owner is. Say it is from Apple Weather when you share it. It stays in this turn: never stored or logged.",
+    "Today's and tomorrow's weather where the owner's phones last placed them (the most recent place), from Apple Weather: each day's condition, high and low in Celsius, chance of rain (0 to 1) and millimetres, the highest UV index, sunrise and sunset, and the current temperature, condition and UV when given. place names the city it is for and how many minutes ago the phone was there; an old place may no longer be where the owner is. phone_timezone is the zone that phone last reported, which can be newer than the place, and the days' dates are in it. Say it is from Apple Weather when you share it. It stays in this turn: never stored or logged.",
   schema: getWeatherArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
   turn_only_output: true,
-  async handle() {
+  async handle(_args, ctx) {
     const unavailable = (reason: Unavailable) => result({ state: 'unavailable', reason });
     let raw: unknown;
     try { raw = await book.places(); } catch { return unavailable('read_failed'); }
@@ -48,19 +51,24 @@ export const getWeatherHandler = (book: WeatherPlaceBook, provider: WeatherKit, 
     }).sort((a, b) => Date.parse(b.place.observed_at) - Date.parse(a.place.observed_at))[0];
     if (!placed) return unavailable('no_place');
     let forecast: Awaited<ReturnType<WeatherKit['forecast']>>;
-    try { forecast = await provider.forecast(placed.place.cell, placed.timezone); } catch { forecast = null; }
+    try { forecast = await provider.forecast(placed.place.cell, placed.timezone, effectSignal(ctx?.runScope, WEATHER_CEILING_MS)); } catch { forecast = null; }
     if (!forecast) return unavailable('provider_unavailable');
     const { locality, region, country, observed_at } = placed.place;
-    return result({
+    const available = getWeatherResultSchema.safeParse({
       state: 'available', source: 'Apple Weather',
       place: {
         ...(locality ? { locality } : {}), ...(region ? { region } : {}), ...(country ? { country } : {}),
-        timezone: placed.timezone, observed_at, age_minutes: Math.max(0, Math.floor((clock.now().getTime() - Date.parse(observed_at)) / 60_000)),
+        phone_timezone: placed.timezone, observed_at, age_minutes: Math.max(0, Math.floor((clock.now().getTime() - Date.parse(observed_at)) / 60_000)),
       },
       ...(forecast.now ? { now: forecast.now } : {}),
-      days: forecast.days.map((day) => ({ ...day })),
+      days: forecast.days,
       read_at: forecast.read_at,
     });
+    if (!available.success) {
+      console.error(JSON.stringify({ hop: 'weatherkit', code: 'result_shape' }));
+      return unavailable('provider_unavailable');
+    }
+    return { ok: true as const, data: available.data, source_taint: 'external' as const };
   },
 });
 

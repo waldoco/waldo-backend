@@ -88,15 +88,35 @@ describe('WeatherKit', () => {
     });
   });
 
-  it('answers from the cache by cell, zone and hour, and keeps it no later than the end of the hour', async () => {
+  it('answers from the cache by cell, zone and the owner\'s local hour, and keeps it no later than the end of that hour', async () => {
     const { cache, puts } = memoryCache(), { asked, fetcher } = provider(apple);
     const kit = weatherKit(credentials, cache, fetcher, () => NOW);
     const first = await kit.forecast('tdr1v', 'Asia/Kolkata');
     expect(await kit.forecast('tdr1v', 'Asia/Kolkata')).toEqual(first);
     expect(asked).toHaveLength(1);
-    expect(puts).toEqual([{ key: `https://weather-cache.waldo.invalid/v1/tdr1v/Asia%2FKolkata/${Math.floor(NOW / 3_600_000)}`, seconds: 1800 }]);
+    expect(puts).toEqual([{ key: 'https://weather-cache.waldo.invalid/v2/tdr1v/Asia%2FKolkata/2026-11-05T14', seconds: 3600 }]);
     await kit.forecast('tdr1y', 'Asia/Kolkata');
     expect(asked).toHaveLength(2);
+  });
+
+  it('never serves yesterday as today after local midnight, from the cache or from the provider', async () => {
+    // 18:20Z is 23:50 in Kolkata on 5 Nov and 18:40Z is 00:10 on 6 Nov: the same UTC hour, different local days.
+    let at = Date.parse('2026-11-05T18:20:00Z');
+    const { cache, puts } = memoryCache(), { asked, fetcher } = provider(apple);
+    const kit = weatherKit(credentials, cache, fetcher, () => at);
+    expect((await kit.forecast('tdr1v', 'Asia/Kolkata'))?.days.map(day => day.date)).toEqual(['2026-11-05', '2026-11-06']);
+    expect(puts.map(put => put.seconds)).toEqual([600]);
+    at = Date.parse('2026-11-05T18:40:00Z');
+    expect((await kit.forecast('tdr1v', 'Asia/Kolkata'))?.days.map(day => day.date)).toEqual(['2026-11-06', '2026-11-07']);
+    expect(asked).toHaveLength(2);
+  });
+
+  it('gives up when the signal aborts before the provider answers, and logs a fixed code', async () => {
+    const hanging = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+    })) as typeof fetch;
+    expect(await weatherKit(credentials, null, hanging, () => NOW).forecast('tdr1v', 'Asia/Kolkata', AbortSignal.timeout(20))).toBeNull();
+    expect(logged.map(line => JSON.parse(line))).toEqual([{ hop: 'weatherkit', code: 'timeout' }]);
   });
 
   it('answers null on any provider failure and logs a fixed code, never the cell', async () => {

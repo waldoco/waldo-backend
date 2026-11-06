@@ -169,7 +169,8 @@ export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema
 // The provider requires attribution: say the forecast is from Apple Weather when sharing it.
 export const getWeatherArgsSchema = z.strictObject({});
 export type GetWeatherArgs = z.infer<typeof getWeatherArgsSchema>;
-const weatherCondition = z.string().min(1).max(40);
+// The provider's condition code, such as Clear or ScatteredThunderstorms: a word, never free text.
+const weatherCondition = z.string().regex(/^[A-Z][A-Za-z]{0,39}$/);
 const celsius = z.number().min(-90).max(60);
 export const weatherToolDaySchema = z.strictObject({
   date: healthReadDaySchema,
@@ -190,7 +191,8 @@ export const getWeatherResultSchema = z.discriminatedUnion('state', [
       locality: z.string().min(1).max(80).optional(),
       region: z.string().min(1).max(80).optional(),
       country: z.string().regex(/^[A-Z]{2}$/).optional(),
-      timezone: z.string().min(1).max(64),
+      // The zone the phone last reported, which can be newer than the place; the days' dates are in it.
+      phone_timezone: z.string().min(1).max(64),
       observed_at: z.iso.datetime(),
       age_minutes: deviceContextAge,
     }),

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(7);
+select plan(11);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -21,6 +21,8 @@ create function pg_temp.weather(owner text) returns jsonb language sql as $$ sel
 
 insert into auth.users(id,email) values ('6e110000-0000-0000-0000-0000000000a1','dw-a@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values ('6e310000-0000-0000-0000-0000000000a3','6e110000-0000-0000-0000-0000000000a1','dw-owner-a','dw-a@example.invalid');
+insert into auth.users(id,email) values ('6e110000-0000-0000-0000-0000000000b1','dw-b@example.invalid');
+insert into waldo.owners(id,auth_user_id,do_name,email) values ('6e310000-0000-0000-0000-0000000000b3','6e110000-0000-0000-0000-0000000000b1','dw-owner-b','dw-b@example.invalid');
 
 select is(pg_temp.weather('dw-owner-a'),'{"error":"consent_required"}'::jsonb,'no weather read before any consent');
 select pg_temp.grant_('dw-owner-a','dw-grant-store','storage_compute',0), pg_temp.grant_('dw-owner-a','dw-grant-model','model_processing',0);
@@ -33,6 +35,18 @@ select is(pg_temp.weather('dw-owner-a')->'places'->0->'place'->>'cell','tdr1v','
 select is(pg_temp.withdraw('dw-owner-a','dw-wd-lookup','provider_lookup',1)->'deletion_routed','false'::jsonb,'withdrawing provider lookup alone deletes nothing');
 select is(pg_temp.weather('dw-owner-a'),'{"error":"consent_withdrawn"}'::jsonb,'and stops every weather read');
 select is(pg_temp.dc('place_read','dw-owner-a','{"purpose":"model"}')->'places'->0->'place'->>'cell','tdr1v','while the place itself still works');
+
+-- Model use is needed too: weather is read for the agent, so storage and provider lookup alone never open it, and withdrawing
+-- model use alone closes it.
+select pg_temp.grant_('dw-owner-b','dw-b-store','storage_compute',0), pg_temp.grant_('dw-owner-b','dw-b-lookup','provider_lookup',0);
+select pg_temp.dc('place_ingest','dw-owner-b',jsonb_build_object('request_id','dw-b-place-1','expected_epoch',1,'device_id','6e910000-0000-0000-0000-000000000002',
+  'place',jsonb_build_object('cell','tdr1v','timezone','Asia/Kolkata','platform','android','observed_at',to_char(now() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')))::text);
+select is(pg_temp.dc('place_read','dw-owner-b','{"purpose":"owner"}')->'places'->0->'place'->>'cell','tdr1v','owner B has a stored place');
+select is(pg_temp.weather('dw-owner-b'),'{"error":"consent_required"}'::jsonb,'storage and provider lookup without model use give no weather read');
+select pg_temp.grant_('dw-owner-b','dw-b-model','model_processing',0);
+select is(pg_temp.weather('dw-owner-b')->'places'->0->'place'->>'cell','tdr1v','adding model use opens it');
+select pg_temp.withdraw('dw-owner-b','dw-b-wd-model','model_processing',1);
+select is(pg_temp.weather('dw-owner-b'),'{"error":"consent_withdrawn"}'::jsonb,'withdrawing model use alone stops every weather read');
 
 select * from finish();
 rollback;
