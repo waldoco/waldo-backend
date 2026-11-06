@@ -301,3 +301,21 @@ describe('get_health', () => {
     });
   });
 });
+
+describe('get_health food from the owner\'s app', () => {
+  const food = (id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', '2026-10-12', kcal, {
+    start_at: `2026-10-12T0${id}:00:00Z`, end_at: `2026-10-12T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
+  it('sums the day\'s food energy and each macro the entries carry, from the one source, and asks for nutrition', async () => {
+    const meals = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      food(1, 612.4, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), food(2, 410, { protein_g: 22 }), food(3, 180, {}),
+    ] }] };
+    const { calls, handler } = fake({ series: meals });
+    const result = await handler.handle({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+    expect(getHealthResultSchema.parse(result.data).state).toBe('available');
+    expect(result.data.signals.map(entry => [entry.signal, entry.unit, entry.days?.[0]?.value])).toEqual([
+      ['food_energy', 'kcal', 1202], ['protein', 'g', 61], ['carbs', 'g', 64], ['fat', 'g', 21],
+    ]);
+    expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['nutrition']);
+  });
+});

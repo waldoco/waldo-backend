@@ -167,7 +167,14 @@ describe('the numeric health floor', () => {
     body_fat: ['body fat 14.2%', 'body fat percentage 14.2', '14% body fat', 'body fat was 14.2 percent'],
     lean_body_mass: ['lean body mass 61.9 kg', 'lean mass 61.9 kg', 'lean mass was 62'],
     stand_hours: ['stand hours 9', '9 stand hours', 'stood in 9 of 12 hours'],
+    food_energy: ['food energy 2,100 kcal', 'ate 2100 kcal', '2100 calories eaten', 'calorie intake 2100', 'intake was 2100 kcal', '2,100 kcal of food'],
+    protein: ['protein 120 g', '120 g of protein', '120g protein', 'protein: 120 grams'],
+    carbs: ['carbs 250 g', '250 g of carbs', 'carbohydrates 250g', '250 grams of carbohydrate'],
+    fat: ['fat 70 g', '70 g of fat', '70g fat', 'fat was 70 grams'],
   };
+  it.each(['the recipe needs 120 g of flour', 'carbs are fine before a run', 'fat chance by 3pm', 'protein bar at 4', 'ate at 8 with the team', 'ate 3 apples', 'intake form 2', 'body fat jokes', '500 calories of work emails'])('leaves an ordinary food sentence alone: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
   // A workout session as get_health lists it, relayed: its heart rate and its minutes in each zone.
   it.each(['average heart rate 152 bpm on the run', 'avg HR 152', 'max HR 181', 'peak heart rate 181', '25 minutes in zone 3', 'zone 2: 15 min', '15 min in heart rate zone 2'])('holds a workout session reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);

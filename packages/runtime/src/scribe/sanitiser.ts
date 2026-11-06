@@ -225,6 +225,10 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bmove\b${BARE_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
   reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal|calories)\s+(?:of\s+active\s+energy\b(?!\s+drinks?\b)|burned\b(?!\s+off\b))`),
+  // Food the owner's app logged: energy eaten, and protein, carbs or fat in grams. Grams of anything else are a recipe.
+  reading(String.raw`\b(?:food\s+energy|(?:calorie|energy)\s+intake)\b${BARE_GAP}(?:\d{1,2},\d{3}|\d{2,5})\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b))|\b(?:food\s+energy|(?:calorie|energy)\s+intake|intake|ate|eaten|consumed)\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\s+(?:eaten|consumed|of\s+food)\b`),
+  reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
 ];
