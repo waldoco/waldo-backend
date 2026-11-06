@@ -23,7 +23,7 @@ import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
 import { reactToMessageHandler, type TapbackPort } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
@@ -4979,7 +4979,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
         if (earlier.length) turn = { ...turn, earlier };
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
-        const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
+        const opened = openedForTurn(this.iMessageOpened, channel, turn.updateId);
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
         const notes = turnHooks?.notes(turn) ?? [];
         if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };

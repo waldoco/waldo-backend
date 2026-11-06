@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
 import {
-  IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, openIMessageMedia, photonAttachmentSource,
+  IMESSAGE_MEDIA_FILES_MAX, IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, iMessageMediaOf, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource,
   type IMessageMedia, type PhotonAttachmentSource,
 } from '../src/channels/imessage/photon-media';
+import { openedForTurn } from '../src/channels/imessage/owner-runtime';
 import { renderIMessage } from '../src/channels/imessage/console';
 
 // Every value here is fictional. The secret and token are distinctive so a leak into any output is found by substring.
@@ -89,6 +90,15 @@ describe('photonAttachmentSource', () => {
     const { fetcher, calls } = photon({ message: () => Response.json(body) });
     expect(await photonAttachmentSource(ENV, fetcher)!(request())).toEqual({ ok: false, code: 'not_in_message' });
     expect(calls.some(c => c.url.includes('/data'))).toBe(false);
+  });
+
+  it.each([
+    ['a dot-only message guid', { messageGuid: '..' }], ['a single-dot message guid', { messageGuid: '.' }],
+    ['a dot-only attachment id', { files: [{ id: '..', mimeType: 'image/png' }] }], ['a slash in an attachment id', { files: [{ id: 'att/../x', mimeType: 'image/png' }] }],
+  ])('refuses %s before any request, so no path can normalise to another route with the token', async (_name, override) => {
+    const { fetcher, calls } = photon();
+    expect(await photonAttachmentSource(ENV, fetcher)!({ ...request(), ...override })).toEqual({ ok: false, code: 'egress_refused' });
+    expect(calls).toEqual([]);
   });
 
   it('bounds size by what Photon declares and by what it streams', async () => {
@@ -212,5 +222,28 @@ describe('openIMessageMedia', () => {
     const d = { ...deps(opened([PNG])), admit: vi.fn(() => { throw new Error('closed'); }) };
     await expect(openIMessageMedia(media(photo), d)).rejects.toThrow('closed');
     expect(d.source).not.toHaveBeenCalled();
+  });
+});
+
+describe('the media that crosses from the bridge', () => {
+  const photo = (n: number) => ({ id: `att-${n}`, name: `photo-${n}.png`, mimeType: 'image/png', size: 10 });
+  it('holds at most IMESSAGE_MEDIA_FILES_MAX files, which still leaves the too-many reply to answer', () => {
+    expect(IMESSAGE_MEDIA_FILES_MAX).toBeGreaterThan(LLM_ATTACHMENTS_MAX);
+    expect(iMessageMediaSchema.safeParse({ messageGuid: 'msg-1', files: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX }, (_, n) => photo(n)) }).success).toBe(true);
+    expect(iMessageMediaSchema.safeParse({ messageGuid: 'msg-1', files: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX + 1 }, (_, n) => photo(n)) }).success).toBe(false);
+  });
+  it('a message with more files than that crosses with the first IMESSAGE_MEDIA_FILES_MAX, and is answered as too many', () => {
+    const media = iMessageMediaOf({ messageGuid: 'msg-1', attachments: [], photonAttachments: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX + 5 }, (_, n) => photo(n)) })!;
+    expect(iMessageMediaSchema.parse(media).files).toHaveLength(IMESSAGE_MEDIA_FILES_MAX);
+  });
+});
+
+describe('the files an iMessage turn opened', () => {
+  const opened = { updateId: 9_000_000_000_001, parts: [{ authorship: 'media_note' as const, text: 'photo' }], attachments: [] };
+  it('are read only by the iMessage turn they were opened for, never by another channel with the same update id', () => {
+    expect(openedForTurn(opened, 'imessage', opened.updateId)).toBe(opened);
+    expect(openedForTurn(opened, 'whatsapp', opened.updateId)).toBeNull();
+    expect(openedForTurn(opened, 'imessage', opened.updateId + 1)).toBeNull();
+    expect(openedForTurn(null, 'imessage', opened.updateId)).toBeNull();
   });
 });
