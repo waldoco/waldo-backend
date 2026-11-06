@@ -318,6 +318,9 @@ export const readMemoryArgsSchema = z.strictObject({
   // Claims by id (the number in a c12 tag), as a stub in recall names them. An id this read may not show is left out,
   // the same as one that does not exist.
   ids: z.array(z.int().positive()).min(1).max(12).optional(),
+  // Also read what used to be true: claims a later fact replaced, each with the dates it held. For a question about the past
+  // ("when did I", "what changed"); the replaced ones are history, never current.
+  include_replaced: z.boolean().optional(),
 }).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
@@ -334,6 +337,9 @@ export const readMemoryClaimSchema = z.strictObject({
   supersedes_id: z.int().positive().nullable(),
   last_seen_at: z.string(),
   area: lifeAreaSchema.optional(),
+  // When the fact began to hold and, once something replaced it, when it stopped.
+  valid_from: z.string().nullable().optional(),
+  valid_to: z.string().nullable().optional(),
 });
 export const readMemoryResultSchema = z.strictObject({
   claims: z.array(readMemoryClaimSchema),

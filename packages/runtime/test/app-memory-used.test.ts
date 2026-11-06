@@ -132,6 +132,18 @@ it('does not name a note the owner asked Waldo to bring up less, though the turn
   }, 1, ON, [{ text: 'A quiet canal habit near Leeds', quiet: true }]);
 });
 
+it('shows a recorded note only while it is not quieted: quiet drops it from the page, bring it back returns it', async () => {
+  await withExchange('app-memory-used-requiet', async (owner, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    expect((await replyOf(owner, 'app-memory-used-requiet', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
+    expect(store.bringUpLess(1, '2026-10-03T00:00:00.000Z', true)).toBe(true);
+    expect(await replyOf(owner, 'app-memory-used-requiet', 'chat=7')).not.toHaveProperty('memory_used');
+    expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
+    expect(store.bringUpLess(1, '2026-10-04T00:00:00.000Z', false)).toBe(true);
+    expect((await replyOf(owner, 'app-memory-used-requiet', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
+  }, 1, ON);
+});
+
 it('records and shows nothing while the switch is off', async () => {
   await withExchange('app-memory-used-off', async (owner, state) => {
     expect(await replyOf(owner, 'app-memory-used-off', 'chat=7')).not.toHaveProperty('memory_used');

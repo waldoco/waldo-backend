@@ -310,10 +310,17 @@ describe('readMemoryResult', () => {
     expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: 'untrusted' }] }).success).toBe(false);
   });
 
-  it('carries no validity start and no learned time: one is never written and the other repeats the row creation', () => {
+  it('carries when a fact began to hold and when it stopped, but no learned time, which repeats the row creation', () => {
     expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, verification_status: 'unverified' }] }).success).toBe(true);
-    for (const extra of [{ valid_from: null }, { valid_from: '2026-09-30T01:00:00Z' }, { learned_at: '2026-09-30T01:00:00Z' }])
+    for (const extra of [{ valid_from: null }, { valid_from: '2026-09-30T01:00:00Z', valid_to: null }, { valid_from: '2026-09-30T01:00:00Z', valid_to: '2026-10-12T21:00:00Z' }])
+      expect([extra, readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, ...extra }] }).success]).toEqual([extra, true]);
+    for (const extra of [{ learned_at: '2026-09-30T01:00:00Z' }, { valid_to: 5 }])
       expect([extra, readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, ...extra }] }).success]).toEqual([extra, false]);
+  });
+  it('read_memory takes include_replaced as an optional flag', () => {
+    expect(readMemoryArgsSchema.safeParse({ query: 'gym', include_replaced: true }).success).toBe(true);
+    expect(readMemoryArgsSchema.safeParse({ include_replaced: 'yes' }).success).toBe(false);
+    expect(readMemoryArgsSchema.parse({})).toEqual({ limit: 10 });
   });
 
   it('rejects a read that claims completeness while omitting a claim, or the reverse, or any action authority', () => {
