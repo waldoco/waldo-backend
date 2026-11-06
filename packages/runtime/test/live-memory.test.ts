@@ -70,6 +70,23 @@ describe('live owner memory', () => {
     const byTopic = await s2.call('forget_memory', { topic: 'copper-lantern', scope_note: 'codename' }, s2.ctx('forget copper-lantern'));
     expect(byTopic).toMatchObject({ ok: true, data: { history_swept: 'topic_literal' } });
   });
+  it('forgets a two-character topic in a script without word spacing', async () => {
+    const s = setup();
+    expect(await s.call('remember', { kind: 'fact', text: 'Travels to 北京 next week', evidence_quote: '我下周去北京出差' }, s.ctx('我下周去北京出差'))).toMatchObject({ ok: true });
+    const result = await s.call('forget_memory', { topic: '北京', scope_note: 'the trip' }, s.ctx('忘掉北京'));
+    expect(result).toMatchObject({ ok: true, data: { removed_ids: [1], history_swept: 'topic_literal' } });
+    expect(s.store.claims()).toHaveLength(0);
+    expect(s.history.flat()).toContain('北京');
+  });
+  it.each([['李', '我和李一起吃午饭'], ['Al', 'I had lunch with Al today']])('refuses the topic %s as too short, saying so, and changes nothing', async (topic, said) => {
+    const s = setup();
+    expect(await s.call('remember', { kind: 'fact', text: `Had lunch with ${topic}`, evidence_quote: said }, s.ctx(said))).toMatchObject({ ok: true });
+    const result = await s.call('forget_memory', { topic, scope_note: 'the person' }, s.ctx(said)) as { ok: boolean; error?: string };
+    expect(result).toMatchObject({ ok: false });
+    expect(result.error).toMatch(/too short/);
+    expect(s.store.claims()).toHaveLength(1);
+    expect(s.history).toEqual([]);
+  });
   it('tells the model what a forget removed and what it left, and to confirm without the forgotten words', async () => {
     for (const args of [{ topic: 'copper-lantern', scope_note: 'the codename' }, { claim_ids: [1], scope_note: 'the codename' }]) {
       const s = setup();
