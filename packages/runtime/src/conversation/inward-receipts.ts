@@ -28,7 +28,8 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
   cancel_standing_order: (args) => `Ended standing order ${text(args, 'id')}`,
   revoke_standing_grant: (args) => `Ended your standing permission for ${text(args, 'class')}`,
   pause_autonomy: () => 'Paused Waldo acting on its own (you can resume it in the app)',
-  set_sleep_need: (args) => typeof args.minutes === 'number' ? `Set your sleep need to ${Math.floor(args.minutes / 60)} h ${args.minutes % 60} min (you can change it)` : null,
+  set_sleep_need: (args) => typeof args.minutes === 'number'
+    ? `Set your sleep need to ${Math.floor(args.minutes / 60)} h${args.minutes % 60 ? ` ${args.minutes % 60} min` : ''} (you can change it)` : null,
 };
 
 const fields = (json: string | undefined): Fields => {

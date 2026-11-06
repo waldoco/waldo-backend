@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, type LLMToolCall, type LLMToolTurn, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
-import { HEALTH_FENCED_TOOLS } from '../src/conversation/health-fence';
+import { HEALTH_FENCED_TOOLS, healthInContext } from '../src/conversation/health-fence';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -116,5 +116,27 @@ describe('health readings beside outside text fence every call that sends text o
 
   it('fences the reads that send text out and every other tool that carries model-chosen text to a third party', () => {
     expect([...HEALTH_FENCED_TOOLS].sort()).toEqual([...EGRESS_READ_TOOLS, 'browse_act', 'call_mcp_tool', 'delegate_task', 'start_task'].sort());
+  });
+});
+
+// The provider sends the system prompt and conversation at the turn's starting taint, so a reading the owner stated stays in
+// view there; the check reads them as outside content. A conversation too long to read at once is one the provider cuts, so
+// its length alone is never a reading.
+describe('a reading in the request\'s own context', () => {
+  const said = (content: string) => ({ role: 'user', content });
+  const long = Array.from({ length: 1_100 }, (_, index) => said(`Message ${index}: moved the call to 4:30 and booked a table for 6 at 8pm.`));
+  const stated = said(`My HRV was ${READING} ms this morning.`);
+
+  it('is found in a short or a long conversation, and a conversation without one is clean whatever its length', async () => {
+    const ctx = context();
+    expect(await healthInContext([said('You are Waldo.'), said('Move my 4:30 to Friday.')], ctx)).toBe(false);
+    expect(await healthInContext([said('You are Waldo.'), stated], ctx)).toBe(true);
+    expect(await healthInContext(long, ctx)).toBe(false);
+    expect(await healthInContext([...long.slice(0, 600), stated, ...long.slice(600)], ctx)).toBe(true);
+  });
+
+  it('counts as one when nothing can read it', async () => {
+    expect(await healthInContext([said('Move my 4:30 to Friday.')], context({ sanitise: undefined }))).toBe(true);
+    expect(await healthInContext([said('Move my 4:30 to Friday.')], context({ sanitise: () => { throw new Error('down'); } }))).toBe(true);
   });
 });

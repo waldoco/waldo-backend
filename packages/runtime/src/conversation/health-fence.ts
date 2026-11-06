@@ -20,15 +20,25 @@ export const HEALTH_FENCE_ERROR: ToolError = toolError(
 
 // A request's own context (its system prompt and conversation) holds a reading when the scribe, reading it as outside content,
 // would withhold health from it: the provider sends that context at the turn's starting taint, so a number the owner stated in
-// memory or an earlier reply stays in view after outside text arrives. No scribe, or a check that cannot finish, counts as one.
-export const healthInContext = async (payload: unknown, ctx: Pick<ToolDispatcherContext, 'sanitise' | 'session' | 'canaryTokens'>): Promise<boolean> => {
-  if (ctx.sanitise === undefined) return true;
+// memory or an earlier reply stays in view after outside text arrives. A context too long or too odd to read at once is
+// one the provider cuts before sending, so each item is then read on its own; an item still too long to read is cut too.
+// No scribe, or a check that cannot finish, counts as a reading.
+const SIZE_OR_SHAPE: ReadonlySet<string> = new Set(['oversize', 'invalid_payload']);
+type ContextRead = 'reading' | 'clean' | 'too_big';
+const readContext = async (payload: unknown, ctx: Pick<ToolDispatcherContext, 'sanitise' | 'session' | 'canaryTokens'>): Promise<ContextRead> => {
   const input = sanitiseInputSchema.safeParse({ payload, destination: 'internal_context', source_taint: 'external', canary_tokens: ctx.session?.canary_tokens ?? ctx.canaryTokens });
-  if (!input.success) return true;
+  if (!input.success || ctx.sanitise === undefined) return 'reading';
   try {
     const result = sanitiseResultSchema.parse(await ctx.sanitise(input.data));
-    return !result.ok || result.redactions.some((redaction) => redaction.kind === 'health_value');
-  } catch { return true; }
+    if (result.ok) return result.redactions.some((redaction) => redaction.kind === 'health_value') ? 'reading' : 'clean';
+    return SIZE_OR_SHAPE.has(result.reason) ? 'too_big' : 'reading';
+  } catch { return 'reading'; }
+};
+export const healthInContext = async (items: readonly unknown[], ctx: Pick<ToolDispatcherContext, 'sanitise' | 'session' | 'canaryTokens'>): Promise<boolean> => {
+  const whole = await readContext(items, ctx);
+  if (whole !== 'too_big') return whole === 'reading';
+  for (const item of items) if (await readContext([item], ctx) === 'reading') return true;
+  return false;
 };
 
 // A call is fenced by its own tool, or by the tool a proposal would run once the owner approves it.

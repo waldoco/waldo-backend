@@ -176,6 +176,8 @@ it("a child spawned after the parent read the reading fences its own egress once
       expect(turns[0]!.output).not.toContain('egress_denied');
       expect(turns[1]!.output).toContain('"error_code":"egress_denied"');
       expect(egressCalls).toEqual([]);
+      // A child's own calls never offer the hosted search.
+      expect(model.requests.filter(request => String(request.messages.at(-1)?.content ?? '').includes(CHILD_TASK) && request.web_search !== undefined)).toEqual([]);
     } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
