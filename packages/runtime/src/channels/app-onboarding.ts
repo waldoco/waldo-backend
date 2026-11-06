@@ -1,6 +1,6 @@
 import {
   APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
-  appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
+  appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListAtRevision, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersFitRevision, appSetupAnswersRequestV1Schema, appSetupAnswersResultAtRevision, appSetupAnswersResultV1Schema,
   type AppSetupAnswersResultV1,
@@ -81,7 +81,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
         ({ provider, state: await host.chat.offered(provider).then(offered => offered ? host.chat.linked(provider) : 'not_offered' as const, () => 'unknown' as const) })));
       return answer(appOnboardingChannelsV1Schema.parse({ surface: host.proactiveSurface(), channels } satisfies AppOnboardingChannelsV1));
     }
-    if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(host.consent.list()));
+    if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(appConsentListAtRevision(host.consent.list(), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'onboarding'))));
     if (path === '/app/v1/findings') {
       if ([...url.searchParams.keys()].some(key => url.searchParams.getAll(key).length !== 1)) return problem('invalid_request');
       const query = appFindingListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams));
