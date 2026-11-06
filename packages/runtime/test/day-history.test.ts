@@ -217,7 +217,7 @@ describe('dayHistory', () => {
     await inOwner('history-legacy', async state => {
       state.storage.kv.put('day_card_delivery_v1', { day: '2026-10-28', cards: { 'card:brief': { message_id: 'row-old', delivered_at: 7 } } });
       const { deps } = depsFor(state, { 'row-old': 'Morning.' });
-      expect((await dayHistoryDay(deps, '2026-10-28'))!.cards[0]).toEqual({ id: 'card:brief', name: 'The Brief', state: 'sent', latest: { message_id: 'row-old', delivered_at: 7, excerpt: 'Morning.' } });
+      expect((await dayHistoryDay(deps, '2026-10-28'))!.cards[0]).toEqual({ id: 'card:brief', name: 'The Daily Brief', state: 'sent', latest: { message_id: 'row-old', delivered_at: 7, excerpt: 'Morning.' } });
       expect((await dayHistoryDay(deps, '2026-10-27'))!.cards).toEqual([]);
     });
   });

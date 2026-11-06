@@ -18,7 +18,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
+const CARD = 'The Daily Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
 const KNOCK = 'template:waldo_proactive_update';
 const REPLY_KNOCK = 'template:waldo_update_ready';
@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: LLMGatewayRequest) {
     const asked = request.request.messages.at(-1)?.content ?? '';
-    const text = asked.includes('[Scheduled card "The Brief"') ? model.card ?? CARD : asked.includes('[Standing order due now') ? REPORT : 'Noted.';
+    const text = asked.includes('[Scheduled card "The Daily Brief"') ? model.card ?? CARD : asked.includes('[Standing order due now') ? REPORT : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
