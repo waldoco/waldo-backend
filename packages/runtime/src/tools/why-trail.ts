@@ -104,7 +104,7 @@ export const storedWhy = (json: string | null | undefined): readonly TrailStep[]
 export const whyJson = (steps: readonly TrailStep[] | undefined): string | null => steps?.length ? JSON.stringify(steps) : null;
 
 // The tools that raise a card and take steps behind it, while the trail is on.
-export const WHY_TOOLS: ReadonlySet<string> = new Set(['propose_calendar_change', 'propose_action', 'propose_google_task_change', 'send_email', 'send_agent_mail', 'send_message']);
+export const WHY_TOOLS: ReadonlySet<string> = new Set(['propose_calendar_change', 'propose_calendar_plan', 'propose_action', 'propose_google_task_change', 'send_email', 'send_agent_mail', 'send_message']);
 // The `why` argument as the model sees it, added to a proposing tool's own parameters.
 export const WHY_PARAMETER = toolParameters(whyArgSchema);
 export const withWhyParameter = (parameters: Record<string, unknown>): Record<string, unknown> => ({

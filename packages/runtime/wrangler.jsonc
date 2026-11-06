@@ -148,7 +148,8 @@
       "WAKE_BRIEF": "0",
       "WAKE_BRIEF_FRESH_MIN": "180",
       "WAKE_BRIEF_TURNS_PER_DAY": "3",
-      "BRIEF_DAY_PLAN": "0"
+      "BRIEF_DAY_PLAN": "0",
+      "CALENDAR_PLAN": "0"
     }
   },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
@@ -347,7 +348,8 @@
           "WAKE_BRIEF": "1",
           "WAKE_BRIEF_FRESH_MIN": "180",
           "WAKE_BRIEF_TURNS_PER_DAY": "3",
-          "BRIEF_DAY_PLAN": "1"
+          "BRIEF_DAY_PLAN": "1",
+          "CALENDAR_PLAN": "1"
         }
       },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },

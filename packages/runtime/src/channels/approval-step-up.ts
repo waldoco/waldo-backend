@@ -13,6 +13,7 @@ export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_share
   message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },
   agent_mail_send: { gated: true, why: "Sends one email as Waldo, from the owner's Waldo address, to other people; it cannot be called back." },
   calendar_change: { gated: false, why: 'Changes one event on the owner\'s own primary calendar, with no guests.' },
+  calendar_plan: { gated: false, why: 'Adds new blocks of time to the owner\'s own primary calendar, with no guests.' },
   calendar_shared: { gated: true, why: 'Changes an event with guests, or on a calendar other people may share.' },
   google_task_change: { gated: false, why: 'Changes one task on the owner\'s own list; reaches no one else.' },
   browser_submit: { gated: true, why: 'Submits a form on a website as the owner.' },

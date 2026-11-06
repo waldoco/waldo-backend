@@ -141,6 +141,7 @@ describe('toolName', () => {
       'get_screen_time',
       'get_device_context',
       'get_weather',
+      'propose_calendar_plan',
     ]);
   });
 
@@ -329,6 +330,7 @@ describe('TOOL_PERMISSIONS', () => {
         'list_reminders',
         'cancel_reminder',
         'propose_calendar_change',
+        'propose_calendar_plan',
       'propose_google_task_change',
         'open_loop',
         'close_loop',

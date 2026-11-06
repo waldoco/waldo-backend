@@ -72,6 +72,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF_TURNS_PER_DAY?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
+  // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
+  // tap (approvals revision 9). Off unless "1"; a card already raised stays decidable with it off.
+  CALENDAR_PLAN?: string;
   // "1" keeps a nightly capacity note in memory (how much real work the owner sustains, and when they think best) and has the
   // Brief and the Close plan deep work and a weekly reset from it. Off unless "1".
   CAPACITY_PLAN?: string;

@@ -60,6 +60,10 @@ const TASK = { source: 'google_tasks' as const, action: 'update' as const, task_
 const GRANT = { scope: { class: 'calendar.move_own_block' as const, account: 'owner@example.test', window: { from: '08:00', to: '19:00' }, weekdays: [1, 2, 3, 4, 5], min_lead_minutes: 30 },
   limits: { max_per_day: 3, timezone: 'UTC' }, valid_from: Date.UTC(2026, 9, 26), expires_at: Date.UTC(2026, 10, 20) };
 const HOLD = { action: 'create' as const, title: 'Focus', start: iso('2026-10-26T15:00:00Z'), end: iso('2026-10-26T16:00:00Z'), reason: 'deep work' };
+const PLAN = { day: '2026-10-26', time_zone: 'UTC', reason: 'your day, laid out', blocks: [
+  { title: 'Focus', start: '2026-10-26T15:00:00+00:00', end: '2026-10-26T16:00:00+00:00', block: 'deep_work' as const },
+  { title: 'Walk', start: '2026-10-26T16:00:00+00:00', end: '2026-10-26T16:30:00+00:00', block: 'rest' as const },
+] };
 const email = () => emailProposal({ to: ['sam@example.test'], subject: 'Weekly numbers', body: 'Hi Sam', message_id: `<${crypto.randomUUID()}@waldo-send>` });
 const message = (content = 'On my way') => ({ channel: 'whatsapp', content, idempotency_key: `key-${crypto.randomUUID()}` });
 const tainted = async () => {
@@ -73,6 +77,7 @@ const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDe
   message_send: desk => desk.proposeSendMessage(message()),
   agent_mail_send: async desk => desk.proposeAgentMailSend(await agentMailProposal()),
   calendar_change: desk => desk.propose(HOLD),
+  calendar_plan: desk => desk.proposeCalendarPlan(PLAN),
   calendar_shared: desk => desk.propose({ ...HOLD, attendees: ['sam@example.test'], send_updates: 'all' }),
   google_task_change: desk => desk.proposeGoogleTaskChange(TASK),
   browser_submit: desk => desk.proposeBrowserSubmit({ url: 'https://shop.example/checkout', action: { selector: '#pay', description: 'Pay' }, binding: { total: '12.00' }, steps: [] }),
