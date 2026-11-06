@@ -14,6 +14,9 @@ export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup',
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferred'] as const;
 // What the owner may still confirm as theirs.
 // A claim and every earlier version each one replaced.
+// A replaced row is history only while something still stands for its end: a newer version that points at it, or the owner's own
+// retirement of it. A replaced row nothing points to is what an earlier forget of its newer version left behind.
+const HISTORY_KEPT = "(claims.retired_at IS NOT NULL OR EXISTS (SELECT 1 FROM claims later WHERE later.supersedes_id = claims.id))";
 const lineageOf = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): number[] => {
   const all = new Set(from);
   for (let frontier = [...from]; frontier.length;) {
@@ -26,7 +29,7 @@ const lineageOf = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): numb
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
 // claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row.
@@ -407,7 +410,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
   // Additive migration: old claims have no verifiable source reference, never invent one.
   for (const [column, definition] of [
     ['source_ref', 'TEXT'], ['learned_at', 'TEXT'], ['valid_from', 'TEXT'],
-    ['valid_to', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
+    ['valid_to', 'TEXT'], ['retired_at', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
     ['pinned', 'TEXT'], ['pin_order', 'INTEGER'],
     // area_by: who filed it, model or owner. The owner's choice stands against the model's later passes.
     ['area', 'TEXT'], ['area_by', 'TEXT'],
@@ -556,6 +559,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       if (!Number.isFinite(limit) || limit < 1 || !words.length) return [];
       return sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid
         WHERE claim_recall MATCH ? AND claims.status = 'superseded' AND claims.valid_to IS NOT NULL AND COALESCE(claims.origin, '') != 'untrusted' AND claims.kind != '${NODE_STATEMENT}'
+        AND ${HISTORY_KEPT}
         ORDER BY bm25(claim_recall), claims.valid_to DESC, claims.id DESC LIMIT ?`, words.map((word) => `"${word}"`).join(' OR '), Math.min(RECALL_CAP, Math.trunc(limit))).toArray();
     },
     // These claims and every earlier version each one replaced, oldest last. Read before a claim is deleted, since a deleted
@@ -564,15 +568,15 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     // The most recently replaced claims, for a question about what changed.
     replacedClaims(limit = 5): Claim[] {
       if (!Number.isFinite(limit) || limit < 1) return [];
-      return sql.exec<Claim>(`SELECT * FROM claims WHERE status = 'superseded' AND valid_to IS NOT NULL AND COALESCE(origin, '') != 'untrusted' AND kind != '${NODE_STATEMENT}' ORDER BY valid_to DESC, id DESC LIMIT ?`, Math.min(RECALL_CAP, Math.trunc(limit))).toArray();
+      return sql.exec<Claim>(`SELECT * FROM claims WHERE status = 'superseded' AND valid_to IS NOT NULL AND COALESCE(origin, '') != 'untrusted' AND kind != '${NODE_STATEMENT}' AND ${HISTORY_KEPT} ORDER BY valid_to DESC, id DESC LIMIT ?`, Math.min(RECALL_CAP, Math.trunc(limit))).toArray();
     },
     // A live claim the day showed is no longer true: it ends at this time and stays as history, never deleted. replacedBy is
     // the claim that now holds the fact, when there is one.
     retire(id: number, at: string, replacedBy?: number): boolean {
       if (!transaction) return false;
       return transaction(() => {
-        const ended = sql.exec(`UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active' AND kind != '${NODE_STATEMENT}' AND id != ? RETURNING id`, at, id, replacedBy ?? 0).toArray().length === 1;
-        if (ended && replacedBy !== undefined) sql.exec('UPDATE claims SET supersedes_id = ? WHERE id = ? AND status IN (\'active\', \'promoted\') AND supersedes_id IS NULL', id, replacedBy);
+        const ended = sql.exec(`UPDATE claims SET status = 'superseded', valid_to = ?, retired_at = ? WHERE id = ? AND status = 'active' AND kind != '${NODE_STATEMENT}' AND id != ? RETURNING id`, at, at, id, replacedBy ?? 0).toArray().length === 1;
+        if (ended && replacedBy !== undefined) sql.exec('UPDATE claims SET supersedes_id = ? WHERE id = ? AND status IN (\'active\', \'promoted\') AND supersedes_id IS NULL AND origin = \'owner\'', id, replacedBy);
         return ended;
       });
     },
@@ -1658,7 +1662,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     for (const op of ops.retire ?? []) {
       if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner') continue;
       const next = typeof op.replaced_by_text === 'string' && op.replaced_by_text.trim()
-        ? store.claims().find((claim) => claim.id !== op.id && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
+        ? store.claims().find((claim) => claim.id !== op.id && claim.origin === 'owner' && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
       if (store.retire(op.id, at, next)) retired += 1;
     }
   }
