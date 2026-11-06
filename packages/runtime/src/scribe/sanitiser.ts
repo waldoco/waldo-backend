@@ -1,4 +1,5 @@
 import { validId } from '@waldo/workspace';
+import { asciiDigits } from '../security/decimal-digits';
 import {
   DERIVED_SCORE_PATTERNS,
   HEALTH_DESTINATION_RULES,
@@ -408,18 +409,21 @@ function cardMatches(text: string): RegExpMatchArray[] {
   });
 }
 
+// A card written in other digits (fullwidth on a Japanese receipt, Arabic-Indic) is found in its ASCII reading. Text with
+// a card is returned in that reading; text with none is returned as it was.
 function redactCards(text: string, counts: Map<RedactionKind, number>): string {
-  const found = cardMatches(text);
+  const read = asciiDigits(text);
+  const found = cardMatches(read);
   if (found.length === 0) return text;
   let output = '';
   let last = 0;
   for (const match of found) {
     const at = match.index!;
-    output += text.slice(last, at) + '[REDACTED_CREDIT_CARD]';
+    output += read.slice(last, at) + '[REDACTED_CREDIT_CARD]';
     last = at + match[0].length;
   }
   increment(counts, 'credit_card', found.length);
-  return output + text.slice(last);
+  return output + read.slice(last);
 }
 
 function matches(pattern: RegExp, text: string): boolean {
@@ -1225,7 +1229,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (cardMatches(view).length > 0) return 'credit_card';
+    if (cardMatches(asciiDigits(view)).length > 0) return 'credit_card';
     if (matches(PII_PATTERNS.phone, view)) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';

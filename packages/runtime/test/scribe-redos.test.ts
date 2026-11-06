@@ -47,6 +47,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'words joined by dots': n => 'a.'.repeat(n / 2),
   'digits and dots': n => '1.'.repeat(n / 2),
   'percent runs': n => 'a%'.repeat(n / 2),
+  'fullwidth digit groups': n => '\uff14\uff11\uff11\uff11 '.repeat(n / 5),
+  'mathematical digits': n => '\u{1d7cf}'.repeat(n / 2),
   'a mail address that never ends': n => 'a.'.repeat(n / 2) + '@',
   'a local part, then an at sign, repeated': n => 'a.b@'.repeat(n / 4),
   'a domain that never has a top level': n => 'a@' + 'b.'.repeat(n / 2) + '1',

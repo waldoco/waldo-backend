@@ -1456,6 +1456,28 @@ function inspectTrusted(payload: SanitiseInput['payload'], destination: Sanitise
   return sanitise({ payload, destination, canary_tokens: [...CANARIES], source_taint: null });
 }
 
+describe('a card number written in digits that are not ASCII', () => {
+  const fullwidth = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCharCode(0xff10 + Number(digit)));
+  const arabicIndic = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCharCode(0x0660 + Number(digit)));
+  const mathematical = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCodePoint(0x1d7ce + Number(digit)));
+
+  it.each([
+    ['fullwidth', fullwidth('4111 1111 1111 1111')],
+    ['Arabic-Indic', arabicIndic('4111-1111-1111-1111')],
+    ['mathematical', mathematical('4111111111111111')],
+  ])('is redacted like an ASCII one: %s', (_script, card) => {
+    for (const destination of ['memory_block', 'send_message'] as const) {
+      expect(inspect(`card ${card} on file`, destination), destination).toMatchObject({ ok: true, payload: 'card [REDACTED_CREDIT_CARD] on file', redactions: [{ kind: 'credit_card', count: 1 }] });
+    }
+    expect(inspectExternal({ body: `card ${card} on file` })).toMatchObject({ ok: true, payload: { body: 'card [REDACTED_CREDIT_CARD] on file' } });
+  });
+
+  it('leaves text with non-ASCII digits and no card untouched', () => {
+    const text = `Invoice ${fullwidth('2026')} paid, ${arabicIndic('12')} items`;
+    expect(inspect(text, 'memory_block')).toMatchObject({ ok: true, payload: text, redactions: [] });
+  });
+});
+
 describe('structured tool identifier integrity', () => {
   const id = 'aaaaaaaa-aaaa-4aaa-4111-111111111114';
   const url = `https://local.invalid/console/workspace/file?id=${id}&revision=1`;
