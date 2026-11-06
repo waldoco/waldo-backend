@@ -260,8 +260,10 @@ describe('messagingSystemPrompt, version 2', () => {
 
   // Voice 7 carries the brand voice guide: the four tones, the health gate and loop, and the words and names, about 2,900
   // bytes net of the lines it replaced (the old character, greeting, body, dip and never-sound-like lines), to about 25,030.
-  it('keeps every delivered version 2 text under 25,100 bytes', () => {
-    expect(Math.max(...v2Prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(25_100);
+  // Voice 8 adds the guide's evidence proposals (one true reason, no wit near health, the quiet Brief, a weekly sense of
+  // interruptions, standing preferences beside undo, the health pull path), about 840 bytes, to about 25,870.
+  it('keeps every delivered version 2 text under 25,900 bytes', () => {
+    expect(Math.max(...v2Prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(25_900);
   });
 
   // The version and the background switch are separate options: neither may stand in for the other.

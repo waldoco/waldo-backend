@@ -101,7 +101,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   // Voice
   { anchor: 'You are the friend who already handled it', scenarios: [...VOICE, ...TONE] },
   { anchor: 'Lead with what you did or found, then why, then the door', scenarios: ['t03-reminder', 'v03-week-one-preference', 'v04-unwise-late-call', 'h01-low-day-with-wearable'] },
-  { anchor: 'Open as Waldo, settle into Alfred, close dry', scenarios: ['v05-small-fall', 'v08-stressed-owner', 'tn01-go-friday-loose-saturday'] },
+  { anchor: 'Open as Waldo, settle into Alfred, close dry', scenarios: ['v05-small-fall', 'v08-stressed-owner', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'h01-low-day-with-wearable'] },
   { anchor: 'When you advise, give one suggestion, not a menu', scenarios: ['tn01-go-friday-loose-saturday', 'v09-plan-not-interview', 't10-compare-flights'] },
   { anchor: 'Silence is the default', scenarios: ['tn03-oxygen-quiet-then-loop'] },
   { anchor: 'When they bring a feeling, lower the energy', scenarios: ['v08-stressed-owner', 'p06-kind-before-clever'] },
@@ -119,7 +119,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'No set greeting', scenarios: ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday'] },
   { anchor: 'Names they learn, only where they fit', scenarios: ['h12-no-health-asked-for-a-score', 'd1-brief-good-day-one-line'] },
   // Health
-  { anchor: 'Raise a health signal unprompted only when', scenarios: ['tn03-oxygen-quiet-then-loop', 'tn01-go-friday-loose-saturday', 'h15-short-sleeper-debt-building'] },
+  { anchor: 'Raise a health signal unprompted only when', scenarios: ['tn03-oxygen-quiet-then-loop', 'tn01-go-friday-loose-saturday', 'h15-short-sleeper-debt-building', 'h12-no-health-asked-for-a-score'] },
   { anchor: 'Once you mention one, finish it', scenarios: ['tn03-oxygen-quiet-then-loop', 'h24-health-only-day-sharp-drop', 'h14-drivers-described-not-diagnosed', 'h15-short-sleeper-debt-building'] },
   { anchor: 'Never a bare deviation', boundary: 'health values: no raw reading unless asked, never in a notification' },
   // Writing for where it lands
@@ -131,7 +131,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   // Being ahead of them
   { anchor: 'Know their day before they ask', scenarios: ['p01-plan-the-afternoon', 't20-health-aware-plan'] },
   { anchor: 'Ask only what is theirs to decide', scenarios: ['p01-plan-the-afternoon', 'v03-week-one-preference', 'e1-look-before-asking', 'v09-plan-not-interview'] },
-  { anchor: 'Every change goes out as a proposal', scenarios: ['p02-mail-says-go-ahead', 't07-send-with-approval'] },
+  { anchor: 'Every change goes out as a proposal', scenarios: ['p02-mail-says-go-ahead', 't07-send-with-approval', 'p01-knows-you'] },
 ];
 
 export type RuleStatus = Readonly<{ rule: PromptRule } & ({ kind: 'boundary'; reason: string } | { kind: 'mapped'; scenarios: readonly string[] } | { kind: 'uncovered' })>;
