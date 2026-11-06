@@ -2,6 +2,7 @@
 // tap, the owner's answer is an ordinary turn that puts a change on an approval card, and the calendar changes only on yes.
 // The model is scripted, so these prove the path (tools offered, cards raised, what reaches the owner and when), not the
 // judgment; whether a live model plans well is the judged eval's. Every reading and event is synthetic.
+import { APP_SCHEDULE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -459,11 +460,11 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
     await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
-      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<boolean> }).act({ action: 'schedule.set', id: 'heartbeat', value });
+      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<unknown> }).act({ action: 'schedule.set', id: 'heartbeat', value });
       expect(armed()).toBe(1);
-      expect(await set('off')).toBe(true);
+      expect(await set('off')).toEqual(APP_SCHEDULE_RECEIPTS_V1.off);
       expect(armed()).toBe(0);
-      expect(await set('on')).toBe(true);
+      expect(await set('on')).toEqual(APP_SCHEDULE_RECEIPTS_V1.on);
       expect(armed()).toBe(1);
     });
   });

@@ -233,7 +233,7 @@ describe('the brain tool surface', () => {
       const ticket = { jobId: `job_${profile}`, attempt: 1, token: 'tok' };
       const brain: TaskBrainPort = {
         claim: async () => ({ jobId: ticket.jobId, profile, brief: { title: 'Size', goal: 'Measure.', context: '', done_when: 'Now.', effort: 'standard', timezone: 'UTC', started_at: 0 }, tools, mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 3_600_000, roundsUsed: 0, ownerRef: 'owner-1' }),
-        tool: async () => 'fenced', checkpoint: async () => 'ok', report: async () => 'accepted', heartbeat: async () => true,
+        tool: async () => 'fenced', checkpoint: async () => 'ok', report: async () => 'accepted', heartbeat: async () => true, spent: async () => undefined,
       };
       await runTaskAttempt(ticket, { brain, sliceEnd: Date.now() + 60_000, model: async ({ tools: round }) => {
         sent = round ? [...round] : undefined;
