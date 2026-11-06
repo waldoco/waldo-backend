@@ -25,6 +25,7 @@ import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { routerSignature } from '../src/identity/owner-directory';
 
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -454,6 +455,30 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
         expect(looks(state)).toBe(0);
         expect(armed().map(row => row.due_at)).toEqual([AT + 24 * 3_600_000]);
       } finally { Date.now = tickAt; }
+    });
+  });
+
+  it('a phone that moved brings the look to now, and the look it starts knows why; off, or for a forged notice, nothing moves', async () => {
+    const moved = async (owner: Steps['owner'], name: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-moved', { method: 'POST', body: '{}',
+      headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));
+    const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
+      .map(row => ({ due_at: row.due_at, moved: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
+    await owned('intervention-moved', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      expect(armed(state).map(row => row.moved)).toEqual([null]);
+      expect((await moved(owner, 'intervention-moved', 'forged')).status).toBe(403);
+      expect(armed(state).map(row => row.moved)).toEqual([null]);
+      expect((await moved(owner, 'intervention-moved')).status).toBe(200);
+      expect(armed(state)).toEqual([{ due_at: AT, moved: 'place_moved' }]);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
+      expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'moved']]);
+      expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+    });
+    await owned('intervention-moved-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+      expect((await moved(owner, 'intervention-moved-off')).status).toBe(200);
+      expect(armed(state)).toEqual([]);
     });
   });
 

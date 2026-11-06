@@ -44,7 +44,7 @@ Each signal has one store and one writer. No signal is copied into a second stor
 - **Absent means unknown.** A missing, stale or withdrawn signal reads as unavailable, with its reason and age. It is never filled in: no default home city, no "fine weather", no zero minutes. This is ADR-0081's missingness rule applied to device context.
 - **Coarse is a schema rule, not a judgment.** The contract accepts a 5-character geohash and nothing finer. No latitude or longitude field exists. The stable rules allow this kind of schema validation.
 - **Finer precision only by opt-in, under an amendment.** v1 has no fine location, no geofences and no background ("Always") location.
-- **No new trigger.** A place or time-zone upload does not start a turn. The model decides what matters inside the triggers that already run (§4).
+- **No new trigger.** A place or time-zone upload does not start a turn. The model decides what matters inside the triggers that already run (§4). Amended (§8): a move to another time zone or city brings Waldo's next look forward, inside the look that already runs.
 
 ### 2. Consent: one place consent, separate withdrawals on the server
 
@@ -101,7 +101,7 @@ There is one path: the existing triggers and the tool permission table.
 - **The model decides relevance.** There is no rain or UV threshold, no "far from home" radius and no trip detector in code.
 - **Tool output is turn-only.** The tool results (`turn_only_output`) never reach the tool ledger, memory, logs or storage.
 - **What Waldo says is not turn-only.** A reply that names the city ("you're in Bengaluru today") lands in the chat history like any other message, under the existing forget paths. The same goes for anything the owner says ("I'm in Bengaluru till Friday"), which the model may remember as it does today.
-- **Owner decision:** whether a change of city or time zone should bring Waldo's next look forward. That would be the only new wake-up. v1 says no; the next 90-minute look sees it.
+- **Owner decision:** whether a change of city or time zone should bring Waldo's next look forward. That would be the only new wake-up. v1 said no; the owner's ruling of 6 November 2026 (#1980, B4) says yes, and §8 records how.
 
 ### 5. Place history: room for v1.1
 
@@ -149,6 +149,32 @@ Location is personal data, not ADR-0081 health data. It lives on the health plan
 - **Stale:** the tool gives the reading's age; whether a two-day-old place still holds is the model's call.
 - **Phone off, or the OS permission denied:** nothing is sent. The last row stays until it expires, and the tool reports its age.
 - **Receipts:** upload receipts are kept 7 days, because time-zone uploads arrive on every wake. Consent receipts are kept 90 days.
+
+## 8. Amendment, 6 November 2026: a move brings the next look forward (#1980 B4)
+
+The owner ruled on §4's open decision: landing after travel, or coming home, may start proactive work. This is the smallest change that does it, and it adds no trigger the model does not already run.
+
+- **What counts as a move:**
+  - The place upload's answer gains `moved`. It is true when this newer reading puts the device in another time zone, or in another named city or country, than the row it replaces.
+  - Each of these is not a move:
+    - a first reading;
+    - a reading that loses to a newer one;
+    - a cell with no names;
+    - another cell in the same city.
+  - The database decides from the row it already keeps, so no history and no new store is added.
+  - "Another city" is the OS's locality name changing, a schema fact, not a judgment about where the owner went.
+- **What a move does:**
+  - The Worker strips `moved` from the app's receipt, which keeps its contract shape, and sends the owner's object a signed notice that carries nothing.
+  - A replayed upload does not tell it again. A notice that fails costs the upload nothing.
+  - The owner's object brings Waldo's own look (PROACTIVE_INTERVENTIONS) to now, or to the owner's next Brief if their day is over.
+- **Where the judgment stays:**
+  - The look is told why it runs and that "a move is a reason to look, not a reason to speak". It reads `get_device_context`, calendar and mail.
+  - It decides `none`, `say` or `act` as on any look.
+  - Every limit of the look holds: the owner's consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget and the gap.
+  - Looks stay one per owner-local hour, so a phone that flips zones cannot run more.
+- **What it does not do:**
+  - It adds no geofence, no arrival rule, no "home" or "gym" label and no fine location.
+  - Arriving at a named place (the gym, home) needs place history (§5) and stays with A3.
 
 ## Considered options
 
@@ -201,6 +227,10 @@ Location is personal data, not ADR-0081 health data. It lives on the health plan
   - each route spends its own per-owner budget;
   - no log line carries a cell, a place name or a time zone.
 - **Tool test:** output is turn-only, and unknown stays unknown.
+- **The move (§8):**
+  - pgTAP (`waldo_device_place_moved.sql`): which readings are a move, with replays answered as recorded.
+  - Worker tests: the receipt is unchanged, a replay or a non-move sends no notice, and a failed notice still answers the upload.
+  - Owner-object test: a signed notice arms the look at once with its cause, the look it starts knows why, a forged notice or the switch off arms nothing.
 - **Before production:**
   - the privacy notice and the store disclosures;
   - a device test on both platforms, including a time-zone upload from a background health sync.

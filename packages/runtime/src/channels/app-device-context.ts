@@ -16,6 +16,8 @@ type ErrorCode = (typeof deviceContextApiErrorV1Schema.shape.error.options)[numb
 export type AppDeviceContextInput = Readonly<{
   request: Request; url: URL; doName: string; rpc: Rpc | null;
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
+  // Tells the owner's object that a phone moved to another time zone or city, so its next look comes now.
+  moved?: () => Promise<void>;
 }>;
 
 export const APP_DEVICE_CONTEXT_PATH = '/app/v1/device-context';
@@ -91,5 +93,13 @@ export const handleAppDeviceContext = async (input: AppDeviceContextInput): Prom
   if (request.method !== 'POST') return refuse('unavailable', 405);
   const body = await readJson(request, write.schema, input.readBody);
   if ('response' in body) return body.response;
-  return settle(await invokeDeviceContext(rpc, doName, write.operation, JSON.stringify(body.data)), write.response, write.operation);
+  const result = await invokeDeviceContext(rpc, doName, write.operation, JSON.stringify(body.data));
+  // An upload's answer says whether the phone moved. The owner's object hears it once, on the upload that recorded it (a replay
+  // does not tell it again), and the app's receipt stays as the contract has it. A notice that fails costs the upload nothing.
+  if (route === '/place' && result && typeof result === 'object' && 'moved' in result) {
+    const { moved, ...receipt } = result as Record<string, unknown>;
+    if (moved === true && receipt.replayed === false && input.moved) await input.moved().catch(() => console.error('app device context moved notice'));
+    return settle(receipt, write.response, write.operation);
+  }
+  return settle(result, write.response, write.operation);
 };
