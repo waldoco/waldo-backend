@@ -34,6 +34,9 @@ describe('a free-window offer', () => {
       choices: [{ action: 'approve', label: 'Do it' }, { action: 'defer', label: 'Not now' }, { action: 'skip', label: 'Keep it free' }],
       fallback_text: `${block.reason} Do it / Not now / Keep it free` }]);
     expect(replyFreeWindowPartV1Schema.safeParse(nine.offers![0]).success).toBe(true);
+    // The approvals list, which the app decides from, asks the same line with the same answers.
+    const [item] = await desk.approvals(NOW, { id });
+    expect(item).toMatchObject({ approval_id: id, question: block.reason, labels: { approve: 'Do it', defer: 'Not now', skip: 'Keep it free' } });
   }));
 
   it('with FREE_WINDOW_OFFERS off, a card marked as an offer is an ordinary calendar card', () => inObject(async (state) => {

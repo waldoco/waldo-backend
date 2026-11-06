@@ -1020,7 +1020,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
       ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: undoUntil(entry)! } : {}),
-      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry), ...whyOf(entry) };
+      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry), ...whyOf(entry), ...offerWords(entry, actions) };
+  };
+  // A live free-window offer asks its line on the approvals list too, with its answers named by what they do to the window.
+  const offerWords = (entry: LedgerRow, actions: readonly string[]) => {
+    const offer = actions.includes('approve') ? offerOf(entry, deps.freeWindowOffers?.() === true) : null;
+    return offer ? { question: offer.line, labels: offerLabels(actions as AppApprovalPart['actions']) } : {};
   };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'task_sources') return 'Task sources (expired)';
