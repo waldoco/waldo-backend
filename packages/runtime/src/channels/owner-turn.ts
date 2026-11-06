@@ -978,7 +978,8 @@ export const createOwnerResponder = (
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const answered = tree.get(publication.leafId)!;
       const told = notice ? { ...answered, modelPayload: `${answered.modelPayload}\n\n${notice.modelLine}` } : answered;
-      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
+      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       if (told !== answered) tree.replace(told);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
