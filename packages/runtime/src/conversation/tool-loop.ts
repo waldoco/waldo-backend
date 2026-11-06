@@ -1,5 +1,6 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { inwardReceipt, withInwardReceipts } from './inward-receipts';
+import { fencedCall, HEALTH_FENCE_ERROR, ownerHealthTurn } from './health-fence';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
@@ -255,6 +256,9 @@ export async function runToolLoop(input: Readonly<{
     return lifetime !== undefined && now - at >= lifetime;
   });
   let browsingWithheld = false;
+  // Set once a request has shown the model the owner's health readings beside outside content; it holds to the turn's end.
+  let healthFenced = false;
+  const healthTurns = new Map<LLMToolTurn, Promise<boolean>>();
   let exit: LoopExit = 'completed';
   // Taint the turn started with came from somewhere this loop did not see.
   const ctxOrigins = input.ctx as { taintOrigins?: readonly string[]; toolArgSourceTaint?: unknown };
@@ -283,8 +287,9 @@ export async function runToolLoop(input: Readonly<{
     if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
     let response: Awaited<ReturnType<ToolLoopStep>>;
+    const shown = shownTurns();
     try {
-      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shownTurns()));
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shown));
     } catch (error) {
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
@@ -305,6 +310,13 @@ export async function runToolLoop(input: Readonly<{
         ? unfinishedReply(exit, done)
         : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls), inward);
     }
+    // This round's calls were written from the request just answered, so they are fenced when it showed both.
+    if (!healthFenced && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external') {
+      for (const turn of shown) {
+        if (!healthTurns.has(turn)) healthTurns.set(turn, ownerHealthTurn(turn, input.ctx));
+        if (await healthTurns.get(turn)) { healthFenced = true; break; }
+      }
+    }
     let firstCall = true;
     roundStarts.push(turns.length);
     // The model's calls as it made them, which its history replays, and the calls the loop runs for them.
@@ -318,6 +330,7 @@ export async function runToolLoop(input: Readonly<{
     // A task worker's calls run on the brain over RPC; every other loop runs its handlers here.
     const run = (index: number) => {
       const { call, answer } = routed[index]!;
+      if (healthFenced && (fencedCall(call) || fencedCall(calls[index]!))) return Promise.resolve(refusal(HEALTH_FENCE_ERROR, 'forbidden', 'health_fence'));
       return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
     };
     let batchLead = true;
