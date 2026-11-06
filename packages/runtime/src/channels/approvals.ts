@@ -301,6 +301,8 @@ export type ApprovalDesk = Readonly<{
   reraise(id: string): Promise<ReraiseOutcome>;
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
+  // Meta refused a card on this surface after accepting it (a failed status for its message id). True when it named a live card.
+  cardNotDelivered(messageRef: string): boolean;
   // A message that is exactly 1 or 2 decides the latest numbered card on this surface while its request is open and `latest` says
   // that card (by its message ref) is still Waldo's latest message in the chat the reply came from; anything else is a turn (null).
   numberedReply(text: string, trace: string, latest: (messageRef: string) => boolean): Promise<ApprovalDecision | null>;
@@ -1936,6 +1938,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
+    // The owner never saw that card, so its presentation is retired and its buttons decide nothing. With no approvable
+    // presentation left anywhere, a card still waiting on the owner waits for their next message here, which sends it again.
+    cardNotDelivered(messageRef) {
+      const card = sql.exec<{ approval_id: string }>('SELECT approval_id FROM approval_presentations WHERE surface = ? AND message_ref = ? AND retired_at IS NULL', surface, messageRef).toArray()[0];
+      if (!card) return false;
+      const id = card.approval_id;
+      sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE surface = ? AND message_ref = ? AND retired_at IS NULL', deps.now(), surface, messageRef);
+      const approvable = sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND approvable = 1 AND retired_at IS NULL', id).toArray().length > 0;
+      if (!approvable) sql.exec(`UPDATE ledger SET status = 'card_unconfirmed', card_waits_on = ? WHERE id = ? AND ${CARD_WAITING}`, surface, id);
+      deps.log({ trace: id, hop: 'approval_card_not_delivered', ms: 0, ok: false, code: approvable ? 'approvable_elsewhere' : 'waits_again' });
+      return true;
+    },
     async ownerWrote() {
       expireDue();
       const passStarted = deps.now();
