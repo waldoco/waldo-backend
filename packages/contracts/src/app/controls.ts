@@ -7,7 +7,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail', 'agreements']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -37,6 +37,7 @@ const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
 export const APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 = 64;
 const agentMailNoticeVersion = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
+export const APP_AGREEMENT_CHOICES_V1 = ['given', 'withdrawn'] as const;
 // One of the owner's local days, as the days view names it.
 const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
@@ -55,14 +56,15 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'improve_waldo.set']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
   // The six digits Twilio texted, for phone.sms_check only. The send and the check name no number: the backend texts the
   // number on file, which only phone.set changes.
   code: z.string().regex(/^\d{6}$/).optional(),
-  // The version of the agent mail notice the owner was shown, for agent_mail.claim only.
+  // The version of the text the owner was shown: the agent mail notice for agent_mail.claim, the agreement for
+  // improve_waldo.set. No other action carries it.
   notice: agentMailNoticeVersion.optional(),
   // google.connect only, and only while the connections view offers google.signin: connect the Google account the owner
   // signs in with. The backend resolves it from the owner's own sign-in identity; the app never names an address.
@@ -128,7 +130,11 @@ export const appControlActionV1Schema = z.strictObject({
   if (agentMail !== (action.view === 'agent_mail')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The agent_mail actions alone use the agent_mail view' });
   if (action.action === 'agent_mail.claim' && !(action.value && action.value.trim().length >= 1 && action.value.length <= APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `agent_mail.claim names the handle in value, up to ${APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1} characters` });
   // Claiming is the owner's opt-in: it names the version of the notice the owner was shown and accepted.
-  if ((action.notice !== undefined) !== (action.action === 'agent_mail.claim')) ctx.addIssue({ code: 'custom', path: ['notice'], message: 'agent_mail.claim alone carries notice, the version of the notice it showed, and always does' });
+  if ((action.notice !== undefined) !== (action.action === 'agent_mail.claim' || action.action === 'improve_waldo.set')) ctx.addIssue({ code: 'custom', path: ['notice'], message: 'agent_mail.claim and improve_waldo.set alone carry notice, the version of the text they showed, and always do' });
+  // Improve Waldo for everyone, from the agreements view: given or withdrawn in value, the agreement's version in notice.
+  if ((action.action === 'improve_waldo.set') !== (action.view === 'agreements')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'improve_waldo.set alone uses the agreements view' });
+  if (action.action === 'improve_waldo.set' && (!APP_AGREEMENT_CHOICES_V1.includes(action.value as never)
+    || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'improve_waldo.set names given or withdrawn in value and the agreement version in notice, nothing else' });
   // Where Waldo writes first, from the day view: one of the surfaces in value and nothing else (revision 11).
   if (action.action === 'proactive_surface.set' && (action.view !== 'day' || !appProactiveSurfaceV1Schema.safeParse(action.value).success
     || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'proactive_surface.set starts from the day view and names one surface in value, nothing else' });
@@ -452,6 +458,30 @@ export const APP_PROACTIVE_SURFACE_RECEIPTS_V1 = {
   imessage_not_linked: { state: 'rejected', message: 'Link iMessage first, then choose it here.' },
   unchecked: { state: 'rejected', message: 'Waldo could not check your linked chats just now. Try again in a moment.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
+// Controls revision 18 (`controls=18`): the agreements view and improve_waldo.set. A build below it never names them and is
+// refused both.
+export const APP_CONTROLS_AGREEMENTS_REVISION = 18;
+// Improve Waldo for everyone: whether the owner agrees that their data may be used to improve Waldo's models for everyone,
+// in future training. It is opt-in and off until the owner gives it, separate from the health agreements, and withdrawn at
+// any time. The app shows the title and, while it is not given, the off line, exactly as here; a change of wording is a new
+// version. given is true only while the owner's latest choice was to give it under the current version, so a new version
+// reads as not given until the owner chooses again. changed_at is epoch ms of the owner's latest choice, or null.
+export const APP_IMPROVE_WALDO_AGREEMENT_V1 = {
+  version: '2026-11-06', title: 'Improve Waldo for everyone', off: 'Your data will no longer be used for future training.',
+} as const;
+export const appControlAgreementsDataV1Schema = z.strictObject({
+  improve_waldo: z.strictObject({ given: z.boolean(), version: agentMailNoticeVersion, changed_at: z.int().positive().nullable() }),
+  actions: z.array(z.literal('improve_waldo.set')).max(1),
+});
+// The receipt for each improve_waldo.set outcome. The app tells them apart by these exact messages, so they are contract.
+export const APP_IMPROVE_WALDO_RECEIPTS_V1 = {
+  given: { state: 'recorded', message: 'Saved. You agreed that your data may be used to improve Waldo for everyone.' },
+  withdrawn: { state: 'recorded', message: 'Saved. Your data will no longer be used for future training.' },
+  already_given: { state: 'recorded', message: 'You had already agreed. Nothing changed.' },
+  already_withdrawn: { state: 'recorded', message: 'It was already off. Nothing changed.' },
+  notice_stale: { state: 'rejected', message: 'The agreement changed since you read it. Read it again, then choose.' },
+  unknown: { state: 'unconfirmed', message: 'The change was not confirmed. Refresh to see where it stands.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -462,6 +492,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
   z.strictObject({ ...envelope, view: z.literal('agent_mail'), data: appControlAgentMailDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('agreements'), data: appControlAgreementsDataV1Schema }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({

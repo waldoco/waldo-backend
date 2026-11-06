@@ -96,6 +96,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'phone.set': { gated: false, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
   'agent_mail.claim': { gated: false, why: 'Opens an address that brings outside mail into Waldo; changing it gives up the old one for 180 days.' },
   'agent_mail.release': { gated: false, why: 'Stops the owner\'s Waldo address receiving mail; removes access.' },
+  'improve_waldo.set': { gated: false, why: 'Gives or withdraws the owner\'s agreement to their data improving Waldo for everyone; reaches no account or data.' },
 };
 
 // Console routes that start access or record consent outside an action. A route marked gated is refused whatever its method.
