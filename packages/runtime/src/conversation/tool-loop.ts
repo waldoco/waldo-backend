@@ -166,6 +166,9 @@ export async function runToolLoop(input: Readonly<{
   // Builds the round's offered list from this loop's tools: the harness tool loader offers the core and its meta tools, and
   // routes a use_tool call to the call it names before anything below reads the call. Not for a task worker's remote loop.
   loader?: (tools: readonly LLMTool[]) => ToolLoader;
+  // A machine turn's check, before each round after the first: true when the owner's own message is waiting, so the turn
+  // closes as if its time were up (no more tools, one last answer) and the owner's turn takes the chain.
+  yieldNow?: () => boolean;
 }>): Promise<string> {
   const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
@@ -275,7 +278,7 @@ export async function runToolLoop(input: Readonly<{
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
     // A tool round starts only while one full model call is left for the final answer.
-    const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS;
+    const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS && !(round > 0 && input.yieldNow?.() === true);
     // propose_action is the route for a privileged call whose arguments came from external content, so it is on the
     // menu exactly while the turn is tainted; the browse tools leave it once browsing is withheld.
     const tainted = (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
