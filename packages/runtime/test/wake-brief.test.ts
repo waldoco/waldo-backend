@@ -176,16 +176,16 @@ describe('the Brief lays out the day (BRIEF_DAY_PLAN)', () => {
 
   it('asks for the time-blocked plan after the paragraph, on the Brief only, recap or planning', () => {
     for (const planning of [false, true]) {
-      const brief = dayCardPrompt(card('card:brief'), '2026-11-04T07:20', context, planning, false, false, true);
+      const brief = dayCardPrompt(card('card:brief'), '2026-11-04T07:20', context, planning, false, false, false, true);
       expect(brief).toContain(SCHEDULE_RULE);
       expect(brief.indexOf(PROSE_RULE)).toBeLessThan(brief.indexOf(SCHEDULE_RULE));
     }
-    for (const id of ['card:midday', 'card:close']) expect(dayCardPrompt(card(id), '2026-11-04T14:00', context, true, true, false, true)).not.toContain(SCHEDULE_RULE);
+    for (const id of ['card:midday', 'card:close']) expect(dayCardPrompt(card(id), '2026-11-04T14:00', context, true, true, false, false, true)).not.toContain(SCHEDULE_RULE);
   });
 
   it('off, every card\'s prompt is byte for byte what it was', () => {
     for (const { id } of DAY_CARDS) for (const planning of [false, true]) for (const shape of [false, true]) {
-      expect(dayCardPrompt(card(id), '2026-11-04T07:20', context, planning, shape, false, false)).toBe(dayCardPrompt(card(id), '2026-11-04T07:20', context, planning, shape));
+      expect(dayCardPrompt(card(id), '2026-11-04T07:20', context, planning, shape, false, false, false)).toBe(dayCardPrompt(card(id), '2026-11-04T07:20', context, planning, shape));
     }
   });
 

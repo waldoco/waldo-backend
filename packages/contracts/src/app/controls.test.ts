@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -311,8 +311,30 @@ describe('constellation view', () => {
       { action: 'claim.unpin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.unpin', id: 'memory:claim:12', volume: 'low' },
       { action: 'claim.edit', id: 'memory:claim:12' }, { action: 'claim.edit', id: 'memory:claim:12', value: '   ' },
       { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1 + 1) },
-      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' }, { action: 'claim.forget', id: 'memory:claim:12' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' },
     ]) expect(act(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+
+  const memoryClaimFixture = { id: 'memory:claim:1', kind: 'fact', text: 'Lives in Leeds', source: 'stated', origin: 'owner', status: 'active', evidence: { kind: 'writer_note', text: 'n' },
+    source_reference: { state: 'unavailable', link: null, visibility: 'withheld_unverified_pointer', retrievable: false }, recorded_at: '2026-10-01', writer_seen_count: 1 };
+  it('shows, for controls revision 15, who said a claim, how Waldo is told to treat it, its web source and what can be sent', () => {
+    const shown = { ...memoryClaimFixture, held_as: 'waldo_thinks', bring_up: 'less', source_url: 'https://samrivera.dev/about', actions: ['claim.confirm', 'claim.forget', 'claim.quiet'] };
+    expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: shown })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...shown, source_url: null } })).success).toBe(true);
+    for (const bad of [{ held_as: 'guess' }, { bring_up: 'never' }, { source_url: 5 }, { actions: ['claim.delete'] }, { source_url: 'x'.repeat(2049) }]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...memoryClaimFixture, ...bad } })).success, JSON.stringify(bad)).toBe(false);
+  });
+});
+
+describe('claim controls, controls revision 15', () => {
+  const act = (fields: object) => appControlActionV1Schema.safeParse({ view: 'constellation', revision, request_id: 'claim-0002', ...fields }).success;
+  it('is revision 15', () => expect(APP_CONTROLS_CLAIM_CONTROLS_REVISION).toBe(15));
+  it('confirms, forgets, dismisses, quiets and unquiets one claim, each carrying no value', () => {
+    for (const action of ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet']) expect(act({ action, id: 'memory:claim:12' }), action).toBe(true);
+  });
+  it('refuses them on a node or bad id, another view, with a value or an extra field', () => {
+    for (const action of ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet']) {
+      for (const bad of [{ id: 'memory:node:12' }, { id: 'memory:claim:0' }, { id: '' }, {}, { id: 'memory:claim:12', value: 'x' }, { id: 'memory:claim:12', confirmation: 'DELETE' }, { id: 'memory:claim:12', view: 'day' }]) expect(act({ action, ...bad }), `${action} ${JSON.stringify(bad)}`).toBe(false);
+    }
   });
 });
 
