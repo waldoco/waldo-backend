@@ -175,6 +175,35 @@ describe('the numeric health floor', () => {
   it.each(['stood in line for 2 hours', 'stand-up at 9', 'zone 3 meeting room at 10', 'the max HR headcount is 12', 'lean startup chapter 3', 'body fat jokes'])('leaves an ordinary sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
+  // Lab results as a report or a clinic mail sets them out: a value with its unit, a reference range, a high or low flag.
+  const LAB_READINGS: Record<string, readonly string[]> = {
+    tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |'],
+    vitamin_d: ['Vitamin D 18 ng/mL', '25-OH Vitamin D: 42 nmol/L (75-200) L', 'Vitamin D (25-OH) 18', 'vitamin D level was 22', 'Vit D3 31 ng/ml'],
+    haemoglobin: ['Haemoglobin 11.2 g/dL', 'Hemoglobin: 135 g/L', 'Hb 10.9 g/dL L', 'Hgb 14.1', 'haemoglobin of 9.8'],
+    egfr: ['eGFR 58 mL/min/1.73m2', 'eGFR: >90', 'eGFR 45 (>60) L', 'eGFR was 72'],
+    creatinine: ['Creatinine 1.3 mg/dL', 'Serum creatinine 112 umol/L (H)', 'creatinine was 0.9', 'Creatinine: 88 µmol/L'],
+    psa: ['PSA 4.5 ng/mL', 'PSA: 6.1 (0-4.0) H', 'Total PSA 2.1 ng/mL', 'PSA level 3.2'],
+    ferritin: ['Ferritin 12 ng/mL', 'Ferritin: 8 µg/L L', 'ferritin is 15', 'Ferritin 210 (30-400)'],
+  };
+  it.each(Object.entries(LAB_READINGS).flatMap(([analyte, texts]) => texts.map((text) => [analyte, text])))('holds a %s lab reading: %s', (_analyte, text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it.each([
+    'PSA: 3 things to know before the offsite',
+    'PSA 2 pm meeting moved to Friday',
+    'Office PSA went out on 12/10',
+    'Hb pencils, 2 packs',
+    'Vitamin D3 1000 IU, one capsule daily.',
+    'Vitamin D 60000 IU once a week for 8 weeks',
+    'Book the TSH test for 12/10 at 8:30',
+    'Ferritin test booked for 9am on 14 Nov',
+    'The creatinine panel costs 450 rupees',
+    'eGFR explained in 5 minutes',
+    'Order #4821 for vitamin D gummies, $12.99',
+    'Haemoglobin talk at 10:30 in room 204',
+  ])('leaves a lab-adjacent ordinary sentence alone: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
   it('covers every signal get_health returns', () => {
     expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());
   });
