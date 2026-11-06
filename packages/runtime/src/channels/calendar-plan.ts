@@ -1,6 +1,7 @@
 import { EffectNotAppliedError, type EffectReadback, type EffectReceipt } from './owner-effect-ledger';
 import { localIso, localToEpoch } from './reminders';
 import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
+import { clockWords } from '../prompt/fixed-lines';
 
 // A day plan (approvals revision 9): new blocks on the owner's own primary calendar, added by one approval. The model only
 // proposes; the owner's tap adds them. Done means every block landed. A block added before another failed is removed again
@@ -37,7 +38,11 @@ export const planBlocks = (input: Readonly<{ day: string; blocks: readonly Reado
   return blocks;
 };
 
-const clock = (iso: string) => iso.slice(11, 16);
+// 9:30–11:30am, 11am–1pm: the start drops its am or pm when the end carries the same one.
+const range = (start: string, end: string) => {
+  const [from, to] = [clockWords(start.slice(11, 16)), clockWords(end.slice(11, 16))];
+  return `${from.slice(-2) === to.slice(-2) ? from.slice(0, -2) : from}–${to}`;
+};
 const KIND: Readonly<Record<NonNullable<PlanBlock['block']>, string>> = { rest: ' (rest)', deep_work: ' (deep work)' };
 // The plan in one line, for every reply that names it.
 export const planSummary = (plan: StoredPlan): string => {
@@ -47,7 +52,7 @@ export const planSummary = (plan: StoredPlan): string => {
 // The card's words: the day, then each block at its own time. The same text reads true before the owner decides and after.
 export const planReview = (plan: StoredPlan): string => {
   return [`${planSummary(plan)}:`,
-    ...plan.blocks.map(block => `${clock(block.start)}–${clock(block.end)} ${block.title}${block.block ? KIND[block.block] : ''}`),
+    ...plan.blocks.map(block => `${range(block.start, block.end)} ${block.title}${block.block ? KIND[block.block] : ''}`),
     '', `No one is invited. ${plan.reason}`].join('\n');
 };
 

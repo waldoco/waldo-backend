@@ -19,28 +19,28 @@ const line = (changes: readonly Change[], id = 'e-sync', over: Partial<{ named: 
 
 describe('the update push line', () => {
   it('golden: names a moved meeting and its new local time', () => {
-    expect(line([MAIL, event()])).toBe('Sync with Krati moved to 15:00');
+    expect(line([MAIL, event()])).toBe('Sync with Krati moved to 3pm');
   });
 
   it('names an added meeting, a cancelled one, and one that changed without moving', () => {
-    expect(line([event({}, 'added', undefined)])).toBe('Sync with Krati added at 15:00');
+    expect(line([event({}, 'added', undefined)])).toBe('Sync with Krati added at 3pm');
     expect(line([event({}, 'cancelled')])).toBe('Sync with Krati cancelled');
-    expect(line([event({ start: '2026-10-20T10:00:00Z', end: '2026-10-20T11:00:00Z' })])).toBe('Sync with Krati at 10:00 changed');
+    expect(line([event({ start: '2026-10-20T10:00:00Z', end: '2026-10-20T11:00:00Z' })])).toBe('Sync with Krati at 10am changed');
   });
 
   it('names the date when the meeting is not today, and no time for an all-day one', () => {
-    expect(line([event({ start: '2026-10-22T15:00:00Z', end: '2026-10-22T15:30:00Z' })])).toBe('Sync with Krati moved to Thu 22 Oct 15:00');
+    expect(line([event({ start: '2026-10-22T15:00:00Z', end: '2026-10-22T15:30:00Z' })])).toBe('Sync with Krati moved to Thu 22 Oct 3pm');
     expect(line([event({ start: '2026-10-20', end: '2026-10-21', all_day: true }, 'added', undefined)])).toBe('Sync with Krati added today');
     expect(line([event({ start: '2026-10-21', end: '2026-10-22', all_day: true })])).toBe('Sync with Krati moved to Wed 21 Oct');
   });
 
   it('reads the time on the owner\'s clock, across a zone change and a DST end', () => {
-    expect(line([event()], 'e-sync', { timezone: 'Asia/Kolkata' })).toBe('Sync with Krati moved to 20:30');
-    expect(line([event()], 'e-sync', { timezone: 'America/New_York' })).toBe('Sync with Krati moved to 11:00');
+    expect(line([event()], 'e-sync', { timezone: 'Asia/Kolkata' })).toBe('Sync with Krati moved to 8:30pm');
+    expect(line([event()], 'e-sync', { timezone: 'America/New_York' })).toBe('Sync with Krati moved to 11am');
     // London leaves summer time at 01:00 UTC on 25 October 2026: the same UTC hour reads an hour earlier after it.
     const london = (start: string) => line([event({ start, end: start })], 'e-sync', { timezone: 'Europe/London', now: Date.parse(start) - 3_600_000 });
-    expect(london('2026-10-24T15:00:00Z')).toBe('Sync with Krati moved to 16:00');
-    expect(london('2026-10-25T15:00:00Z')).toBe('Sync with Krati moved to 15:00');
+    expect(london('2026-10-24T15:00:00Z')).toBe('Sync with Krati moved to 4pm');
+    expect(london('2026-10-25T15:00:00Z')).toBe('Sync with Krati moved to 3pm');
   });
 
   it('is the fixed line while names are off, for a mail, for a change the job does not hold, and for one without a title', () => {
@@ -72,12 +72,12 @@ describe('the update push line', () => {
   });
 
   it('shows a title without the invisible characters it carried', () => {
-    expect(line([event({ title: 'Sync\u200b with\u2060 Krati' })])).toBe('Sync with Krati moved to 15:00');
+    expect(line([event({ title: 'Sync\u200b with\u2060 Krati' })])).toBe('Sync with Krati moved to 3pm');
   });
 
   it('keeps titles that only look dotted, and caps a long one', () => {
-    for (const title of ['Dr. Rao', 'Lunch with A.K.', 'Q3.5 planning', 'St. James sync', '3.30 sync']) expect(line([event({ title })])).toBe(`${title} moved to 15:00`);
-    expect(line([event({ title: `Planning ${'and more '.repeat(20)}` })]).length).toBeLessThanOrEqual(PUSH_TITLE_CHARS + ' moved to Thu 22 Oct 15:00'.length);
+    for (const title of ['Dr. Rao', 'Lunch with A.K.', 'Q3.5 planning', 'St. James sync', '3.30 sync']) expect(line([event({ title })])).toBe(`${title} moved to 3pm`);
+    expect(line([event({ title: `Planning ${'and more '.repeat(20)}` })]).length).toBeLessThanOrEqual(PUSH_TITLE_CHARS + ' moved to Thu 22 Oct 3pm'.length);
   });
 
   it('never carries the event\'s description or location, whatever they say', () => {

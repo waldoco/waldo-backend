@@ -62,7 +62,7 @@ describe('the prep push body', () => {
   });
 
   it('names the meeting and its local start when names are on', () => {
-    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30');
+    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30am');
   });
 
   it('never carries an email address, a link, a health value, or an empty or overlong title', () => {
@@ -73,6 +73,6 @@ describe('the prep push body', () => {
     expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: undefined, start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC', named: true }).length).toBeLessThanOrEqual('Prep:  at 05:00'.length + 60);
+    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC', named: true }).length).toBeLessThanOrEqual('Prep:  at 5am'.length + 60);
   });
 });

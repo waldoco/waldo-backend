@@ -190,8 +190,8 @@ describe('the Brief lays out the day (BRIEF_DAY_PLAN)', () => {
   });
 
   it('a laid-out Brief passes the owner-reply and outbox policies, so its times are not taken for readings', () => {
-    const text = ['The Brief', 'A focused day with one big moment: the investor call at three.', '', SCHEDULE_HEADING,
-      '08:00–10:30 Deep work: finish the Q3 deck', '12:30–13:15 Lunch and a walk', '15:00–15:45 Investor call'].join('\n');
+    const text = ['The Daily Brief', 'A focused day with one big moment: the investor call at three.', '', SCHEDULE_HEADING,
+      '8–10:30am Deep work: finish the Q3 deck', '12:30–1:15pm Lunch and a walk', '3–3:45pm Investor call', '11am–1pm Offsite prep'].join('\n');
     for (const destination of ['owner_reply', 'outbox'] as const) {
       const result = sanitise({ payload: [{ role: 'assistant', content: text }], destination, source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'] });
       expect([destination, result.ok]).toEqual([destination, true]);

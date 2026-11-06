@@ -19,7 +19,7 @@ import { presenceAuthority } from './helpers/directory-presence';
 import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
+const CARD = 'The Daily Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
 const UPDATE = 'Lunch moved to 13:00.';
 // Counts the job turns by the prompt each one opens with; the runtime's other model calls answer 'Noted.'.
@@ -31,7 +31,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: LLMGatewayRequest) {
     const asked = request.request.messages.at(-1)?.content ?? '';
-    const text = asked.includes('[Scheduled card "The Brief"') ? (model.cards += 1, CARD)
+    const text = asked.includes('[Scheduled card "The Daily Brief"') ? (model.cards += 1, CARD)
       : asked.includes('[Standing order due now') ? (model.reports += 1, model.slowReportMs && ((shift: number) => { const before = Date.now; Date.now = () => before() + shift; })(model.slowReportMs), model.reportOnce && model.reports > 1 ? '' : REPORT)
         : asked.includes('[Update check,') ? (model.updates += 1, UPDATE) : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };

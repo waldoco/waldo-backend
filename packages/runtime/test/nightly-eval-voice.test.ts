@@ -14,6 +14,7 @@ import { labelInput, loadVoiceLabels, parseVoiceLabels, voiceAgreement, type Lab
 import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
 import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
 import { BRIEF_HEALTH_SCENARIOS } from '../evals/nightly/brief-health-scenarios';
+import { TONE_SCENARIOS } from '../evals/nightly/tone-scenarios';
 import { CARD_SCENARIOS } from '../evals/nightly/card-scenarios';
 import { HEALTH_SCENARIOS } from '../evals/nightly/health-scenarios';
 import { PERSONALITY_SCENARIOS } from '../evals/nightly/personality-scenarios';
@@ -355,7 +356,7 @@ describe('the nightly catalogue', () => {
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'k1-owner-lookup')).toBe(true);
     const worker = NIGHTLY_SCENARIOS.filter((entry) => /^w\d+-/.test(entry.id));
     expect(worker.map((entry) => entry.id)).toEqual(['w1-long-read-in-background', 'w2-late-answer-keeps-promise']);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + PERSONALITY_SCENARIOS.length + HEALTH_SCENARIOS.length + BRIEF_HEALTH_SCENARIOS.length + CARD_SCENARIOS.length + worker.length + 1);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + PERSONALITY_SCENARIOS.length + HEALTH_SCENARIOS.length + BRIEF_HEALTH_SCENARIOS.length + TONE_SCENARIOS.length + CARD_SCENARIOS.length + worker.length + 1);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {

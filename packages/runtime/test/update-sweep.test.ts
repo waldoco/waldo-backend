@@ -374,7 +374,7 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
     turn: async (trace, text, current) => { await current(); turns.push({ trace, text }); return reply.text; },
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
     dayState: {
-      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
+      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Daily Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
       named: () => named.on, chose: (_trace, code) => { chose.push(code); },
       settled: () => { settled.n += 1; },
     },
@@ -401,9 +401,9 @@ describe('applying a sweep job with the day state', () => {
       const a = applyingDay(h);
       a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.' }, push: { event: 'e-sync' } });
       await a.lane();
-      expect(a.turns[0]!.text).toContain('The Brief reached them in the app at 08:00');
+      expect(a.turns[0]!.text).toContain('The Daily Brief reached them in the app at 08:00');
       expect(a.turns[0]!.text).toContain('"revise"');
-      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', inPlace: true, push: 'Sync with Krati at 17:00 changed' }]);
+      expect(a.effects).toEqual([{ id: `update:${job.id}`, text: 'Your sync with Krati moved to 17:00, so the afternoon starts later.', revision: 'card:brief', inPlace: true, push: 'Sync with Krati at 5pm changed' }]);
       expect(a.chose).toEqual(['revise+push']);
       expect(judged(h.sql)).toEqual([1]);
     });
@@ -411,7 +411,7 @@ describe('applying a sweep job with the day state', () => {
 
   it('the push never carries what the turn read or wrote: health in its findings and its card, a mail, an unknown event', async () => {
     const READ_HEALTH: TaskResult = { ...FOUND, findings: [{ text: 'Recovery is low today and resting HR was 48 bpm.', source_ref: 'event:e-sync' }] };
-    for (const [push, named, expected] of [[{ event: 'e-sync' }, true, 'Sync with Krati at 17:00 changed'], [{ event: 'e-sync' }, false, PUSHES.update.body],
+    for (const [push, named, expected] of [[{ event: 'e-sync' }, true, 'Sync with Krati at 5pm changed'], [{ event: 'e-sync' }, false, PUSHES.update.body],
       [{ event: 'e-other' }, true, PUSHES.update.body], [{}, true, PUSHES.update.body]] as const) await withSweep(async (h) => {
       h.events.push(MOVED);
       h.mail.push({ ...MAIL, snippet: 'Your HRV 38 ms looks fine.' });
@@ -576,7 +576,7 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
     ...(interruptions ? { interruptions } : {}),
     dayState: {
-      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Brief reached them in the app at 08:00.', delivered: card => card === 'card:brief', revisesCards: true,
+      quiet: () => quiet.on, cards: () => 'Today\'s cards: The Daily Brief reached them in the app at 08:00.', delivered: card => card === 'card:brief', revisesCards: true,
       named: () => named.on, chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
     },
     triage: {
@@ -610,7 +610,7 @@ describe('the triage turn', () => {
   it('golden: tell with a push goes out once, spends one interrupt, and the turn saw the owner\'s goals', async () => {
     await withSweep(async (h) => {
       const a = await triaged(h, { decision: 'tell', say: 'Your sync with Krati moved to 17:00.', push: { event: 'e-sync' } });
-      expect(a.effects).toEqual([expect.objectContaining({ text: 'Your sync with Krati moved to 17:00.', push: 'Sync with Krati at 17:00 changed' })]);
+      expect(a.effects).toEqual([expect.objectContaining({ text: 'Your sync with Krati moved to 17:00.', push: 'Sync with Krati at 5pm changed' })]);
       expect(a.chose).toEqual(['tell+push']);
       expect(a.goals.asked).toBe(1);
       expect(a.turns[0]!.text).toContain('Ship the Q4 board deck by Friday');
