@@ -558,7 +558,7 @@ export const createOwnerResponder = (
         : guardedHandlers;
       // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
       // counter resets each turn and the spawner closes over this turn's LLM step. The child
-      // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
+      // runs a nested tool loop on the read tools (CHILD_TOOL_NAMES) with its own round
       // slice; flat by construction - children never get delegate_task.
       // One shared round budget per submitted turn: the parent loop and every child it spawns
       // draw from it, so the turn's stated cap is absolute (Codex #224 hold). Its time and rounds follow the run.
@@ -577,7 +577,8 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: childHandlers,
           budget: turnBudget,
-          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say.
+          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();

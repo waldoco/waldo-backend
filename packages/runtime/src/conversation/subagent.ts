@@ -18,23 +18,14 @@ import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } fro
 export const SUBAGENT_ROUND_SHARE = 0.6;
 export const SUBAGENT_MAX_SPAWNS_PER_TURN = 5;
 
-// The child tool set: reads and research only. No sends, no writes, no delegation, no
-// gated/privileged tools - so the autonomy gate can never fire inside a child and a child can
-// never act on the owner's behalf.
-// browse_page is deliberately NOT in v1: the browser tools' external-origin contract lands
-// separately (#220), and a child must not hold a tool whose taint boundary is unresolved.
-export const CHILD_TOOL_NAMES: readonly ToolName[] = [
-  'get_context',
-  'read_memory',
-  'search_episodes',
-  'web_search',
-];
-
-// What a task may ask a child to use: read tools whose handlers only read. Browsing keeps an
-// unresolved taint boundary, delegation keeps depth flat, and the rest of the table is effects.
-const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'browse_page', 'read_tool_output'];
+// What a child may use: every read tool whose handler only reads, page reads included (browse_page is external-origin, so a
+// child's page read taints its report). Delegation keeps depth flat, read_tool_output pages the parent's own store, and the
+// rest of the table is effects, so the autonomy gate never fires inside a child and a child never acts for the owner.
+const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'read_tool_output'];
 export const CHILD_READ_TOOLS: readonly ToolName[] = (Object.keys(TOOL_REPLAY_CLASS) as ToolName[])
   .filter((name) => TOOL_REPLAY_CLASS[name].replay === 'safe_read' && !NOT_FOR_CHILDREN.includes(name));
+// A child's default tools: all of them. Its own copy, so a test can widen the default without touching the read set.
+export const CHILD_TOOL_NAMES: readonly ToolName[] = [...CHILD_READ_TOOLS];
 
 // Effects a child task performs belong in the parent's typed receipts: the reply may claim only
 // receipted effects. Today the child set is read-only, so none exist. A child tool with a
