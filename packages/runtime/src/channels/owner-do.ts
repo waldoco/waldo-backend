@@ -6194,14 +6194,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!isClock(value)) return false;
           const card = id as (typeof APP_SCHEDULE_TIME_IDS_V1)[number];
           const today = await setCardTime(cardTimeDeps(now), card, value, true);
-          return today === 'unreadable' ? APP_SCHEDULE_RECEIPTS_V1.unavailable : appScheduleTimeReceiptV1({ card, time: value, today, noLaterThan: card === 'card:brief' && this.env.WAKE_BRIEF === '1' });
+          if (today === 'unreadable') return APP_SCHEDULE_RECEIPTS_V1.unavailable;
+          log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
+          return appScheduleTimeReceiptV1({ card, time: value, today, noLaterThan: card === 'card:brief' && this.env.WAKE_BRIEF === '1' });
         } else if (action === 'schedule.set' || action === 'schedule.reset') {
           const kind = SCHEDULE_KINDS.find((candidate) => candidate === id);
           if (action === 'schedule.set' && (!kind || (value !== 'on' && value !== 'off'))) return false;
           const was = kind === undefined ? undefined : schedPrefs.enabled(kind);
           if (action === 'schedule.set') schedPrefs.set(kind!, value === 'on'); else schedPrefs.reset();
           await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable: await armableNow(), alongHeartbeat: lookFollows }, action === 'schedule.set' ? kind : undefined);
-          if (action === 'schedule.set') return APP_SCHEDULE_RECEIPTS_V1[was === (value === 'on') ? (value === 'on' ? 'already_on' : 'already_off') : value === 'on' ? 'on' : 'off'];
+          if (action === 'schedule.set') {
+            log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
+            return APP_SCHEDULE_RECEIPTS_V1[was === (value === 'on') ? (value === 'on' ? 'already_on' : 'already_off') : value === 'on' ? 'on' : 'off'];
+          }
         } else if (action === 'proactivity.set') {
           const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
