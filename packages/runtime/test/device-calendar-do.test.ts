@@ -22,7 +22,9 @@ const snapshot = (events: readonly object[], at = NOW) => ({
 });
 const inObject = <T,>(work: (state: DurableObjectState) => Promise<T>) => runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`device-calendar-do-${seq += 1}`)), async (_i, state) => work(state));
 const post = (path: string, body: unknown, headers: Record<string, string> = {}) => new Request(`https://o.test/app/v1/device/calendar${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-const grant = { request_id: 'dcal-grant-0001', signal: 'calendar', version: 1, purposes: [{ purpose: 'storage_compute', expected_epoch: 0 }, { purpose: 'model_processing', expected_epoch: 0 }] };
+const grant = { request_id: 'dcal-grant-0001', signal: 'calendar', version: 1, purposes: [{ purpose: 'storage_compute', expected_epoch: 0 }, { purpose: 'model_processing', expected_epoch: 0 }] } as const;
+// The tool's answer, whatever its branch.
+const answer = async (handler: ReturnType<typeof queryPhoneCalendarHandler>) => ((await handler.handle({}, undefined as never)) as { data?: unknown }).data;
 
 describe('the owner object\'s phone-calendar routes', () => {
   it('answer consent, ingest and the owner\'s read-back, and refuse what the contract does not hold', () => inObject(async (state) => {
@@ -67,13 +69,13 @@ describe('the owner object\'s phone-calendar routes', () => {
       state: async () => [{ id: 'acct-1', email: 'owner@example.test', error: null, calendar: true, mail: true, tasks: false }],
       client: async () => (uids === null ? null : { events: async () => uids.map((uid, index) => ({ id: `g${index}`, title: 'x', start: meeting.start, end: meeting.end, all_day: false, ical_uid: uid })) }),
     }) as never;
-    const compared = await queryPhoneCalendarHandler(phoneCalendarReader(book, google(['shared-uid@example.test'])), clock).handle({});
-    expect(compared.data).toMatchObject({ state: 'available', on_google: 1, google_compared: true, more: 0, phones: [{ phone: 1, age_minutes: 30, complete: true }] });
-    expect((compared.data as { events: { title: string; may_be_on_google: boolean }[] }).events.map(event => [event.title, event.may_be_on_google])).toEqual([['Standup', true]]);
-    const unknown = await queryPhoneCalendarHandler(phoneCalendarReader(book, google(null)), clock).handle({});
-    expect(unknown.data).toMatchObject({ on_google: 0, google_compared: false });
-    expect((unknown.data as { events: unknown[] }).events).toHaveLength(2);
+    const compared = await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google(['shared-uid@example.test'])), clock));
+    expect(compared).toMatchObject({ state: 'available', on_google: 1, google_compared: true, more: 0, phones: [{ phone: 1, age_minutes: 30, complete: true }] });
+    expect((compared as { events: { title: string; may_be_on_google: boolean }[] }).events.map(event => [event.title, event.may_be_on_google])).toEqual([['Standup', true]]);
+    const unknown = await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google(null)), clock));
+    expect(unknown).toMatchObject({ on_google: 0, google_compared: false });
+    expect((unknown as { events: unknown[] }).events).toHaveLength(2);
     book.withdraw({ request_id: 'dcal-wd-0001', purpose: 'storage_compute', expected_epoch: 1 }, 'w');
-    expect((await queryPhoneCalendarHandler(phoneCalendarReader(book, google([])), clock).handle({})).data).toEqual({ state: 'unavailable', reason: 'consent_required' });
+    expect(await answer(queryPhoneCalendarHandler(phoneCalendarReader(book, google([])), clock))).toEqual({ state: 'unavailable', reason: 'consent_required' });
   }));
 });
