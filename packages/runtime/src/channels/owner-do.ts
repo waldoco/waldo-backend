@@ -2536,6 +2536,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       for (const { id, at } of refused) closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? now }, records.some(row => addressed(row) && row.providerMessageIds?.includes(id)), now, log) || closed;
       changed = observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
         ...failed.map(({ id, at }) => ({ id, kind: 'failed' as const, at: at ?? now }))], addressed, now);
+      // Approval cards skip the outbox, so a refusal or failure of one is the desk's to settle: the card waits again.
+      for (const { id } of [...refused, ...failed]) runtime.desk.cardNotDelivered(id);
     });
     await this.rearmEveryWake();
     // An arrival for a direct reply, or a repeat, changes nothing: the common case needs no follow-up.
