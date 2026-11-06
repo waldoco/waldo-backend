@@ -239,11 +239,12 @@ describe('the media that crosses from the bridge', () => {
 });
 
 describe('the files an iMessage turn opened', () => {
-  const opened = { updateId: 9_000_000_000_001, parts: [{ authorship: 'media_note' as const, text: 'photo' }], attachments: [] };
-  it('are read only by the iMessage turn they were opened for, never by another channel with the same update id', () => {
-    expect(openedForTurn(opened, 'imessage', opened.updateId)).toBe(opened);
-    expect(openedForTurn(opened, 'whatsapp', opened.updateId)).toBeNull();
-    expect(openedForTurn(opened, 'imessage', opened.updateId + 1)).toBeNull();
-    expect(openedForTurn(null, 'imessage', opened.updateId)).toBeNull();
+  const opened = { updateId: 9_000_000_000_001, runId: 'run-imessage', parts: [{ authorship: 'media_note' as const, text: 'photo' }], attachments: [] };
+  it('are read only by the iMessage turn they were opened for, never by another run with the same update id', () => {
+    expect(openedForTurn(opened, { updateId: opened.updateId, runScope: { runId: 'run-imessage' } })).toBe(opened);
+    expect(openedForTurn(opened, { updateId: opened.updateId, runScope: { runId: 'run-whatsapp' } })).toBeNull();
+    expect(openedForTurn(opened, { updateId: opened.updateId })).toBeNull();
+    expect(openedForTurn(opened, { updateId: opened.updateId + 1, runScope: { runId: 'run-imessage' } })).toBeNull();
+    expect(openedForTurn(null, { updateId: opened.updateId, runScope: { runId: 'run-imessage' } })).toBeNull();
   });
 });
