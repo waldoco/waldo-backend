@@ -75,6 +75,17 @@ function requireStrictHistoricalBase(root, baseRef) {
   return baseRef;
 }
 
+// A pull_request run checks out GitHub's merge of the PR onto the base branch as the branch stood when GitHub made that merge.
+// The branch may have moved on by the time the job fetches it, so its tip is no longer an ancestor of HEAD. When HEAD is a
+// two-parent merge whose first parent is in the base branch's history, that first parent is the base the PR was merged onto,
+// and the PR's migrations are checked against it. Any other HEAD keeps the branch tip as its base.
+function pullRequestMergeBase(root, tip) {
+  const parents = runGit(root, ['rev-list', '--parents', '--max-count=1', 'HEAD']);
+  if (parents.status !== 0 || parents.stdout.trim().split(' ').length !== 3) return undefined;
+  const first = resolveGitRef(root, 'HEAD^1');
+  return first && runGit(root, ['merge-base', '--is-ancestor', first, tip]).status === 0 ? first : undefined;
+}
+
 function resolveBaseRef(root, argv) {
   const explicit = parseBaseRef(argv) ?? process.env.WALDO_DO_MIGRATION_BASE_REF;
   if (explicit) {
@@ -91,7 +102,8 @@ function resolveBaseRef(root, argv) {
       );
       process.exit(1);
     }
-    return requireStrictHistoricalBase(root, remoteRef ?? localRef);
+    const tip = remoteRef ?? localRef;
+    return requireStrictHistoricalBase(root, pullRequestMergeBase(root, tip) ?? tip);
   }
 
   const repository = runGit(root, ['rev-parse', '--show-toplevel']);
