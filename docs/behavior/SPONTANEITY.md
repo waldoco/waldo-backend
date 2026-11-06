@@ -41,7 +41,6 @@ New moments are inputs to that layer, never a second path to the owner.
   - Calendar events keep their exact times. Open time is filled from goals, open loops, tasks and waiting items.
   - A dip in shared health gives a lighter plan, paired with one easy step, never a bare warning.
   - The plan is a suggestion and never claims a calendar change. Source: `SCHEDULE_RULE` in `prompt/day-cards.ts`.
-- **One tap adds the plan to the calendar.** This is the `calendar_plan` approval kind, approvals revision 9. It is built separately; see that PR.
 
 ## Not built: follow-ups for the proactive layer's seams
 
