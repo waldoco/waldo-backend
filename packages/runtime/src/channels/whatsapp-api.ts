@@ -86,7 +86,7 @@ export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, p
 // WhatsApp shows an unsaved business by its number.
 export const sendWhatsAppWaldoCard = (call: WhatsAppCall, to: string, waldoNumber: string) =>
   call({ to, type: 'contacts', contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${waldoNumber}`, type: 'WORK', wa_id: waldoNumber }] }] });
-const ackId = (ack: unknown): string | null => {
+export const whatsappAckId = (ack: unknown): string | null => {
   const id = (ack as { messages?: { id?: unknown }[] } | undefined)?.messages?.[0]?.id;
   return typeof id === 'string' && id !== '' ? id : null;
 };
@@ -180,7 +180,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
           console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, code: 'interactive_refused_text_fallback', status: error.status }));
         }
         if (ack !== undefined) {
-          const id = ackId(ack);
+          const id = whatsappAckId(ack);
           if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, (b.fallback_text ?? b.text).trim());
           return ack;
         }
@@ -192,7 +192,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       for (let index = 0; index < parts.length; index += 1) {
         try { ack = await sendWhatsAppText(call, to, parts[index]!, b.link_preview_options?.is_disabled !== true, index === 0 ? b.quote_message_id : undefined); }
         catch (error) { if (index === 0) throw error; throw new WhatsAppPartialSend(index, ack, parts.slice(index), error); }
-        const id = ackId(ack);
+        const id = whatsappAckId(ack);
         if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, parts[index]!);
       }
       return ack;

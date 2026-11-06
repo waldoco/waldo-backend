@@ -252,7 +252,7 @@ import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactive
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
-import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
+import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
@@ -756,7 +756,35 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // work, the one the jobs lane reports on; an object with no runtime to log through keeps the outcome fields only, never a
   // tool's input or output.
   private taskChannel(): ChannelKind {
-    return this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : this.imessageOnly() ? 'imessage' : 'telegram';
+    return this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : this.imessageOnly() ? 'imessage' : this.ownerSurface();
+  }
+  // The surface for a caller with none of its own: the console, Google consent, an event notice, the owner's runs. With
+  // OWNER_SURFACE_DEFAULT on, Telegram only while the owner is linked there on a deploy that runs it; then the app, WhatsApp or
+  // iMessage they are bound on; the app when none is yet, where no owner is bound and a send goes nowhere.
+  private ownerSurface(): ChannelKind {
+    if (this.env.OWNER_SURFACE_DEFAULT !== '1') return 'telegram';
+    const kv = this.ctx.storage.kv;
+    if (this.env.TELEGRAM_BOT_TOKEN && kv.get<boolean>('telegram_unlinked') !== true
+      && resolveOwnerTelegramId(kv.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null) > 0) return 'telegram';
+    return this.appBound() ? 'app' : this.whatsappBound() ? 'whatsapp' : this.imessageBound() ? 'imessage' : 'app';
+  }
+  // A notice outside any turn, on `surface` through its runtime. The app has no caller that delivers outside a turn, so the
+  // notice is written into the transcript of the owner the directory admits. 'blocked': it certainly did not leave (the gate
+  // refused, or the directory does not admit the owner or cannot say); 'held': WhatsApp keeps it until it can deliver. A throw
+  // is an outcome nobody can know.
+  private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string): Promise<'sent' | 'held' | 'blocked'> {
+    if (surface === 'app') {
+      const found = await this.appOwnerLookup();
+      if (found.kind !== 'admitted') return 'blocked';
+      await this.appDeliveryFor(found.authority)(text);
+      return 'sent';
+    }
+    const ack = await runtime.api.sendMessage({ chat_id: runtime.owner, text });
+    if (ack === undefined) return 'blocked';
+    if (whatsappHeld(ack)) return 'held';
+    const telegramId = (ack as { message_id?: unknown } | null)?.message_id;
+    if (surface === 'whatsapp' ? whatsappAckId(ack) === null : !(Number.isSafeInteger(telegramId) && Number(telegramId) > 0)) throw new Error('notification_unacknowledged');
+    return 'sent';
   }
   private taskLog(entry: TurnLogEntry): void {
     try { this.setup(this.taskChannel()).log(entry); }
@@ -853,12 +881,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           : child.reason === 'not_consumed'
           ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
           : INTERRUPTED_NOTICES.steer;
-      await this.setup().finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
+      await this.setup('telegram').finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
         payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\n${this.requestReceived(child.admittedAt)}` : '') },
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
       }, work => this.commitRecoveryNotice(child, current => {
         // An in-process failure may already have frozen a notice for this same attempt.
-        const known = this.setup().finalOutbox.records().find(row => row.id === noticeId);
+        const known = this.setup('telegram').finalOutbox.records().find(row => row.id === noticeId);
         if (known && (known.ownerSubject !== child.subject || known.doName !== child.doName || known.bot !== child.bot
           || known.trace !== ownerTurnTrace('telegram', child.updateId) || known.payload.chat_id !== Number(child.subject))) {
           current.outcomeNoticeBlocked = 'notice_identity'; return;
@@ -996,8 +1024,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.activeScope = scope; this.activeAbort = abort;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      this.setup().control.bindTarget(runId);
-      this.setup().control.durableConsume(async ids => {
+      this.setup('telegram').control.bindTarget(runId);
+      this.setup('telegram').control.durableConsume(async ids => {
         scope.admit();
         for (const id of ids) {
           const child = (await this.inbox.records()).find(row => row.control?.targetRun === runId && row.updateId === id);
@@ -1017,7 +1045,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await Promise.race([this.turn(raw, 'telegram', true, scope), expired]);
       }
       if (direct) await this.inbox.transition(row.id, attempt, 'completed', 'direct_path_returned');
-      const final = this.setup().finalOutbox.records().find(r => r.inbox?.runId === runId);
+      const final = this.setup('telegram').finalOutbox.records().find(r => r.inbox?.runId === runId);
       if (!final && !direct) await this.inbox.transition(row.id, attempt, 'quarantined', 'no_final_effects_uncertain');
     } catch {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
@@ -1045,7 +1073,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (this.activeInbox?.runId === runId) this.activeInbox = null;
         // Serial owner execution is over; retained child claims are recovered as uncertain.
         this.liveAttempts.clear();
-        await this.setup().scheduler.rearm();
+        await this.setup('telegram').scheduler.rearm();
       }
       }
     }
@@ -1408,7 +1436,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async settleRetiredWhatsApp(retired: readonly string[], channel?: ChannelKind): Promise<void> {
     if (!retired.length) return;
     try {
-      const runtime = this.setup(channel);
+      const runtime = this.setup(channel ?? this.ownerSurface());
       await runtime.ready;
       await runtime.finalOutbox.settleEnded(retired, runtime.settleFinal);
     } catch { console.error('whatsapp unlink settlement deferred'); }
@@ -2120,7 +2148,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       // A ticket the app issued is begun on the app runtime, so an owner without Telegram can connect.
       const issuer = await this.ctx.storage.get<string>(`connect_channel:${ticket_hash}`);
-      const begin = await this.serial(() => this.setup(issuer === 'app' ? 'app' : 'telegram').google.beginSession(ticket_hash));
+      const begin = await this.serial(() => this.setup(issuer === 'app' ? 'app' : this.ownerSurface()).google.beginSession(ticket_hash));
       console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begin !== null }));
       return Response.json({ url: begin?.url ?? null, nonce: begin?.nonce ?? null });
     }
@@ -2135,7 +2163,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const updatesStale = (await this.ctx.storage.get('webhook_updates')) !== WEBHOOK_UPDATES.join(',');
     if (origin && this.env.TELEGRAM_WEBHOOK_SECRET && (updatesStale || prevOrigin !== origin)) {
       try {
-        await this.setup().call('setWebhook', { url: `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret_token: this.env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: WEBHOOK_UPDATES });
+        await this.setup('telegram').call('setWebhook', { url: `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret_token: this.env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: WEBHOOK_UPDATES });
         await this.ctx.storage.put('webhook_updates', WEBHOOK_UPDATES.join(','));
       } catch (error) {
         console.log(JSON.stringify({ hop: 'set_webhook', ok: false, error: String(error) }));
@@ -2148,7 +2176,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.probeTurn(body);
     }
     const update = JSON.parse(body) as RawUpdate;
-    await this.serial(() => this.turn(update));
+    await this.serial(() => this.turn(update, 'telegram'));
     return new Response('ok');
   }
 
@@ -2648,24 +2676,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Resume only an admitted, not-yet-claimed record after a crash. Claimed/settled
     // redeliveries are acknowledged without repeating a possible notification.
     if(!inbox.claim(source,delivery))return new Response('ok');
-    const { runs, api, owner, log } = this.setup();
+    const surface = this.ownerSurface(), runtime = this.setup(surface), { runs, log } = runtime;
     const run = runs.start('event', null);
     const summary = `${source}: ${envelope.title}`.slice(0, 180);
+    let sent: 'sent' | 'held' | 'blocked' | null = null;
     try {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
-        const ack=await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
-        // The egress gate refused: nothing left the Worker, so this is a definite non-send, not an unknown one. The gate's own line names why.
-        if(ack===undefined){
+        sent = await this.notifyOwner(surface, runtime, `Event - ${summary}${url ? `\n${url}` : ''}`);
+        // Refused at the gate (its own line names why) or by the directory: nothing left the Worker, a definite non-send, not an unknown one.
+        if(sent==='blocked'){
           inbox.undelivered(source,delivery);
           runs.finish(run.id,'stopped',`${source}: notification not sent; refused at the ownership check`.slice(0,180));
           log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:'notification_blocked' });
           return new Response('ok');
         }
-        if(!ack||typeof ack!=='object'||!Number.isSafeInteger((ack as {message_id?:unknown}).message_id)||Number((ack as {message_id:number}).message_id)<=0)throw new Error('notification_unacknowledged');
       }
       inbox.finish(source,delivery);
-      runs.finish(run.id, 'completed', `${summary}: ${notify?'notification acknowledged':'admission recorded'}`.slice(0,200));
+      runs.finish(run.id, 'completed', `${summary}: ${sent==='held'?'notification held until WhatsApp can deliver it':notify?'notification acknowledged':'admission recorded'}`.slice(0,200));
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, detail: `${source}:${envelope.kind.slice(0, 60)}` });
     } catch (error) {
       runs.finish(run.id, 'stopped', `${source}: notification outcome unknown; not retried`.slice(0, 180));
@@ -2851,7 +2879,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const channel={imessage:this.imessageHost.env,phone:this.env,agentMail:this.agentMailControls(this.ctx.storage.kv.get<string>('do_name')??''),devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked,onWhatsAppUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(this.ctx.storage.kv.get<string>('do_name')??'')};
           if(channelRead)return channelControlsRead(channelRead,channel);
           if(channelAction)return channelControlsAction(await request.formData(),channel);
-          const runtime=this.setup();await runtime.ready;
+          const runtime=this.setup(this.ownerSurface());await runtime.ready;
           if(controlsRoute){
             if(memoryControlsRoute){
               if([...url.searchParams.keys()].some(key=>key!=='id')||url.searchParams.getAll('id').length!==1||(url.searchParams.get('id')?.length??0)>256)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
@@ -2922,7 +2950,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (overviewRoute) {
       try {
-        const runtime = this.setup();
+        const runtime = this.setup(this.ownerSurface());
         await runtime.ready;
         return Response.json(await runtime.overview(), { headers: DASHBOARD_OVERVIEW_HEADERS });
       } catch {
@@ -2943,7 +2971,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST' && jsonAdmin) {
       return adminAction(request, session.csrf, consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'));
     }
-    const { ready, view, act, googleConsoleStart, google, openFile, desk } = this.setup();
+    const { ready, view, act, googleConsoleStart, google, openFile, desk } = this.setup(this.ownerSurface());
     await ready;
     const resultPage = (message: string, ok: boolean) => new Response(message, { status: ok ? 200 : 400, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
     const noticePage = (key: string) => { const receipt = dashboardReceipt(key); return resultPage(receipt.message, receipt.outcome !== 'failed'); };
@@ -3028,8 +3056,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const parsed = raw === null ? NaN : Number(raw);
       const limitRaw = Number(url.searchParams.get('limit') ?? '20');
       const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 50) : 20;
-      const { rows: page, next } = this.setup().runs.listPage(limit, Number.isFinite(parsed) ? parsed : undefined);
-      const waiting = outboxRunNotes(this.setup().finalOutbox.records());
+      const runtime = this.setup(this.ownerSurface());
+      const { rows: page, next } = runtime.runs.listPage(limit, Number.isFinite(parsed) ? parsed : undefined);
+      const waiting = outboxRunNotes(runtime.finalOutbox.records());
       return Response.json({ runs: page.map(run => run.status === 'running' && waiting.has(run.id) ? { ...run, summary: waiting.get(run.id)! } : run), next_before: next }, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
     }
     // Page routing: /console serves the overview; /console/<slug> serves one page. Action,
@@ -3071,13 +3100,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
-  // Settles one consent attempt. The owner hears about a new link once, in Telegram, whatever the browser shows.
+  // Settles one consent attempt. The owner hears about a new link once, on their surface (ownerSurface), whatever the browser shows.
   private async finishGoogle(input: ConsentCallback): Promise<ConsentReply> {
-    const { owner, api, google, log } = this.setup();
+    const surface = this.ownerSurface(), runtime = this.setup(surface), { google, log } = runtime;
     const { outcome, bot, fresh } = await google.finish(input);
     if (fresh && outcome.kind === 'linked') {
       const can = [googleHas(outcome.scopes, 'calendar') ? 'read your calendar' : '', googleHas(outcome.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
-      await api.sendMessage({ chat_id: owner, text: `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}` })
+      await this.notifyOwner(surface, runtime, `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}`)
+        .then(sent => { if (sent === 'blocked') log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, code: 'send_blocked' }); })
         .catch((error: unknown) => log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, error: String(error), code: 'send_failed' }));
     }
     return { outcome, bot };
@@ -3437,7 +3467,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // `channel` is the surface the alarm pass picked for the owner's proactive work (proactiveTargets): the report goes there
   // through the delivery outbox, and each surface the owner chose as a copy gets one once it is delivered (copiedFollowups).
-  private async drainMacDeliveries(channel: ChannelKind = 'telegram'): Promise<void> {
+  private async drainMacDeliveries(channel: ChannelKind): Promise<void> {
     const inbox=macInbox(this.ctx.storage);
     // The alarm calls this for every owner: with nothing pending it must not touch any runtime.
     if(!inbox.pending().length)return;
@@ -3708,7 +3738,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return Response.json(result);
   }
 
-  private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
+  private async turn(update: unknown, channel: ChannelKind, durable = false, scope?: RunEffectScope): Promise<void> {
     update = maskCredentialReply(update, this.ctx.storage.kv);
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
@@ -3768,7 +3798,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (harness) {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId)).slice(0, HARNESS_MESSAGE_LIMIT) });
+        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
         return;
       }
       const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
@@ -3808,8 +3838,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
 
-  private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number): Promise<string> {
-    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup();
+  private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number, channel: ChannelKind): Promise<string> {
+    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup(channel);
     if (command.kind === 'trace') return traces.recent(timezone, command.filter);
     if (command.kind === 'e2e') return traces.checklist(timezone);
     if (command.kind === 'usage') return traces.usage();
@@ -3851,7 +3881,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
 
-  private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
+  private setup(channel: ChannelKind): OwnerRuntime {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
     const currentOwner = channel === 'whatsapp' || nativeSurface(channel)
