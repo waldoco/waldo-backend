@@ -6,6 +6,8 @@ import { startLookup } from '../src/onboarding/lookup';
 import { jobBook, type JobBook } from '../src/tasks/jobs';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
 // The owner look-up the owner's yes starts, end to end through the owner object's own routes: the yes and the setup answers
@@ -38,11 +40,11 @@ beforeEach(() => {
     return new Response('unexpected', { status: 500 });
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; WELCOME_V2?: string; BRAVE_SEARCH_API_KEY?: string }>;
+type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; OWNER_LOOKUP?: string; WELCOME_V2?: string; BRAVE_SEARCH_API_KEY?: string }>;
 type Owner = InstanceType<typeof OwnerDO>;
-const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectState; owner: Owner; book(): JobBook; app(path: string, body: unknown): Promise<Response>; jobs(): { id: string; status: string; brief_json: string; due_at: number | null }[]; hops(prefix: string): string[] }>) => Promise<void>) => {
+const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectState; owner: Owner; book(): JobBook; app(path: string, body: unknown): Promise<Response>; jobs(): { id: string; status: string; brief_json: string; due_at: number | null }[]; hops(prefix: string): string[]; skipped(): string[] }>) => Promise<void>) => {
   const name = `lookup-owner-${crypto.randomUUID()}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -53,10 +55,12 @@ const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectS
     const app = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
       headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
     const jobs = () => state.storage.sql.exec<{ id: string; status: string; brief_json: string; due_at: number | null }>("SELECT id, status, brief_json, due_at FROM task_jobs WHERE origin = 'machine:owner_lookup'").toArray();
-    const hops = (prefix: string) => state.storage.sql.exec<{ hop: string }>('SELECT hop FROM trace_log WHERE hop LIKE ? ORDER BY rowid', `${prefix}%`).toArray().map(row => row.hop);
+    // lookup_skipped is a pass that wrote no job; its code says why, and is all it carries.
+    const hops = (prefix: string) => state.storage.sql.exec<{ hop: string }>("SELECT hop FROM trace_log WHERE hop LIKE ? AND hop != 'lookup_skipped' ORDER BY rowid", `${prefix}%`).toArray().map(row => row.hop);
+    const skipped = () => state.storage.sql.exec<{ note: string | null }>("SELECT note FROM trace_log WHERE hop = 'lookup_skipped' ORDER BY rowid").toArray().map(row => row.note ?? '');
     let n = 0;
     const book = () => jobBook(state.storage.sql, { now: Date.now, newId: () => `test-${n += 1}`, newToken: () => `tok-${n += 1}` });
-    try { await run({ state, owner, book, app, jobs: () => { try { return jobs(); } catch { return []; } }, hops }); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+    try { await run({ state, owner, book, app, jobs: () => { try { return jobs(); } catch { return []; } }, hops, skipped: () => { try { return skipped(); } catch { return []; } } }); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 };
 const consents = async (app: (path: string, body: unknown) => Promise<Response>, lookup: boolean) => {
@@ -70,11 +74,12 @@ const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
 const settle = () => new Promise(resolve => setTimeout(resolve, 150));
 
 it('the yes and the setup answers write one look-up job carrying only the name, and the first reply lets it start', async () => {
-  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, app, jobs, hops }) => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, app, jobs, hops, skipped }) => {
     await consents(app, true);
     await settle();
-    // No name yet: the yes alone writes nothing.
+    // No name yet: the yes alone writes nothing, and says why without saying anything about the owner.
     expect(jobs()).toEqual([]);
+    expect(skipped()).toContain('no_name:no_claim');
     expect((await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-1', name: 'Asha' })).status).toBe(200);
     await vi.waitFor(() => expect(jobs()).toHaveLength(1), { timeout: 10_000, interval: 25 });
     const [job] = jobs();
@@ -105,10 +110,12 @@ it('the yes and the setup answers write one look-up job carrying only the name, 
     expect(jobs().map(job => job.status)).toEqual(['queued']);
     expect(model.replies).toBeGreaterThan(0);
     expect(jobs()[0]!.due_at).toBeLessThanOrEqual(Date.now());
-    // A second answers post starts nothing new.
+    // A second answers post starts nothing new: the job for this yes was already written.
     await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-2', name: 'Asha K' });
     await settle();
     expect(jobs()).toHaveLength(1);
+    expect(skipped().at(-1)).toBe('started');
+    expect(skipped().join(' ')).not.toMatch(/Asha/);
   });
 });
 
@@ -123,19 +130,29 @@ it('withdrawing the yes cancels and fences the look-up job', async () => {
   });
 });
 
-it('writes no look-up job without the yes, or with the switch off', async () => {
-  await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ app, jobs }) => {
+it('writes no look-up job without the yes, or with the switch off, and says which', async () => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ app, jobs, skipped }) => {
     await consents(app, false);
     await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-n', name: 'Asha' });
     await settle();
     expect(jobs()).toEqual([]);
+    expect(new Set(skipped())).toEqual(new Set(['not_granted']));
   });
-  await ownerWith({ ONBOARDING_LOOKUP: '0' }, async ({ app, jobs, hops }) => {
+  await ownerWith({ ONBOARDING_LOOKUP: '0' }, async ({ app, jobs, hops, skipped }) => {
     await consents(app, true);
     await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-o', name: 'Asha' });
     await settle();
     expect(jobs()).toEqual([]);
     expect(hops('lookup_')).toEqual([]);
+    expect(new Set(skipped())).toEqual(new Set(['switch_off']));
+  });
+  // The server does not offer the look-up at all: told apart from an owner who said no.
+  await ownerWith({ ONBOARDING_LOOKUP: '1', OWNER_LOOKUP: '0' }, async ({ app, jobs, skipped }) => {
+    await consents(app, false);
+    await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-x', name: 'Asha' });
+    await settle();
+    expect(jobs()).toEqual([]);
+    expect(new Set(skipped())).toEqual(new Set(['not_offered']));
   });
 });
 
@@ -189,5 +206,25 @@ it('the look-up worker\'s web search sends the search provider no location: only
     expect(asked).toHaveLength(1);
     expect(new URL(asked[0]!).searchParams.get('q')).toBe('Asha Rao designer');
     expect(new URL(asked[0]!).searchParams.has('country')).toBe(false);
+  });
+});
+
+it('the look-up\'s end reaches the owner as one card on their surface, counting what it kept and naming none of it', async () => {
+  // Midday in the owner's zone, outside quiet hours.
+  vi.setSystemTime(Date.parse('2026-11-03T12:00:00Z'));
+  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, owner, book, app, jobs }) => {
+    await consents(app, true);
+    await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-e', name: 'Asha' });
+    await vi.waitFor(() => expect(jobs()).toHaveLength(1), { timeout: 10_000, interval: 25 });
+    const id = jobs()[0]!.id;
+    const ticket = book().startAttempt(id)!;
+    expect(await owner.taskClaim(ticket)).not.toBe('fenced');
+    expect(await owner.taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Nothing I could stand behind.', findings: [], proposals: [], left: [] } }, [], { rounds: 2, costUsd: 0 })).not.toBe('fenced');
+    await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+    await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('app');
+    await vi.waitFor(() => expect(jobs().map(job => job.status)).toEqual(['applied']), { timeout: 10_000, interval: 25 });
+    const cards = (state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.id === `lookup:${id}`);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.payload.text).not.toContain('Asha');
   });
 });
