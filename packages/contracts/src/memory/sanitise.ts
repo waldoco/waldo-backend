@@ -401,6 +401,11 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
   outbox: { raw_sensor: 'reject', derived_score: 'reject' },
 };
 
+// A number written with a country code (a plus sign and, after the first digit, seven to fourteen more, which is the most E.164
+// allows), or an Indian mobile written in two groups of five. Each digit is read once, so a long run of digits and signs
+// cannot slow the scan: it starts at a plus sign or at a lookbehind-checked digit and never reads past fifteen digits.
+export const PHONE_OUTSIDE_US = /\+[1-9](?:[\s.()-]{0,2}\d){7,14}(?!\d)|(?<![\d+])[6-9]\d{4}[\s.-]\d{5}(?!\d)/g;
+
 // Check 3 — PII is redacted, never rejected (ADR-0024 false-positive policy: uncertainty
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by
 // the runtime; these four are the pinned regex forms.
@@ -408,7 +413,7 @@ export const PII_PATTERNS = {
   // A match starts where its run of local-part characters starts, so each character is read once: starting on a word boundary
   // inside the run made a long run of "a.a.a." quadratic.
   email: /(?<![\w._%+-])[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
-  phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
+  phone: new RegExp(`${PHONE_OUTSIDE_US.source}|\\b(\\+?1?[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b`, 'g'),
   // Not for use on its own: this is a candidate, looser than a card. Mask uuids and long hex ids first and hold a fifteen-digit
   // match to its check digit, as cardMatches does in runtime/src/scribe/sanitiser.ts.
   // A card candidate: sixteen digits in four groups of four, or an Amex 4-6-5, with a space, dot or hyphen between groups or

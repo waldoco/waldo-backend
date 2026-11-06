@@ -5,6 +5,7 @@ import {
   MODEL_CONTEXT_MAX_CHARS,
   PLAIN_WORD_DERIVED_SCORES,
   derivedHealthDestinationViewSchema,
+  PHONE_OUTSIDE_US,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   ROLE_TAG_PATTERN,
@@ -93,14 +94,15 @@ const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct
 // Health phrases with a number: the free-text floor for destinations the structured checks do not cover.
 export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|rmssd|sdnn|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s*\(\s*(?:rmssd|sdnn)\s*\))?(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
-  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b(?:\s*\d{1,2}\s*m(?:ins?|inutes?)?\b)?/i,
   /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
   /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,  // A wrist temperature is a deviation from the owner's baseline, so a signed small number is the reading.
+  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+\-−]?\d+(?:\.\d+)?/i,
 ];
 // Health phrases without a number (a state named in words). Kept apart so a later qualitative entry can never join the
 // numeric floor by accident.
@@ -327,7 +329,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
   // Starts at the beginning of a run of token characters and checks the rest of the token (two more segments) in one look
   // ahead, so a long run of "eyJ-eyJ-" is read once, not once for every "eyJ" in it.
-  /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b)[A-Za-z0-9_-]*?(?<!\w)eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
+  /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b)[A-Za-z0-9_-]*?eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
@@ -343,7 +345,7 @@ const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participa
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
 const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
-const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
+const PHONE_PATTERN = new RegExp(`${PHONE_OUTSIDE_US.source}|\\+?\\b(?:1?[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b`, 'g');
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const JSON_ESCAPES = /\\u[0-9a-fA-F]{4}/g;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
@@ -370,7 +372,9 @@ function cloneRegex(pattern: RegExp): RegExp {
 // across its first three, or a long hex id (a run of 20 or more hex characters holding a letter, with or not with a 0x: a
 // 24-character object id, a 32-character id, a 40-character SHA, a 0x hash). The identifiers are masked before the
 // scan, so a real card next to one is still found, and the masked text keeps every index. A fifteen-digit candidate is an
-// Amex only when its check digit holds. Anything else card-shaped is a card, whatever surrounds it.
+// Amex only when its check digit holds, and a candidate whose groups are written two ways ("20261106-1234-5678", a build
+// number) is a card only when its check digit holds, since a card is typed with one separator or none. Anything else
+// card-shaped is a card, whatever surrounds it.
 const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const HEX_ID = /(?<![0-9a-z])(?:0x)?(?=[0-9a-f]*[a-f])[0-9a-f]{20,}(?![0-9a-z])/gi;
 
@@ -387,12 +391,18 @@ function luhnValid(digits: string): boolean {
 // A hex run that holds a card number is not an id to leave unread: "deadbeef4111111111111111" redacts the card.
 const holdsCardNumber = (hex: string): boolean => (hex.match(/\d{13,19}/g) ?? []).some(luhnValid);
 
+// A card has one separator between its groups, or none; groups written two ways are not a card unless the check digit holds.
+const separatedAlike = (candidate: string): boolean => {
+  const separators = candidate.replace(/\d/g, '');
+  return separators.length === 0 || (separators.length === 3 && new Set(separators).size === 1);
+};
+
 function cardMatches(text: string): RegExpMatchArray[] {
   const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length))
     .replace(HEX_ID, id => (holdsCardNumber(id) ? id : '#'.repeat(id.length)));
   return [...masked.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))].filter(match => {
     const digits = match[0].replace(/\D/g, '');
-    return digits.length !== 15 || luhnValid(digits);
+    return luhnValid(digits) || (digits.length === 16 && separatedAlike(match[0]));
   });
 }
 

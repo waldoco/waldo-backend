@@ -24,9 +24,15 @@ const NUMBERS = ['12', '62', '140', '90', '140/90', '1.5', '98', '7', '6.5', '1e
 const AFTER = ['', 'ms', 'bpm', '%', 'mmhg', 'hours', 'hrs', 'mins', '°c', ' ms', ' bpm', ' %', ' mmhg', ' hours', ' degrees c', 'kg'];
 const SEPS = ['', ':', '=', ',', ': ', ' = ', ', ', '"', ': "', "'"];
 
+// Two patterns were widened afterwards: the HRV one takes the method in brackets ("hrv (rmssd) 45 ms") and the sleep one a
+// short unit ("sleep 7h", "deep sleep 1h 20m"), and a wrist temperature pattern was added at the end. A widened pattern still
+// finds every match the earlier one found, where it found it, and may find more of the same text; the rest are as before.
+const WIDENED = new Set([1, 4]);
+
 describe('the rewritten numeric health patterns find what the ones they replaced found', () => {
-  it('the same patterns, in the same order', () => {
-    expect(HEALTH_FREE_TEXT_NUMERIC).toHaveLength(BASE.length);
+  it('the same patterns, in the same order, and the wrist temperature pattern after them', () => {
+    expect(HEALTH_FREE_TEXT_NUMERIC).toHaveLength(BASE.length + 1);
+    expect(HEALTH_FREE_TEXT_NUMERIC[BASE.length]!.source).toContain('wrist');
   });
 
   it('over random text where numbers stand alone or follow a letter', () => {
@@ -46,7 +52,11 @@ describe('the rewritten numeric health patterns find what the ones they replaced
       for (let at = 0; at < BASE.length; at += 1) {
         const before = BASE[at]!.exec(text), now = HEALTH_FREE_TEXT_NUMERIC[at]!.exec(text);
         if (before) matched += 1;
-        expect([now?.[0], now?.index], `${JSON.stringify(text)} against pattern ${at}`).toEqual([before?.[0], before?.index]);
+        if (WIDENED.has(at)) {
+          if (before) expect([now?.index, now?.[0].startsWith(before[0])], `${JSON.stringify(text)} against pattern ${at}`).toEqual([before.index, true]);
+        } else {
+          expect([now?.[0], now?.index], `${JSON.stringify(text)} against pattern ${at}`).toEqual([before?.[0], before?.index]);
+        }
       }
     }
     expect(matched).toBeGreaterThan(1_000);

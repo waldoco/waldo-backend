@@ -66,6 +66,25 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'a private key header repeated': n => '-----BEGIN PRIVATE KEY-----\n'.repeat(n / 28),
   'card-shaped digit groups': n => '1234 '.repeat(n / 5),
   'hex ids run together': n => 'deadbeef41111111 '.repeat(n / 17),
+  'country-code phone groups that never end': n => '+4 4 '.repeat(n / 5),
+  'plus signs and digits': n => '+1'.repeat(n / 2),
+  'a plus sign, then a long run of digits': n => '+' + '1'.repeat(n),
+  'a plus sign and digits with brackets': n => '+4 (('.repeat(n / 6),
+  'five-digit phone groups': n => '98765 '.repeat(n / 6),
+  'five-digit phone groups with hyphens': n => '98765-'.repeat(n / 6),
+  'a token header glued to a letter, repeated': n => 'aeyJ'.repeat(n / 4),
+  'a token header glued to an underscore, then its segments': n => '_eyJ'.repeat(n / 4) + '.aaaa.aaaaaaaa',
+  'a long word, then a token': n => 'a'.repeat(n) + 'eyJaaaaaa.aaaa.aaaaaaaa',
+  'a long word, then a token with a short last segment': n => 'a'.repeat(n) + 'eyJaaaaaa.aaaa.aaa',
+  'card groups written two ways': n => '2026 1106-1234 5678 '.repeat(n / 20),
+  'four-digit groups with two separators, repeated': n => '1111-1111 '.repeat(n / 10),
+  'sleep and a short unit, repeated': n => 'sleep 7h '.repeat(n / 9),
+  'sleep and a number with no unit, repeated': n => 'sleep 7 '.repeat(n / 8),
+  'sleep, hours and a stray number, repeated': n => 'sleep 7h 22 '.repeat(n / 12),
+  'hrv and an open bracket, repeated': n => 'hrv ( rmssd '.repeat(n / 12),
+  'hrv with its method in brackets, repeated': n => 'hrv (rmssd) '.repeat(n / 12),
+  'a wrist temperature word repeated': n => 'wrist temperature '.repeat(n / 18),
+  'a wrist temperature and filler words, repeated': n => 'wrist temp up up up up '.repeat(n / 23),
 };
 
 // A health word followed by a run of blanks, a word run or a colon run: the shapes where a pattern that lets two
@@ -73,7 +92,7 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
 const TRIGGERS = ['hrv', 'HRV', 'heart rate', 'resting heart rate', 'sleep', 'slept', 'deep sleep', 'REM', 'steps', 'weight', 'body weight', 'bp',
   'blood pressure', 'systolic', 'spo2', 'blood oxygen', 'glucose', 'calorie burn', 'active energy', 'wrist temperature', 'body temperature',
   'respiratory rate', 'breathing rate', 'body fat', 'stand hours', 'zone 2', 'awake', 'move', 'burned', 'fever', 'recovery', 'crs', 'form score',
-  'vo2 max', 'Bearer', 'password', 'api_key', 'secret', 'sk-', 'eyJ', 'hr', 'pulse'];
+  'vo2 max', 'rmssd', 'sdnn', 'hrv (rmssd)', 'wrist temp', 'sleep 7', 'Bearer', 'password', 'api_key', 'secret', 'sk-', 'eyJ', 'hr', 'pulse'];
 const FILLERS: Readonly<Record<string, (n: number) => string>> = {
   spaces: n => ' '.repeat(n), newlines: n => '\n'.repeat(n), 'no-break spaces': n => '\u00a0'.repeat(n), tabs: n => '\t'.repeat(n),
   'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
