@@ -16,6 +16,15 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
   await armAlarm(txn, existing === null ? due : Math.min(existing, due));
 }
 
+// Unsent app uploads expire here: the app lane drops each at its expiry (app-uploads). It is apart from the inbox's own
+// wake, so an upload nobody sends never reads as an owner message waiting (owner-first).
+export const APP_UPLOADS_DUE_KEY = 'app_uploads_due_v1';
+// The upload's key is written in the staging commit; this moves the alarm slot earlier only, so no other lane's wake drops.
+export async function armAppUploadsWake(storage: DurableObjectStorage, due: number): Promise<void> {
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, existing === null ? due : Math.min(existing, due));
+}
+
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';
 
@@ -31,7 +40,7 @@ export const ALARM_FAILED_LANE_KEY = 'owner_alarm_failed_lane_v1';
 // arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
 // runtime but missing here, and on a lane that arms the alarm without naming one.
 export const WAKE_DUE_KEYS = [
-  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
+  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, APP_UPLOADS_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY,
   'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
@@ -45,7 +54,7 @@ export const ALARM_LANES = {
   transport: ['telegram_final_outbox_due_v1'],
   schedule: [],
   browser: ['browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1'],
-  app: [APP_INBOX_DUE_KEY],
+  app: [APP_INBOX_DUE_KEY, APP_UPLOADS_DUE_KEY],
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
   mail: ['agent_mail_due_v1', 'agent_mail_rule_due_v1'],

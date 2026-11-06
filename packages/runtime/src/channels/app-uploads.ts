@@ -1,3 +1,4 @@
+import { APP_UPLOADS_DUE_KEY } from '../scheduler/alarm-slot';
 import { APP_CHAT_PHOTO_TYPES, APP_CHAT_UPLOAD_TTL_MS, APP_CHAT_UPLOADS_WAITING_MAX, APP_CHAT_VOICE_TYPES, type AppChatUploadKind } from '../../../contracts/src/app/core';
 
 // A chat attachment from the app, staged in the owner's own object between its upload and its message's turn. Waiting, it
@@ -22,13 +23,14 @@ export const dropAppUpload = (kv: SyncKv, id: string): void => {
 
 const waiting = (kv: SyncKv): Meta[] => [...kv.list<Meta>({ prefix: META })].map(([, meta]) => meta).filter(meta => meta.takenBy === undefined);
 
-// Drops every untaken upload past its expiry. The app inbox's wake includes the next expiry (appUploadsDue), so the alarm
-// runs this on time whether or not attachments are still switched on.
+const appUploadsDue = (kv: SyncKv): number | null => waiting(kv).reduce<number | null>((soonest, meta) =>
+  meta.expiresAt !== null && (soonest === null || meta.expiresAt < soonest) ? meta.expiresAt : soonest, null);
+// Drops every untaken upload past its expiry and leaves the uploads' wake on the next expiry, or none. The app lane runs it on
+// every pass, so an upload is dropped on time whether or not attachments are still switched on.
 export const sweepAppUploads = (kv: SyncKv, now: number): void => {
   for (const meta of waiting(kv)) if (meta.expiresAt !== null && meta.expiresAt <= now) dropAppUpload(kv, meta.id);
+  kv.put(APP_UPLOADS_DUE_KEY, appUploadsDue(kv));
 };
-export const appUploadsDue = (kv: SyncKv): number | null => waiting(kv).reduce<number | null>((soonest, meta) =>
-  meta.expiresAt !== null && (soonest === null || meta.expiresAt < soonest) ? meta.expiresAt : soonest, null);
 // Whether another upload may wait, asked before its bytes are read; staging asks again in its own transaction.
 export const appUploadRoom = (storage: DurableObjectStorage, now: number): boolean => storage.transactionSync(() => {
   sweepAppUploads(storage.kv, now);
@@ -44,6 +46,7 @@ export const stageAppUpload = (storage: DurableObjectStorage, upload: Readonly<{
   for (let part = 0; part < parts; part += 1) kv.put(`${PART}${id}:${part}`, upload.data.slice(part * PART_BYTES, (part + 1) * PART_BYTES));
   const meta: Meta = { id, owner: upload.owner, kind: upload.kind, mime: upload.mime, name: upload.name, bytes: upload.data.length, parts, expiresAt };
   kv.put(META + id, meta);
+  kv.put(APP_UPLOADS_DUE_KEY, appUploadsDue(kv));
   return { id, expiresAt };
 });
 

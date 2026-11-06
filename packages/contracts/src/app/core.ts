@@ -89,7 +89,8 @@ export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}
 // not there to take (unknown, expired, already sent, or attachments off) is refused 409 upload_unavailable. A backend that takes none answers 404 at
 // APP_CHAT_UPLOAD_PATH, so a build attaches only after an upload there succeeds. An upload not sent within
 // APP_CHAT_UPLOAD_TTL_MS is dropped. A sent one is kept only until its message's turn ends: a voice note is read for its
-// transcript and not kept; a photo or file is kept in the owner's files where file keeping is on, as on every chat surface.
+// transcript and not kept; a photo or file is copied into the owner's workspace files where file keeping is on, as on every
+// chat surface, and is otherwise not kept.
 // Upload failures: 400 (no or unknown kind, empty body, a file without a plain name), 404 (attachments off), 413 (over
 // the cap), 415 (a type its kind does not take), 429 (APP_CHAT_UPLOADS_WAITING_MAX unsent uploads, or the rate budget).
 export const APP_CHAT_UPLOAD_PATH = '/app/v1/chat/uploads' as const;

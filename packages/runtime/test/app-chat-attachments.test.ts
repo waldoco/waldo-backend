@@ -77,7 +77,7 @@ const fixture = (name: string, switches: Record<string, string | undefined>, wor
         await vi.waitFor(() => { row = state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${messageId}`); expect(['completed', 'interrupted']).toContain(row?.state); }, { timeout: 10_000, interval: 20 });
         return row!;
       },
-      staged: () => [...state.storage.kv.list({ prefix: 'app_upload' })].map(([key]) => key),
+      staged: () => [...state.storage.kv.list({ prefix: 'app_upload' })].map(([key]) => key).filter(key => key.startsWith('app_upload:') || key.startsWith('app_upload_part:')),
     });
   } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
 });
@@ -172,17 +172,20 @@ describe('an upload nobody sends', () => {
   it('wakes the owner object at its expiry and is dropped by the alarm there, with attachments since switched off', async () => {
     await fixture('attach-expiry', ON, async ({ upload, send, settled, staged, state }) => {
       const { upload_id, expires_at } = await uploaded(await upload('voice', 'audio/mp4', bytes(5_000, 2)));
-      expect(state.storage.kv.get<number>('app_inbox_due_v1')).toBe(expires_at);
-      // A message run meanwhile moves the inbox's wake and must leave it on the waiting upload's expiry.
+      expect(state.storage.kv.get<number>('app_uploads_due_v1')).toBe(expires_at);
+      // An upload nobody has sent yet is not an owner message waiting: background work does not yield to it.
+      const { ownerMessageWaiting } = await import('../src/channels/owner-first');
+      expect(ownerMessageWaiting(state.storage.kv, expires_at)).toBe(false);
+      // A message run meanwhile moves the inbox's own wake and leaves the uploads' wake on the waiting upload's expiry.
       await settled(await admitted(await send('expiry-client-001', { text: 'something else first' })));
-      expect(state.storage.kv.get<number>('app_inbox_due_v1')).toBe(expires_at);
+      expect(state.storage.kv.get<number>('app_uploads_due_v1')).toBe(expires_at);
       expect(await state.storage.getAlarm()).toBeLessThanOrEqual(expires_at);
       const meta = state.storage.kv.get<{ expiresAt: number }>(`app_upload:${upload_id}`)!;
       state.storage.kv.put(`app_upload:${upload_id}`, { ...meta, expiresAt: Date.now() - 1 });
       const off = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', APP_CHAT_ATTACHMENTS: '0' } as never);
       await off.alarm();
       expect(staged()).toEqual([]);
-      expect(state.storage.kv.get('app_inbox_due_v1')).toBeNull();
+      expect(state.storage.kv.get('app_uploads_due_v1')).toBeNull();
     });
   });
 });
