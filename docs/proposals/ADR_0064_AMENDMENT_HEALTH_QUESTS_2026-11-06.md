@@ -37,11 +37,12 @@ ADR-0064 kept goals as a contract with no runtime writer. This amendment gives t
 ## Health plane
 - **No readings in the goals table.** Wearable readings are never copied into a quest; they stay on the Supabase health plane and are read live.
 - **What the model is told:** the quest prompts ask for zone words and never a reading or a score.
-- **Traces:** `set_quest` sits in the health tool namespace, so its hop is withheld from diagnostics as a whole.
+- **Traces:** `set_quest` sits in its own `quests` tool namespace, because the health namespace is at its bound of nine tools. The trace scrub withholds that namespace's hops whole, as it does the health namespace's.
 
 ## Retention and forget
 - **Completed quests:** they stay in the table. The app lists them for 30 days, after every open quest.
 - **Forget:** the owner's forget redacts the topic from `description`, `baseline`, `target`, `progress` and `plan`, as it already did for the first four. A redaction that would grow a column past its 500-character CHECK is cut at 500, so the forget always lands.
+- **While a forget is cleaning:** quest lines ride the owner turn with the standing orders and cross the same forget barrier, so a quest that still holds the topic is dropped from what the model reads.
 
 ## Not covered
 - Personal experiments inside a quest (A2).
