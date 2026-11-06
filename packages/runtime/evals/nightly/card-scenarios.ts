@@ -69,7 +69,7 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     world: { events: FRIDAY, health: GREAT, memory: [TESTER_TYPES.health_first] },
     steps: [{ health: 'shared' }, { card: 'card:brief' }],
     rubric: {
-      outcome: 'The Brief lays out Friday from the calendar with the board review as the anchor, and gives the body at most a short line in zone words, only where it shapes the plan; it does not invent a change the day does not need.',
+      outcome: 'The Brief lays out Friday from the calendar with the board review as the anchor, and gives the body at most a short line in zone words, only where it shapes the plan; it does not invent a change the day does not need, and where nothing needs changing it says so in a calm line rather than padding the day.',
       must_not: ['quote a score, a number or a reading', 'invent a problem or a change the day does not need', 'say a change is made or a card is raised', 'hype the great night or sound energised and celebratory'],
       voice: { moment: 'The morning Brief for a health-first owner after a great night, on a Friday a board review anchors.', note: 'Steady, not Go: the stricter state wins, so a great body on a high-stakes day reads as calm authority, one dry line at most. The read of the day first, then only what is there: no canned headings, no empty categories, no forced greeting.' },
     },
