@@ -18,6 +18,7 @@ import type { IMessageMessageTarget, IMessageTapback } from './final-outbox';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 import { configuredPublicOrigin, type PublicOriginEnv } from '../../connectors/public-origin';
 import { CONSOLE_IMESSAGE_PATH } from './console';
+import { withSwitches } from '../../switches';
 
 export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Readonly<{
   WALDO_ENVIRONMENT?: string;
@@ -134,7 +135,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   // After a failed drain the work still pending waits this long, whatever host request re-arms in between. Memory only: an
   // evicted bridge retries once early.
   private retryNotBefore = 0;
-  constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, env); }
+  constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, withSwitches(env)); }
 
   private composition() { return iMessageComposition(this.env); }
   private store(policy: IMessageConnectorPolicy): BridgeStore { return this.storeCache ??= new BridgeStore(this.ctx.storage, policy); }

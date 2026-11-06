@@ -46,6 +46,7 @@ import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http
 import { photonCallback } from './channels/imessage/photon-routes';
 import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
 import { photonKeepAlive } from './channels/imessage/enrollment';
+import { withSwitches } from './switches';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -250,6 +251,7 @@ const worker = {
 } satisfies ExportedHandler<Env>;
 
 export default {
-  ...worker,
-  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, withSwitches(env), ctx)),
+  email: (message: ForwardableEmailMessage, env: Env): Promise<void> => worker.email(message, withSwitches(env)),
+  scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> => worker.scheduled(controller, withSwitches(env), ctx),
 } satisfies ExportedHandler<Env>;

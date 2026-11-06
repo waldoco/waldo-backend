@@ -4,6 +4,7 @@ import { callMcpToolHandler, executeMcp, mcpServers, readMcpToolHandler, type Mc
 import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_SERVERS, GOOGLE_MCP_UNAVAILABLE } from '../src/connectors/google-mcp';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 
 const GMAIL = 'https://gmailmcp.googleapis.com/mcp/v1';
 const CALENDAR = 'https://calendarmcp.googleapis.com/mcp/v1';
@@ -184,7 +185,7 @@ describe('staging only', () => {
 describe('the staging registry', () => {
   // The owner approved button-free reads of Gmail, Calendar and Drive metadata only; Docs, Sheets and Slides bodies are not.
   it('names exactly the Gmail, Calendar and Drive servers, each narrowed to its reads', () => {
-    const staging = mcpServers((parseJsonc(config) as { env: { staging: { vars: { WALDO_MCP_SERVERS: string } } } }).env.staging.vars.WALDO_MCP_SERVERS);
+    const staging = mcpServers((flatConfig(parseJsonc(config)) as { env: { staging: { vars: { WALDO_MCP_SERVERS: string } } } }).env.staging.vars.WALDO_MCP_SERVERS);
     expect(staging.map((s) => s.url)).toEqual([GMAIL, CALENDAR, DRIVE]);
     for (const s of staging) expect(s.allow_tools).toEqual(GOOGLE_MCP_SERVERS.find((g) => g.url === s.url)!.read_tools);
   });

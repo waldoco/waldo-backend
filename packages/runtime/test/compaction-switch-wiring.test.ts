@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { claimStore } from '../src/memory/claims';
@@ -19,7 +20,7 @@ const TENANT = `ten_${OWNER_ID.replaceAll('-', '')}`;
 const CHAT = `owner:${PRINCIPAL}`;
 const NEXT = 'What is on today?';
 const SUMMARY = 'Owner instructions:\n- The owner prefers harbour walks.';
-const DEPLOYED = (parseJsonc(config) as { vars: { WALDO_COMPACTION?: string } }).vars.WALDO_COMPACTION;
+const DEPLOYED = (flatConfig(parseJsonc(config)) as { vars: { WALDO_COMPACTION?: string } }).vars.WALDO_COMPACTION;
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
 vi.mock('../src/channels/telegram-api', async load => {

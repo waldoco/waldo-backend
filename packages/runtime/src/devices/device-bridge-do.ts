@@ -12,10 +12,11 @@ import { deviceDiagnostic, genericReject } from './generic-reject';
 import { httpSigningFields } from './redeem-route';
 import { frameSignatureBase, httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
 import { sessionEventFrame, ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
+import { withSwitches } from '../switches';
 type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null; frames?: FrameWindow; principal_checked_at?: number };
 export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   constructor(ctx: DurableObjectState, env: DeviceBridgeEnv) {
-    super(ctx, env);
+    super(ctx, withSwitches(env));
     ctx.blockConcurrencyWhile(async () => {
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nonces(nonce TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)');
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)');

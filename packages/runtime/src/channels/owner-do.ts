@@ -302,6 +302,7 @@ import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
 import type { ProviderOutcome, TaskOutcome, TaskSpend } from '../tasks/worker-loop';
 import type { LoopToolResult } from '../conversation/tool-loop';
 import { configuredPublicOrigin } from '../connectors/public-origin';
+import { withSwitches } from '../switches';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
 
@@ -490,7 +491,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly browserReady: Promise<void>;
   private readonly browserTrial: BrowserTrialPreparation | undefined;
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
-    super(ctx, env);
+    super(ctx, withSwitches(env));
+    env = this.env;
     // Alarm work (Calendar watch renewals, scheduled cards, connect offers) reads the stored origin, so an owner who sends
     // nothing after a host move takes the configured one here rather than at their next request.
     // Because the stored origin already matches, no request sees an origin change, so the Telegram webhook is never re-pointed
