@@ -315,8 +315,10 @@ it('a calendar detail that fails its schema drops the details, not the card, so 
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-calendar-fallback-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0;
+    // The event moving is still ahead, as a move card closes once it starts.
+    const seenDay = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
     // Google answered without an offset, which the review can still write but `previous` does not accept.
-    let seen = { start: '2026-09-23T18:00:00', end: '2026-09-23T18:15:00' };
+    let seen = { start: `${seenDay}T18:00:00`, end: `${seenDay}T18:15:00` };
     const client = {
       account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
       event: async (id: string) => ({ id, title: 'Standup', ...seen, all_day: false, etag: 'v1' }),
@@ -335,11 +337,11 @@ it('a calendar detail that fails its schema drops the details, not the card, so 
     expect((await list('approvals=2'))[0]!.review).toContain('Move "Standup" from');
 
     // With a well-formed event the details return, and an explicit primary calendar is still not named.
-    seen = { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' };
+    seen = { start: `${seenDay}T18:00:00+05:30`, end: `${seenDay}T18:15:00+05:30` };
     const primary = await desk.propose({ action: 'move', event_id: 'e2', title: 'Standup', start: `${day}T19:30:00+05:30` as never, end: `${day}T19:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });
     const detailed = (await list('approvals=2')).find(a => a.approval_id === primary)!;
     expect(detailed.exact.changes).toEqual({ action: 'move', title: 'Standup', start: `${day}T19:30:00+05:30`, end: `${day}T19:45:00+05:30`,
-      account: 'owner@example.com', previous: { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' }, time_zone: 'Asia/Kolkata' });
+      account: 'owner@example.com', previous: { start: `${seenDay}T18:00:00+05:30`, end: `${seenDay}T18:15:00+05:30` }, time_zone: 'Asia/Kolkata' });
     expect(detailed.review).not.toContain('primary');
   });
 });

@@ -360,6 +360,62 @@ describe('approval desk', () => {
     });
   });
 
+  it('a move whose target time gained an event after the card stops; one that was already there when proposed does not', async () => {
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-move-target-taken'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const texts: string[] = [];
+      const moved: string[] = [];
+      let n = 0;
+      const there = { id: 'x-old', title: 'Focus hold', start: '2026-09-28T14:00:00+05:30', end: '2026-09-28T15:00:00+05:30', all_day: false, etag: 'o1', status: 'confirmed' };
+      let target: Record<string, unknown>[] = [there];
+      const reads: string[] = [];
+      const client = {
+        events: async (from: string, to: string) => { reads.push(`${from}/${to}`); return target; },
+        event: async (id: string) => ({ id, title: 'Expense report', start: '2026-09-24T17:45:00+05:30', end: '2026-09-24T18:45:00+05:30', all_day: false, etag: 'v1' }),
+        moveEvent: async (id: string, start: string, end: string) => { moved.push(`${id} ${start}`); return { id, title: 'Expense report', start, end, all_day: false, etag: 'v2' }; },
+      } as unknown as GoogleClient;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (_method, body) => { texts.push(String((body as { text?: string }).text ?? '')); return {}; },
+        owner: 42, google: async () => client, newId: () => String(++n), now: () => Date.parse('2026-09-24T02:00:00Z'), timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const tap = (id: string) => desk.callback({ id: 'q', from: { id: 42 }, data: `a:${id}` }, 't');
+      const move = { action: 'move' as const, event_id: 'e1', title: 'Expense report', start: iso('2026-09-28T14:00:00+05:30'), end: iso('2026-09-28T15:00:00+05:30'), reason: 'Monday afternoon is light' };
+
+      const taken = await desk.propose(move);
+      expect(reads).toEqual(['2026-09-28T14:00:00+05:30/2026-09-28T15:00:00+05:30']);
+      target = [there, { id: 'x-new', title: 'Call with Dev', start: '2026-09-28T14:30:00+05:30', end: '2026-09-28T15:30:00+05:30', all_day: false, etag: 'n1', status: 'confirmed' }];
+      await tap(taken);
+      expect(moved).toEqual([]);
+      expect(texts.at(-1)).toContain('is no longer free');
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', taken).one().status).toBe('stale');
+
+      target = [there, { ...there, id: 'x-gone', status: 'cancelled' }];
+      const free = await desk.propose(move);
+      await tap(free);
+      expect(moved).toEqual(['e1 2026-09-28T14:00:00+05:30']);
+    });
+  });
+
+  it('a move card closes when the event it moves starts, even if the new time is later', async () => {
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-move-expires-at-source'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let now = Date.parse('2026-09-24T10:00:00Z');
+      let n = 0;
+      const moved: string[] = [];
+      const client = {
+        events: async () => [],
+        event: async (id: string) => ({ id, title: 'Expense report', start: '2026-09-24T12:15:00Z', end: '2026-09-24T13:15:00Z', all_day: false, etag: 'v1' }),
+        moveEvent: async (id: string, start: string, end: string) => { moved.push(id); return { id, title: 'Expense report', start, end, all_day: false, etag: 'v2' }; },
+      } as unknown as GoogleClient;
+      const desk = approvalDesk(state.storage.sql, { call: async () => ({}), owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'UTC', log: () => undefined });
+      const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Expense report', start: iso('2026-09-28T08:30:00Z'), end: iso('2026-09-28T09:30:00Z'), reason: 'Monday is light' });
+      expect((await desk.approvals(now, { id }))[0]?.expires_at).toBe(Date.parse('2026-09-24T12:15:00Z'));
+      now = Date.parse('2026-09-24T12:16:00Z');
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('This proposal expired');
+      expect(moved).toEqual([]);
+    });
+  });
+
   it('console path: pending lists open proposals, decide applies/skips without Telegram, double-decide is safe', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-console'));
     await runInDurableObject(stub, async (_instance, state) => {
