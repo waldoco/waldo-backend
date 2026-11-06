@@ -94,7 +94,7 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 // trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['patrol_log', ['summary']],
-  ['goals', ['description', 'baseline', 'target', 'progress']],
+  ['goals', ['description', 'baseline', 'target', 'progress', 'plan']],
   // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
   ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;

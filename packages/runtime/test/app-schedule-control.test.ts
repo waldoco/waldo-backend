@@ -4,13 +4,14 @@
 // owner's time, which today's card follows at once. The clock is mocked: the owner's zone is UTC.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_SCHEDULE_REVISION, APP_SCHEDULE_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_CONTROLS_SCHEDULE_REVISION, APP_SCHEDULE_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
 import { OwnerDO } from '../src/channels/owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { loopBook } from '../src/channels/loops';
+import { questBook } from '../src/channels/quests';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { jobBook } from '../src/tasks/jobs';
@@ -205,4 +206,20 @@ it('refuses an unknown schedule, a time for an on/off schedule and a malformed t
     }
     expect([dayPlanBook(storage.sql).pins(), due(storage, 'card:brief')]).toEqual([{}, Date.parse('2026-11-06T08:00:00Z')]);
   });
+});
+
+// The day view on the same app path also lists the owner's quests from controls revision 17, outside the day's revision.
+it('lists the owner\'s quests from controls revision 17; a build below it never receives them', async () => {
+  const seed = (storage: DurableObjectStorage) => questBook(storage.sql, { timezone: 'UTC', now: () => new Date(NOW) }, () => 'q1').set({ title: 'Asleep by 11 on weeknights', check_in_days: 1 }, OWNER);
+  await fixture(async ({ app, storage }) => {
+    const before = await dayView(app);
+    seed(storage);
+    const after = await dayView(app) as Awaited<ReturnType<typeof dayView>> & { data: { quests?: unknown } };
+    expect(after.data.quests).toEqual([{ id: 'quest:q1', title: 'Asleep by 11 on weeknights', state: 'active', plan: null, usual: null, target: null, progress: null, deadline: null, check_in_days: 1, next_check_in: '2026-11-07' }]);
+    expect(after.revision).toBe(before.revision);
+  }, { revision: APP_CONTROLS_QUESTS_REVISION });
+  await fixture(async ({ app, storage }) => {
+    seed(storage);
+    expect((await dayView(app)).data).not.toHaveProperty('quests');
+  }, { revision: APP_CONTROLS_QUESTS_REVISION - 1 });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -775,5 +775,25 @@ describe('schedule.set, controls revision 16', () => {
     const messages = todays.map(today => appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today, noLaterThan: false }));
     for (const receipt of messages) { expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true); expect(receipt.message).toContain('7:10am'); }
     expect(new Set(messages.map(receipt => receipt.message)).size).toBe(todays.length);
+  });
+});
+
+describe('quests on the day view, controls revision 17', () => {
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const quest = (extra: object = {}) => ({
+    id: 'quest:a1b2c3', title: 'Sleep by 11 on weeknights', state: 'active', plan: 'Screens off at 10:30', usual: 'Usually past midnight', target: null,
+    progress: null, deadline: null, check_in_days: 7, next_check_in: '2026-11-13', ...extra,
+  });
+  it('is revision 17', () => expect(APP_CONTROLS_QUESTS_REVISION).toBe(17));
+  it('lists the owner\'s quests, and stays optional for a build below 17', () => {
+    for (const valid of [{}, { quests: [] }, { quests: [quest(), quest({ id: 'quest:z9', state: 'ambient', check_in_days: null, next_check_in: null }), quest({ id: 'quest:y8', state: 'completed', next_check_in: null, deadline: '2026-12-01' })] }])
+      expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [quest({ id: 'goal-1' }), quest({ state: 'paused' }), quest({ state: 'ambient' }), quest({ check_in_days: null }), quest({ check_in_days: 29, next_check_in: null }),
+      quest({ title: '' }), quest({ deadline: '13 Nov' }), quest({ plan: undefined }), quest({ hrv_ms: 52 })])
+      expect(appControlProjectionV1Schema.safeParse(day({ quests: [invalid] })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(day({ quests: Array.from({ length: APP_QUESTS_MAX_V1 + 1 }, (_, n) => quest({ id: `quest:q${n}` })) })).success).toBe(false);
   });
 });

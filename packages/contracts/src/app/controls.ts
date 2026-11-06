@@ -61,6 +61,21 @@ export const APP_CONTROLS_SCHEDULE_REVISION = 16;
 export const APP_SCHEDULE_IDS_V1 = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat'] as const;
 export const APP_SCHEDULE_TIME_IDS_V1 = ['card:brief', 'card:close'] as const;
 const APP_CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Controls revision 17 (`controls=17`): the day view lists the owner's quests, the goals they chose to work toward with
+// Waldo, in their own words. active ones shape the Brief and the Close and get check-ins every check_in_days days, next on
+// next_check_in (the owner's local day; null when none is scheduled); ambient ones are kept in mind without check-ins;
+// completed ones stay listed for 30 days. Read-only: the owner starts and changes a quest in chat. Builds below 17 never
+// receive the field.
+export const APP_CONTROLS_QUESTS_REVISION = 17;
+export const APP_QUESTS_MAX_V1 = 20;
+export const APP_QUEST_CHECK_IN_DAYS_MAX_V1 = 28;
+const questText = text.min(1).max(500);
+export const appQuestV1Schema = z.strictObject({
+  id: z.string().regex(/^quest:[a-z0-9]{1,40}$/), title: questText, state: z.enum(['active', 'ambient', 'completed']),
+  plan: questText.nullable(), usual: questText.nullable(), target: questText.nullable(), progress: questText.nullable(),
+  deadline: historyDay.nullable(), check_in_days: z.int().min(1).max(APP_QUEST_CHECK_IN_DAYS_MAX_V1).nullable(), next_check_in: historyDay.nullable(),
+}).refine(quest => quest.next_check_in === null || (quest.state === 'active' && quest.check_in_days !== null), { error: 'Only an active quest with a pace has a next check-in', path: ['next_check_in'] });
+export type AppQuestV1 = z.infer<typeof appQuestV1Schema>;
 const isScheduleId = (id: unknown): boolean => (APP_SCHEDULE_IDS_V1 as readonly unknown[]).includes(id);
 const isScheduleTimeId = (id: unknown): boolean => (APP_SCHEDULE_TIME_IDS_V1 as readonly unknown[]).includes(id);
 const scheduleSetValid = (id: string | undefined, value: string | undefined): boolean =>
@@ -238,6 +253,7 @@ export const appControlDayDataV1Schema = z.strictObject({
     .refine(rows => new Set(rows.map(row => row.id)).size === rows.length, 'A schedule is listed once').optional(),
   proactive_surface: z.strictObject({ value: appProactiveSurfaceV1Schema, choices: z.array(appProactiveSurfaceV1Schema).min(1).max(appProactiveSurfaceV1Schema.options.length)
     .refine(choices => new Set(choices).size === choices.length, 'A choice is listed once') }).optional(),
+  quests: z.array(appQuestV1Schema).max(APP_QUESTS_MAX_V1).optional(),
 });
 // Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
 // them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets
