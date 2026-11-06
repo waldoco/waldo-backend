@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OWNER_MODELS, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_FALLBACK_MODEL, WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMResponse } from '@waldo/contracts';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -20,6 +23,12 @@ const CLOUDFLARE = { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'cf-to
 const LIVE = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, WALDO_EVAL_MAX_CALLS: '600', WALDO_EVAL_PROFILE: 'staging' };
 
 describe('the staging profile', () => {
+  it('reads staging\'s switches by name, flattened out of WALDO_SWITCHES exactly as the Worker reads them', () => {
+    expect(STAGING).toEqual((flatConfig(parseJsonc(config)) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars);
+    expect(STAGING).not.toHaveProperty('WALDO_SWITCHES');
+    expect(STAGING.DEVICE_WEATHER).toBe('1');
+  });
+
   it('classifies every variable the staging block of wrangler.jsonc sets, and nothing it no longer sets', () => {
     expect(unclassifiedVars(STAGING)).toEqual([]);
     expect(staleClasses(STAGING)).toEqual([]);

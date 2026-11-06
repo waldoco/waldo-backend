@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { BINDING_BUDGET, checkConfig, checkSources, runbookSecretNames } from '../guards/guard-switches-binding.mjs';
@@ -63,5 +64,21 @@ test('every handler of the Worker\'s default export flattens its env', () => {
   const ok = 'export default { fetch: (r, env, c) => worker.fetch(r, withSwitches(env), c), email: (m, env) => worker.email(m, withSwitches(env)) } satisfies ExportedHandler<Env>;';
   assert.deepEqual(checkSources([{ path: 'src/index.ts', text: ok }]), []);
   assert.match(checkSources([{ path: 'src/index.ts', text: 'export default { ...worker, fetch: (r, env) => worker.fetch(r, withSwitches(env)) };' }]).join(), /default export entry "\.\.\.worker"/);
-  assert.match(checkSources([{ path: 'src/index.ts', text: 'export default { scheduled: (c, env, x) => worker.scheduled(c, env, x) };' }]).join(), /handler scheduled must pass withSwitches/);
+  assert.match(checkSources([{ path: 'src/index.ts', text: 'export default { scheduled: (c, env, x) => worker.scheduled(c, env, x) };' }]).join(), /handler scheduled must take env and pass withSwitches/);
+  assert.match(checkSources([{ path: 'src/index.ts', text: 'export default { fetch: (r, env, c) => { oauthStateSecret(env); return worker.fetch(r, withSwitches(env), c); } };' }]).join(), /handler fetch uses env other than as withSwitches\(env\)/);
+  assert.match(checkSources([{ path: 'src/index.ts', text: 'export default { fetch: (r, env, c) => env.DEVICE_PLACE === "1" ? worker.fetch(r, withSwitches(env), c) : none };' }]).join(), /handler fetch uses env other than/);
+});
+
+// Moving the switches into WALDO_SWITCHES changed no var the Worker reads: every name 1808c6ed (the last config before the
+// move) declared is still declared in the same environment with the same value. A later deliberate change to one of those
+// values moves this pin to the commit that made it.
+const BEFORE_MOVE = '1808c6ed83c9d84be2b4ae36ad05e9d27343b772';
+test('the move kept every var the Worker reads, by name and value, in both environments', (t) => {
+  const old = spawnSync('git', ['show', `${BEFORE_MOVE}:packages/runtime/wrangler.jsonc`], { cwd: root, encoding: 'utf8' });
+  if (old.status !== 0) { t.skip(`${BEFORE_MOVE} is not in this clone's history`); return; }
+  const before = parseJsonc(old.stdout), now = flatConfig(config);
+  assert.equal(Object.keys(before.vars).length, 109);
+  for (const [label, was, is] of [['production', before.vars, now.vars], ['staging', before.env.staging.vars, now.env.staging.vars], ['previews', before.previews.vars, now.previews.vars]]) {
+    for (const [name, value] of Object.entries(was)) assert.deepEqual([label, name, is[name]], [label, name, value]);
+  }
 });

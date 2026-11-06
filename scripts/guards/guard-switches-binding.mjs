@@ -130,10 +130,18 @@ export const checkSources = (files) => {
         if (!ts.isObjectLiteralExpression(handler)) bad.push('src/index.ts: the default export must be an object literal of handlers');
         else for (const property of handler.properties) {
           if (!ts.isPropertyAssignment(property) && !ts.isMethodDeclaration(property)) { bad.push(`src/index.ts: default export entry "${property.getText(source).slice(0, 40)}" must be a handler that flattens env`); continue; }
-          let flattens = false;
-          const find = (inner) => { if (isFlattenCall(inner)) flattens = true; else ts.forEachChild(inner, find); };
+          // The handler's env parameter is used only as withSwitches' argument, so nothing in it reads the raw env.
+          const fn = ts.isPropertyAssignment(property) ? property.initializer : property;
+          const envParam = (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn) || ts.isMethodDeclaration(fn)) ? fn.parameters.find((param) => ts.isIdentifier(param.name) && param.name.text === 'env') : undefined;
+          let flattens = false, raw = false;
+          const find = (inner) => {
+            if (isFlattenCall(inner)) flattens = true;
+            if (ts.isIdentifier(inner) && inner.text === 'env' && inner.parent !== envParam && !(isFlattenCall(inner.parent) && inner.parent.arguments[0] === inner)) raw = true;
+            ts.forEachChild(inner, find);
+          };
           find(property);
-          if (!flattens) bad.push(`src/index.ts: default export handler ${property.name.getText(source)} must pass withSwitches(env)`);
+          if (!envParam || !flattens) bad.push(`src/index.ts: default export handler ${property.name.getText(source)} must take env and pass withSwitches(env)`);
+          else if (raw) bad.push(`src/index.ts: default export handler ${property.name.getText(source)} uses env other than as withSwitches(env)`);
         }
       }
       ts.forEachChild(node, visit);

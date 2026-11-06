@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import config from '../wrangler.jsonc?raw';
@@ -85,7 +86,7 @@ it('the staging Worker runs owner turns on the item rule: a held memory item is 
 });
 
 it('the production Worker keeps the earlier whole-read rule', async () => {
-  expect((env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
-  const { modes } = await readMemoryTurn('forget-barrier-production-env', (env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
+  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
+  const { modes } = await readMemoryTurn('forget-barrier-production-env', (withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
   expect(modes).toEqual(['reads']);
 });

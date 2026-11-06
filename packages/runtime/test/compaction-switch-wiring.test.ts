@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
@@ -103,7 +104,7 @@ const turnRequest = async (name: string, switchValue: string | undefined) => {
 
 it('the deployed Worker setting is off, and an app turn on it sends the covered rows verbatim, never the summary', async () => {
   expect(DEPLOYED).toBe('off');
-  expect((env as { WALDO_COMPACTION?: string }).WALDO_COMPACTION).toBe(DEPLOYED);
+  expect((withSwitches(env) as { WALDO_COMPACTION?: string }).WALDO_COMPACTION).toBe(DEPLOYED);
   const sent = await turnRequest('compaction-wiring-deployed', DEPLOYED);
   for (const text of [asked(0), answered(0), asked(1), answered(1), recent, NEXT]) expect(sent).toContain(text);
   expect(sent).not.toContain('harbour walks');

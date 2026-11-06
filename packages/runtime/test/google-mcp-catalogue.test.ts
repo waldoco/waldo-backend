@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:test';
+import { withSwitches } from '../src/switches';
 import { describe, expect, it, vi } from 'vitest';
 import { callMcpToolHandler, executeMcp, mcpServers, readMcpToolHandler, type McpGoogleAuth } from '../src/tools/live/mcp';
 import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_SERVERS, GOOGLE_MCP_UNAVAILABLE } from '../src/connectors/google-mcp';
@@ -174,7 +175,7 @@ describe('a preview that is not available reads as not available, never an error
 describe('staging only', () => {
   // The test pool loads the top-level (production) block of wrangler.jsonc; staging lives under env.staging.
   it('production config names no MCP server and keeps button-free reads off', () => {
-    const production = env as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
+    const production = withSwitches(env) as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
     expect(production.WALDO_ENVIRONMENT).toBe('production');
     expect(production.WALDO_MCP_SERVERS).toBe('[]');
     expect(mcpServers(production.WALDO_MCP_SERVERS)).toEqual([]);
