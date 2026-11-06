@@ -14,6 +14,8 @@ import {
   getHealthArgsSchema,
   getScreenTimeArgsSchema,
   getScreenTimeResultSchema,
+  getDeviceContextArgsSchema,
+  getDeviceContextResultSchema,
   healthReadSignalSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
@@ -86,6 +88,34 @@ describe('getScreenTimeArgsSchema', () => {
     expect(getScreenTimeResultSchema.safeParse({ state: 'available', from: '2026-11-01', to: '2026-11-02', days: [{ ...row, device_id: 'x' }] }).success).toBe(false);
     expect(getScreenTimeResultSchema.safeParse({ state: 'unavailable', reason: 'no_data' }).success).toBe(true);
     expect(getScreenTimeResultSchema.safeParse({ state: 'unavailable', reason: 'phone_offline' }).success).toBe(false);
+  });
+});
+
+describe('get_device_context', () => {
+  // Synthetic values: a made-up city and zone.
+  const device = {
+    device: 1, platform: 'ios', timezone: 'Asia/Dubai', timezone_observed_at: '2026-11-05T08:00:00.000Z', timezone_age_minutes: 30,
+    place: { locality: 'Testville', country: 'AE', observed_at: '2026-11-05T07:00:00.000Z', age_minutes: 90 },
+  };
+
+  it('takes no arguments', () => {
+    expect(getDeviceContextArgsSchema.safeParse({}).success).toBe(true);
+    expect(getDeviceContextArgsSchema.safeParse({ device: 1 }).success).toBe(false);
+  });
+
+  it('answers each phone\'s zone and named place with their ages, never a cell or a coordinate', () => {
+    expect(getDeviceContextResultSchema.safeParse({ state: 'available', devices: [device, { ...device, device: 2, place: null }] }).success).toBe(true);
+    expect(getDeviceContextResultSchema.safeParse({ state: 'available', devices: [{ ...device, place: { observed_at: '2026-11-05T07:00:00.000Z', age_minutes: 90 } }] }).success).toBe(true);
+    for (const bad of [
+      { ...device, place: { ...device.place, cell: 'tdr1v' } },
+      { ...device, place: { ...device.place, latitude: 25.2 } },
+      { ...device, device_id: '0c9d6a7e-1f2b-4c3d-8e9f-0a1b2c3d4e5f' },
+      { ...device, device: 9 },
+      { ...device, timezone_age_minutes: -1 },
+    ]) expect(getDeviceContextResultSchema.safeParse({ state: 'available', devices: [bad] }).success).toBe(false);
+    expect(getDeviceContextResultSchema.safeParse({ state: 'available', devices: [] }).success).toBe(false);
+    expect(getDeviceContextResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(true);
+    expect(getDeviceContextResultSchema.safeParse({ state: 'unavailable', reason: 'phone_offline' }).success).toBe(false);
   });
 });
 
