@@ -1,4 +1,5 @@
 import { healthIngestReceiptV1Schema, healthSampleV1Schema, type HealthSampleV1 } from '../../../../contracts/src/app/health-ingest';
+import { sleepJustEnded } from '../wake-notice';
 import { invokeHealth } from '../../channels/app-health';
 import { HANDOFF_CODE_TTL_MS, newHandoff } from '../../channels/connect-confirm';
 import { md5Hex } from '../../channels/md5';
@@ -45,7 +46,10 @@ export type WhoopOwnerDeps = Readonly<{
   now(): number;
   timezone(): string;
   // Recomputes the owner's derived rows after readings were committed, and tells the health trigger about a zone change.
-  produce(): Promise<unknown>;
+  // woke: the committed readings carry a night that just ended (WAKE_BRIEF).
+  produce(woke?: boolean): Promise<unknown>;
+  // WAKE_BRIEF: how fresh a night's end must be to count as the owner just waking. Absent, a sync never says so.
+  wakeFreshMs?: number;
   arm(at: number): Promise<void>;
   disarm(): Promise<void>;
   log(line: WhoopLog): void;
@@ -156,7 +160,9 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   // ---- Ingest: the app's own signed write, in batches the contract accepts ----
   type Staged = Readonly<{ samples: readonly HealthSampleV1[]; deletions: readonly WhoopDeletion[] }>;
-  const ingest = async (staged: Staged, epoch: number): Promise<number> => {
+  // pass.woke: whether this pass committed a night that just ended; only the yes leaves this object, never the time.
+  type Pass = { woke: boolean };
+  const ingest = async (staged: Staged, epoch: number, pass: Pass): Promise<number> => {
     const samples = staged.samples.filter(sample => healthSampleV1Schema.safeParse(sample).success);
     if (samples.length !== staged.samples.length) deps.log({ hop: 'whoop', ok: false, code: 'sample_dropped' });
     let committed = 0;
@@ -177,6 +183,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!receipt.success) throw new Failed('ingest refused');
       if (!receipt.data.replayed) committed += receipt.data.accepted + receipt.data.deleted;
     }
+    if (committed > 0 && deps.wakeFreshMs !== undefined && sleepJustEnded(samples, deps.now(), deps.wakeFreshMs)) pass.woke = true;
     return committed;
   };
 
@@ -200,7 +207,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     }
     return out;
   };
-  const windowBatch = async (from: number, to: number, epoch: number): Promise<number> => {
+  const windowBatch = async (from: number, to: number, epoch: number, pass: Pass): Promise<number> => {
     const range = { start: new Date(from).toISOString(), end: new Date(to).toISOString() };
     const sleeps = await collect(next => api.sleeps({ ...range, next }));
     const recoveries = await collect(next => api.recoveries({ ...range, next }));
@@ -216,7 +223,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     }
     const recoveryOf = new Map(recoveries.map(recovery => [recovery.sleep_id, recovery]));
     const samples = [...byId.values()].flatMap(sleep => whoopNightSamples({ sleep, recovery: recoveryOf.get(sleep.id) ?? null })).concat(workouts.flatMap(whoopWorkoutSamples));
-    return ingest({ samples, deletions: [] }, epoch);
+    return ingest({ samples, deletions: [] }, epoch, pass);
   };
 
   const finish = async (result: SyncResult, code: string, next: number | null): Promise<SyncResult> => {
@@ -233,6 +240,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     const started = deps.now();
     let progress = cursor();
     let changed = 0;
+    const pass: Pass = { woke: false };
     try {
       const consent = await consents();
       if (!consent) return await finish('failed', 'consent_unreadable', started + RETRY_MS);
@@ -241,15 +249,15 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (progress.backfilled) windows.push([started - RECONCILE_DAYS * DAY_MS, started]);
       else for (let from = progress.next_from ?? started - BACKFILL_DAYS * DAY_MS; from < started; from += WINDOW_DAYS * DAY_MS) windows.push([from, Math.min(from + WINDOW_DAYS * DAY_MS, started)]);
       for (const [from, to] of windows) {
-        changed += await windowBatch(from, to, consent.epoch);
+        changed += await windowBatch(from, to, consent.epoch, pass);
         // A committed window is never fetched again, so a failure later in the month resumes where it stopped.
         if (!progress.backfilled) { progress = { ...progress, next_from: to }; kv.put('whoop:cursor', progress); }
       }
       kv.put('whoop:cursor', { backfilled: true, next_from: null, last_sync_at: started });
-      if (changed > 0) await deps.produce().catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
+      if (changed > 0) await deps.produce(pass.woke).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
       return await finish('synced', 'synced', started + SYNC_EVERY_MS);
     } catch (error) {
-      if (changed > 0) await deps.produce().catch(() => undefined);
+      if (changed > 0) await deps.produce(pass.woke).catch(() => undefined);
       const result = classify(error);
       // Committed pages stay committed; nothing is zero-filled for the rest. A reconnect or a consent waits for the owner.
       return finish(result, result === 'failed' ? 'failed' : result, result === 'rate_limited' ? started + (error as RateLimited).afterMs : result === 'failed' ? started + RETRY_MS : result === 'consent_required' ? started + SYNC_EVERY_MS : null);
@@ -266,27 +274,28 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     if (kv.get<number>(seen) !== undefined) return 'duplicate';
     const [, kind, action] = match as unknown as [string, 'sleep' | 'recovery' | 'workout', 'updated' | 'deleted'];
     let changed = 0;
+    const pass: Pass = { woke: false };
     try {
       const consent = await consents();
       if (!consent) return 'failed';
       if (missingGrants(consent).length > 0) return 'consent_required';
-      if (action === 'deleted') changed = await ingest({ samples: [], deletions: whoopDeletions(kind, input.id, Math.floor(deps.now() / 1000)) }, consent.epoch);
+      if (action === 'deleted') changed = await ingest({ samples: [], deletions: whoopDeletions(kind, input.id, Math.floor(deps.now() / 1000)) }, consent.epoch, pass);
       else if (kind === 'workout') {
         const workout: WhoopWorkout | null = await guard(() => api.workout(input.id));
-        changed = workout ? await ingest({ samples: whoopWorkoutSamples(workout), deletions: [] }, consent.epoch) : 0;
+        changed = workout ? await ingest({ samples: whoopWorkoutSamples(workout), deletions: [] }, consent.epoch, pass) : 0;
       } else {
         // A recovery's id is its sleep's id, so both kinds start from the sleep.
         const sleep: WhoopSleep | null = await guard(() => api.sleep(input.id));
         const recovery: WhoopRecovery | null = sleep ? await guard(() => api.cycleRecovery(sleep.cycle_id)) : null;
-        changed = sleep ? await ingest({ samples: whoopNightSamples({ sleep, recovery }), deletions: [] }, consent.epoch) : 0;
+        changed = sleep ? await ingest({ samples: whoopNightSamples({ sleep, recovery }), deletions: [] }, consent.epoch, pass) : 0;
       }
-      if (changed > 0) await deps.produce().catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
+      if (changed > 0) await deps.produce(pass.woke).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
       for (const [key, at] of [...kv.list<number>({ prefix: 'whoop:seen:' })]) if (deps.now() - at > SEEN_TTL_MS) kv.delete(key);
       kv.put(seen, deps.now());
       deps.log({ hop: 'whoop', ok: true, code: 'hint_handled' });
       return 'handled';
     } catch (error) {
-      if (changed > 0) await deps.produce().catch(() => undefined);
+      if (changed > 0) await deps.produce(pass.woke).catch(() => undefined);
       const result = classify(error);
       deps.log({ hop: 'whoop', ok: false, code: `hint_${result}` });
       // A rate limit or a failure is caught up by the next reconcile; nothing is guessed in the meantime.
