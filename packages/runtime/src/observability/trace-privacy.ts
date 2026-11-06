@@ -95,8 +95,9 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
   };
 };
 
-// The staging release gate, in code: free-form text may be exported ONLY outside production.
-// WALDO_ENVIRONMENT 'production' disables text capture no matter what LANGFUSE_CAPTURE_TEXT
-// says, so a misconfigured prod deploy fails safe (types/counts only), never open.
+// The staging release gate, in code: free-form text may be exported ONLY outside the environments real people use.
+// WALDO_ENVIRONMENT 'production' or 'beta' disables text capture no matter what LANGFUSE_CAPTURE_TEXT says, so a
+// misconfigured deploy fails safe (types/counts only), never open.
+const NO_CAPTURE_ENVIRONMENTS: ReadonlySet<string> = new Set(['production', 'beta']);
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
-  env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
+  env.LANGFUSE_CAPTURE_TEXT === 'true' && !NO_CAPTURE_ENVIRONMENTS.has(env.WALDO_ENVIRONMENT ?? 'development');

@@ -382,6 +382,61 @@
       "vectorize": [
         { "binding": "VECTORIZE", "index_name": "waldo-recall" }
       ]
+    },
+    // The first beta cohort's own stack (docs/ops/BETA_ENVIRONMENT_2026-11-04.md). Nothing here exists in Cloudflare yet,
+    // and scripts/deploy-runtime.sh refuses --env beta: a wrangler deploy of this block would create the Worker, its Durable
+    // Object namespaces, the R2 bucket and the custom domain. Bindings are non-inheritable, so the block is complete; its
+    // own bucket and rate-limit namespace keep beta counters and files apart from staging on a shared account. Switches
+    // follow the staging set the owner approved on 4 Nov 2026; channel identities (number, address, Photon project, mail
+    // domain, Gmail push project) stay empty until beta has its own. guard-wrangler-local-bindings.mjs checks all of it.
+    "beta": {
+      "name": "waldo-runtime-beta",
+      "main": "src/entry.ts",
+      "routes": [{ "pattern": "app.heywaldo.in", "custom_domain": true }],
+      "workers_dev": false,
+      "limits": { "cpu_ms": 300000 },
+      "triggers": { "crons": ["17 3 * * *"] },
+      "observability": {
+        "enabled": true,
+        "redact_query_string": true,
+        "logs": { "enabled": true, "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
+      "vars": { "WALDO_ENVIRONMENT": "beta", "WALDO_PUBLIC_ORIGIN": "https://app.heywaldo.in", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "1", "PREP_PUSH_NAMES": "1", "WALDO_DAY_STATE": "1", "UPDATE_PUSH_NAMES": "1", "DRIVE_READS": "1", "APP_AGREEMENTS": "1", "OWNER_LOOKUP": "1", "OWNER_PROFILE": "1", "MEMORY_SEMANTIC_RECALL": "1", "MEMORY_SELECTION": "1", "PHONE_SMS_VERIFY": "0", "PHONE_SMS_COUNTRIES": "+91", "PHONE_SMS_DAILY_LIMIT": "20", "CONSOLE_GOOGLE_SIGNIN": "0", "APP_ID_TOKEN_SIGNIN": "1", "OPEN_SIGNUP": "0", "OPEN_SIGNUP_DAILY_CAP": "10", "OPEN_SIGNUP_TOTAL_CAP": "80", "OPEN_SIGNUP_SPEND_CEILING_USD": "5", "MAIL_SOURCE_FOLLOWUPS": "1", "MCP_READ_INTENTS": "1", "WALDO_MCP_SERVERS": "[{\"name\":\"gmail\",\"url\":\"https://gmailmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"calendar\",\"url\":\"https://calendarmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"drive\",\"url\":\"https://drivemcp.googleapis.com/mcp/v1\",\"auth\":\"google\"}]", "GMAIL_PUSH_PROJECT": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "*", "IMESSAGE_CONNECTOR_ENABLED": "0", "IMESSAGE_CONNECTOR_POLICY": "", "IMESSAGE_ONBOARDING_URL": "", "IMESSAGE_WALDO_ADDRESS": "", "IMESSAGE_MEDIA": "1", "WALDO_IMESSAGE_PROGRESS": "0", "PHOTON_PROJECT_ID": "", "WHATSAPP_REENGAGE_TEMPLATE": "", "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE": "", "WHATSAPP_ONBOARDING_URL": "", "WHATSAPP_WALDO_NUMBER": "", "WHATSAPP_DEBUG_LOG": "false", "WHATSAPP_REPLY_MERGE": "1", "WALDO_OWNER_FIRST": "1", "WALDO_SECOND_MESSAGE": "1", "WHATSAPP_QUIET_MS": "3000", "WALDO_COST_LEDGER_SYNC": "on", "WALDO_FORGET_BARRIER": "on", "WALDO_MODEL_PROVIDER": "anthropic", "WALDO_TOOL_SEARCH": "off", "WALDO_TOOL_LOADER": "harness", "WALDO_COMPACTION": "on", "WALDO_STREAM_REPLIES": "on", "HEALTH_PROVISIONAL_SCORES": "1", "HEALTH_SOLO_NOTICE": "1", "HEALTH_TRAINING_LOAD": "1", "HEALTH_COACHING": "1", "MEDICATIONS": "0", "SCREEN_TIME": "0", "HISTORY_ARCHIVE": "dry", "ONBOARDING_LOOKUP": "1", "WELCOME_V2": "1", "HEALTH_EASE_WORKOUT": "1", "CALENDAR_UNDO_CANCEL": "1", "AUTONOMY_OWN_CALENDAR": "1", "APPROVE_IN_CHAT": "1", "MEMORY_NIGHTLY_SOURCE_UPDATES": "1", "MEMORY_DAYTIME_CONSOLIDATOR": "1", "AGENT_MAIL_INBOUND": "0", "AGENT_MAIL_DOMAIN": "", "AGENT_MAIL_SEND": "0", "AGENT_MAIL_ZONE_ID": "" },
+      "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
+      "durable_objects": {
+        "bindings": [
+          { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+          { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
+          { "name": "TRACER_DO", "class_name": "TracerDO" },
+          { "name": "OWNER_DO", "class_name": "OwnerDO" },
+          { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+          { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" },
+          { "name": "TASK_WORKER_DO", "class_name": "TaskWorkerDO" }
+        ]
+      },
+      "r2_buckets": [
+        { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts-beta" }
+      ],
+      "ratelimits": [
+        {
+          "name": "RESPONSIBILITY_RATE_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 120, "period": 60 }
+        }
+      ],
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+        { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+        { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
+        { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] },
+        { "tag": "v9", "new_sqlite_classes": ["TaskWorkerDO"] }
+      ],
+      // Semantic recall embeds through Workers AI; nothing reads Vectorize, so beta binds no index to share with staging.
+      "ai": { "binding": "AI" }
     }
   },
   "migrations": [
