@@ -1,4 +1,5 @@
 import { validId } from '@waldo/workspace';
+import { asciiDigits } from '../security/decimal-digits';
 import {
   DERIVED_SCORE_PATTERNS,
   HEALTH_DESTINATION_RULES,
@@ -97,7 +98,7 @@ export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|rmssd|sdnn|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s*\(\s*(?:rmssd|sdnn)\s*\))?(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
-  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?|h(?:\s*\d{1,2}\s*m(?:ins?|inutes?)?)?)\b/i,
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?(?:~\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?|h(?:\s*\d{1,2}\s*m(?:ins?|inutes?)?)?)\b/i,
   /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
   /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
@@ -105,6 +106,9 @@ export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   // A wrist temperature is a deviation from the owner's baseline: a signed number, a decimal or a number with a degree sign, after
   // the few words a reading puts between ("wrist temp up 0.4°C"), so "wrist temperature feature in iOS 17" is not one.
   /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit)))/i,
+  // Hours and minutes glued with no minute unit ("sleep 7h22"), right after the sleep word: with a word between it is as
+  // often a clock time ("sleep at 10h30").
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b\s*(?:[:=,]\s*)?(?:~\s*)?\d{1,2}h[0-5]\d\b/i,
 ];
 // Health phrases without a number (a state named in words). Kept apart so a later qualitative entry can never join the
 // numeric floor by accident.
@@ -128,6 +132,7 @@ const BARE_GAP = gapOf(READING_WORDS);
 const SLEEP_GAP = gapOf(String.raw`${READING_WORDS}|at|for|a|an|less\s+than|more\s+than`);
 const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped|climbed|by`);
 const STEADY_GAP = gapOf(STEADY_WORDS);
+const SEPARATOR_GAP = String.raw`(?:\s*[:=~])*\s*`;
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
 const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
@@ -174,7 +179,8 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
   // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SEPARATOR_GAP}\d{1,2}h[0-5]\d\b`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
   // a sleep word, and REM only in capitals.
@@ -261,11 +267,14 @@ const proseReadings = (text: string): Found[] => {
   const plain = unemphasised(text);
   return [...OWNER_HEALTH_READINGS.flatMap((pattern) => found(pattern, view)), ...PLAIN_READINGS.flatMap((pattern) => found(pattern, plain))];
 };
-// Each reading in text, as the words the floor matched.
-const numericHealthReadings = (text: string): string[] => [
-  ...proseReadings(text).map((reading) => reading.text),
-  ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
-];
+// Each reading in text, as the words the floor matched, in ASCII digits whatever digits the text was written in.
+const numericHealthReadings = (written: string): string[] => {
+  const text = asciiDigits(written);
+  return [
+    ...proseReadings(text).map((reading) => reading.text),
+    ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
+  ];
+};
 
 // The one numeric health floor for memory written from outside content and for stored summaries, where a match drops the
 // write. What the owner says goes into memory without it. Precision wins over recall here: a false match loses an ordinary
@@ -293,7 +302,7 @@ export const numericHealthInJsonText = (text: string): boolean => {
 // claim's own quote, or the owner's own readings), since a number the owner typed about anything else vouches for nothing.
 const NUMBER = /\d+(?:[.,]\d+)*/g;
 export const readingBeyondOwner = (text: string, owner: string | undefined): boolean => {
-  const said = new Set(owner?.match(NUMBER) ?? []);
+  const said = new Set(owner === undefined ? [] : asciiDigits(owner).match(NUMBER) ?? []);
   return numericHealthReadings(text).some((reading) => (reading.match(NUMBER) ?? []).some((number) => !said.has(number)));
 };
 
@@ -305,7 +314,9 @@ export const ownerReadings = (owner: string | undefined): string | undefined => 
 const ENDS_IN_HOURS = new RegExp(String.raw`\d\s*h(?:rs?|ours?)?$`, 'i');
 const STARTS_IN_MINUTES = new RegExp(String.raw`^${STAGE_MINUTES}`, 'i');
 const HOURS_BEFORE = new RegExp(String.raw`${STAGE_HOURS}$`, 'i');
-export const redactNumericHealth = (text: string, marker: string): string => {
+// Text with a reading is returned in ASCII digits; text with none is returned as it was.
+export const redactNumericHealth = (written: string, marker: string): string => {
+  const text = asciiDigits(written);
   const spans: Array<[number, number]> = [];
   const minutesAfter = new RegExp(String.raw`\s*${STAGE_MINUTES}`, 'iy');
   const tail = (end: number): number => { minutesAfter.lastIndex = end; return minutesAfter.exec(text)?.[0].length ?? 0; };
@@ -316,7 +327,7 @@ export const redactNumericHealth = (text: string, marker: string): string => {
   };
   proseReadings(text).forEach(span);
   for (const pattern of RAW_SENSOR_PATTERNS) found(pattern, text).filter((field) => SERIALIZED_FIELD.test(field.text)).forEach(span);
-  if (spans.length === 0) return text;
+  if (spans.length === 0) return written;
   spans.sort((a, b) => a[0] - b[0]);
   let out = '', at = 0;
   for (const [start, end] of spans) {
@@ -420,6 +431,47 @@ function redactCards(text: string, counts: Map<RedactionKind, number>): string {
   }
   increment(counts, 'credit_card', found.length);
   return output + text.slice(last);
+}
+
+// A phone-shaped number the words before it or the numbers beside it say is something else:
+//  - a run of digits after a word that names a reference ("order", "PNR", "invoice #") is that reference;
+//  - a run of ten digits that starts with 0 or 1 is neither a US number (no area code starts so) nor an Indian mobile, and is
+//    most often a timestamp in seconds;
+//  - two groups of five after a currency or an amount word ("₹75000 80000", "salary 75000 80000") are a range, and next to
+//    a third group of five they are a list.
+// Only the twenty-four characters before a match and the seven after it are read, so the check costs the same for any text.
+const REFERENCE_BEFORE = /\b(?:order|ref|reference|id|invoice|inv|txn|transaction|pnr|booking|ticket|awb|tracking|utr|receipt|bill)\b\.?\s*(?:no\.?|number|#|:)?\s*#?\s*$/i;
+const AMOUNT_BEFORE = /(?:[₹$€£]|\b(?:rs|inr|usd|salary|price|budget|cost|amount|rent|fees?|ctc|between|from)\b\.?:?)\s*$/i;
+const FIVE_GROUP_BEFORE = /(?<!\d)\d{5}\s$/;
+const FIVE_GROUP_AFTER = /^\s\d{5}(?!\d)/;
+const CONTEXT_BEFORE = 24;
+const notAPhone = (number: string, before: string, after: string): boolean => {
+  const digits = number.replace(/^[\s.-]/, '');
+  if (/^\d+$/.test(digits) && (REFERENCE_BEFORE.test(before) || (digits.length === 10 && /^[01]/.test(digits)))) return true;
+  return /^0?[6-9]\d{4}\s\d{5}$/.test(digits) && (AMOUNT_BEFORE.test(before) || FIVE_GROUP_BEFORE.test(before) || FIVE_GROUP_AFTER.test(after));
+};
+
+function phoneMatches(text: string): RegExpMatchArray[] {
+  return [...text.matchAll(new RegExp(PHONE_PATTERN.source, PHONE_PATTERN.flags))].filter((match) => {
+    const end = match.index! + match[0].length;
+    return !notAPhone(match[0], text.slice(Math.max(0, match.index! - CONTEXT_BEFORE), match.index), text.slice(end, end + 7));
+  });
+}
+
+// A number written in other digits (fullwidth, Devanagari) is found in its ASCII reading. Text with a number is returned in that
+// reading; text with none is returned as it was.
+function redactPhones(text: string, counts: Map<RedactionKind, number>): string {
+  const read = asciiDigits(text);
+  const found = phoneMatches(read);
+  if (found.length === 0) return text;
+  let output = '';
+  let last = 0;
+  for (const match of found) {
+    output += read.slice(last, match.index) + '[REDACTED_PHONE]';
+    last = match.index! + match[0].length;
+  }
+  increment(counts, 'phone', found.length);
+  return output + read.slice(last);
 }
 
 function matches(pattern: RegExp, text: string): boolean {
@@ -1098,11 +1150,12 @@ function containsForbiddenHealth(
     input.payload,
     input.destination,
     (text) => {
+      const read = freeTextScan ? asciiDigits(text) : text;
       if (
         freeTextScan &&
-        (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, text, plainWords)) ||
-          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, text, plainWords)))
+        (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, read)) ||
+          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, read, plainWords)) ||
+          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, read, plainWords)))
       ) {
         return true;
       }
@@ -1159,8 +1212,10 @@ function redactExternalHealthSpans(
         const inner = transformJsonStrings(parsed as JsonValue, (value, field) => field === undefined ? value : redact(value));
         return inner.invalid ? text : JSON.stringify(inner.payload);
       }
-    } catch { /* Ordinary free text is scanned for spans. */ }
-    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), text);
+    } catch { /* Ordinary free text is scanned for spans, in its ASCII reading; text with no span is returned as it was. */ }
+    const read = asciiDigits(text);
+    const output = patterns.reduce((out, pattern) => replaceAndCount(out, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), read);
+    return output === read ? text : output;
   };
   const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
@@ -1226,7 +1281,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
     if (cardMatches(view).length > 0) return 'credit_card';
-    if (matches(PII_PATTERNS.phone, view)) return 'phone';
+    if (phoneMatches(asciiDigits(view)).length > 0) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
   }
@@ -1326,7 +1381,7 @@ function redactPiiText(
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
   if (!ownerReadable(destination, taint, 'phone'))
-    output = replaceAndCount(output, PHONE_PATTERN, '[REDACTED_PHONE]', 'phone', counts);
+    output = redactPhones(output, counts);
   if (!ownerReadable(destination, taint, 'address')) {
     output = replaceAndCount(output, PII_PATTERNS.ipv4, '[REDACTED_ADDRESS]', 'address', counts);
     output = replaceAndCount(output, PII_PATTERNS.ipv6, '[REDACTED_ADDRESS]', 'address', counts);
