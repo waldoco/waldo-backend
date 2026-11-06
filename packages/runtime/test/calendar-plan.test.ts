@@ -173,6 +173,67 @@ describe('the day plan card', () => {
     });
   });
 
+  it('two approvals at once while recovering: one finishes the plan, the other is told it is handled, and nothing is removed', async () => {
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      // The object stopped after block 0 was on record and before block 1 went out.
+      const effects = ownerEffectLedger(state.storage, () => NOW), first = await sha256Hex('tool:plan-1:apply:0');
+      await effects.execute({ operationId: 'tool:plan-1:apply:0', owner_ref: String(OWNER), tool: 'calendar_plan', payload: { ...PLAN.blocks[0], block_index: 0 } },
+        { dispatch: async () => { await fake.client.createEvent({ ...PLAN.blocks[0]!, id: first, operationMarker: first }); return { provider_id: first, result: { etag: 'v1' } }; }, reconcile: async () => ({ status: 'unknown' }) });
+      state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ?", NOW, id);
+      const outs = await Promise.all([h.desk.decide(id, 'a', 'one', { surface: 'telegram' }), h.desk.decide(id, 'a', 'two', { surface: 'app' })]);
+      expect(outs.map(out => out.toast).sort()).toEqual(['Already handled.', 'Done']);
+      expect([h.status(id), h.live()]).toEqual(['done', PLAN.blocks.map(block => block.title)]);
+    });
+  });
+
+  it('after a rollback that ended unknown, approving again adds nothing: it reads the calendar back and says what is there', async () => {
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      fake.failCreate.set(2, () => { fake.failRead = true; fake.failCancel = () => { throw new GoogleError(401, 'google token failed: invalid_grant'); }; throw new GoogleError(401, 'google token failed: invalid_grant'); });
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      expect((await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast).toBe('Outcome unknown');
+      // Google is reconnected: the approval reads back, and never reports a plan done that is not on the calendar.
+      fake.failRead = false; fake.failCancel = null;
+      const again = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([again.toast, h.status(id), fake.creates, h.live()]).toEqual(['Outcome unknown', 'uncertain', 3, ['Write the board memo', 'Lunch and a walk']]);
+      expect(again.message).toContain('"Write the board memo", "Lunch and a walk" are still on your calendar');
+      // The owner removes them; the next approval reads that back and the card reads not done.
+      for (const index of [0, 1]) fake.events.delete(await sha256Hex(`tool:plan-1:apply:${index}`));
+      const settled = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([settled.toast, h.status(id), fake.creates, h.live()]).toEqual(['Not done', 'failed', 3, []]);
+    });
+  });
+
+  it('after an undo that ended unknown, approving again adds nothing back: it reads the calendar and says what is still there', async () => {
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      expect((await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast).toBe('Done');
+      // Removing block 0 fails in a way that does not say whether it went through.
+      const memo = await sha256Hex('tool:plan-1:apply:0');
+      let cancels = 0;
+      fake.failCancel = () => { if (cancels++ === 0) throw new GoogleError(500, 'backend error'); return undefined as never; };
+      expect([(await h.desk.decide(id, 'u', 'trace', { surface: 'telegram' })).toast, h.status(id), h.live()]).toEqual(['Outcome unknown', 'uncertain', ['Write the board memo']]);
+      const again = await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      expect([again.toast, h.status(id), fake.creates, h.live()]).toEqual(['Partly undone', 'done', 3, ['Write the board memo']]);
+      expect(again.message).toContain('"Write the board memo" is still on your calendar');
+      expect([(await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast, fake.creates]).toEqual(['Already handled.', 3]);
+    });
+    // Read back with nothing left, the undo is whole.
+    await owner(async state => {
+      const fake = calendar(), h = harness(state, fake);
+      const id = await h.desk.proposeCalendarPlan(PLAN);
+      await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' });
+      let cancels = 0;
+      fake.failCancel = () => { if (cancels++ === 0) throw new GoogleError(500, 'backend error'); return undefined as never; };
+      await h.desk.decide(id, 'u', 'trace', { surface: 'telegram' });
+      fake.events.delete(await sha256Hex('tool:plan-1:apply:0'));
+      expect([(await h.desk.decide(id, 'a', 'trace', { surface: 'telegram' })).toast, h.status(id), fake.creates, h.live()]).toEqual(['Undone', 'undone', 3, []]);
+    });
+  });
+
   it('undo removes every block; one the owner changed since is left, and the receipt says which', async () => {
     await owner(async state => {
       const fake = calendar(), h = harness(state, fake);

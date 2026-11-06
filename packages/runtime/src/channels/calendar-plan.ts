@@ -102,6 +102,17 @@ export const addPlan = async (input: Readonly<{ client: GoogleClient; effect: Ef
   return left.length ? { state: 'unknown', left } : { state: 'not_done', removed: added.length };
 };
 
+// Once a removal began (a rollback, or an undo), the plan is never added again: a cached add would read as landed after its
+// block was removed. What is on the calendar is read back instead, by each block's fixed event id. `unread`: a read that failed.
+export const planOnCalendar = async (client: GoogleClient, operationRef: string, plan: StoredPlan): Promise<Readonly<{ present: readonly string[]; unread: readonly string[] }>> => {
+  const present: string[] = [], unread: string[] = [];
+  for (const [index, block] of plan.blocks.entries()) {
+    try { if ((await client.event(await sha256Hex(`${operationRef}:apply:${index}`))).status !== 'cancelled') present.push(block.title); }
+    catch (error) { if (!gone(error)) unread.push(block.title); }
+  }
+  return { present, unread };
+};
+
 // Undo: each block the plan added is removed while it is still the version the plan wrote. One the owner changed since, or
 // whose version is not known, is left as it is.
 export type PlanRemoval = Readonly<{ removed: readonly string[]; kept: readonly string[]; unknown: readonly string[] }>;

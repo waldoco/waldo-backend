@@ -17,7 +17,7 @@ import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
-import { addPlan, planReview, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
+import { addPlan, planOnCalendar, planReview, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
 import { appWhy, storedWhy, whyJson, type TrailStep } from '../tools/why-trail';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
@@ -1162,10 +1162,29 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return true;
   };
   // A day plan, all or nothing. Every block is its own effect, so an approval after an interruption finishes what the first
-  // one started and adds nothing twice. Up to 24 calls to Google run here, none inside a transaction.
+  // one started and adds nothing twice. Up to 24 calls to Google run here, none inside a transaction. One decision runs per
+  // plan, claimed before anything is awaited.
   const plansRunning = new Set<string>();
   const blocksNamed = (titles: readonly string[]) => titles.map(title => `"${title}"`).join(', ');
   const decidePlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
+    if (plansRunning.has(id)) return { toast: 'Already handled.', message: 'Already handled.' };
+    plansRunning.add(id);
+    try { return await runPlan(id, entry, action, operationRef, recovering, trace); } finally { plansRunning.delete(id); }
+  };
+  const settlePlan = async (id: string, plan: StoredPlan, client: GoogleClient, operationRef: string, undoing: boolean, trace: string): Promise<ApprovalDecision> => {
+    const { present, unread } = await planOnCalendar(client, operationRef, plan);
+    deps.log({ trace, hop: 'calendar_plan_settle', ms: 0, ok: unread.length === 0, code: unread.length ? 'unknown' : present.length ? 'present' : 'absent' });
+    const still = (titles: readonly string[]) => `${blocksNamed(titles)} ${titles.length === 1 ? 'is' : 'are'} still on your calendar`;
+    if (unread.length) return { toast: 'Outcome unknown', message: `I could not read ${blocksNamed(unread)} on your calendar${present.length ? `, and ${still(present)}` : ''}. Check your calendar; approving again won't add or remove anything.` };
+    if (undoing) {
+      if (!present.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: "Undone: none of the plan's blocks is on your calendar." }; }
+      setStatus(id, 'done');
+      return { toast: 'Partly undone', message: `${still(present)}; the rest of the plan is removed. Remove any you don't want.` };
+    }
+    if (!present.length) { setStatus(id, 'failed'); return { toast: 'Not done', message: 'Nothing from the plan is on your calendar.' }; }
+    return { toast: 'Outcome unknown', message: `The plan was not added whole: ${still(present)}. Remove any you don't want; approving again won't add or remove anything.` };
+  };
+  const runPlan = async (id: string, entry: LedgerRow, action: DeskAction, operationRef: string, recovering: boolean, trace: string): Promise<ApprovalDecision> => {
     const plan = JSON.parse(entry.payload_json) as StoredPlan;
     if (!deps.effects) return { toast: 'Not available', message: 'A day plan cannot be added here. Nothing was changed.' };
     if (action === 'u' && !(entry.undo_json && entry.decided_at !== null && (recovering || deps.now() <= undoUntil(entry)!)))
@@ -1176,33 +1195,32 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const lost = claimOpen(id);
       if (lost) return lost;
     }
-    plansRunning.add(id);
+    const removal = (kind: 'rollback' | 'undo') => plan.blocks.some((_, index) => deps.effects!.get(`${operationRef}:${kind}:${index}`));
+    if (action === 'a' && recovering && (removal('rollback') || removal('undo'))) return settlePlan(id, plan, client, operationRef, removal('undo'), trace);
     const started = deps.now();
-    try {
-      if (action === 'u') {
-        const undone = await undoPlan({ client, effect, operationRef, undo: JSON.parse(entry.undo_json!) as PlanUndo });
-        deps.log({ trace, hop: 'calendar_plan_undo', ms: deps.now() - started, ok: !undone.unknown.length, code: undone.unknown.length ? 'unknown' : undone.kept.length ? 'partial' : 'undone' });
-        if (undone.unknown.length) {
-          sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id);
-          return { toast: 'Outcome unknown', message: `I could not confirm the plan was removed: ${blocksNamed(undone.unknown)} may still be on your calendar. Check your calendar and remove any you don't want.` };
-        }
-        if (!undone.kept.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: `Undone: removed all ${undone.removed.length} blocks of the plan.` }; }
-        setStatus(id, 'done');
-        return { toast: 'Partly undone', message: `Removed ${undone.removed.length ? blocksNamed(undone.removed) : 'nothing'}. Left ${blocksNamed(undone.kept)} as it is, because it changed after I added it.` };
+    if (action === 'u') {
+      const undone = await undoPlan({ client, effect, operationRef, undo: JSON.parse(entry.undo_json!) as PlanUndo });
+      deps.log({ trace, hop: 'calendar_plan_undo', ms: deps.now() - started, ok: !undone.unknown.length, code: undone.unknown.length ? 'unknown' : undone.kept.length ? 'partial' : 'undone' });
+      if (undone.unknown.length) {
+        sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id);
+        return { toast: 'Outcome unknown', message: `I could not confirm the plan was removed: ${blocksNamed(undone.unknown)} may still be on your calendar. Check your calendar and remove any you don't want.` };
       }
-      const outcome = await addPlan({ client, effect, operationRef, plan, made: deps.grants?.enabled() === true });
-      deps.log({ trace, hop: 'calendar_plan', ms: deps.now() - started, ok: outcome.state === 'done', code: outcome.state });
-      if (outcome.state === 'done') {
-        setStatus(id, 'done', outcome.undo);
-        return { toast: 'Done', message: `Done: added all ${plan.blocks.length} blocks to your calendar. Undo is available for 10 minutes.` };
-      }
-      if (outcome.state === 'not_done') {
-        setStatus(id, 'failed');
-        return { toast: 'Not done', message: `Nothing was added: Google refused part of the plan${outcome.removed ? `, so I removed the ${outcome.removed} block${outcome.removed === 1 ? '' : 's'} already added` : ''}. Your calendar is as it was.` };
-      }
-      setStatus(id, 'uncertain');
-      return { toast: 'Outcome unknown', message: `Part of the plan failed and I could not confirm it was all removed: ${blocksNamed(outcome.left)} may still be on your calendar. Check your calendar and remove any you don't want; approving again won't redo this.` };
-    } finally { plansRunning.delete(id); }
+      if (!undone.kept.length) { setStatus(id, 'undone'); return { toast: 'Undone', message: `Undone: removed all ${undone.removed.length} blocks of the plan.` }; }
+      setStatus(id, 'done');
+      return { toast: 'Partly undone', message: `Removed ${undone.removed.length ? blocksNamed(undone.removed) : 'nothing'}. Left ${blocksNamed(undone.kept)} as it is, because it changed after I added it.` };
+    }
+    const outcome = await addPlan({ client, effect, operationRef, plan, made: deps.grants?.enabled() === true });
+    deps.log({ trace, hop: 'calendar_plan', ms: deps.now() - started, ok: outcome.state === 'done', code: outcome.state });
+    if (outcome.state === 'done') {
+      setStatus(id, 'done', outcome.undo);
+      return { toast: 'Done', message: `Done: added all ${plan.blocks.length} blocks to your calendar. Undo is available for 10 minutes.` };
+    }
+    if (outcome.state === 'not_done') {
+      setStatus(id, 'failed');
+      return { toast: 'Not done', message: `Nothing was added: Google refused part of the plan${outcome.removed ? `, so I removed the ${outcome.removed} block${outcome.removed === 1 ? '' : 's'} already added` : ''}. Your calendar is as it was.` };
+    }
+    setStatus(id, 'uncertain');
+    return { toast: 'Outcome unknown', message: `Part of the plan failed and I could not confirm it was all removed: ${blocksNamed(outcome.left)} may still be on your calendar. Check your calendar and remove any you don't want; approving again won't redo this.` };
   };
   const GRANT_UNKNOWN: ApprovalDecision = { toast: 'Outcome unknown', message: 'Whether that change under your standing grant landed is still unknown. Nothing was run again; check your calendar.' };
   // A granted change whose outcome is unknown settles from its effect record and never runs again: a recorded outcome is
