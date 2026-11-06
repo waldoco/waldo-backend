@@ -85,6 +85,17 @@ describe('quest book', () => {
     });
   });
 
+  it('skips a goal row that is not in quest form, so it never reaches a prompt or breaks the app\'s day view', async () => {
+    await runInDurableObject(stub(), (_instance, state) => {
+      const book = questBook(state.storage.sql, clockAt('2026-11-06T10:00:00Z'), ids());
+      state.storage.sql.exec("INSERT INTO goals (id, user_id, description, active, created_at, updated_at) VALUES ('goal-1', 'owner-1', 'An older goal', 1, '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z')");
+      book.set({ title: 'Sleep by 11' }, 'owner-1');
+      expect(book.shown().map(quest => quest.id)).toEqual(['quest:q1']);
+      expect(book.open().map(quest => quest.id)).toEqual(['quest:q1']);
+      expect(questsPrompt(book)).not.toContain('An older goal');
+    });
+  });
+
   it('lists completed quests to the app for 30 days', async () => {
     await runInDurableObject(stub(), (_instance, state) => {
       const clock = clockAt('2026-11-06T10:00:00Z'), book = questBook(state.storage.sql, clock, ids());
@@ -126,12 +137,19 @@ describe('set_quest', () => {
     });
   });
 
-  it('keeps an owner-stated number, and refuses a reading once the turn read outside content', async () => {
+  it('keeps a reading the owner stated in their own words, and refuses one they did not, as from a wearable read this turn', async () => {
     await runInDurableObject(stub(), async (_instance, state) => {
       const handler = questHandler(questBook(state.storage.sql, clockAt('2026-11-06T10:00:00Z'), ids()));
-      expect(await handler.handle({ title: 'Resting HR down to 55 bpm' }, ownerTurn)).toMatchObject({ ok: true });
-      expect(await handler.handle({ title: 'Resting HR down to 55 bpm' }, { ...ownerTurn, toolArgSourceTaint: 'external' } as ToolDispatcherContext)).toMatchObject({ ok: false, code: 'rejected' });
-      expect(await handler.handle({ title: 'Recover after the flu' }, { ...ownerTurn, toolArgSourceTaint: 'external' } as ToolDispatcherContext)).toMatchObject({ ok: true });
+      const said = (text: string, recent: string[] = []) => ({ ...ownerTurn, memoryTurn: { ownerId: 'owner-1', conversationRef: 'c', current: { message_ref: 'm1', text }, recent: recent.map((body, i) => ({ message_ref: `r${i}`, text: body })) } }) as ToolDispatcherContext;
+      expect(await handler.handle({ title: 'Resting HR down to 55 bpm' }, said('Make a quest: resting HR down to 55 bpm by March.'))).toMatchObject({ ok: true });
+      expect(await handler.handle({ title: 'Resting HR down to 55 bpm' }, said('Yes, start it.', ['I want my resting heart rate down to 55 bpm.']))).toMatchObject({ ok: true });
+      // The owner asked for a quest; the number came from get_health, not from them.
+      expect(await handler.handle({ title: 'HRV up', usual: 'HRV around 48 ms' }, said('Start a quest to get my HRV up.'))).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await handler.handle({ title: 'Resting HR down to 55 bpm' }, ownerTurn)).toMatchObject({ ok: false, code: 'rejected' });
+      // A number the owner wrote inside a forwarded part vouches for nothing.
+      const forwarded = { ...ownerTurn, memoryTurn: { ownerId: 'owner-1', conversationRef: 'c', current: { message_ref: 'm1', text: 'Coach says: HRV 48 ms. Make it a quest.', sourceQuoteRanges: [{ start: 0, end: 23 }] }, recent: [] } } as ToolDispatcherContext;
+      expect(await handler.handle({ title: 'HRV quest', usual: 'HRV 48 ms' }, forwarded)).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await handler.handle({ title: 'Recover after the flu' }, { ...said('Help me recover after the flu.'), toolArgSourceTaint: 'external' } as ToolDispatcherContext)).toMatchObject({ ok: true });
     });
   });
 });

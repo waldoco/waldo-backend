@@ -1,11 +1,11 @@
 import { goalState, setQuestArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type GoalState, type SetQuestArgs, type SetQuestResult, type ToolHandler } from '@waldo/contracts';
-import { APP_QUESTS_MAX_V1, type AppQuestV1 } from '../../../contracts/src/app/controls';
+import { APP_QUESTS_MAX_V1, appQuestV1Schema, type AppQuestV1 } from '../../../contracts/src/app/controls';
 import { GOAL_QUEST_COLUMNS, HEY144_GOALS_SCHEMA_MIGRATION } from '../do-schema';
-import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
+import { HEALTH_SPAN_MARKER, ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { ownerParts, type MemoryOwnerTurn } from '../tools/owner-words';
 import type { OwnerClock } from '../tools/live/get-context';
 import type { CardId } from '../prompt/day-cards';
-import { turnReadOutside } from './approvals';
 import { localIso } from './reminders';
 
 // Quests (ADR-0064 GoalRecord, as amended for health quests): goals the owner chose to work toward with Waldo, kept in the
@@ -49,8 +49,10 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
       next_check_in: state === 'active' && row.check_in_days !== null ? addDays(dayOf(row.last_check_in_at ?? row.created_at), row.check_in_days) : null,
     };
   };
-  const rows = (): Row[] => sql.exec<Row>('SELECT * FROM goals ORDER BY created_at, id').toArray();
-  const open = (): AppQuestV1[] => rows().map(view).filter(quest => quest.state !== 'completed');
+  // A goals row another writer left outside the quest shape is not a quest: no prompt lists it and the app never receives it.
+  const quests = (): AppQuestV1[] => sql.exec<Row>('SELECT * FROM goals ORDER BY created_at, id').toArray().map(view).filter(quest => appQuestV1Schema.safeParse(quest).success);
+  const updatedAt = (id: string): string => sql.exec<{ updated_at: string }>('SELECT updated_at FROM goals WHERE id = ?', id).one().updated_at;
+  const open = (): AppQuestV1[] => quests().filter(quest => quest.state !== 'completed');
   return {
     set(args, userId) {
       const now = clock.now().toISOString();
@@ -76,7 +78,7 @@ export const questBook = (sql: Sql, clock: OwnerClock, newId: () => string): Que
     // Every open quest fits (QUESTS_OPEN_MAX is below the app's cap), so recently completed ones only fill the room left.
     shown: () => {
       const since = clock.now().getTime() - COMPLETED_SHOWN_MS;
-      const done = rows().filter(row => view(row).state === 'completed' && Date.parse(row.updated_at) >= since).map(view);
+      const done = quests().filter(quest => quest.state === 'completed' && Date.parse(updatedAt(quest.id)) >= since);
       return [...open(), ...done].slice(0, APP_QUESTS_MAX_V1);
     },
     due: () => {
@@ -119,6 +121,14 @@ export const questCardContext = (card: CardId, book: QuestBook): string | null =
 
 const DESCRIPTION = "Start or change one of the owner's quests: a goal they chose to work toward with you (a marathon block, steadier sleep, coming back after illness, a weight target), with a plan, where they start against their own usual, a check-in pace and a state. Only when they ask: agree the plan and pace with them first. On a change, a field left out stays and null clears it. state completed when they finish or drop it, ambient to keep it in mind without check-ins. Write their own words; never copy a reading from a wearable or health app into a quest.";
 
+// The readings in the owner's own words this turn and in their recent messages, forwarded parts left out. A reading in a
+// quest is kept only when its numbers are among these, so one read from a wearable or outside content never lands in a quest.
+const readingNotOwners = (text: string, ctx: ToolDispatcherContext): boolean => {
+  const turn = (ctx as { memoryTurn?: Readonly<{ ownerId?: string; current?: MemoryOwnerTurn; recent?: readonly MemoryOwnerTurn[] }> }).memoryTurn;
+  const said = turn?.current && turn.ownerId === ctx.authenticatedUserId ? ownerReadings([turn.current, ...(turn.recent ?? [])].flatMap(ownerParts).join('\n')) : undefined;
+  return text.includes(HEALTH_SPAN_MARKER) || readingBeyondOwner(text, said);
+};
+
 export const questHandler = (book: QuestBook): ToolHandler<SetQuestArgs, SetQuestResult, ToolDispatcherContext> => ({
   name: 'set_quest',
   description: DESCRIPTION,
@@ -128,10 +138,8 @@ export const questHandler = (book: QuestBook): ToolHandler<SetQuestArgs, SetQues
   mutates_state: true,
   async handle(args, ctx) {
     if (ctx.trigger !== 'user_message') return { ok: false, code: 'rejected', error: "Only the owner's own chat turn can start or change a quest." };
-    // The same line remember holds: once a turn has read outside content, a reading in the text may have come from there.
-    const texts = [args.title, args.plan, args.usual, args.target, args.progress].filter((text): text is string => typeof text === 'string');
-    if (turnReadOutside(ctx) && texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text)))
-      return { ok: false, code: 'rejected', error: 'This turn read outside content (mail, a web page or a connected tool), so a quest stores no health reading from it. Write it in words, or ask the owner.' };
+    if ([args.title, args.plan, args.usual, args.target, args.progress].some(text => typeof text === 'string' && readingNotOwners(text, ctx)))
+      return { ok: false, code: 'rejected', error: 'A quest keeps a health number only as the owner said it in their own message, never one read from a device or outside content. Write it in words, or ask the owner.' };
     ctx.runScope?.admit();
     const result = ctx.runScope ? ctx.runScope.commit(() => book.set(args, ctx.authenticatedUserId)) : book.set(args, ctx.authenticatedUserId);
     return typeof result === 'string' ? { ok: false, code: 'invalid_args', error: result } : { ok: true, data: result, source_taint: null };

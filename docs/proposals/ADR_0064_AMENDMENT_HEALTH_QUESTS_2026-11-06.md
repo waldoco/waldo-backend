@@ -19,7 +19,7 @@ ADR-0064 kept goals as a contract with no runtime writer. This amendment gives t
 ## Who writes and reads
 - **Writer: `set_quest`.** It runs only on the owner's own chat turn (`user_message`), as ADR-0064's write rule already requires.
   - A turn that has read outside content gets the owner's approval card, the same as every write.
-  - That turn never stores a health reading in a quest.
+  - A quest keeps a health number only as the owner said it: every number in a reading must appear in a reading in the owner's own words, in their current or recent messages, with forwarded parts left out. A reading the model took from `get_health`, a wearable or outside content is refused on every turn, so measured values never reach the goals table, the tool ledger, the prompts or the app.
   - The owner's own stated targets are stored as stated, under ADR-0064's stated-target carve-out.
 - **Readers:**
   - every owner turn, which sees the open quests by id beside the standing orders;
@@ -41,8 +41,9 @@ ADR-0064 kept goals as a contract with no runtime writer. This amendment gives t
 
 ## Retention and forget
 - **Completed quests:** they stay in the table. The app lists them for 30 days, after every open quest.
-- **Forget:** the owner's forget redacts the topic from `description`, `baseline`, `target`, `progress` and `plan`, as it already did for the first four. A redaction that would grow a column past its 500-character CHECK is cut at 500, so the forget always lands.
-- **While a forget is cleaning:** quest lines ride the owner turn with the standing orders and cross the same forget barrier, so a quest that still holds the topic is dropped from what the model reads.
+- **Forget:** the owner's forget redacts the topic from `description`, `baseline`, `target`, `progress` and `plan`, as it already did for the first four. A redaction that would grow a column past its 500-character CHECK is cut at 500 characters (never inside one), so the forget always lands.
+- **Rows outside the quest shape:** a `goals` row another writer left with an id that is not `quest:…` is skipped by every reader, so it never reaches a prompt or breaks the app's day view.
+- **While a forget is cleaning:** quest lines cross the forget barrier wherever they are read: with the standing orders on an owner turn, and as the job's context at the Brief and the Close. A quest that still holds the topic never reaches the model (tested in `forget-barrier-staging-env.test.ts` and `quests-owner-do.test.ts`).
 
 ## Not covered
 - Personal experiments inside a quest (A2).
