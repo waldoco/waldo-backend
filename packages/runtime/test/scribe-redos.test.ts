@@ -8,7 +8,9 @@ import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { numericHealthIn, redactNumericHealth, sanitise } from '../src/scribe/sanitiser';
 
-const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'];
+// A canary is 16 hex characters. These hold letters, so a run of digits in a test input is never mistaken for one (sanitise
+// refuses a canary before it runs the health patterns, which would let a slow pattern pass unread).
+const CANARIES = ['a1b2c3d4e5f60718', '0f1e2d3c4b5a6978', '9a8b7c6d5e4f3021'];
 // External text is the one that has every PII class redacted, including the ones the owner may read in their own words.
 const scan = (text: string, destination: SanitiseDestination = 'send_message') =>
   sanitise({ payload: destination === 'send_message' ? text : { body: text }, destination, canary_tokens: [...CANARIES], source_taint: 'external' });
@@ -88,13 +90,22 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     expect(millis(() => redactNumericHealth(text, '[health]'))).toBeLessThan(300);
   });
 
-  // A word between a health word and its number may not swallow the number's own digits and be tried at every split.
-  it.each(['heart rate', 'glucose', 'hrv', 'steps', 'bp', 'blood pressure', 'sleep duration', 'form', 'body temperature'])('%s, a word, then 40,000 digits that end in a letter, is read in a moment', word => {
-    const text = `${word} x ${'1'.repeat(40_000)}z`;
-    expect(millis(() => scan(text)), 'sanitise').toBeLessThan(300);
-    expect(millis(() => numericHealthIn(text)), 'numericHealthIn').toBeLessThan(300);
-    expect(millis(() => redactNumericHealth(text, '[health]')), 'redactNumericHealth').toBeLessThan(300);
-    expect(millis(() => scan(`${word} ${'1'.repeat(200_000)}`)), 'a bare run of digits').toBeLessThan(300);
+  // A word between a health word and its number may not swallow the number's own digits and be tried at every split. The
+  // free-text health patterns run only inside sanitise(), so this goes through it, to both a message and the model's context.
+  it.each(['heart rate', 'glucose', 'hrv', 'steps', 'bp', 'blood pressure', 'sleep duration', 'form', 'body temperature'])('%s, a word, then 80,000 digits, is read in a moment with or without a letter after them', word => {
+    for (const destination of ['send_message', 'internal_context'] as const) {
+      for (const tail of ['z', '']) expect(millis(() => scan(`${word} x ${'1'.repeat(80_000)}${tail}`, destination)), `${destination}, tail ${JSON.stringify(tail)}`).toBeLessThan(300);
+      expect(millis(() => scan(`${word} ${'1'.repeat(200_000)}`, destination)), `${destination}, a bare run of digits`).toBeLessThan(300);
+      expect(millis(() => scan(`${word} ${'x1'.repeat(40_000)}`, destination)), `${destination}, letters between digits`).toBeLessThan(300);
+    }
+  });
+
+  // The canary check comes first: with a canary in the text, none of the health patterns is reached, so a test that
+  // used one would pass without exercising them.
+  it('the digits in these inputs are read by the health patterns, not refused as a canary', () => {
+    const result = scan(`heart rate x 72 ${'1'.repeat(40)}z`, 'internal_context');
+    expect(result.ok === false && result.check === 'canary_token').toBe(false);
+    expect(scan(`heart rate: 72 bpm`, 'send_message')).toMatchObject({ ok: false, check: 'health_value' });
   });
 
   // A role tag is `<`, an optional `/`, a role and `>`, each with blanks allowed between: blanks after a lone `<` are read once.
