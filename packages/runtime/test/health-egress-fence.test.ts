@@ -74,6 +74,22 @@ describe('health readings beside outside text fence every call that sends text o
     expect(outcome('s')).toMatchObject({ ok: false, error_code: 'egress_denied' });
   });
 
+  // A round's calls are written before that round's results exist, so a search beside the read is not fenced: it could not
+  // hold a reading it had not seen.
+  it('a search in the same round as the readings and the outside read runs; the next one is fenced', async () => {
+    const { outcome } = await scripted([[HEALTH, CALENDAR, call('s0', 'web_search', { query: 'board call agenda' })], [SEARCH]]);
+    expect(outcome('s0')).toMatchObject({ ok: true });
+    expect(outcome('s')).toMatchObject({ ok: false, error_code: 'egress_denied' });
+  });
+
+  it('a loop that has shown the readings marks its context, and a child started with that mark fences on its first outside read', async () => {
+    const parent = context();
+    await scripted([[HEALTH], [call('g', 'get_context', {})]], parent);
+    expect(parent.healthShown).toBe(true);
+    const { outcome } = await scripted([[CALENDAR], [SEARCH]], context({ healthShown: true }));
+    expect(outcome('s')).toMatchObject({ ok: false, error_code: 'egress_denied' });
+  });
+
   it('readings alone, or outside text alone, leave the search running', async () => {
     for (const rounds of [[[HEALTH], [SEARCH]], [[CALENDAR], [SEARCH]]]) {
       const { ran, outcome } = await scripted(rounds);

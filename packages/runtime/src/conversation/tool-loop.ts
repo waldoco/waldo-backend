@@ -256,7 +256,10 @@ export async function runToolLoop(input: Readonly<{
     return lifetime !== undefined && now - at >= lifetime;
   });
   let browsingWithheld = false;
-  // Set once a request has shown the model the owner's health readings beside outside content; it holds to the turn's end.
+  // Set once a request has shown the model the owner's health readings, and the fence once it has also read outside content;
+  // both hold to the turn's end. The loop records the first on its context, so a child it spawns starts with it: the child's
+  // task was written after the readings.
+  let healthShown = input.ctx.healthShown === true;
   let healthFenced = false;
   const healthTurns = new Map<LLMToolTurn, Promise<boolean>>();
   let exit: LoopExit = 'completed';
@@ -311,12 +314,11 @@ export async function runToolLoop(input: Readonly<{
         : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls), inward);
     }
     // This round's calls were written from the request just answered, so they are fenced when it showed both.
-    if (!healthFenced && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external') {
-      for (const turn of shown) {
-        if (!healthTurns.has(turn)) healthTurns.set(turn, ownerHealthTurn(turn, input.ctx));
-        if (await healthTurns.get(turn)) { healthFenced = true; break; }
-      }
+    for (const turn of healthShown ? [] : shown) {
+      if (!healthTurns.has(turn)) healthTurns.set(turn, ownerHealthTurn(turn, input.ctx));
+      if (await healthTurns.get(turn)) { healthShown = true; input.ctx.healthShown = true; break; }
     }
+    healthFenced ||= healthShown && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
     let firstCall = true;
     roundStarts.push(turns.length);
     // The model's calls as it made them, which its history replays, and the calls the loop runs for them.

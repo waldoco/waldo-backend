@@ -81,6 +81,8 @@ export type ToolRecord = Readonly<{
 //                 sleep need, a health value), or a request to widen Waldo's own authority. A turn that has read outside text is
 //                 refused the call.
 //  narrows        it only ends or stops something the owner set up, so outside text can at worst make Waldo do less or ask again.
+//                 Under outside text the reply lists it (conversation/inward-receipts). forget_memory is not one: what it removes
+//                 cannot be put back, so outside text could wipe what the owner told Waldo; it stays on the owner's card.
 //  owner_inward   it writes only into the owner's own space, sends, publishes and grants nothing, and the owner can undo it. It runs
 //                 without a card only in a turn the owner's own message started, so the reply lists it (conversation/inward-receipts);
 //                 with no owner in the turn it is carded.
@@ -209,7 +211,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   list_owner_findings: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   // Owner turns only: the owner's history is theirs to ask about; a machine turn reads its own job's inputs.
   search_history: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: read() },
-  forget_memory: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'memory_forgotten', tainted: { exempt: 'narrows', reason: 'it only removes what Waldo holds; the owner can tell Waldo again, and nothing it forgets is ever sent anywhere' }, replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
+  forget_memory: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'memory_forgotten', replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
   // No live handler in this tree, so the effect is unverified: give each a claim label when its handler ships.
   execute_action: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER) },
   write_task: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER) },

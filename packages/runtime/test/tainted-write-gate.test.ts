@@ -70,7 +70,6 @@ const NARROWS: readonly (readonly [ToolName, Record<string, unknown>])[] = [
   ['cancel_reminder', { id: 'reminder:r1' }],
   ['cancel_task', { job_id: 'job_0123456789ab' }],
   ['cancel_standing_order', { id: 'o1' }],
-  ['forget_memory', { topic: 'vendor', scope_note: 'the vendor' }],
 ];
 
 describe('a tainted turn sends every write to the owner card', () => {
@@ -175,15 +174,17 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   // A standing change outlives the turn; it is not privileged, so the owner's own turn makes it with no approval line.
-  it('a reminder, loop, standing order or setting from a tainted turn is the owner\'s; none is a privileged action', async () => {
-    for (const tool of ['set_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'set_proactivity', 'set_schedule_preference'] as const) {
+  // A forget cannot be undone, so outside text never forgets anything without the owner's card.
+  it('a reminder, loop, standing order, setting or forget from a tainted turn is the owner\'s; none is a privileged action', async () => {
+    for (const tool of ['set_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory'] as const) {
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, {}), tool).toBe(true);
       expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
       expect(taintGateBlocksDirectExecution(tool, 'external'), tool).toBe(false);
     }
     const scope_note = 'the plan';
     for (const args of [{ claim_ids: [1], scope_note }, { topic: 'plan', scope_note }, { topic: 'e', scope_note }, { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note }, null, undefined]) {
-      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, {})).toBe(false);
+      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, {})).toBe(true);
+      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, { ownerInitiated: true })).toBe(true);
     }
   });
 
@@ -206,7 +207,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
       'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
-      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'log_meal', 'log_workout', 'open_loop',
+      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
       'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
@@ -217,7 +218,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     const ownerTurn: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
     expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
-    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'create_artifact', 'revise_artifact']));
+    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'create_artifact', 'revise_artifact', 'forget_memory']));
   });
 });
 

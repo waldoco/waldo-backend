@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, type LLMToolCall, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
-import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
+import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER, withInwardReceipts } from '../src/conversation/inward-receipts';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -28,7 +28,7 @@ const fakes = () => {
     runs,
     handlers: [
       handler('search_communication', { messages: [{ id: 'm1', from: 'stranger@example.net', body: INJECTED }] }),
-      handler('set_reminder'), handler('cancel_reminder'), handler('send_email'), handler('web_search', { results: [] }),
+      handler('set_reminder'), handler('cancel_reminder'), handler('send_email'), handler('web_search', { results: [] }), handler('forget_memory'),
     ],
   };
 };
@@ -63,6 +63,37 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     expect(runs.map(([tool]) => tool)).toContain('cancel_reminder');
   });
 
+  // "Cancel all my reminders" in an email: a narrowing write runs, but never out of the owner's sight.
+  it('an injected cancel runs and is listed too, even in a turn with no owner message that would have stayed silent', async () => {
+    for (const [ctx, answer, expected] of [
+      [context({ ownerInitiated: true }), 'Done.', `Done.\n\n${INWARD_RECEIPTS_HEADER}\n- Cancelled all your reminders`],
+      [context(), 'SKIP', `${INWARD_RECEIPTS_HEADER}\n- Cancelled all your reminders`],
+    ] as const) {
+      const { runs, handlers } = fakes();
+      let round = 0;
+      const script = [[call('c1', 'search_communication', { query: 'x' })], [call('c2', 'cancel_reminder', { all: true })]];
+      const reply = await runToolLoop({ handlers, ctx, maxSteps: 10, step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: answer }) });
+      expect(runs.map(([tool]) => tool)).toEqual(['search_communication', 'cancel_reminder']);
+      expect(reply).toBe(expected);
+    }
+  });
+
+  it('an injected forget stays on the owner\'s card, owner in the turn or not', async () => {
+    for (const ctx of [context({ ownerInitiated: true }), context()]) {
+      const { runs, handlers } = fakes();
+      const events: Array<{ name: string; error_code?: string }> = [];
+      let round = 0;
+      const script = [[call('c1', 'search_communication', { query: 'x' })], [call('c2', 'forget_memory', { claim_ids: [12], scope_note: 'the plan' })]];
+      await runToolLoop({ handlers, ctx, maxSteps: 10, onTool: (event) => events.push({ name: event.call.name, ...(event.error_code ? { error_code: event.error_code } : {}) }),
+        step: async () => (round < script.length ? { text: '', tool_calls: script[round++]! } : { text: 'Done.' }) });
+      expect(runs.map(([tool]) => tool)).toEqual(['search_communication']);
+    }
+  });
+
+  it('a silent reply with nothing changed stays silent', () => {
+    expect(withInwardReceipts('SKIP', [])).toBe('SKIP');
+  });
+
   it('with no owner message in the turn the same reminder is carded, and the reply lists nothing', async () => {
     const { runs, handlers } = fakes();
     const reply = await runToolLoop({ handlers, ctx: context(), maxSteps: 10, step: obedient() });
@@ -80,9 +111,9 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     expect(reply).toBe('Set.');
   });
 
-  // The receipt lines and the exemption name one set: an inward exemption without a receipt line fails here.
-  it('every owner-inward record has a receipt line, and nothing else does', () => {
-    const inward = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted !== undefined && 'exempt' in record.tainted && record.tainted.exempt === 'owner_inward').map(([tool]) => tool).sort();
-    expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual(inward);
+  // The receipt lines and the exemptions name one set: an inward or narrowing exemption without a receipt line fails here.
+  it('every owner-inward and narrowing record has a receipt line, and nothing else does', () => {
+    const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted !== undefined && 'exempt' in record.tainted && (record.tainted.exempt === 'owner_inward' || record.tainted.exempt === 'narrows')).map(([tool]) => tool).sort();
+    expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual(listed);
   });
 });
