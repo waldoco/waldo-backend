@@ -379,10 +379,10 @@ describe('the planning Brief offers the plan card only with CALENDAR_PLAN on', (
   const brief = DAY_CARDS.find(card => card.id === 'card:brief')!;
   const context = { calendar: 'No events.', ledger: '', today: '', updates: '' };
   it('adds the plan card rule to the planning Brief, and off leaves every prompt as it was', () => {
-    expect(dayCardPrompt(brief, '2026-11-05T07:00', context, true, false, false, true, true)).toContain(PLAN_CARD_RULE);
-    expect(dayCardPrompt(brief, '2026-11-05T07:00', context, false, false, false, true, true)).not.toContain(PLAN_CARD_RULE);
+    expect(dayCardPrompt(brief, '2026-11-05T07:00', context, true, false, false, false, true, true)).toContain(PLAN_CARD_RULE);
+    expect(dayCardPrompt(brief, '2026-11-05T07:00', context, false, false, false, false, true, true)).not.toContain(PLAN_CARD_RULE);
     for (const card of DAY_CARDS) for (const planning of [false, true]) for (const layout of [false, true]) {
-      expect(dayCardPrompt(card, '2026-11-05T07:00', context, planning, true, false, layout, false)).toBe(dayCardPrompt(card, '2026-11-05T07:00', context, planning, true, false, layout));
+      expect(dayCardPrompt(card, '2026-11-05T07:00', context, planning, true, false, false, layout, false)).toBe(dayCardPrompt(card, '2026-11-05T07:00', context, planning, true, false, false, layout));
     }
   });
 });

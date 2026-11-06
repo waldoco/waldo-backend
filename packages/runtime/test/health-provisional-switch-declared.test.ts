@@ -135,3 +135,10 @@ describe('CAPACITY_PLAN in the Worker config', () => {
     expect(parsed.env.staging.vars.CAPACITY_PLAN).toBe('1');
   });
 });
+
+describe('TOMORROW_TODAY in the Worker config', () => {
+  it('is on for staging and off for production', () => {
+    expect(parsed.vars.TOMORROW_TODAY).toBe('0');
+    expect(parsed.env.staging.vars.TOMORROW_TODAY).toBe('1');
+  });
+});
