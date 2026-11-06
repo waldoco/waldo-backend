@@ -146,6 +146,8 @@ export const toolNameSchema = z.enum([
   'get_weather',
   // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
   'propose_calendar_plan',
+  // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
+  'show_chart',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -300,6 +302,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_email',
     'send_agent_mail',
     'offer_replies',
+    'show_chart',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',

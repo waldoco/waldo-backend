@@ -142,6 +142,7 @@ describe('toolName', () => {
       'get_device_context',
       'get_weather',
       'propose_calendar_plan',
+      'show_chart',
     ]);
   });
 
@@ -315,6 +316,7 @@ describe('TOOL_PERMISSIONS', () => {
         'send_email',
         'send_agent_mail',
         'offer_replies',
+        'show_chart',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
