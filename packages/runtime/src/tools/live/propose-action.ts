@@ -8,6 +8,7 @@ import type { RunEffectScope } from '../../channels/run-effect-scope';
 import { callWhy, proposalStatus, type ProposeOptions, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
 import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
+import { TOOL_RECORDS } from '../records';
 
 export type TaintedActionDesk = Readonly<{
   proposeTaintedAction(proposal: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
@@ -55,8 +56,12 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
     if (taintedCallRefused(tool.data, 'external')) return { ok: false, error: `${tool.data} is never put on a card. ${TAINT_REFUSED_CAUSE}`, code: 'rejected' };
-    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted.
-    if (!(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted. A
+    // call that only narrows runs directly where the turn holds its tool; a turn that does not (a job on outside text) may
+    // still put it on the owner's card.
+    const record = TOOL_RECORDS[tool.data].tainted;
+    const narrows = record !== undefined && 'exempt' in record && record.exempt === 'narrows';
+    if (!narrows && !(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {

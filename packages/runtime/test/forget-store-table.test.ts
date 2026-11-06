@@ -17,6 +17,7 @@ const TEXT_JSON = 'text-bearing JSON or free text; no purge wired, contents not 
 const TABLES: Record<string, Row> = {
   // Memory and derived stores
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
+  reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
   memory_backups: purged('forget-coverage.test.ts'), spots: purged('forget-coverage.test.ts'), core_file_revisions: purged('forget-coverage.test.ts'),
   constellation_nodes: purged('forget-coverage.test.ts'), 
