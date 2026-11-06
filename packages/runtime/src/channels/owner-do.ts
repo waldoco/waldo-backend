@@ -4776,7 +4776,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const attachTools = attachmentRoute ? [attachFileHandler({ open: openWorkspace, book: turnAttachments })] : [];
     // A chart is the app reply's chart_series part, so the app is the one surface that offers it.
     const turnCharts = turnChartBook();
-    const chartTools = channel === 'app' ? [showChartHandler(turnCharts)] : [];
+    const chartTools = SURFACE_CAPABILITIES_V1[channel].charts === 'native' ? [showChartHandler(turnCharts)] : [];
     // The planning Brief's answers to tap, offered only on a surface that draws them as chips on the row (today the app).
     const planningBrief = this.env.PLANNING_BRIEF === '1';
     // PROACTIVE_ACT_AHEAD: the approved day shape, and update triage that builds on the worker's prepared move.
