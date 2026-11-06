@@ -9,7 +9,7 @@ import { episodeIndex } from '../src/channels/episodes';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
-import { jobBook } from '../src/tasks/jobs';
+import { jobBook, MACHINE_ORIGIN } from '../src/tasks/jobs';
 
 const OWNER_ID = '5b3c4d5e-6f70-4a8b-9cad-1e2f3a4b5c6e';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -102,6 +102,24 @@ describe('look-up erasure through the owner object', () => {
     expect((await call('/app/v1/consents/withdraw', { request_id: 'withdraw-task-0001', purpose: 'owner_lookup' })).status).toBe(200);
     expect(task.book.get(task.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
     for (const text of [FOUND.text, FOUND.evidence_quote, PUNE.evidence_quote]) expect(task.columns()).not.toContain(text);
+  }));
+  // The look-up's worker is still reading when the owner takes the yes back: the job is stopped and fenced, what it found is
+  // erased, and the withdrawal answers 200, where a running task used to count as an unseen copy and block the cleanup.
+  it('withdrawing the yes while the look-up is running stops it, erases its finding and answers 200', () => owner('onboarding-erase-withdraw-running', async ({ state, call }) => {
+    const { findings } = seed(state);
+    const sql = state.storage.sql, book = jobBook(sql, { now: Date.now, newId: () => 'f1d1f1d10002', newToken: () => 'token' });
+    const brief = { title: 'Look-up', goal: 'Find public pages about the owner.', context: 'Asha Menon', done_when: 'Done.', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'lookup-running', origin: `${MACHINE_ORIGIN}owner_lookup`, surface: 'app', brief, dueAt: Date.now(), deadlineAt: Date.now() + 7_200_000, taint: 'external' });
+    const ticket = book.startAttempt(job.id)!;
+    expect(book.get(job.id)?.status).toBe('running');
+    const response = await call('/app/v1/consents/withdraw', { request_id: 'withdraw-running-0001', purpose: 'owner_lookup' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ consent: { status: 'withdrawn' }, findings_erased: 2 });
+    expect(book.get(job.id)).toMatchObject({ status: 'cancelled', lease_token: null });
+    expect(book.report(ticket, { outcome: 'done', summary: 'late' } as never, { rounds: 1, costUsd: 0 })).toBe('fenced');
+    expect(findings.record(PUNE, 'About', Date.now())).toBe('consent_required');
+    expect(findings.foundSince(0)).toBe(0);
+    expect(sql.exec("SELECT COUNT(*) AS n FROM task_jobs WHERE status IN ('queued','running')").toArray()[0]?.n).toBe(0);
   }));
   it('forgetting one finding cancels a task that carries it and leaves no copy in the job book', () => owner('onboarding-erase-one-task', async ({ state, call }) => {
     const { first } = seed(state);

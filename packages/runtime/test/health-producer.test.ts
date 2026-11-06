@@ -117,6 +117,13 @@ describe('produceHealthScores', () => {
     expect(weight.activation).toBe('candidate_unaccepted');
   });
 
+  it('scores Weight on a day read without a calendar it had to leave out (partial)', async () => {
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: true }));
+    const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    await run(h);
+    expect(typeof (h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).score).toBe('number');
+  });
+
   it('leaves Weight unavailable, and still writes Recovery and Form, when the calendar cannot be read', async () => {
     const cases: [string, ProducerDeps['readDemand'], string[]][] = [
       ['failed', async () => { throw new Error('do down'); }, ['demand_failed']],
