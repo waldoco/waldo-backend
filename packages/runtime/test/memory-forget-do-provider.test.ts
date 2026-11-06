@@ -839,10 +839,18 @@ positiveStore('goals', 'POSGOAL769', (sql, text) => {
   sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
   sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'pos-769-goal', 'u', text, 't', 't');
 }, sql => JSON.stringify(sql.exec('SELECT id, description FROM goals').toArray()));
-// A quest's text is held to 500 characters; a topic shorter than the marker that replaces it grows the text, and the forget still lands.
+// A quest's text is held to 500 characters; a topic shorter than the marker that replaces it grows the text, and the forget
+// still lands. The plan ends in emoji placed so a cut by UTF-16 unit would split one, so the cut is shown to be by character.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 positiveStore('goals', 'POSQ7', (sql, text) => {
-  questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1').set({ title: 'Training block', plan: `${text} POSQ7 ${'x'.repeat(500 - text.length - 7)}` }, 'u');
-}, sql => JSON.stringify(sql.exec('SELECT plan FROM goals').toArray()), 'a quest plan at its length bound');
+  const head = `${text} POSQ7 `, grown = head.replaceAll('POSQ7', FORGOTTEN).length, fill = 499 - grown;
+  questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1').set({ title: 'Training block', plan: `${head}${'x'.repeat(fill)}${'🏃'.repeat(500 - head.length - fill)}` }, 'u');
+}, sql => {
+  const { plan } = sql.exec<{ plan: string }>('SELECT plan FROM goals').one();
+  // SQLite stores half a character as U+FFFD, so a split shows as that or as a lone surrogate.
+  if (LONE_SURROGATE.test(plan) || plan.includes('\uFFFD') || Array.from(plan).length > 500) throw new Error('the forget cut a character in half or overran the bound');
+  return plan;
+}, 'a quest plan at its length bound');
 // An experiment's change is held to 300 characters, and the forget still lands at that bound too.
 positiveStore('experiments', 'POSX7', (sql, text) => {
   const book = questBook(sql, { timezone: 'UTC', now: () => new Date() }, () => 'q1');

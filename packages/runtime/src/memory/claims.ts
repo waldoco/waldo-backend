@@ -932,10 +932,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
                   if (normal === row.value && redacted !== normal) next = redacted;
                 } catch { continue; }
               }
-              // A marker longer than the text it replaces can grow an owner record past its bound, so the end is cut and the
-              // forget still lands.
+              // A marker longer than the text it replaces can grow an owner record past its bound (its CHECK counts characters),
+              // so the end is cut by character, never inside one, and the forget still lands.
               const max = RECORD_TEXT_MAX[table]?.[column];
-              if (max !== undefined) next = next.slice(0, max);
+              if (max !== undefined) next = Array.from(next).slice(0, max).join('');
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }
