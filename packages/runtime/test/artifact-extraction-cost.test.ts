@@ -31,6 +31,18 @@ describe('artifact extraction on hostile text', () => {
     ['one digit run glued to "is your"', '1'.repeat(N) + 'is your code'],
     ['"code" glued to itself', 'code'.repeat(N / 4) + ' 1'],
     ['letters and digits in turn, then "is your"', 'a1'.repeat(N / 2) + ' is your code'],
+    ['a code-naming line, then short digit lines', ('code\n' + '1 2\n'.repeat(3)).repeat(N / 17)],
+    ['code-naming lines only', 'code\n'.repeat(N / 5)],
+    ['digits split by spaced hyphens', 'code ' + '1 - '.repeat(N / 4)],
+    ['digits split by dots', 'code ' + '1.'.repeat(N / 2)],
+    ['digits split by dashes and middle dots in turn', 'code ' + '1\u20131\u00b7'.repeat(N / 4)],
+    ['fullwidth digits, then "is your"', '\uff11'.repeat(N) + ' is your code'],
+    ['mathematical digits', '\u{1d7cf}'.repeat(N / 2) + ' is your code'],
+    ['quotes and brackets, then "is your"', '("'.repeat(N / 2) + '1 is your code'],
+    ['"is your" followed by many words', '123456 is your ' + 'a '.repeat(N / 2)],
+    ['Hangul fillers between digits', 'code ' + '1\u3164'.repeat(N / 2)],
+    ['musical format characters between digits', 'code ' + '1\u{1d173}'.repeat(N / 3)],
+    ['links with a code parameter that never ends', 'https://a?code=1234'.repeat(N / 19)],
     ['an adjective glued to itself', 'verification'.repeat(N / 12) + 'code 1'],
   ])('stays linear: %s', (_shape, text) => {
     const started = performance.now();
