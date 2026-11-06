@@ -1,8 +1,10 @@
 import { env } from 'cloudflare:workers';
+import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
@@ -13,7 +15,7 @@ import { holdTopic } from './helpers/pending-topic';
 // forget is still cleaning.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
-const STAGING = (parseJsonc(config) as { env: { staging: { vars: { WALDO_FORGET_BARRIER?: string } } } }).env.staging.vars;
+const STAGING = (flatConfig(parseJsonc(config)) as { env: { staging: { vars: { WALDO_FORGET_BARRIER?: string } } } }).env.staging.vars;
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], calls: [] as { name: string; arguments: string }[], modes: [] as unknown[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -84,7 +86,7 @@ it('the staging Worker runs owner turns on the item rule: a held memory item is 
 });
 
 it('the production Worker keeps the earlier whole-read rule', async () => {
-  expect((env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
-  const { modes } = await readMemoryTurn('forget-barrier-production-env', (env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
+  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
+  const { modes } = await readMemoryTurn('forget-barrier-production-env', (withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
   expect(modes).toEqual(['reads']);
 });

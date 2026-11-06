@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { searchEpisodesArgsSchema, readThreadArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, buildSessionState, type ToolName } from '@waldo/contracts';
@@ -454,7 +455,7 @@ describe('through the owner turn', () => {
 type Vars = Readonly<Record<string, string>>;
 describe('APPROVE_IN_CHAT in the Worker config', () => {
   it('is off in production and on in staging', () => {
-    const parsed = parseJsonc(config) as { vars: Vars; env: { staging: { vars: Vars } } };
+    const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: { staging: { vars: Vars } } };
     expect(parsed.vars.APPROVE_IN_CHAT).toBe('0');
     expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
   });

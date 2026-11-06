@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { OWNER_MODELS, type ModelName } from '@waldo/contracts';
 import { parseJsonc } from '../../../../scripts/jsonc.mjs';
+import { flatVars } from '../../../../scripts/wrangler-vars.mjs';
 import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import { modelProviderSetting } from '../../src/llm/owner-routes';
@@ -144,8 +145,9 @@ export const unclassifiedVars = (vars: StagingVars): readonly string[] => Object
 export const staleClasses = (vars: StagingVars): readonly string[] => Object.keys(STAGING_VAR_CLASSES).filter((name) => !(name in vars)).sort();
 
 export const readStagingVars = (path: URL = new URL('../../wrangler.jsonc', import.meta.url)): StagingVars => {
-  const vars = (parseJsonc(readFileSync(path, 'utf8')) as { env?: { staging?: { vars?: Record<string, unknown> } } }).env?.staging?.vars;
-  if (!vars) throw new Error('wrangler.jsonc has no env.staging.vars');
+  const block = (parseJsonc(readFileSync(path, 'utf8')) as { env?: { staging?: { vars?: Record<string, unknown> } } }).env?.staging?.vars;
+  if (!block) throw new Error('wrangler.jsonc has no env.staging.vars');
+  const vars = flatVars(block);
   for (const [name, value] of Object.entries(vars)) if (typeof value !== 'string') throw new Error(`env.staging.vars.${name} is not a string`);
   return vars as StagingVars;
 };

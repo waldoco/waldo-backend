@@ -9,6 +9,7 @@
 //    The 2026-09-25 deploy shipped staging with ONLY ai+vectorize and healthz 404'd.
 import { readFileSync } from 'node:fs';
 import { parseJsonc } from '../jsonc.mjs';
+import { flatVars } from '../wrangler-vars.mjs';
 
 const path = process.env.WRANGLER_CONFIG_PATH ?? 'packages/runtime/wrangler.jsonc';
 const raw = readFileSync(path, 'utf8');
@@ -49,11 +50,15 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   }
   // vars mirror by KEY SET, not value: trace identity (WALDO_ENVIRONMENT) must differ per
   // environment or staging traces pollute production. Every top-level var key must exist in
-  // staging and vice versa, and both sides must pin the trace identity vars.
-  const topVars = cfg.vars ?? {};
-  const stagingVars = staging.vars ?? {};
+  // staging and vice versa, and both sides must pin the trace identity vars. The switches nested
+  // under WALDO_SWITCHES mirror the same way, each at the same level on both sides.
+  const topVars = flatVars(cfg.vars);
+  const stagingVars = flatVars(staging.vars);
   for (const k of Object.keys(topVars)) if (!(k in stagingVars)) bad.push(`env.staging missing var "${k}"`);
   for (const k of Object.keys(stagingVars)) if (!(k in topVars)) bad.push(`top level missing var "${k}" present in env.staging`);
+  const nested = (vars) => new Set(Object.keys(vars?.WALDO_SWITCHES ?? {}));
+  const topNested = nested(cfg.vars), stagingNested = nested(staging.vars);
+  for (const k of Object.keys(topVars)) if (topNested.has(k) !== stagingNested.has(k)) bad.push(`var "${k}" sits in WALDO_SWITCHES on one side only`);
   if (topVars.WALDO_ENVIRONMENT !== 'production') bad.push('top-level WALDO_ENVIRONMENT must be "production"');
   if (stagingVars.WALDO_ENVIRONMENT !== 'staging') bad.push('env.staging WALDO_ENVIRONMENT must be "staging"');
   if (!('WALDO_RELEASE' in topVars) || !('WALDO_RELEASE' in stagingVars)) bad.push('WALDO_RELEASE must exist at top level and in env.staging (deploy wrapper restamps it)');
@@ -86,13 +91,16 @@ for (const [name, node] of [['top level', cfg], ...Object.entries(cfg?.env ?? {}
   if (parsed?.protocol !== 'https:' || parsed.origin !== origin) bad.push(`${name} WALDO_PUBLIC_ORIGIN must be empty or a bare https origin`);
 }
 
-// 6. Each vars key sits on its own line. Lanes add switches in parallel; with every key on one line, each pair of
-//    PRs conflicts there, while one key per line lets git merge them.
+// 6. Each vars key sits on its own line, inside WALDO_SWITCHES too. Lanes add switches in parallel; with every key on
+//    one line, each pair of PRs conflicts there, while one key per line lets git merge them.
 const lines = raw.split('\n');
 for (let i = 0; i < lines.length; i += 1) {
   if (!/"vars"\s*:/.test(lines[i])) continue;
   if (!/"vars"\s*:\s*\{\s*$/.test(lines[i])) { bad.push(`line ${i + 1}: put each vars key on its own line`); continue; }
-  for (i += 1; i < lines.length && !/^\s*\},?\s*$/.test(lines[i]); i += 1) {
+  let depth = 1;
+  for (i += 1; i < lines.length && depth > 0; i += 1) {
+    if (/^\s*\},?\s*$/.test(lines[i])) { depth -= 1; continue; }
+    if (depth === 1 && /^\s*"WALDO_SWITCHES"\s*:\s*\{\s*$/.test(lines[i])) { depth += 1; continue; }
     if (!/^\s*(\/\/.*|"[^"]+"\s*:\s*("(?:[^"\\]|\\.)*"|true|false|-?\d+(\.\d+)?)\s*,?\s*(\/\/.*)?)?$/.test(lines[i])) {
       bad.push(`line ${i + 1}: put each vars key on its own line`);
     }

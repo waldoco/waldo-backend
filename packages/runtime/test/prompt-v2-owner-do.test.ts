@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMRequest } from '@waldo/contracts';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
@@ -26,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '3f8a1c52-7d4e-4b19-a6c0-9e2d5b7f1a84';
-const PARSED = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+const PARSED = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
 const V2_SECTION = '\nBeing ahead of them\n';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; });
