@@ -4,7 +4,7 @@ import { HEALTH_FENCED_TOOLS } from '../src/conversation/health-fence';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
-import { EGRESS_READ_TOOLS } from '../src/tasks/profiles';
+import { EGRESS_READ_TOOLS } from '../src/tools/records';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 // Once the model has been shown the owner's health readings beside outside content, a call it makes could carry a reading

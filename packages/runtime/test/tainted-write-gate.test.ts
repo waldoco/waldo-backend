@@ -46,7 +46,6 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
     ['extract_archive', { file_id: 'abcdefab-cdef-4abc-8abc-000000000001', revision: 1 }],
   ],
   artifacts: [
-    ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
     ['revise_artifact', { artifact_id: 'a1', expected_revision: 1, body_markdown: 'Pay the new account.' }],
     ['export_artifact', { artifact_id: 'a1', expected_revision: 1, format: 'pdf' }],
   ],
@@ -57,13 +56,14 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   ],
 };
 
-// The owner's own inward writes that the owner can undo: they send, publish and grant nothing. In a turn the owner's message
+// The owner's own inward writes that the owner can undo or that only add: they send, publish and grant nothing. In a turn the owner's message
 // started they run under outside text, with a receipt in the reply; with no owner in the turn they are carded.
 const INWARD: readonly (readonly [ToolName, Record<string, unknown>])[] = [
   ['set_reminder', { note: 'Wire the deposit to the new account', at: '2026-11-07T15:00', repeat: 'none' }],
   ['update_todo', { item_id: 'i1', status: 'done' }],
   ['track_responsibility', { title: 'Pay the vendor', intent: 'Pay the vendor before Friday' }],
   ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
+  ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
 ];
 // What only ends or stops something: outside text can at worst make Waldo drop a reminder or a job the owner can set again.
 const NARROWS: readonly (readonly [ToolName, Record<string, unknown>])[] = [
@@ -217,8 +217,8 @@ describe('a tainted turn sends every write to the owner card', () => {
     // background tasks, MCP writes and the writes with no undo stay on the owner's card.
     const ownerTurn: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
-    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
-    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'create_artifact', 'revise_artifact', 'forget_memory']));
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'revise_artifact', 'forget_memory']));
   });
 });
 

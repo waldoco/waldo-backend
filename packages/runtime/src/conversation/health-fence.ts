@@ -1,5 +1,5 @@
 import { EXTERNAL_ORIGIN_TOOLS, sanitiseInputSchema, sanitiseResultSchema, toolError, type LLMToolCall, type LLMToolTurn, type ToolError, type ToolName } from '@waldo/contracts';
-import { EGRESS_READ_TOOLS } from '../tasks/profiles';
+import { EGRESS_READ_TOOLS } from '../tools/records';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { toolOfCall } from '../tools/loader';
 

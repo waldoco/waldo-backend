@@ -83,7 +83,8 @@ export type ToolRecord = Readonly<{
 //  narrows        it only ends or stops something the owner set up, so outside text can at worst make Waldo do less or ask again.
 //                 Under outside text the reply lists it (conversation/inward-receipts). forget_memory is not one: what it removes
 //                 cannot be put back, so outside text could wipe what the owner told Waldo; it stays on the owner's card.
-//  owner_inward   it writes only into the owner's own space, sends, publishes and grants nothing, and the owner can undo it. It runs
+//  owner_inward   it writes only into the owner's own space, sends, publishes and grants nothing, and the owner can undo it or it
+//                 only adds (a new artifact: an unwanted one is clutter, not harm). It runs
 //                 without a card only in a turn the owner's own message started, so the reply lists it (conversation/inward-receipts);
 //                 with no owner in the turn it is carded.
 // unless_owner_stated: the refusal lifts for a figure the owner typed in their own words in the message that started this turn.
@@ -165,7 +166,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   propose_calendar_plan: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: 'calendar_plan_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact blocks on their own card' }, replay: unknown('proposal desk dedupe not inspected') },
   propose_google_task_change: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'google_task_change_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('exact provider proposal and shared approval receipt required') },
   draft_email: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: 'email_drafted', tainted: { exempt: 'draft', reason: 'a Gmail draft sends nothing; the owner reviews and sends it themselves' }, replay: { replay: 'non_replayable_uncertain', basis: 'proxy intent id from user+turn+toolCall: a replay returns the stored result or intent_pending; an uncertain dispatch stays pending and there is no remote draft lookup', evidence: { file: 'connectors/proxy-intent.ts', needle: 'intent_pending' } } },
-  create_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'artifact_created', replay: unknown(NOT_INSPECTED) },
+  create_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'artifact_created', tainted: { exempt: 'owner_inward', reason: 'it only adds a new artifact to the owner\'s own list, which the owner sees in the reply; nothing leaves until an export, which stays carded' }, replay: unknown(NOT_INSPECTED) },
   revise_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'artifact_revised', replay: unknown(NOT_INSPECTED) },
   export_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'artifact_exported', replay: unknown(NOT_INSPECTED) },
   browse_act: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: true, ownerTurnOnly: false, long: true, claim: 'browser_acted', tainted: { exempt: 'commits_on_card', reason: 'its steps change only the page in Waldo\'s own browser; anything that would send or submit waits on the owner\'s browser card' }, replay: unknown('real browser actions on a public page; page effects cannot be reconciled') },
@@ -275,3 +276,9 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.
 export const toolActivity = (name: string): AppChatActivityKind => (TOOL_ACTIVITY as Partial<Record<string, AppChatActivityKind>>)[name] ?? 'working';
+
+// The reads whose arguments leave the account: a search query, a page URL, an MCP call. Nothing cards a read, so a turn that
+// starts on text nobody asked Waldo to read, with no owner in the loop, could be steered into carrying private data out in
+// them. A machine job's worker and every unattended outside-text turn (channels/check-back) go without; the owner's own turns
+// and the tasks the owner starts keep them.
+export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'browse_page', 'read_mcp_tool'];

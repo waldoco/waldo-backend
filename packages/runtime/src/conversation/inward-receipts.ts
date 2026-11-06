@@ -1,5 +1,5 @@
 import type { ToolName } from '@waldo/contracts';
-import { SKIP_UPDATE } from '../prompt/update-cards';
+import { SKIP_UPDATE } from '../prompt/skip-update';
 
 // A write the taint gate lets run without a card after outside text (tools/records owner_inward and narrows) is listed under
 // the reply in these fixed words, whatever the model wrote: the owner sees what outside content led Waldo to change and can
@@ -18,6 +18,7 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Args
   update_todo: (args) => `Marked step ${text(args, 'item_id')} as ${text(args, 'status')}`,
   track_responsibility: (args) => `Now tracking "${text(args, 'title')}"`,
   workspace_write: (args) => `Wrote ${text(args, 'path')} in your workspace`,
+  create_artifact: (args) => `Created "${text(args, 'name')}" in your artifacts`,
   cancel_reminder: (args) => args.all === true ? 'Cancelled all your reminders' : `Cancelled reminder ${text(args, 'id')}`,
   cancel_task: (args) => `Stopped background task ${text(args, 'job_id')}`,
   cancel_standing_order: (args) => `Ended standing order ${text(args, 'id')}`,
