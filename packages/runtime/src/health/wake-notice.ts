@@ -20,3 +20,14 @@ export const sleepJustEnded = (samples: readonly unknown[], now: number, freshMs
   const end = asleep.length > 0 ? Math.max(...asleep.map((interval) => Date.parse(interval.end_at))) : Date.parse(sample.data.end_at);
   return end >= now - freshMs && end <= now + CLOCK_SKEW_MS;
 });
+
+// WORKOUT_WAKE: how recently a workout must have ended for an upload to count as "the owner just finished one". The phone
+// can deliver hours late (ADR-0010), and a workout that ended longer ago has already shaped the day it was in.
+export const WORKOUT_FRESH_MS = 180 * 60_000;
+// Whether these samples carry a workout that ended just now. Only the yes leaves; its time, type and detail never do.
+export const workoutJustEnded = (samples: readonly unknown[], now: number): boolean => samples.some((value) => {
+  const sample = healthSampleV1Schema.safeParse(value);
+  if (!sample.success || sample.data.signal !== 'workout') return false;
+  const end = Date.parse(sample.data.end_at);
+  return end >= now - WORKOUT_FRESH_MS && end <= now + CLOCK_SKEW_MS;
+});

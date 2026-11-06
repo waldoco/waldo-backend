@@ -308,6 +308,7 @@ const WAKE_WORDS: Readonly<Record<Exclude<HealthWakeReason, 'zone_change'>, stri
   driver_appeared: 'A signal is outside the owner\'s usual range that was not at the last reading.',
   driver_far: 'A signal that was already outside the owner\'s usual range has moved far outside it.',
   load_jump: 'Load moved by more than a steady amount since the last reading, inside the same zone.',
+  workout_ended: 'The owner just finished a workout.',
 };
 
 // The owner's health state as both prompts give it: zones now and before, what else changed, and the signals outside usual
@@ -363,6 +364,7 @@ export const healthTriggerPrompt = (input: Readonly<{
     "The owner's own goals are in their profile in memory (a race, a training block, a sleep or energy aim): weigh this change against them, since a change that serves a goal they stated can be worth raising. Never invent a goal they have not stated.",
     ...protocolLines(input.protocols),
     'Decide whether this change meets a coming decision where waiting would make the day worse: a hard meeting, a long drive, a deadline. If one change to the plan would clearly help, propose exactly one: move or cancel one listed event by its ref, or create one block of protected time, as rest (a break, recovery or a lighter stretch) or deep_work (focused work). Otherwise return no_op. A proposal the owner skips costs their trust, so when it is not clearly worth an interruption, return no_op.',
+    ...((input.reasons ?? []).includes('workout_ended') ? ['Look at the rest of today and this evening with recovery in mind. Propose a change only when one clearly helps; a finished workout on its own needs none.'] : []),
     ...(input.easeWorkout ? ["A training session or workout on the calendar is a coming decision too. When today calls for less, you may swap a hard session for an easier one in the same slot (hard intervals for an easy run, a heavy lift for a walk or mobility): action move with the event's own start and end, and rename_to the easier session's name. You may also move it to a better time. Whether an event is a workout, and how hard it is, is your call from its title and the owner's goals."] : []),
     'Never diagnose or alarm, and never mention medicine. The reason is one short line for the owner, at most 200 characters, and may use the zone words. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it (for example "Focus block" or "Buffer"). Times are owner-local ISO (YYYY-MM-DDTHH:MM). notify_guests says whether Google should email the guests of a moved or cancelled event.',
     `Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), block (rest or deep_work for a create, else null), notify_guests (true or false when the event has guests, else null), ${input.easeWorkout ? 'rename_to (move only: the new name, which goes to Google like a title; else null), ' : ''}reason (empty for no_op).`,

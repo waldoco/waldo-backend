@@ -711,3 +711,27 @@ describe('app health scores: revision 4', () => {
     expect('sleep_debt' in await json({ ...plain, sleep_debt: debt }, contracts('health=1'))).toBe(false);
   });
 });
+
+describe('a finished workout in an upload (WORKOUT_WAKE)', () => {
+  // The owner's object answers the notice; what it was told is kept, and nothing else.
+  const told: unknown[] = [];
+  const workoutEnv = (on: boolean) => ({ ...(env() as object), ...(on ? { WORKOUT_WAKE: '1' } : {}),
+    OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { if (new URL(request.url).pathname.endsWith('/health-samples')) told.push(await request.json()); return Response.json({ ok: true }); } }) } }) as never;
+  const upload = async (endedMinutesAgo: number, on: boolean) => {
+    told.length = 0;
+    const end = Date.now() - endedMinutesAgo * 60_000, start = end - 45 * 60_000;
+    const run = { sample_id: 'HK:run-1', revision: 0, signal: 'workout', unit: 'minutes', activity: 'running', value: 45, start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString(), day: new Date(end).toISOString().slice(0, 10), utc_offset_minutes: 0 };
+    rpcResult = { ...receipt, accepted: 1 };
+    const deferred: Promise<unknown>[] = [];
+    const response = await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ ...batch, samples: [run] }) }), workoutEnv(on), auth, work => { deferred.push(work); });
+    await Promise.all(deferred);
+    return { status: response?.status, told: [...told] };
+  };
+  it('tells the owner\'s object a workout just ended, with that word alone', async () => {
+    expect(await upload(10, true)).toEqual({ status: 200, told: [{ workout: true }] });
+  });
+  it('says nothing of an old workout, or with the switch off', async () => {
+    expect(await upload(240, true)).toEqual({ status: 200, told: [{}] });
+    expect(await upload(10, false)).toEqual({ status: 200, told: [{}] });
+  });
+});

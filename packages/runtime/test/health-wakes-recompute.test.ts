@@ -32,7 +32,7 @@ const debtRow = (day: string, minutes: number) => ({ scores: { day, sleep_debt: 
 const NEW_DRIVER = ['wrist temperature above usual'];
 
 type Harness = Readonly<{ recompute: ReturnType<typeof healthRecompute>; woken: [string, readonly HealthWakeReason[]][]; contextReads: () => number; scoreReads: string[]; zone: { name: string }; clock: { at: number } }>;
-const harness = (over: { enabled?: boolean } = {}): Harness => {
+const harness = (over: { enabled?: boolean; noted?: readonly HealthWakeReason[] } = {}): Harness => {
   const woken: [string, readonly HealthWakeReason[]][] = [], scoreReads: string[] = [], zone = { name: 'Asia/Kolkata' }, clock = { at: Date.parse('2026-10-21T08:00:00Z') };
   let reads = 0;
   const deps: HealthRecomputeDeps = {
@@ -46,6 +46,7 @@ const harness = (over: { enabled?: boolean } = {}): Harness => {
       enabled: () => over.enabled ?? true,
       readContext: async () => { reads += 1; world.order.push(`read:${world.stage}`); if (world.contextFails) throw new Error('read failed'); return world.context[world.stage]; },
       woken: async (day, reasons) => { world.order.push('woken'); woken.push([day, reasons]); },
+      ...(over.noted ? { noted: (day: string) => (day === '2026-10-21' ? over.noted! : []) } : {}),
     },
   };
   return { recompute: healthRecompute(deps), woken, contextReads: () => reads, scoreReads, zone, clock };
@@ -74,6 +75,23 @@ describe('the wake check after a recompute', () => {
     await recompute.run();
     expect(woken).toEqual([['2026-10-21', ['sleep_debt_building']]]);
     expect(scoreReads).toEqual(['2026-10-21', '2026-10-20', '2026-10-19', '2026-10-18']);
+  });
+
+  it('hands a reason the upload named to the trigger with the run\'s own, even when the run wrote no row, once today\'s row is there', async () => {
+    world.context = { before: row('2026-10-21'), after: row('2026-10-21', NEW_DRIVER) };
+    const named = harness({ noted: ['workout_ended'] });
+    await named.recompute.run();
+    expect(named.woken).toEqual([['2026-10-21', ['driver_appeared', 'workout_ended']]]);
+    world.outcome = 'stale'; world.order = [];
+    world.context = { before: row('2026-10-21'), after: row('2026-10-21') };
+    const unchanged = harness({ noted: ['workout_ended'] });
+    await unchanged.recompute.run();
+    expect(unchanged.woken).toEqual([['2026-10-21', ['workout_ended']]]);
+    world.context = { before: row('2026-10-20'), after: row('2026-10-20') };
+    const noToday = harness({ noted: ['workout_ended'] });
+    await noToday.recompute.run();
+    expect(noToday.woken).toEqual([]);
+    expect((await (async () => { const off = harness(); await off.recompute.run(); return off.woken; })())).toEqual([]);
   });
 
   it('does not wake when nothing changed', async () => {

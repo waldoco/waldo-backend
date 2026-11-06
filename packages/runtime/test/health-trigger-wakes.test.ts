@@ -35,6 +35,7 @@ const SENTENCES: Readonly<Record<Exclude<HealthWakeReason, 'zone_change'>, strin
   driver_appeared: 'A signal is outside the owner\'s usual range that was not at the last reading.',
   driver_far: 'A signal that was already outside the owner\'s usual range has moved far outside it.',
   load_jump: 'Load moved by more than a steady amount since the last reading, inside the same zone.',
+  workout_ended: 'The owner just finished a workout.',
 };
 
 let sequence = 0;
