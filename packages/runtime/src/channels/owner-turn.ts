@@ -438,8 +438,8 @@ export const createOwnerResponder = (
     const recalled = privateOwner?.memorySelection ? await recallWithin({ ...args, stubs }, privateOwner.semanticRecall ? SEMANTIC_DEADLINE_MS : LEXICAL_DEADLINE_MS) : await recallForTurn(args);
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     for (const claim of recalled.used ?? []) usedClaims.add(claim);
-    if (recalled.text && privateOwner?.memoryUsed && ownerTurnActive) return `${recalled.text}\n${SAY_WHICH_MEMORY}`;
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
+    if (recalled.text && privateOwner?.memoryUsed && ownerTurnActive) return `${recalled.text}\n${SAY_WHICH_MEMORY}`;
     return recalled.text;
   };
   const consumeRound = async () => {
@@ -800,7 +800,8 @@ export const createOwnerResponder = (
   const usedClaims = new Set<number>();
   const SAY_WHICH_MEMORY = '(If the owner asks which memory shaped a reply, on any surface, name the notes above you relied on, or say none did.)';
   const readClaimIds = (output: string): number[] => {
-    try { const read = JSON.parse(output) as { claims?: { id?: unknown }[] }; return (read.claims ?? []).flatMap(claim => Number.isSafeInteger(claim.id) ? [claim.id as number] : []); } catch { return []; }
+    // The tool answers { ok, data: { claims } }, and the tool loop can append a note after the JSON.
+    try { const read = (JSON.parse(output.slice(0, output.lastIndexOf('}') + 1)) as { data?: { claims?: { id?: unknown }[] } }).data; return (read?.claims ?? []).flatMap(claim => Number.isSafeInteger(claim.id) ? [claim.id as number] : []); } catch { return []; }
   };
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
