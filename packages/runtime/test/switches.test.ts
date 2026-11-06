@@ -15,12 +15,13 @@ describe('withSwitches', () => {
     expect([declared.WHATSAPP_QUIET_MS, read.WHATSAPP_QUIET_MS]).toEqual(['3000', '0']);
   });
 
-  it('lets a name set on env win, keeps the flattened env stable, and leaves an env without switches as it is', () => {
-    const raw = { WALDO_SWITCHES: { DEVICE_PLACE: '1', WALDO_OWNER_FIRST: '0' }, WALDO_OWNER_FIRST: '1', OTHER: 'x' };
-    const flat = withSwitches(raw) as typeof raw & Record<string, string>;
+  it('lets a name set on env win, reads a changed env afresh, and leaves an env without switches as it is', () => {
+    const raw: Record<string, unknown> = { WALDO_SWITCHES: { DEVICE_PLACE: '1', WALDO_OWNER_FIRST: '0' }, WALDO_OWNER_FIRST: '1', OTHER: 'x' };
+    const flat = withSwitches(raw) as Record<string, unknown>;
     expect([flat.DEVICE_PLACE, flat.WALDO_OWNER_FIRST, flat.OTHER]).toEqual(['1', '1', 'x']);
-    expect(withSwitches(raw)).toBe(flat);
-    expect(withSwitches(flat)).toBe(flat);
+    expect(withSwitches(flat)).toEqual(flat);
+    raw.DEVICE_PLACE = '0';
+    expect((withSwitches(raw) as Record<string, unknown>).DEVICE_PLACE).toBe('0');
     const preview = { WALDO_ENVIRONMENT: 'preview' };
     expect(withSwitches(preview)).toBe(preview);
     expect(withSwitches({ WALDO_SWITCHES: '{"DEVICE_PLACE":"1"}' }) as Record<string, unknown>).toMatchObject({ DEVICE_PLACE: '1' });

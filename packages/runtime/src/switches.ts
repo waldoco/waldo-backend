@@ -4,10 +4,9 @@
 // env.<NAME> as it did when every switch was its own var. A name set on env itself wins, so a test's override or a deploy's
 // --var still applies. guard-switches-binding.mjs checks that every seam does this.
 //
-// A WALDO_SWITCHES that is not a JSON object of strings throws at the seam: every request and object fails loudly rather
-// than running with every switch read as off. One that is absent (the PR preview) leaves env as it is.
-const flattened = new WeakMap<object, object>();
-const seen = new WeakSet<object>();
+// Each call builds a fresh flattened copy (a deployed env never changes; a changed config arrives as a new Worker version
+// and new objects). A WALDO_SWITCHES that is not a JSON object of strings throws at the seam: every request and object fails
+// loudly rather than running with every switch read as off. One that is absent (the PR preview) leaves env as it is.
 
 const switchesOf = (raw: unknown): Record<string, string> | undefined => {
   if (raw === undefined) return undefined;
@@ -22,12 +21,6 @@ const switchesOf = (raw: unknown): Record<string, string> | undefined => {
 };
 
 export const withSwitches = <E extends object>(env: E): E => {
-  if (seen.has(env)) return env;
-  const cached = flattened.get(env);
-  if (cached) return cached as E;
   const switches = switchesOf((env as { WALDO_SWITCHES?: unknown }).WALDO_SWITCHES);
-  const flat = (switches ? { ...switches, ...env } : env) as E;
-  flattened.set(env, flat);
-  seen.add(flat);
-  return flat;
+  return (switches ? { ...switches, ...env } : env) as E;
 };
