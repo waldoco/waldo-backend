@@ -6,7 +6,7 @@ import type { AppChatActivityKind } from '../../../contracts/src/app/core';
 // line per namespace instead of every schema. OpenAI's tool search guide asks for namespaces with clear, high-level
 // descriptions and fewer than 10 functions each; Anthropic's asks to keep the most used tools non-deferred.
 export const BRAIN_NAMESPACES = {
-  calendar: 'Calendar changes and Google Tasks: propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
+  calendar: 'Calendar changes and Google Tasks: propose_calendar_change to add, move or cancel an event, query_phone_calendar for the calendars on the owner\'s phone that no connected account shows, and reading or changing Google Tasks.',
   mail: "Mail beyond search: read a whole message, approve_shown, where it is offered, when the owner tells you to go ahead with any card they were shown in this conversation (a send, or a calendar or task change), send_agent_mail to propose one Waldo sends as itself from the owner's Waldo address, draft_email for a Gmail draft they edit themselves, and contacts.",
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, search_history for past runs, tasks and decided cards, read_tool_output for stored tool output, chat threads, and owner_message_heard for a newer message the owner sent during this turn.',
@@ -119,7 +119,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   get_device_context: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_weather: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
-  query_phone_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
+  query_phone_calendar: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_contacts: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
