@@ -79,6 +79,21 @@ export const appIdTokenResultV1Schema = z.union([
   ...appVerifyResultV1Schema.options,
   z.strictObject({ state: z.literal('confirm_with_email_code'), email: z.email().max(254), link: signinLink }),
 ]);
+// What a signed-in device is, as the connections view lists it beside each session (controls revision 19).
+export const appSessionKindV1Schema = z.enum(['phone', 'tablet', 'computer', 'unknown']);
+export const APP_SESSION_LABEL_MAX_V1 = 80;
+// PUT /app/v1/session/device: the app says which device holds this session, from the platform's own model and OS
+// version (never the name the owner gave the device). The backend strips control and format characters, keeps the OS
+// version's major number and answers with what it stored, e.g. "iPhone 17 Pro · iOS 26". It replaces what this session
+// held and carries over to the sessions its renewals open, so sending it after sign-in is enough; sending it again (after
+// an OS update, say) is harmless. kind defaults to phone. A Worker without the route answers 404; the session then stays
+// unnamed and the app keeps saying "Another device".
+export const APP_SESSION_MODEL_MAX_V1 = 60;
+export const appSessionDeviceRequestV1Schema = z.strictObject({
+  platform: z.enum(['ios', 'android']), model: z.string().min(1).max(APP_SESSION_MODEL_MAX_V1),
+  os_version: z.string().max(20).regex(/^[0-9]{1,4}(\.[0-9]{1,4}){0,3}$/), kind: z.enum(['phone', 'tablet']).optional(),
+});
+export const appSessionDeviceResultV1Schema = z.strictObject({ kind: z.enum(['phone', 'tablet']), label: z.string().min(1).max(APP_SESSION_LABEL_MAX_V1) });
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
 // A new credential for a new session, and when to renew that. The presented credential keeps working for 5 more
 // minutes, then stops; it renews once, so a second renewal of it is refused.
@@ -164,6 +179,7 @@ export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
   // A Worker without this route answers 404; the app then keeps its credential.
   { method: 'POST', path: '/app/v1/auth/renew', response: appRenewResultV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/session/device', request: appSessionDeviceRequestV1Schema, response: appSessionDeviceResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/channels/imessage/link-code', response: appIMessageLinkCodeV1Schema, authenticated: true, success_status: 200 },
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
@@ -175,5 +191,6 @@ export const appCoreRoutesV1 = [
 ] as const;
 
 export type AppSessionV1 = z.infer<typeof appSessionV1Schema>;
+export type AppSessionDeviceV1 = z.infer<typeof appSessionDeviceRequestV1Schema>;
 export type AppSendV1 = z.infer<typeof appSendRequestV1Schema>;
 export type AppMessageV1 = z.infer<typeof appMessageV1Schema>;

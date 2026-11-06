@@ -12,6 +12,7 @@ import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
+import type { SessionDevice } from '../identity/session-device';
 import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
 
 export const CONSOLE_PATH = '/console';
@@ -45,7 +46,9 @@ export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: nu
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
 // name is recorded. Tokens never leave this function.
 // ref names a directory-held session, so the app can sign that device out; browser rows from this store have none.
-export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string }>;
+// device and last_active describe a directory-held session for the app (controls revision 19); they stay out of the
+// connections view's revision.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string; device?: SessionDevice | null; last_active?: string }>;
 const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
   [...sessions].sort((a, b) => signedInAt(b) - signedInAt(a)).map((session) => ({
