@@ -778,7 +778,7 @@ describe('schedule.set, controls revision 16', () => {
   });
 });
 
-describe('quests on the day view, controls revision 17', () => {
+describe('quests on the day view, controls revision 18', () => {
   const day = (extra: object) => ({
     version: 1, state: 'available', revision, view: 'day',
     data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
@@ -787,7 +787,7 @@ describe('quests on the day view, controls revision 17', () => {
     id: 'quest:a1b2c3', title: 'Sleep by 11 on weeknights', state: 'active', plan: 'Screens off at 10:30', usual: 'Usually past midnight', target: null,
     progress: null, deadline: null, check_in_days: 7, next_check_in: '2026-11-13', ...extra,
   });
-  it('is revision 17', () => expect(APP_CONTROLS_QUESTS_REVISION).toBe(17));
+  it('is revision 18', () => expect(APP_CONTROLS_QUESTS_REVISION).toBe(18));
   it('lists the owner\'s quests, and stays optional for a build below 17', () => {
     for (const valid of [{}, { quests: [] }, { quests: [quest(), quest({ id: 'quest:z9', state: 'ambient', check_in_days: null, next_check_in: null }), quest({ id: 'quest:y8', state: 'completed', next_check_in: null, deadline: '2026-12-01' })] }])
       expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);

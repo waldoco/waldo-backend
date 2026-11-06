@@ -24,7 +24,7 @@ ADR-0064 kept goals as a contract with no runtime writer. This amendment gives t
 - **Readers:**
   - every owner turn, which sees the open quests by id beside the standing orders;
   - the Brief and the Close, through the job's context;
-  - the app day view, at controls revision 17.
+  - the app day view, at controls revision 18.
 - **Check-ins:**
   - A quest is due when its pace has come round in the owner's local days.
   - The Close reads due quests marked as due.

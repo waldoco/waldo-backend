@@ -208,8 +208,8 @@ it('refuses an unknown schedule, a time for an on/off schedule and a malformed t
   });
 });
 
-// The day view on the same app path also lists the owner's quests from controls revision 17, outside the day's revision.
-it('lists the owner\'s quests from controls revision 17; a build below it never receives them', async () => {
+// The day view on the same app path also lists the owner's quests from controls revision 18, outside the day's revision.
+it('lists the owner\'s quests from controls revision 18; a build below it never receives them', async () => {
   const seed = (storage: DurableObjectStorage) => questBook(storage.sql, { timezone: 'UTC', now: () => new Date(NOW) }, () => 'q1').set({ title: 'Asleep by 11 on weeknights', check_in_days: 1 }, OWNER);
   await fixture(async ({ app, storage }) => {
     const before = await dayView(app);
