@@ -8,6 +8,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
 import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from './profiles';
 import { quoted } from '../prompt/turn-prompt';
+import { threadOfChain } from '../channels/app-threads';
 import { PARK_WORDS } from '../prompt/fixed-lines';
 
 // The brain's task tools. Whether a piece of work becomes a task is the model's call: nothing here routes work by its
@@ -48,12 +49,14 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (unavailable) return refusal(unavailable, 'invalid_args');
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
-      const conversationRef = deps.conversationRef?.(ctx) ?? null;
+      // An approved replay runs outside any turn, so the thread comes from the turn whose card it was.
+      const askedThread = ctx.askedIn?.surface === 'app' && threadOfChain(ctx.askedIn.conversation_ref) ? ctx.askedIn.conversation_ref : null;
+      const conversationRef = deps.conversationRef?.(ctx) ?? askedThread;
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
         ...(tainted ? { outside_text: true as const } : {}), ...(tainted && ctx.approvedTaintedAction?.tool === 'start_task' ? { owner_approved: true as const } : {}),
-        ...(conversationRef ? { conversation_ref: conversationRef } : {}),
+        ...(conversationRef ? { conversation_ref: conversationRef } : {}), ...(ctx.askedIn ? { asked_in: ctx.askedIn } : {}),
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead. Each
       // field is read as the model wrote it; in the brief's JSON a quote or a tab before a number is an escape the check misses.

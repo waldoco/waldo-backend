@@ -44,11 +44,12 @@ export type MachineBrief = Readonly<{
 // title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
 // owner_approved: that turn's start_task ran from the owner's own card, so a profile holding mail and the web together keeps both.
 // conversation_ref: the app thread's chain the task was started in, so its report answers there; absent for main and every
-// other surface. The host's, never the worker's: the claim leaves it out.
+// other surface. asked_in: the surface and conversation the owner asked in, so the report answers there wherever the card for
+// it was approved. The host's, never the worker's: the claim leaves both out.
 // A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone?: string; started_at: number; outside_text?: true; owner_approved?: true; conversation_ref?: string; machine?: MachineBrief;
+  effort: 'standard' | 'deep'; timezone?: string; started_at: number; outside_text?: true; owner_approved?: true; conversation_ref?: string; asked_in?: Readonly<{ surface: string; conversation_ref: string }>; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.

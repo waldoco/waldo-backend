@@ -143,6 +143,10 @@ export const unaskedRecord = (record: FinalRecord): boolean => unaskedKind(recor
 // meeting prep, a pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
 // since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote. So does a
 // message WhatsApp took any part of: it is on the owner's phone in part, and the app would get only the rest.
+// A record that answers work the owner asked for on WhatsApp, addressed to that number.
+export const askedOnWhatsApp = (subject: string) => (record: FinalRecord): boolean =>
+  record.askedOn === 'whatsapp' && record.ownerSubject === subject && record.payload.chat_id === Number(subject);
+
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
   !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);

@@ -3,7 +3,7 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { applyInterrupted, isMachine, MACHINE_MAX_RUNNING, jobCheckpoint, jobResult, replayBrief, replayKey, replayOutcome, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { applyInterrupted, isMachine, MACHINE_MAX_RUNNING, jobCheckpoint, jobResult, replayBrief, replayKey, replayOutcome, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskBrief, type TaskTicket } from './jobs';
 import type { ReplayCardStatus } from '../channels/approvals';
 import { applyMachineJob, APPLY_RETRY_MS, type MachineAppliers } from './machine';
 import { fixedReport, interruptedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
@@ -36,7 +36,8 @@ export type JobsLaneDeps = Readonly<{
   // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
   // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
   // conversationRef: the app thread a task was started in, where its messages go while that thread is open.
-  deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string): Promise<void>;
+  // askedIn: where the owner asked for the work; the host answers there when it can reach that conversation.
+  deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string, askedIn?: TaskBrief['asked_in']): Promise<void>;
   // Whether this alarm still has time for a model turn; work left over waits for the next pass.
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
@@ -190,7 +191,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       }
     }
     try {
-      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref);
+      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref, taskBrief(row).asked_in);
       else settle(row);
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;
@@ -351,7 +352,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (due > deps.now()) { nextNote = Math.min(nextNote ?? due, due); continue; }
     if (deps.quiet()) { nextNote = Math.min(nextNote ?? Infinity, deps.now() + QUIET_RECHECK_MS); continue; }
     try {
-      await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row, deps.timezone), () => book.noteSent(row.id), taskBrief(row).conversation_ref);
+      await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row, deps.timezone), () => book.noteSent(row.id), taskBrief(row).conversation_ref, taskBrief(row).asked_in);
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;
       continue;
