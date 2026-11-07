@@ -216,7 +216,7 @@ describe('a tainted turn sends every write to the owner card', () => {
       'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
-      'set_proactivity', 'set_quest', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task', 'steer_task',
+      'set_experiment', 'set_proactivity', 'set_quest', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task', 'steer_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
