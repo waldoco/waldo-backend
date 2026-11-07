@@ -1,0 +1,215 @@
+diff --git a/packages/runtime/src/llm/anthropic.ts b/packages/runtime/src/llm/anthropic.ts
+index 60fd0598..6049ec42 100644
+--- a/packages/runtime/src/llm/anthropic.ts
++++ b/packages/runtime/src/llm/anthropic.ts
+@@ -62,6 +62,9 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
+     input.runScope?.signal.addEventListener('abort', abortRun, { once: true });
+     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
+     const startedAt = Date.now();
++    // Declared outside the try: a search-only response was billed even when its continuation then fails.
++    const searched: Anthropic.ContentBlock[] = [];
++    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+     try {
+       const body: Anthropic.MessageCreateParamsNonStreaming = {
+         model: input.request.model,
+@@ -75,8 +78,6 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
+       // A response that only searched for tools (the server paused its turn) has not answered yet. The tool search guide
+       // continues it by sending its content back as the assistant's turn; the searched blocks lead the answer's own, so a
+       // later round replays the whole turn.
+-      const searched: Anthropic.ContentBlock[] = [];
+-      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+         searched.push(...response.content);
+         searchSpent.input_tokens += response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
+@@ -125,7 +126,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
+         ? ` (${[error.status, error.type].filter((part) => part !== undefined && part !== null).join(' ')})`
+         : '';
+       const retry = error instanceof Anthropic.APIError ? retryAdvice(error.headers) : undefined;
+-      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}) };
++      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+     } finally {
+       clearTimeout(timeout);
+       input.runScope?.signal.removeEventListener('abort', abortRun);
+diff --git a/packages/runtime/src/llm/openai.ts b/packages/runtime/src/llm/openai.ts
+index a2b79779..1922dc9f 100644
+--- a/packages/runtime/src/llm/openai.ts
++++ b/packages/runtime/src/llm/openai.ts
+@@ -69,6 +69,9 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
+     // The request's own limit, cut to what is left of the turn.
+     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
+     const startedAt = Date.now();
++    // Declared outside the try: a search-only response was billed even when its continuation then fails.
++    const searched: OpenAI.Responses.ResponseOutputItem[] = [];
++    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+     try {
+       const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
+           model: input.request.model,
+@@ -87,8 +90,6 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
+       let response = await this.client.responses.create(body, { signal: controller.signal });
+       // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
+       // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
+-      const searched: OpenAI.Responses.ResponseOutputItem[] = [];
+-      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+         searched.push(...response.output);
+         searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
+@@ -101,14 +102,14 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
+       const strictSent = strictParametersByTool(input.request);
+       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
+       const incomplete = response.status === 'incomplete';
+-      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+-        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
+-      }
+       const spent = {
+         input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
+         output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
+         cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
+       };
++      if (incomplete && text.length === 0 && toolCalls.length === 0) {
++        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}`, spent };
++      }
+       // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
+       // and the tokens it cost still count.
+       if (text.length === 0 && toolCalls.length === 0) {
+@@ -138,7 +139,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
+         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
+         : '';
+       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
+-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}) };
++      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+     } finally {
+       clearTimeout(timeout);
+       input.runScope?.signal.removeEventListener('abort', abortRun);
+diff --git a/packages/runtime/test/anthropic.test.ts b/packages/runtime/test/anthropic.test.ts
+index 2831b3a0..1ae77d97 100644
+--- a/packages/runtime/test/anthropic.test.ts
++++ b/packages/runtime/test/anthropic.test.ts
+@@ -1,4 +1,5 @@
+ import { describe, expect, it } from 'vitest';
++import Anthropic from '@anthropic-ai/sdk';
+ import {
+   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
+   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+@@ -246,6 +247,43 @@ describe('AnthropicMessagesAdapter tool search', () => {
+     expect(result).toMatchObject({ ok: false, code: 'transient' });
+   });
+ 
++  it('keeps the spend of a search-only response when its continuation fails', async () => {
++    let calls = 0;
++    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
++      calls += 1;
++      if (calls === 1) return reply([search, found], 'pause_turn');
++      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
++    } } } as never });
++    const base = gatewayRequest();
++    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
++    expect(calls).toBe(2);
++    expect(result).toMatchObject({ ok: false, code: 'invalid_args', spent: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 0 } });
++  });
++
++  it('reports no spend for a first call that fails', async () => {
++    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
++      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
++    } } } as never });
++    const base = gatewayRequest();
++    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
++    expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
++    expect(result).not.toHaveProperty('spent');
++  });
++
++  // Each continuation is billed, so only a response whose every block is search work, and that holds a search result,
++  // is continued; anything else is answered or failed on the call that returned it.
++  it.each([
++    ['holds no blocks at all', reply([], 'end_turn')],
++    ['called the search but holds no result', reply([search], 'pause_turn')],
++    ['also answered in text', reply([search, found, { type: 'text', text: 'Free at 3.' }], 'end_turn')],
++    ['stopped at the output limit', reply([search, found], 'max_tokens')],
++  ])('does not continue a response that %s', async (_case, response) => {
++    const { bodies, adapter } = recording([response, reply([use], 'tool_use')]);
++    const base = gatewayRequest();
++    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
++    expect(bodies).toHaveLength(1);
++  });
++
+   it('sends a deferred tool up front when the history calls it without the search that loaded it', async () => {
+     const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Done.' }])]);
+     const base = gatewayRequest();
+diff --git a/packages/runtime/test/llm-provider.test.ts b/packages/runtime/test/llm-provider.test.ts
+index 6b9290a8..3699111b 100644
+--- a/packages/runtime/test/llm-provider.test.ts
++++ b/packages/runtime/test/llm-provider.test.ts
+@@ -935,6 +935,13 @@ describe('RuntimeLLMProvider', () => {
+       expect(gateway.requests).toHaveLength(2);
+     });
+ 
++    it('keeps tool search on a request that failed for another reason', async () => {
++      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'transient', error: 'synthetic outage' }));
++      await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
++      expect(gateway.requests.length).toBeGreaterThan(0);
++      expect(gateway.requests.every((request) => request.request.tool_search !== undefined)).toBe(true);
++    });
++
+     it('does not resend a refused request that carried no tool search', async () => {
+       const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
+       const { tool_search: _none, ...plain } = searchTurn.renderRequest();
+diff --git a/packages/runtime/test/openai.test.ts b/packages/runtime/test/openai.test.ts
+index 7745fc76..71ac9135 100644
+--- a/packages/runtime/test/openai.test.ts
++++ b/packages/runtime/test/openai.test.ts
+@@ -576,6 +576,56 @@ describe('OpenAIResponsesAdapter tool search', () => {
+     expect(result).toMatchObject({ ok: false, code: 'transient' });
+   });
+ 
++  const searchItems = [
++    { type: 'tool_search_call', id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'free time' } },
++    { type: 'tool_search_output', id: 'tso_1', execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'calendar' }] },
++  ];
++  const answer = { id: 'r2', status: 'completed', output_text: 'Free at 3.', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Free at 3.', annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1 } };
++
++  it('keeps the spend of a search-only response when its continuation fails', async () => {
++    let calls = 0;
++    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => {
++      calls += 1;
++      if (calls === 1) return { id: 'r1', status: 'completed', output_text: '', output: searchItems, usage: { input_tokens: 100, output_tokens: 7, input_tokens_details: { cached_tokens: 40 } } };
++      throw new OpenAI.APIError(400, { message: 'synthetic', code: 'invalid_value' }, 'synthetic', new Headers());
++    }) });
++    const result = await adapter.complete(searchRequest());
++    expect(calls).toBe(2);
++    expect(result).toMatchObject({ ok: false, code: 'invalid_args', spent: { input_tokens: 100, output_tokens: 7, cache_read_input_tokens: 40 } });
++  });
++
++  it('reports no spend for a first call that fails', async () => {
++    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => { throw new OpenAI.APIError(400, { message: 'synthetic', code: 'invalid_value' }, 'synthetic', new Headers()); }) });
++    const result = await adapter.complete(searchRequest());
++    expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
++    expect(result).not.toHaveProperty('spent');
++  });
++
++  it('keeps the spend of an output cut off at its limit, searches included', async () => {
++    const replies = [
++      { id: 'r1', status: 'completed', output_text: '', output: searchItems, usage: { input_tokens: 10, output_tokens: 2 } },
++      { id: 'r2', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [], usage: { input_tokens: 12, output_tokens: 3 } },
++    ];
++    let calls = 0;
++    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++]) });
++    const result = await adapter.complete(searchRequest());
++    expect(result).toMatchObject({ ok: false, code: 'oversize', spent: { input_tokens: 22, output_tokens: 5 } });
++  });
++
++  // Each continuation is billed, so only a complete response whose every item is search work, and that holds a search
++  // output, is continued; anything else is answered or failed on the call that returned it.
++  it.each([
++    ['holds no items at all', { id: 'r1', status: 'completed', output_text: '', output: [], usage: { input_tokens: 1, output_tokens: 1 } }],
++    ['called the search but holds no output', { id: 'r1', status: 'completed', output_text: '', output: [searchItems[0]], usage: { input_tokens: 1, output_tokens: 1 } }],
++    ['also answered in text', { ...answer, id: 'r1', output: [...searchItems, ...answer.output] }],
++    ['stopped at the output limit', { id: 'r1', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: searchItems, usage: { input_tokens: 1, output_tokens: 1 } }],
++  ])('does not continue a response that %s', async (_case, response) => {
++    let calls = 0;
++    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => (calls++ === 0 ? response : answer)) });
++    await adapter.complete(searchRequest());
++    expect(calls).toBe(1);
++  });
++
+   it('replays no search items and no namespaces in a request that declares no tool search', async () => {
+     let sent: { input?: unknown[]; tools?: Array<{ type: string }> } = {};
+     const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
