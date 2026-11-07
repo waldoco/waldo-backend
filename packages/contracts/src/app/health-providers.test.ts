@@ -69,4 +69,12 @@ describe('health providers: consent at revision 2', () => {
     expect(healthConsentListAtRevisionV1(rows, 2)).toEqual(rows);
     expect([isHealthProviderSourceV1('whoop'), isHealthProviderSourceV1('apple'), isHealthProviderSourceV1('oura')]).toEqual([true, false, false]);
   });
+
+  it('names Google Health as the second cloud provider, under that name and no other', () => {
+    expect([isHealthProviderSourceV1('google_health'), isHealthProviderSourceV1('fitbit')]).toEqual([true, false]);
+    expect(healthProviderConnectV1Schema.safeParse({ request_id: 'provider-connect-g1', provider: 'google_health' }).success).toBe(true);
+    rejected(healthProviderConnectV1Schema, [{ request_id: 'provider-connect-g1', provider: 'fitbit' }, { request_id: 'provider-connect-g1', provider: 'google' }]);
+    const both = [{ provider: 'whoop', state: 'connected', last_sync_at: null }, { provider: 'google_health', state: 'not_connected', last_sync_at: null }];
+    expect(healthProviderListV1Schema.safeParse({ providers: both }).success).toBe(true);
+  });
 });
