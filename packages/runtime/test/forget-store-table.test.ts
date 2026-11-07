@@ -103,7 +103,7 @@ const TABLES: Record<string, Row> = {
   task_jobs: purged('memory-forget-do-provider.test.ts'),
   history_archive: purged('forget-history-archive.test.ts'),
   memory_blocks: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), memory_inbox: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
-  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
+  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'), experiments: purged('memory-forget-do-provider.test.ts'),
 };
 
 // Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directives.

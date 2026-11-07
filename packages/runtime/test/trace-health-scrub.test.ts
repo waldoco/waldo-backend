@@ -123,7 +123,7 @@ describe('trace health scrub at the gate, capture on', () => {
 
   it('withholds a quest hop whole: an owner-stated target or progress never reaches a trace', () => {
     const input = '{"title":"Resting HR down to 55","progress":"Walked twice this week"}';
-    for (const hop of ['tool_set_quest', 'task_tool_set_quest']) {
+    for (const hop of ['tool_set_quest', 'task_tool_set_quest', 'tool_set_experiment', 'tool_review_experiment']) {
       const gated = gateTraceEntry({ trace: 'tg-4', hop, ms: 1, ok: true, text: { input, output: '{"status":"started"}' } }, true);
       expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
     }
