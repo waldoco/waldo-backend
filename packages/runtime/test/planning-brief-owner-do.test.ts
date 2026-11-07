@@ -475,6 +475,19 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
       expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'moved']]);
       expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+      // A city that keeps flipping pulls the look forward once per cadence, no more.
+      for (const minutes of [5, 60, 119]) {
+        const at = Date.now;
+        Date.now = () => AT + minutes * 60_000;
+        try { expect((await moved(owner, 'intervention-moved')).status).toBe(200); } finally { Date.now = at; }
+        expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+      }
+      const later = Date.now;
+      Date.now = () => AT + 121 * 60_000;
+      try {
+        expect((await moved(owner, 'intervention-moved')).status).toBe(200);
+        expect(armed(state)).toEqual([{ due_at: AT + 121 * 60_000, moved: 'place_moved' }]);
+      } finally { Date.now = later; }
     });
     await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       state.storage.kv.put('owner_alarm_last_v1', 1);

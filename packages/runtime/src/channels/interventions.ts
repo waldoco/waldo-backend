@@ -45,6 +45,10 @@ export const armInterventionReview = async (scheduler: Scheduler, at: number, ag
   await scheduler.schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID, ...(cause ? { cause_id: cause } : {}) }, occurrenceAt: at, dueAt: at, recurrence: null });
 };
 export const lookCause = (entry: Readonly<{ payload_refs: Readonly<Record<string, string>> }>): LookCause | null => (isCause(entry.payload_refs.cause_id) ? entry.payload_refs.cause_id : null);
+// A move or an arrival pulls the look forward at most once per look cadence, so a phone whose city keeps flipping (on a border,
+// on a train) costs no more looks than the cadence already allows. The time of the last pull is all that is kept.
+export const MOVE_PULL_KEY = 'intervention:move_pulled_at';
+export const movePullAllowed = (last: number | undefined, now: number, everyMs: number): boolean => last === undefined || now - last >= everyMs;
 
 // The start of the next owner-local hour, where a look's job key turns over (zones off the hour included).
 export const nextLocalHour = (now: number, timezone: string): number => {

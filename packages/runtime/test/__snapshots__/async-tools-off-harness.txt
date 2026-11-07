@@ -102,4 +102,4 @@ Remembering
 Less-used tools are not in your function list. The tool catalogue below names them by group: find_tools loads their definitions and use_tool calls one by name. Load the one you need before saying you can't do something.
 Tool catalogue:
 - web: browse_act, read_drive. Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.
-- reminders: cancel_task, start_task. Follow-ups and background work: start_task for long work that reports back later, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.
+- reminders: cancel_task, start_task. Follow-ups and background work: start_task for long work that reports back later, check_task for how one stands, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.

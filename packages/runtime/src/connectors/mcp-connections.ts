@@ -26,6 +26,23 @@ const DEVICE_INTERVAL_MIN_S = 5;
 const QUESTION_TTL_MS = 24 * 60 * 60_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 // The newest sends kept for Patrol; the access log shows only the last 30 days of them.
+// Where a send went: the first argument the catalogue names as its target, as the owner's own id or name for it. A list of
+// recipients (a meeting shared with several addresses) reads as the first ones that fit and how many more.
+const TARGET_CHARS = 80;
+export const sendTargetOf = (keys: readonly string[], args: Readonly<Record<string, unknown>>): string | null => {
+  const clean = (value: string) => value.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === 'string' && clean(value)) return clean(value).slice(0, TARGET_CHARS);
+    const names = Array.isArray(value) ? value.flatMap(item => typeof item === 'string' && clean(item) ? [clean(item)] : []) : [];
+    if (!names.length) continue;
+    let shown = names[0]!.slice(0, TARGET_CHARS), count = 1;
+    const more = (n: number) => names.length > n ? ` +${names.length - n}` : '';
+    while (count < names.length && `${shown}, ${names[count]}${more(count + 1)}`.length <= TARGET_CHARS) shown = `${shown}, ${names[count++]}`;
+    return `${shown}${more(count)}`.length <= TARGET_CHARS ? `${shown}${more(count)}` : `${shown.slice(0, TARGET_CHARS - more(count).length)}${more(count)}`;
+  }
+  return null;
+};
 const MCP_SENDS_KEPT = 500;
 // tools/list freshness when the server gives no ttlMs (spec: CacheableResult). A refresh also follows any
 // call that names a tool the cache does not have.
@@ -278,14 +295,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     return !!r && !!found && r.status === 'active' && sendsAsOwner(r, found.def) && grant?.source === 'owner' && grant.digest === found.digest;
   };
   // A replayed intent returns the edge's stored result without sending again, so it adds no row.
-  // Where a send went: the first argument the catalogue names as its target, as the owner's own id or name for it.
-  const sendTarget = (r: Row, args: Readonly<Record<string, unknown>>): string | null => {
-    for (const key of catalogueEntry(r.server_url, r.issuer)?.send_target ?? []) {
-      const value = args[key];
-      if (typeof value === 'string' && value.trim()) return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
-    }
-    return null;
-  };
+  const sendTarget = (r: Row, args: Readonly<Record<string, unknown>>): string | null => sendTargetOf(catalogueEntry(r.server_url, r.issuer)?.send_target ?? [], args);
   const keepSend = (r: Row, tool: string, args: Readonly<Record<string, unknown>>, via: 'without_asking' | 'approved', ok: boolean, intent: string) => {
     sql.exec('INSERT OR IGNORE INTO mcp_sends (at, server, tool, workspace, channel, via, ok, intent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', deps.now(), r.name, tool, r.workspace, sendTarget(r, args), via, ok ? 1 : 0, intent);
     sql.exec('DELETE FROM mcp_sends WHERE id <= (SELECT MAX(id) FROM mcp_sends) - ?', MCP_SENDS_KEPT);
