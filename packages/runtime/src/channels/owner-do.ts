@@ -257,7 +257,7 @@ import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactive
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
-import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
+import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, whatsappForwarded, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
@@ -982,15 +982,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
-      if (text === '/stop') {
-        if (this.browserTrial) {
-          this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
-          this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());
-          const authorization = browserOwnerAuthority(this.ctx.storage).read();
-          if (authorization) this.ctx.storage.kv.put('browser_owner_task_revoked_v1', authorization.manifest.runId);
-        }
-        this.ownerBrowser.stop(); await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()])));
-      }
+      if (text === '/stop') await this.stopOwnerWork();
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
       if (admitted === 'admitted' && control && this.activeInbox?.runId === control.targetRun) {
@@ -2480,6 +2472,39 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     } catch { console.error('whatsapp failure notice unavailable'); }
   }
 
+  // An owner's explicit stop, from any surface: the browser trial and tasks the owner started stop, and the owner browser with
+  // them. The running turn is the caller's to stop on its own inbox.
+  private async stopOwnerWork(): Promise<void> {
+    if (this.browserTrial) {
+      this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
+      this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());
+      const authorization = browserOwnerAuthority(this.ctx.storage).read();
+      if (authorization) this.ctx.storage.kv.put('browser_owner_task_revoked_v1', authorization.manifest.runId);
+    }
+    this.ownerBrowser.stop(); await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()])));
+  }
+  // A typed /stop from the bound owner (WHATSAPP_STOP), the control Telegram has: it stops the owner's background work, and
+  // the running WhatsApp turn and the owner's messages waiting ahead of the /stop (inbox stop). When it stopped any, the
+  // owner is told once, quoting the message it stopped, after Meta has its acknowledgement; the /stop runs no turn of its own.
+  // When it stopped none, the /stop runs as ever ("Nothing is running right now."). A forward is someone else's text and
+  // stops nothing; any other words are the running turn's model to weigh.
+  private async whatsappStop(claimed: readonly WaIngressMessage[], subject: string): Promise<void> {
+    if (this.env.WHATSAPP_STOP !== '1') return;
+    const stops = claimed.filter(m => m.from === subject && m.type === 'text' && m.text?.body?.trim() === '/stop' && !whatsappForwarded(m));
+    if (!stops.length) return;
+    await this.stopOwnerWork();
+    const active = this.activeWhatsApp;
+    const closed = this.whatsappInbox().stop(active ? { id: active.scope.runId, attempt: active.scope.attempt } : null, new Set(stops.flatMap(m => typeof m.id === 'string' ? [m.id] : [])));
+    if (!closed.length) return;
+    if (active && closed[0]!.id === active.scope.runId && this.activeScope === active.scope) this.activeAbort?.abort();
+    const quoted = closed[0]!.wamid;
+    this.ctx.waitUntil((async () => {
+      try {
+        const { api, owner } = this.setup('whatsapp');
+        await api.sendMessage({ chat_id: owner, text: INTERRUPTED_NOTICES.stopped, ...(quoted ? { quote_message_id: quoted } : {}) });
+      } catch { console.error('whatsapp stop notice unavailable'); }
+    })());
+  }
   // One WhatsApp turn under its row's run scope. A commit holds only while the row is still running under this attempt, before
   // its deadline, and while the sender is still the bound, linked subject under an unchanged owner name. The scope is aborted
   // when its turn ends, so a turn that outlived its race cannot commit after the next one starts, and an unlink or rebind
@@ -2580,6 +2605,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       inbox.admit(updates.map((update, index) => ({ update, wamid: sources[index] ?? '' })), subject);
     }); } catch (error) { if (error instanceof WhatsAppInboxFull) return new Response('unavailable', { status: 503 }); throw error; }
     if (changed) return new Response('unavailable', { status: 503 });
+    await this.whatsappStop(claimed, subject);
     // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
     if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
     return new Response('ok');
