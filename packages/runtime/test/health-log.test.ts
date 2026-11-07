@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TOOL_PERMISSIONS } from '@waldo/contracts';
 import { healthLogBook, healthLogHandlers, healthSection, type HealthLogEntry } from '../src/channels/health-log';
 import { md5Hex } from '../src/channels/md5';
+import { OwnerDirectoryError } from '../src/identity/owner-directory';
 
 describe('md5', () => {
   it('matches the published RFC 1321 vectors', () => {
@@ -105,7 +106,7 @@ describe('health log tools', () => {
     expect(['turn_only_output' in logMeal!, 'turn_only_output' in logWorkout!]).toEqual([false, false]);
   });
 
-  it('delete answers what it removed, at the owner\'s local time, so the reply can quote it and the owner can log it again', async () => {
+  it('delete answers what it removed, at the owner\'s local time, so the reply can describe it and the owner can log it again', async () => {
     const result = await deleteHealthLog!.handle({ id: 1 } as never);
     expect(result).toEqual({
       ok: true,
@@ -123,6 +124,21 @@ describe('health log tools', () => {
   it('delete with the store unlinked is transient, never a silent success', async () => {
     const [, , , unlinkedDelete] = healthLogHandlers(healthLogBook(null, null, 'telegram', clock));
     expect(await unlinkedDelete!.handle({ id: 1 } as never)).toMatchObject({ ok: false, code: 'transient' });
+  });
+
+  // The database answering with an error means the delete rolled back. A timeout, a dropped connection or a gateway error can
+  // come after the delete committed, so that outcome is unknown and the model is sent to look before it tells the owner.
+  it('delete that the database refused says it was not removed; a lost answer says the outcome is unknown and to check the list', async () => {
+    const failing = (error: unknown) => healthLogHandlers(healthLogBook(async () => { throw error; }, 'do-health', 'telegram', clock))[3]!;
+    const refused = await failing(new OwnerDirectoryError(400, '22023', null)).handle({ id: 1 } as never);
+    expect(refused).toEqual({ ok: false, code: 'transient', error: 'the health log could not be removed' });
+    for (const lost of [new DOMException('The operation timed out.', 'TimeoutError'), new TypeError('Network connection lost.'), new OwnerDirectoryError(504, null, null)]) {
+      const result = await failing(lost).handle({ id: 1 } as never) as { ok: boolean; code: string; error: string };
+      expect(result).toMatchObject({ ok: false, code: 'transient' });
+      expect(result.error).toContain('not known whether');
+      expect(result.error).toContain('list_health_logs');
+      expect(result.error).not.toContain('could not be removed');
+    }
   });
 
   it('logs a meal with an honest estimate marker in the payload', async () => {

@@ -7,6 +7,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso, localToEpoch } from './reminders';
 import { md5Hex } from './md5';
+import { OwnerDirectoryError } from '../identity/owner-directory';
 
 // A9 (BUILD_PLAN_2026-09-25): meal + workout logging over the signed router rail. The DO
 // signs md5 of the exact payload text it sends (the RPC takes text and casts to jsonb
@@ -157,7 +158,7 @@ export const healthLogHandlers = (book: HealthLogBook) => [
   } satisfies ToolHandler<ListHealthLogsArgs, ListResult, ToolDispatcherContext>,
   {
     name: 'delete_health_log',
-    description: "Remove one of the owner's meal or workout logs by id: the id log_meal or log_workout returned, or one from list_health_logs. Use it when the owner asks to undo or remove a log. The result is the entry removed; say what it was, so the owner can log it again if it was a mistake.",
+    description: "Remove one of the owner's meal or workout logs by id: the id log_meal or log_workout returned, or one from list_health_logs. Use it when the owner asks to undo or remove a log. The result is the entry removed; tell the owner which entry it was in words (what and when, not its figures), so they can log it again if it was a mistake.",
     schema: deleteHealthLogArgsSchema,
     trigger_allowlist: allowlist('delete_health_log'),
     autonomy_gated: false,
@@ -170,7 +171,11 @@ export const healthLogHandlers = (book: HealthLogBook) => [
         if (removed === null) return { ok: false, code: 'not_found', error: 'The owner has no health log with that id. Use list_health_logs to see the ids.' };
         return { ok: true, data: { removed }, source_taint: null };
       } catch (error) {
-        return { ok: false, code: 'transient', error: error instanceof Error && error.message === NOT_LINKED ? NOT_LINKED : 'the health log could not be removed' };
+        if (error instanceof Error && error.message === NOT_LINKED) return { ok: false, code: 'transient', error: NOT_LINKED };
+        // The database answered with an error, so the delete rolled back. A timeout, a lost connection or a gateway error can
+        // come after the delete committed: then nothing is known, and a second delete would only answer not_found.
+        if (error instanceof OwnerDirectoryError && error.status < 500) return { ok: false, code: 'transient', error: 'the health log could not be removed' };
+        return { ok: false, code: 'transient', error: 'It is not known whether the health log was removed: the answer was lost. Call list_health_logs to see whether it is still there before telling the owner.' };
       }
     },
   } satisfies ToolHandler<DeleteHealthLogArgs, DeleteResult, ToolDispatcherContext>,
