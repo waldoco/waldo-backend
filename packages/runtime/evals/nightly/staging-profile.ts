@@ -106,6 +106,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
+  IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
   IMESSAGE_VOICE: gap('iMessage voice notes; the trial runs the app surface'),
 
   WALDO_ENVIRONMENT: inert('names the deployment'),

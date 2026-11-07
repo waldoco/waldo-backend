@@ -20,13 +20,13 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
 import { appMessageBody, appTurnText, appUploadName, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
-import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
+import { IMessageFinalOutbox, STOP_ANSWER, targetOf } from './imessage/final-outbox';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, handOffIMessageStopAnswer, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
 import { reactToMessageHandler, type TapbackPort } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
@@ -228,7 +228,7 @@ import { signedRpc } from '../identity/owner-directory';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
-import { INTERRUPTED_NOTICES } from '../prompt/fixed-lines';
+import { INTERRUPTED_NOTICES, NOTHING_RUNNING, STOPPED_BEFORE_START } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
@@ -238,7 +238,7 @@ import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-t
 import { deviceContextReadBook, getDeviceContextHandler } from '../tools/live/device-context';
 import { weatherTools } from '../tools/live/weather';
 import { cacheApiWeatherCache } from '../connectors/weatherkit';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { NUMBERED_REPLY, appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
@@ -1201,7 +1201,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.ctx.storage.kv.get<string>('imessage_subject') !== subject) { this.ctx.storage.kv.put('imessage_subject', subject); this.runtimes = {}; }
       this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
     }
+    if (outcome === 'admitted' || outcome === 'duplicate') this.iMessageStop(input);
     return outcome;
+  }
+  // A typed /stop from the owner on iMessage (IMESSAGE_STOP), the control Telegram and WhatsApp have. In one commit it stops
+  // the running turn and the messages waiting ahead of it, and answers the /stop once: stopped, or nothing is running. The
+  // stopped turn is aborted at once, then the owner's background work stops. A repeated handoff of the same /stop finds it
+  // already answered; one that comes after a restart cut it short finds it still waiting, and stops then. Any other words are
+  // the running turn's model to weigh.
+  private iMessageStop(input: IMessageTurnHandoff): void {
+    if (this.env.IMESSAGE_STOP !== '1' || input.envelope.text.trim() !== '/stop' || input.media) return;
+    const inbox = new IMessageOwnerInbox(this.ctx.storage);
+    const row = inbox.records().find(record => record.dedupKey === input.dedupKey);
+    if (!row) return;
+    // The answer is said the way the stop went: a turn that had started may have changed something; waiting messages had not
+    // started. A full outbox costs only the answer, never the stop.
+    const answer = (closed: readonly IMessageInboxRecord[]) => closed.some(record => record.state === 'running') ? INTERRUPTED_NOTICES.stopped : closed.length ? STOPPED_BEFORE_START : NOTHING_RUNNING;
+    const stopped = inbox.stop(row.id, record => NUMBERED_REPLY.test(record.text), (record, closed) => {
+      try { new IMessageFinalOutbox(this.ctx.storage).freeze(record, answer(closed), 'stop'); }
+      catch (error) { console.error(JSON.stringify({ hop: 'imessage_stop', ok: false, code: 'answer_not_frozen', error_class: error instanceof Error ? error.name : 'unknown' })); }
+    });
+    if (stopped === null) return;
+    if (this.activeIMessage && stopped.some(record => record.id === this.activeIMessage!.id) && this.activeScope?.runId === this.activeIMessage.id) this.activeAbort?.abort();
+    this.ctx.waitUntil(handOffIMessageStopAnswer(this.imessageHost, `${STOP_ANSWER}${row.id}`).catch(() => { console.error('imessage stop answer deferred'); }));
+    this.ctx.waitUntil(this.stopOwnerWork().catch(error => { console.error(JSON.stringify({ hop: 'imessage_stop', ok: false, code: 'background_stop_failed', error_class: error instanceof Error ? error.name : 'unknown' })); }));
+    this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
   }
   /** Bridge DO RPC: the owner's tapback, kept as a line for their next turn. It starts no turn and reaches no approval. */
   async noteIMessageReaction(input: IMessageReactionHandoff): Promise<'noted' | 'refused'> {
@@ -3914,7 +3938,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (ownerCommand && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
-      return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
+      return void (await call('sendMessage', { chat_id: owner, text: NOTHING_RUNNING }));
     }
     const harness = ownerCommand ? parseHarnessCommand(raw.message?.text) : null;
     const handledDirectly = !nativeSurface(channel) && (raw.callback_query !== undefined || harness !== null || (ownerCommand && raw.message?.text?.trim() === '/ledger'));
