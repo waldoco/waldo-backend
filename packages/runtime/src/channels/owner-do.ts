@@ -1201,19 +1201,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.ctx.storage.kv.get<string>('imessage_subject') !== subject) { this.ctx.storage.kv.put('imessage_subject', subject); this.runtimes = {}; }
       this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
     }
-    if (outcome === 'admitted' || outcome === 'duplicate') this.iMessageStop(input);
+    const row = outcome === 'admitted' || outcome === 'duplicate' ? new IMessageOwnerInbox(this.ctx.storage).records().find(record => record.dedupKey === input.dedupKey) : undefined;
+    if (row) this.iMessageStop(row);
     return outcome;
   }
   // A typed /stop from the owner on iMessage (IMESSAGE_STOP), the control Telegram and WhatsApp have. In one commit it stops
   // the running turn and the messages waiting ahead of it, and answers the /stop once: stopped, or nothing is running. The
   // stopped turn is aborted at once, then the owner's background work stops. A repeated handoff of the same /stop finds it
-  // already answered; one that comes after a restart cut it short finds it still waiting, and stops then. Any other words are
-  // the running turn's model to weigh.
-  private iMessageStop(input: IMessageTurnHandoff): void {
-    if (this.env.IMESSAGE_STOP !== '1' || input.envelope.text.trim() !== '/stop' || input.media) return;
+  // already answered. One whose admit committed but whose stop never ran (the process ended in between) is found by the next
+  // drain, which stops it before it would claim anything as a turn. Any other words are the running turn's model to weigh.
+  private iMessageStop(row: IMessageInboxRecord): void {
+    if (this.env.IMESSAGE_STOP !== '1' || row.state !== 'admitted' || row.text.trim() !== '/stop' || row.media) return;
     const inbox = new IMessageOwnerInbox(this.ctx.storage);
-    const row = inbox.records().find(record => record.dedupKey === input.dedupKey);
-    if (!row) return;
     // The answer is said the way the stop went: a turn that had started may have changed something; waiting messages had not
     // started. A full outbox costs only the answer, never the stop.
     const answer = (closed: readonly IMessageInboxRecord[]) => closed.some(record => record.state === 'running') ? INTERRUPTED_NOTICES.stopped : closed.length ? STOPPED_BEFORE_START : NOTHING_RUNNING;
@@ -1249,6 +1248,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!composition) return;
     const inbox = new IMessageOwnerInbox(this.ctx.storage);
     inbox.recover(this.imessageAttempts, this.iMessageFailureNotice);
+    for (const row of inbox.records()) this.iMessageStop(row);
     for (const pending of inbox.records().filter(row => row.state === 'admitted')) {
       let current = false;
       try { await currentIMessageAuthority(this.imessageHost.env, pending); current = true; }

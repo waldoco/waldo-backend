@@ -116,13 +116,13 @@ export class IMessageFinalOutbox {
     return record.ownerThreaded === true
       || new IMessageOwnerInbox(this.storage).records().some((r) => r.updateId > record.updateId && r.conversationRef === record.conversationRef);
   }
-  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   /** Whether a message frozen before `replyRef` still waits for the same bridge, so `replyRef` must go after it. */
   waitingAhead(replyRef: string): boolean {
     const row = this.get(replyRef);
     return !!row && this.records().some((r) => r.replyRef !== replyRef && r.state === 'frozen' && !isProgressNote(r.replyRef) && !r.reaction
       && r.bridgeDoName === row.bridgeDoName && (r.seq ?? 0) < (row.seq ?? 0));
   }
+  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   messageWaiting(bridgeDoName: string): boolean {
     return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && !r.reaction && r.bridgeDoName === bridgeDoName);
   }
