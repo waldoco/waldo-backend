@@ -5971,11 +5971,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!interventions || !schedPrefs.enabled('heartbeat') || !armable('heartbeat')) return;
       const now = Date.now();
       if (!movePullAllowed(identity.get<number>(MOVE_PULL_KEY), now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN))) {
+        // Not looked at sooner, but the look already armed knows a phone moved, so the move is not lost.
+        const armed = scheduler.lookup(INTERVENTION_REVIEW_ID);
+        if (armed.state === 'entry' && !lookMoved(armed.entry)) await armInterventionReview(scheduler, armed.entry.due_at, true, true);
         log({ trace: `place_moved:${now}`, hop: 'intervention_review', ms: 0, ok: true, code: 'held_move_within_cadence' });
         return;
       }
-      identity.put(MOVE_PULL_KEY, now);
+      // The pull is spent only once the look is armed: an arm that throws leaves this cadence's pull for the next move.
       await armInterventionReview(scheduler, nextLookAt(now, 0, clock.timezone, day => plans.window(day, clock.timezone)), true, true);
+      identity.put(MOVE_PULL_KEY, now);
     };
     const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
