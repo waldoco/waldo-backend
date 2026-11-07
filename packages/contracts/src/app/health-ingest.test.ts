@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, GOOGLE_HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -32,6 +32,15 @@ describe('health consent', () => {
   it('ties a grant to the copy of its own source: WHOOP on the device copy, or a device source on the WHOOP copy, is refused', () => {
     expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }).success).toBe(true);
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'whoop' }, { ...grant, source: 'whoop', version: HEALTH_CONSENT_VERSION_V1 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, { ...grant, source: 'whoop', version: 4 }]);
+  });
+  it('gives Google Health its own notice, copy 4, and accepts that copy for Google Health only', () => {
+    expect([GOOGLE_HEALTH_CONSENT_VERSION_V1, healthConsentVersionV1('google_health')]).toEqual([4, 4]);
+    expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'google_health', version: 4 }).success).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'google_health', version: 3 }, { ...grant, source: 'google_health', version: 2 }, { ...grant, source: 'whoop', version: 4 },
+      { ...grant, version: 4 }, { ...grant, source: 'fitbit', version: 4 }]);
+    const row = { consent_class: 'health_processing', source: 'google_health', purpose: 'storage_compute', version: 4, status: 'granted', epoch: 1, granted_at: '2026-11-07T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' };
+    expect(healthConsentListV1Schema.safeParse({ consents: [row] }).success).toBe(true);
+    rejected(healthConsentListV1Schema, [{ consents: [{ ...row, version: 3 }] }, { consents: [{ ...row, version: 2 }] }]);
   });
   // A stored grant keeps the version it was written on. After a copy change, reading it back must still work (the list, a
   // withdraw's answer, a replayed grant), while a new grant must name the current version.
