@@ -381,15 +381,24 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     now, newId: () => `f17e0000-f17e-4f17-8f17-${String(++fileIds).padStart(12, '0')}` }) : null;
   const keepUpload = store ? uploadKeeper(() => store, OWNER) : null;
   const logged: HealthLogEntry[] = [];
+  let logIds = 0;
   const mealBook: HealthLogBook = {
     linked: () => true,
     log: async (kind, payload, atLocal) => {
       const at = atLocal ?? localIso(now(), TIMEZONE);
       effect('health.log', { kind, payload, at });
-      logged.unshift({ id: logged.length + 1, kind, logged_at: new Date(now()).toISOString(), source: 'console', payload });
-      return { id: logged.length, at };
+      const id = ++logIds;
+      logged.unshift({ id, kind, logged_at: new Date(now()).toISOString(), source: 'console', payload });
+      return { id, at };
     },
     recent: async (limit) => logged.slice(0, limit),
+    remove: async (id) => {
+      const index = logged.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const [entry] = logged.splice(index, 1);
+      effect('health.remove', { id });
+      return { id, kind: entry!.kind, at: localIso(Date.parse(entry!.logged_at), TIMEZONE), payload: entry!.payload };
+    },
   };
   const offered = [
     ...(seed.meals ? healthLogHandlers(mealBook) : []),

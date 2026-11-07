@@ -80,7 +80,7 @@ import type { AgentMailControlsDeps } from './agent-mail/controls';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, RUN_CLOSE_MARGIN_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
-import { receiptUrl } from '../conversation/artifact-link-guard';
+import { RECEIPT_TOOLS, receiptUrl } from '../conversation/artifact-link-guard';
 import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
@@ -4093,7 +4093,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const step = this.iMessageProgress && entry.trace === ownerTurnTrace('imessage', this.activeIMessage?.updateId ?? -1) ? toolNameSchema.safeParse(/^(?:subagent_)?tool_(.+)$/.exec(entry.hop)?.[1]) : undefined;
       if (step?.success) this.iMessageProgress?.saw(step.data);
       if (entry.principal !== undefined) { const { principal, ...rest } = entry; tracePrincipal = principal; entry = rest; }
-      if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact')) {
+      if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && entry.hop.startsWith('tool_') && RECEIPT_TOOLS.has(entry.hop.slice(5))) {
         try {
           const url = receiptUrl(entry.hop.slice(5), JSON.parse(entry.text?.output ?? 'null'));
           if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
