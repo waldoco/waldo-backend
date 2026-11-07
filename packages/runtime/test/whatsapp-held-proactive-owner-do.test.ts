@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cardExpiry, dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
+import { questBook } from '../src/channels/quests';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { updateBook } from '../src/channels/update-cards';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -89,6 +90,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   // Runs the step with the clock moved forward, as when the owner next writes much later.
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
   card(): Promise<void>;
+  // A daily quest started two days ago, so the Close falls due with it due too; answers its last check-in.
+  closeWithQuest(): Promise<() => string | null>;
   // Arms the Check-in this far ahead; answers when it is due.
   checkIn(ms: number): Promise<number>;
   // Daily unless a cron expression is given.
@@ -154,6 +157,11 @@ const owned = async (name: string, script: (steps: Readonly<{
           try { return await step(); } finally { Date.now = now; }
         },
         card: async () => { await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null }); },
+        closeWithQuest: async () => {
+          questBook(state.storage.sql, { timezone: 'UTC', now: () => new Date(Date.now() - 48 * HOUR) }, () => 'q1').set({ title: 'Daylight before ten', check_in_days: 1 }, 'owner');
+          await scheduler.schedule({ id: 'card:close', kind: 'brief', payloadRefs: { id: 'card:close' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+          return () => state.storage.sql.exec<{ at: string | null }>('SELECT last_check_in_at AS at FROM goals').one().at;
+        },
         checkIn: async ms => {
           const at = Date.now() + ms;
           await scheduler.schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: at, dueAt: at, recurrence: null });
@@ -250,6 +258,20 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       await card();
       await alarms(3);
       expect(expiryOf('card:brief')).toBe(Date.parse(`${today()}T00:00:00Z`) + 24 * HOUR);
+    });
+  });
+
+  it('counts a held Close\'s quests checked in only once it reaches the owner', async () => {
+    await owned('wa-held-close-quest', async ({ alarms, reply, arrived, closeWithQuest, outbox }) => {
+      const lastCheckIn = await closeWithQuest();
+      await alarms(3);
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'pending' }]);
+      expect(lastCheckIn()).toBeNull();
+      await reply();
+      expect(lastCheckIn()).toBeNull();
+      await arrived();
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'delivered' }]);
+      expect(lastCheckIn()?.slice(0, 10)).toBe(today());
     });
   });
 
