@@ -184,11 +184,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
   // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
-  reading(String.raw`\b(?:slept|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
-  // "sleep" with a duration before "before the flight" is a plan; the past tense above is what was slept. Said as a reading
-  // ("sleep was 6 hours", "Sleep: 6 h"), it is one whatever follows.
-  reading(String.raw`\b(?:sleeps?|sleeping)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})(?!\s+(?:before|until|till|ahead\s+of)\b)`),
-  reading(String.raw`\b(?:sleeps?|sleeping)\s*(?:[:=~]|\b(?:${READING_WORDS})\b)${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
   reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SEPARATOR_GAP}\d{1,2}h[0-5]\d\b`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
