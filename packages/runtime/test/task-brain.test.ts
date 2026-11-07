@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL, TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -216,6 +216,22 @@ describe('the task brain host', () => {
       host.fence(t.jobId);
       expect(await pending).toBe('fenced');
       expect(aborted).toBe(true);
+    });
+  });
+
+  it('a cancelled attempt\'s spend since its last checkpoint reaches the log once, and only its own worker calls', async () => {
+    await withHost(async ({ host, ticket, book, log }) => {
+      const t = ticket();
+      await host.claim(t);
+      expect(book.cancel(t.jobId, 'owner')).toBe(true);
+      host.fence(t.jobId);
+      const usage = { model: OPENAI_GPT_6_LUNA_MODEL, input: 10, output: 2, cached: 0 };
+      const spent: TurnLogEntry = { trace: `task:${t.jobId}:${t.attempt}`, hop: 'llm_task', ms: 1, ok: true, job_id: t.jobId, job_profile: 'reader', cost_kind: 'worker', usage };
+      const foreign: TurnLogEntry = { ...spent, job_id: 'job-other' };
+      const unpriced: TurnLogEntry = { ...spent, cost_kind: undefined };
+      await host.spent(t, [spent, foreign, unpriced]);
+      await host.spent(t, [spent]);
+      expect(log.filter(entry => entry.hop === 'llm_task')).toEqual([spent]);
     });
   });
 
@@ -1060,19 +1076,41 @@ describe('a steered task', () => {
     });
   });
 
-  it('a report at or past the deadline, or with a step still recorded in flight, is accepted: a new attempt could not use the change, or could run the step again', async () => {
+  it('a report at or past the deadline, or with a step still recorded in flight, is accepted as partial and names each change it did not do', async () => {
     await withHost(async ({ book, ticket, clock }) => {
       const late = ticket();
       steer(book, late.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
       clock.at = book.get(late.jobId)!.deadline_at;
       book.touch(late, null);
       expect(book.report(late, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(late.jobId)!.result_json!)).toEqual({ ...result('Two tables found.'), status: 'partial', left: ['The change "Also check walk-ins." came too late for this task and was not done.'] });
+      expect(book.get(late.jobId)!.outcome).toBe('partial');
       clock.at = T0;
       const acting = ticket('errand');
       steer(book, acting.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
       expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
       expect(book.report(acting, result('Booked view of the form.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
-      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null });
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null, outcome: 'partial' });
+      expect(JSON.parse(book.get(acting.jobId)!.result_json!).left).toEqual(['The change "Also check walk-ins." came too late for this task and was not done.']);
+    });
+  });
+
+  it('a failed report keeps its status and still names the change it did not do; a shown change is never named', async () => {
+    await withHost(async ({ book, ticket, clock }) => {
+      const failed = ticket();
+      steer(book, failed.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1');
+      clock.at = book.get(failed.jobId)!.deadline_at;
+      book.touch(failed, null);
+      expect(book.report(failed, { status: 'failed', summary: 'Stopped.', findings: [], proposals: [], left: ['Prices'] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(failed.jobId)!.result_json!)).toMatchObject({ status: 'failed', left: ['Prices', 'The change "Only rooftop places." came too late for this task and was not done.'] });
+      clock.at = T0;
+      const shown = ticket();
+      steer(book, shown.jobId, 'interrupt', 'Only rooftop places.', 'turn-3:s1');
+      expect(book.report(shown, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      const next = book.startAttempt(shown.jobId)!;
+      expect(book.claim(next)).not.toBe('fenced');
+      expect(book.report(next, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(shown.jobId)!.result_json!)).toEqual(result('Two rooftops.'));
     });
   });
 
@@ -1088,6 +1126,16 @@ describe('a steered task', () => {
       expect(row).toMatchObject({ status: 'queued', taint: 'external' });
       expect(jobCheckpoint(row).turns.map(turn => turn.call.name)).toEqual(['search_communication']);
       expect(log.filter(entry => entry.hop === 'task_attempt_steered')).toHaveLength(1);
+    });
+  });
+
+  it('the judge reads a long change cut like the context beside it', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', `Rome. ${'r'.repeat(5_000)}`, 'turn-2:s1');
+      const text = watchdogJudgeText(book.get(t.jobId)!, null, [], T0);
+      expect(text).toContain('Rome.');
+      expect(text).not.toContain('r'.repeat(2_100));
     });
   });
 

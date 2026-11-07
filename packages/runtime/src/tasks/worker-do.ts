@@ -21,6 +21,7 @@ export type OwnerTaskRpc = Readonly<{
   taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'>;
   taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   taskHeartbeat(ticket: TaskTicket): Promise<boolean>;
+  taskSpent(ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void>;
 }>;
 type Held = Readonly<{ owner: string; ticket: TaskTicket }>;
 
@@ -54,6 +55,7 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         checkpoint: (ticket, seq, turns, events, spend, outcomes) => owner.taskCheckpoint(ticket, seq, turns, events, spend, outcomes),
         report: (ticket, result, events, spend, outcomes) => owner.taskReport(ticket, result, events, spend, outcomes),
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
+        spent: (ticket, events) => owner.taskSpent(ticket, events),
       };
       const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health };
       outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env)), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });

@@ -168,19 +168,25 @@ describe('the changed patterns still find what the earlier ones found', () => {
   const text = (pieces: readonly string[], most: number): string => Array.from({ length: 1 + Math.floor(pick([...Array(most).keys()].map(n => n / most)) * most) }, () => pick(pieces)).join('');
   const digitsIn = (value: string): number => (value.match(/\d/g) ?? []).length;
 
-  it('a number the earlier phone pattern redacted is still redacted', () => {
+  // The one narrowing is meant: a bare run of ten digits that starts with 0 or 1 is neither a US number nor an Indian mobile.
+  it('a number the earlier phone pattern redacted is still redacted, unless it is a bare ten-digit run that starts with 0 or 1', () => {
     const BASE = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
+    const narrowed = (match: string): boolean => /^[\s.-]?[01]\d{9}$/.test(match);
     const pieces = ['+', '1', '4', '9', '5', '0', '7', ' ', ' ', '-', '.', '(', ')', 'a', 'x ', '415', '555', '0142', '98765', '43210'];
     let compared = 0;
-    for (let run = 0; run < 20_000; run += 1) {
+    let skipped = 0;
+    for (let run = 0; run < 25_000; run += 1) {
       const input = `n ${text(pieces, 16)} z`;
-      const covered = [...input.matchAll(BASE)].reduce((sum, match) => sum + digitsIn(match[0]), 0);
+      const found = [...input.matchAll(BASE)];
+      skipped += found.filter((match) => narrowed(match[0])).length;
+      const covered = found.filter((match) => !narrowed(match[0])).reduce((sum, match) => sum + digitsIn(match[0]), 0);
       if (covered === 0) continue;
       compared += 1;
       const output = bodyOf(run0(input));
       expect(digitsIn(output), JSON.stringify(input)).toBeLessThanOrEqual(digitsIn(input) - covered);
     }
     expect(compared).toBeGreaterThan(1_000);
+    expect(skipped).toBeGreaterThan(10);
   });
 
   it('a token the earlier token pattern found is still refused', () => {

@@ -401,11 +401,22 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
   outbox: { raw_sensor: 'reject', derived_score: 'reject' },
 };
 
-// A number written with a country code (a plus sign and, after the first digit, eight to fourteen more, which is the most E.164
-// allows), or an Indian mobile written in two groups of five with a space between them, or with its national 0 and no space (a hyphen
-// would take every price or salary range such as 75000-80000). Each digit is read once, so a long run of digits and signs
-// cannot slow the scan: it starts at a plus sign or at a lookbehind-checked digit and never reads past fifteen digits.
-export const PHONE_OUTSIDE_US = /(?<![\d+])\+[1-9](?:[\s.()-]{0,2}\d){8,14}(?!\d)|(?<![\d+])0?[6-9]\d{4}\s\d{5}(?!\d)|(?<![\d+])0[6-9]\d{9}(?!\d)/g;
+// A number written with a country code: a plus sign and, after the first digit, eight to fourteen more, which is the most E.164
+// allows. Glued to a letter ("call+44..."), it takes nine or more, so "x+123456789" is not one; a date after the country code
+// ("+1 2026-11-06") is not one either. A WhatsApp link (wa.me/919876543210) writes the number with no plus, and only that link
+// says the digits are one: a bare twelve-digit run is as often a UPI or IRCTC reference. An Indian mobile is also written in two
+// groups of five with a space between them, or with its national 0, with or without a hyphen; without the 0, a hyphen would take
+// every price or salary range such as 75000-80000. Each digit is read once, so a long run of digits and signs cannot slow the
+// scan: it starts at a plus sign, a link or a lookbehind-checked digit and never reads past fifteen digits.
+const PLUS_COUNTRY = String.raw`\+[1-9](?!\d{0,2}[\s.()-]{0,2}(?:19|20)\d\d-[01]\d-[0-3]\d(?!\d))`;
+const PHONE_DIGIT = String.raw`(?:[\s.()-]{0,2}\d)`;
+export const PHONE_OUTSIDE_US = new RegExp([
+  String.raw`(?<![\dA-Za-z+])${PLUS_COUNTRY}${PHONE_DIGIT}{8,14}(?!\d)`,
+  String.raw`(?<=[A-Za-z])${PLUS_COUNTRY}${PHONE_DIGIT}{9,14}(?!\d)`,
+  String.raw`(?<=\b[Ww][Aa]\.[Mm][Ee]\/)[1-9]\d{7,14}(?!\d)`,
+  String.raw`(?<![\d+])0?[6-9]\d{4}\s\d{5}(?!\d)`,
+  String.raw`(?<![\d+])0[6-9]\d{4}-?\d{5}(?!\d)`,
+].join('|'), 'g');
 
 // Check 3 — PII is redacted, never rejected (ADR-0024 false-positive policy: uncertainty
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by

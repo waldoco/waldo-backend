@@ -20,7 +20,7 @@ export const TURN_TYPES: Readonly<Record<string, string>> = {
   health_chat: 'h01-low-day-with-wearable',
   long_chat: 'r1-recall-across-day',
   reminder: 't03-reminder',
-  day_card: 'h20-brief-with-shared-health',
+  day_card: 'h23-brief-heavy-day-low-form',
   health_trigger: 'h1-health-change-card',
   outside_job: 'm13-outside-job-no-health',
 };

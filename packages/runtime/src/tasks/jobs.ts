@@ -319,12 +319,15 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     report(ticket: TaskTicket, result: TaskResult, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | 'steered' | Fenced {
       const row = current(ticket);
       const checkpoint = row ? jobCheckpoint(row) : null;
-      if (row && checkpoint?.steers?.some(steer => steer.shown === undefined) && row.inflight_json === null && deps.now() < row.deadline_at) {
+      const unseen = checkpoint?.steers?.filter(steer => steer.shown === undefined) ?? [];
+      if (row && checkpoint && unseen.length && row.inflight_json === null && deps.now() < row.deadline_at) {
         return requeue(ticket, spend, { ...checkpoint, ...(result.status === 'failed' ? {} : { draft: result }) });
       }
       const draft = checkpoint?.draft;
       const kept = draft && result.status !== 'done' && !result.findings.length && !result.proposals.length ? fromDraft(draft) : result;
-      return finish(ticket, JSON.stringify(kept), kept.status, spend);
+      // A change no worker saw is named as not done, so the report never reads as if steer_task's "steered" came true.
+      const told = unseen.length ? notDone(kept, unseen) : kept;
+      return finish(ticket, JSON.stringify(told), told.status, spend);
     },
     // A change to a task that has not finished (steer_task). A finished, cancelled or settled job takes none. The job's taint only
     // ever rises: a change written in a turn that read outside text makes the report apply as tainted.
@@ -631,6 +634,11 @@ const REPLAY_JOB_OUTCOME = { done: 'done', rejected: 'blocked', failed: 'failed'
 // The key an approval's replay job is written under: one job per card, whatever decides it how often.
 export const replayKey = (approvalId: string): string => `approval:${approvalId}`;
 // What an earlier attempt found, reported when the attempt that was to add a change ended with nothing of its own.
+const STEER_NAMED = 200;
+const notDone = (result: TaskResult, steers: readonly Steer[]): TaskResult => ({
+  ...result, status: result.status === 'done' ? 'partial' : result.status,
+  left: [...result.left, ...steers.map(steer => `The change "${steer.text.length > STEER_NAMED ? `${steer.text.slice(0, STEER_NAMED)}…` : steer.text}" came too late for this task and was not done.`)],
+});
 const fromDraft = (draft: TaskResult): TaskResult => ({ ...draft, status: draft.status === 'done' ? 'partial' : draft.status, left: [...draft.left, 'A change made after it first finished was not done.'] });
 export const jobCheckpoint = (row: JobRow): Checkpoint => row.checkpoint_json === null ? { turns: [] } : JSON.parse(row.checkpoint_json) as Checkpoint;
 // A reported row's intent is its apply turn's (a worker's in-flight step, kept on a parked row, names a tool instead).

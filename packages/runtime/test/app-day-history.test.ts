@@ -112,7 +112,7 @@ it('lists the last fourteen days for controls=6, with today\'s delivered Brief a
     const data = (body as { data: { today: string; history_since: string; days: { date: string; complete: boolean; cards: { id: string; state: string; latest?: unknown }[] }[] } }).data;
     expect([data.today, data.history_since, data.days.length]).toEqual([today, today, 14]);
     expect(data.days[0]!.cards).toEqual([
-      { id: 'card:brief', name: 'The Brief', state: 'sent', latest: { message_id: row!.id, delivered_at: AT, excerpt: card.text } },
+      { id: 'card:brief', name: 'The Daily Brief', state: 'sent', latest: { message_id: row!.id, delivered_at: AT, excerpt: card.text } },
       { id: 'card:midday', name: 'Check-in', state: 'pending', latest: null }, { id: 'card:close', name: 'The Close', state: 'pending', latest: null },
     ]);
     expect(data.days[1]).toEqual({ date: new Date(AT - DAY_MS).toISOString().slice(0, 10), complete: false, cards: [], updates_total: 0 });

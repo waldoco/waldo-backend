@@ -42,12 +42,12 @@ describe('a day card in the nightly world', () => {
     expect(sent[0]).toContain('compact card for chat');
   });
 
-  it('d1: shows the Brief the good day, and a card that quotes the score fails', async () => {
+  it('d1: shows the Brief the great night, and a card that quotes the score fails', async () => {
     const honest = await card('d1-brief-good-day-one-line', 'Friday: board review 11 to 1, design review at 3, spin at 6. A good day against your baseline.');
     expect(honest.failed).toEqual([]);
     expect(honest.sent[0]).toContain('Form zone:');
-    expect(honest.sent[0]).not.toContain('66.1');
-    expect((await card('d1-brief-good-day-one-line', 'Friday looks good: Form is 66.1.')).failed).toEqual(['no score or reading appears on a card']);
+    expect(honest.sent[0]).not.toContain('86.1');
+    expect((await card('d1-brief-good-day-one-line', 'Friday looks good: Form is 86.1.')).failed).toEqual(['no score or reading appears on a card']);
   });
 
   it('d2: shows the Check-in only what is left of the day, with the shared health', async () => {

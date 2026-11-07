@@ -16,9 +16,9 @@ export const SKIP_CARD = 'SKIP';
 // post-mvp-cleanup: fallback times until onboarding seeds the routine.
 export const DAY_CARDS: readonly DayCard[] = [
   {
-    id: 'card:brief', name: 'The Brief', defaultTime: '08:00', calendar: 'today', body: 'plan',
+    id: 'card:brief', name: 'The Daily Brief', defaultTime: '08:00', calendar: 'today', body: 'plan',
     instruction: [
-      'It is morning. Send the owner The Brief: how today looks and what to protect.',
+      'It is morning. Send the owner The Daily Brief: how today looks and what to protect.',
       'Open with a one-line read of the day. Then walk them through it in order: events with times and what each is for, and any reminder due today or anything waiting on them, said in the sentence where it matters.',
       'Name the one thing that matters most today and one clear action. Use what you know about their routines only when you actually have it.',
       'One clear direction, not a list of worries.',
@@ -45,9 +45,9 @@ export const DAY_CARDS: readonly DayCard[] = [
 // With PLANNING_BRIEF on, the Brief plans the day instead of walking through it: it checks what it builds on, proposes
 // changes on the owner's approval cards, and may ask one question with answers to tap. The other cards are unchanged.
 export const PLANNING_BRIEF_INSTRUCTION = [
-  'It is morning. Send the owner The Brief: one clear plan for today, not a recap of their calendar.',
+  'It is morning. Send the owner The Daily Brief: one clear plan for today, not a recap of their calendar.',
   'First read the shape of the day: the fixed commitments and the free stretches between them, what is still owed (open loops, replies owed, approvals waiting), and their goals where memory has them. The ledger and the waiting list can be stale or hold leftovers: before you build on an item, check it with your read tools (a reply may already be sent, an event may have moved), and leave out what is done or reads like a test or placeholder rather than something they owe.',
-  'Say it in this order. Open with a one-line read of the night and the day ahead, the night only from their shared health context. Then the clash you found, if there is one: where the day asks more than it leaves room for, or something owed collides with a commitment. Then what needs their yes or no: the one move that matters most, and at most two more. Close with what you checked, in a few words, so they can see why. Name a commitment only where it shapes the plan.',
+  'Say it in this order. Open with a one-line read of the day ahead, with the night in it only from their shared health context and only when it shapes the plan. Then the clash you found, if there is one: where the day asks more than it leaves room for, or something owed collides with a commitment. Then what needs their yes or no: the one move that matters most, and at most two more. Close with what you checked, in a few words, so they can see why. Name a commitment only where it shapes the plan.',
   'Put each move on its own approval card: propose_calendar_change for the calendar when you have it (holding a free stretch for the work that matters, moving something that clashes), propose_action for a reminder or any other change. Each is a yes or no that is theirs to decide; a day that needs no change gets none. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it.',
   'When a card tool takes why, fill it with the steps that led to that card, each tied to something you read this turn: the event, the thread, the memory or the health score.',
   'When the day is open or you do not know what they want to get done, ask them one question in the card\'s words, so it reads whole on its own; when you have offer_replies, also offer short answers to tap with it. Their answer comes back as an ordinary message, and you plan from it then. When the plan is clear, ask nothing.',
@@ -58,7 +58,7 @@ export const PLANNING_BRIEF_INSTRUCTION = [
 // the planning Brief raises its cards itself, and still changes nothing until the owner approves.
 const SILENT_WITHOUT = 'When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.';
 export const CLASH_LINE = 'When the calendar asks a lot of them on a day their Form or Recovery is low, that clash is the read of the day: say it plainly, and offer the one change that would ease it most.';
-const planRule = (cards: string) => `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good, a line is enough. ${CLASH_LINE} ${cards} When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`;
+const planRule = (cards: string) => `Plan with their body only when this request carries their shared health context, and in its words. Let it shape the day: when Form or Recovery is low or the load is heavy for them, say what to protect and what could move, lighten or wait, as one offer they can say yes to; when it is good and changes nothing, it needs no line. ${CLASH_LINE} ${cards} When a score is provisional, say so plainly if you mention it: their personal baseline is still forming. When this context names energy windows, name the best one and what to protect in it, as one offer. Never invent a window, a score or readiness. Never diagnose or alarm. ${SILENT_WITHOUT}`;
 const BODY_RULE: Readonly<Record<DayCard['body'], string>> = {
   plan: planRule('You cannot change their calendar or raise an approval card from here, so never say a change is made or that you raised a card for it; a yes from them puts it on an approval card.'),
   line: `Their body gets at most one line, and only when this request carries their shared health context: say what it shows. ${SILENT_WITHOUT}`,
@@ -74,9 +74,9 @@ export const PROSE_RULE = 'Plain sentences only: no headings, labels, bullet poi
 // judgment; the calendar's own events keep their times. The plan is a suggestion in the card, so it never claims a change.
 export const SCHEDULE_HEADING = 'Your day';
 export const SCHEDULE_RULE = [
-  `The paragraph keeps to the rule above. After it, lay out the rest of their day as a time-blocked plan: a blank line, a line reading "${SCHEDULE_HEADING}", then one line per block in time order, written "HH:MM–HH:MM what it is for", starting from now and ending when their day usually ends.`,
+  `The paragraph keeps to the rule above. After it, lay out the rest of their day as a time-blocked plan: a blank line, a line reading "${SCHEDULE_HEADING}", then one line per block in time order, its time range written as they would say it (9–10:30am, 2–3pm) and then what it is for, starting from now and ending when their day usually ends.`,
   'Keep every event from the calendar at its own time, exactly as the calendar has it. Fill the open time around them with what matters most today, drawn from their goals, open loops, tasks and anything waiting on them: the hardest thinking in their best energy window when their shared health names one, calls, email and admin in the lower stretches, a real break and a meal, and travel or buffer time before anything that needs it.',
-  'When their shared health shows a dip, plan a lighter day and pair it in the paragraph with the one easy step that helps or what still looks good, never a bare warning. Without shared health, plan from the calendar and what you know of their routine.',
+  'When their shared health shows a low day, plan a lighter one and say so in the paragraph as the reason for the plan, never as a warning. Without shared health, plan from the calendar and what you know of their routine.',
   'Leave time free when nothing needs it. Never invent an event, task or deadline you were not given. The plan is your suggestion, not a calendar change: never say a block is booked or on their calendar. If the day is already full, say so and list only the calendar.',
 ].join(' ');
 
@@ -148,7 +148,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
 
 export const DAY_PLAN_INSTRUCTION = [
   "You plan when Waldo sends today's cards to its owner, in the owner's local time.",
-  '- The Brief: the morning read of the day. It should land soon after they usually wake and before their first commitment.',
+  '- The Daily Brief: the morning read of the day. It should land soon after they usually wake and before their first commitment.',
   '- Check-in: the midday update of the Brief, only what changed and what comes next. It fits a natural pause after their focused hours. Skip it on a light day.',
   '- The Close: the end-of-day wrap. It should land about an hour before they usually wind down.',
   'Use their routine and preferences from memory and today\'s calendar; weekends and unusual days can differ. A time the owner explicitly asked for wins. Never plan a card inside their quiet hours; move it to just after they end, or skip it.',

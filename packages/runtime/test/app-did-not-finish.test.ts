@@ -116,7 +116,7 @@ describe('an app turn that does not finish', () => {
       const unfinished = await send(owner(), state, name, 'ledger-client-01', 'Set quiet hours from 9pm to 7am.');
       expect(unfinished.outcome).toBe('completed');
       const [, promise] = await shown(owner(), name);
-      expect(promise!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.\n\nDone: proactivity set$/);
+      expect(promise!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d{2})?[ap]m\.\n\nDone: proactivity set$/);
       expect(record(state, unfinished.id).landed).toBeUndefined();
       model.effectThenFail = false; model.requests = [];
       expect((await send(owner(), state, name, 'ledger-client-02', 'Are my quiet hours set?')).outcome).toBe('completed');
@@ -135,7 +135,7 @@ describe('an app turn that does not finish', () => {
       const messages = await shown(owner(), name);
       expect(messages.map(message => [message.role, message.parent_id])).toEqual([['user', null], ['assistant', failed.id]]);
       expect(notices(messages)).toHaveLength(0);
-      expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.$/);
+      expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d{2})?[ap]m\.$/);
       expect(state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM task_jobs').toArray()).toEqual([{ kind: 'retry_turn', status: 'queued' }]);
       const [{ due_at: due }] = state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM task_jobs').toArray() as [{ due_at: number }];
       await vi.waitFor(async () => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(due), { timeout: 2_000, interval: 20 });
