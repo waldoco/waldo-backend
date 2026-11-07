@@ -178,7 +178,7 @@ describe('the numeric health floor', () => {
   // Lab results as a report or a clinic mail sets them out: a value with its unit, a reference range, a high or low flag.
   const LAB_READINGS: Record<string, readonly string[]> = {
     tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |', 'TSH (ultrasensitive) 4.8', 'TSH 6', 'TSH 5\nT3 1.2'],
-    vitamin_d: ['Vitamin D 18 ng/mL', '25-OH Vitamin D: 42 nmol/L (75-200) L', 'Vitamin D (25-OH) 18', 'vitamin D level was 22', 'Vit D3 31 ng/ml'],
+    vitamin_d: ['Vitamin D 18 ng/mL', '25-OH Vitamin D: 42 nmol/L (75-200) L', 'Vitamin D (25-OH) 18', 'Vit D3 31 ng/ml', 'Vitamin D 18 (30-100)', 'Vitamin D: 12 (<20)'],
     haemoglobin: ['Haemoglobin 11.2 g/dL', 'Hemoglobin: 135 g/L', 'Hb 10.9 g/dL L', 'Hgb 14.1', 'haemoglobin of 9.8', 'Hb 10.9 → 11.4 g/dL', 'Hb 9.8 L'],
     egfr: ['eGFR 58 mL/min/1.73m2', 'eGFR: >90', 'eGFR 45 (>60) L', 'eGFR was 72'],
     creatinine: ['Creatinine 1.3 mg/dL', 'Serum creatinine 112 umol/L (H)', 'creatinine was 0.9', 'Creatinine: 88 µmol/L', 'Creatinine, serum 1.3'],
@@ -228,6 +228,14 @@ describe('the numeric health floor', () => {
     'Hgb 3.',
     'ferritin 2.',
     'TSH 3)',
+    // Plain vitamin D with a dose, a count, a price or a brand name in brackets.
+    'Vitamin D 1000 (2 caps daily)',
+    'Buy Vitamin D 1000 high strength',
+    '| Vitamin D3 | 2 | ₹499 |',
+    'Take Vitamin D: 1 cap',
+    'Vitamin D is 1 of 3 supplements',
+    'Vitamin D3 (60K) 4',
+    'Vitamin D (cholecalciferol) 1000',
   ])('leaves a lab-adjacent ordinary sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
