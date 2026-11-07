@@ -51,4 +51,3 @@ Both are removed by account deletion with the rest of the owner's object.
   and account deletion removes them with the object, as ADR-0082's lifecycle already requires of owner state.
 - **Arrival or departure triggers.** The device-context ADR of 5 November adds no trigger in v1 and rejects arrival moments.
   Building one waits for the owner to change that ruling.
-- **WHOOP.** Its syncs do not say `workout`, pending the owner's ruling on WHOOP's API terms of 6 October 2026.

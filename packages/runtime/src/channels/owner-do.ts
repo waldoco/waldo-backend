@@ -1916,8 +1916,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.whoop??=whoopOwner({
       doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
       timezone:()=>this.setup('app').timezone,
-      produce:woke=>this.setup('app').healthSamples('readings',woke),
+      produce:(woke,workout)=>this.setup('app').healthSamples('readings',woke,workout),
       ...(this.env.WAKE_BRIEF==='1'?{wakeFreshMs:wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN)}:{}),
+      ...(this.env.WORKOUT_WAKE==='1'?{workoutWake:true as const}:{}),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
