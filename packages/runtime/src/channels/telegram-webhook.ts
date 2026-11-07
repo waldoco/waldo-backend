@@ -68,6 +68,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
   // Off: Telegram, as before.
   OWNER_SURFACE_DEFAULT?: string;
+  // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
+  // not there and a send that names an attachment is refused.
+  APP_CHAT_ATTACHMENTS?: string;
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
   WHATSAPP_STOP?: string;
