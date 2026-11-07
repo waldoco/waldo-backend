@@ -266,6 +266,16 @@ describe('trace redaction takes every value a reading carries', () => {
     for (const value of values) expect(redacted).not.toContain(value);
   });
 
+  it.each([
+    ['Owner slept 7h, 3 meetings today and a run at 6.', '3 meetings'],
+    ['Your resting HR was 61, 2 meetings moved to Friday.', '2 meetings'],
+    ['HRV 42 ms, 1 meeting moved.', '1 meeting'],
+  ])('stops at a count after a comma: %s', (text, kept) => {
+    const redacted = redactNumericHealth(text, '[W]');
+    expect(redacted).toContain('[W]');
+    expect(redacted).toContain(kept);
+  });
+
   it('stops at a clock time in the next cell', () => {
     const redacted = redactNumericHealth('Resting HR 61 | 10:30 check-in', '[W]');
     expect(redacted).not.toContain('61');

@@ -264,9 +264,13 @@ const unemphasised = (text: string): string => text.replace(new RegExp(EMPHASIS,
 // A trend's second value ("from 48 to 35", "48 → 35") belongs to the reading.
 // Every further value is the reading's too, each with its unit: a trend's next step after an arrow or "down to", a value
 // restated after ", now", the next in a list, or the next cells of a table row, whose borders the prose view reads as colons.
-// A clock time ("10:30") is never one.
-const TREND_UNIT = String.raw`(?:\s*(?:ms|bpm|%|kg|lbs?|hrs?|hours?|h|mins?|minutes?|m)\b)?`;
-const TREND_TAIL = String.raw`(?:\s*(?:(?:down\s+|up\s+)?to|→|->|=>|↓|↑|⬇|⬆|↘|↗|,\s*now|,|:)\s*[+\-−]?\d+(?:[.,]\d+)?(?![\d:])${TREND_UNIT})+`;
+// A clock time ("10:30") is never one. After a bare comma a value is the reading's only with a unit, or as one of a list that
+// goes on or ends there ("HRV 42, 45, 48"): "HR 61, 2 meetings moved" counts the meetings.
+const TREND_UNIT = String.raw`\s*(?:ms|bpm|%|kg|lbs?|hrs?|hours?|h|mins?|minutes?|m)\b`;
+const TREND_VALUE = String.raw`[+\-−]?\d+(?:[.,]\d+)?(?![\d:])`;
+const TREND_STEP = String.raw`\s*(?:(?:down\s+|up\s+)?to|→|->|=>|↓|↑|⬇|⬆|↘|↗|,\s*now|:)\s*${TREND_VALUE}(?:${TREND_UNIT})?`;
+const LIST_STEP = String.raw`\s*,\s*${TREND_VALUE}(?:${TREND_UNIT}|(?=[^\S\n]*(?:,|\band\b|[.;!?)]|\n|$)))`;
+const TREND_TAIL = String.raw`(?:${TREND_STEP}|${LIST_STEP})+`;
 type Found = Readonly<{ index: number; text: string }>;
 const found = (pattern: RegExp, source: string): Found[] => {
   const tail = new RegExp(TREND_TAIL, 'iy');
