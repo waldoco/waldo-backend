@@ -137,6 +137,16 @@ describe('trace health scrub at the gate, capture on', () => {
     }
   });
 
+  it('withholds a medicine tool hop whole: no medicine name, time or dose status reaches a trace', () => {
+    const output = '{"ok":true,"data":{"id":"med-1","name":"Testolin 5 mg","times":["13:00"],"today":[{"at":"13:00","status":"taken"}]}}';
+    for (const tool of ['track_medication', 'log_medication', 'list_medications', 'stop_medication']) {
+      for (const hop of [`tool_${tool}`, `task_tool_${tool}`]) {
+        const gated = gateTraceEntry({ trace: 'tg-med', hop, ms: 1, ok: true, text: { input: '{"name":"Testolin 5 mg"}', output } }, true);
+        expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+      }
+    }
+  });
+
   it('withholds health tool turns and health context blocks inside a model call input, keeping the conversation', async () => {
     const block = `Shared health today (derived by the app from the owner's own wearable data):\n${renderHealth(material)}`;
     const ledger = healthSection([{ id: 1, kind: 'meal', logged_at: '2026-10-12T08:00:00Z', payload: { description: 'poha', calories_estimate: 487 } }] as never, 'Asia/Kolkata');
