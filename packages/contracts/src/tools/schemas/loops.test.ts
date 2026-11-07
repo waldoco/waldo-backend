@@ -24,6 +24,20 @@ describe('set_schedule_preference health mode', () => {
   });
 });
 
+describe('set_schedule_preference time', () => {
+  it('sets the time the Brief or the Close comes every day, as a 24-hour local time', () => {
+    for (const [card, time] of [['brief', '07:10'], ['close', '21:30'], ['brief', '00:00'], ['close', '23:59']] as const)
+      expect(setSchedulePreferenceArgsSchema.parse({ action: 'time', card, time })).toEqual({ action: 'time', card, time });
+  });
+
+  it('refuses a time without its card, a card without its time, a malformed time, another card, and either beside on, off or reset', () => {
+    for (const input of [{ action: 'time', card: 'brief' }, { action: 'time', time: '07:10' }, { action: 'time', card: 'brief', time: '7:10' }, { action: 'time', card: 'brief', time: '24:00' },
+      { action: 'time', card: 'brief', time: '7:10am' }, { action: 'time', card: 'midday', time: '14:00' }, { action: 'time', card: 'brief', time: '07:10', kind: 'daily_brief' },
+      { action: 'on', kind: 'daily_brief', time: '07:10' }, { action: 'off', kind: 'daily_brief', card: 'brief' }, { action: 'reset', card: 'close', time: '21:30' }])
+      expect(setSchedulePreferenceArgsSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
+  });
+});
+
 describe('open_loop source_ref', () => {
   // A loop bound to a mail source skips the owner's card (the taint gate's one exception), so the model must read it as a
   // guess at follow-up, not as something the owner agreed to.
