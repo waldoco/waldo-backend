@@ -152,7 +152,7 @@ Location is personal data, not ADR-0081 health data. It lives on the health plan
 
 ## 8. Amendment, 6 November 2026: a move brings the next look forward (#1980 B4)
 
-The owner ruled on §4's open decision: landing after travel, or coming home, may start proactive work. This is the smallest change that does it, and it adds no trigger the model does not already run.
+The owner ruled on §4's open decision: landing after travel, or coming home, may start proactive work. On 7 Nov the owner confirmed that a move or an arrival only brings the existing look forward (#1980). This is the smallest change that does it: it adds a new wake cause, `place_moved`, that feeds Waldo's existing look. It adds no new trigger type, no new interrupt channel and no change to the owner's limits.
 
 - **What counts as a move:**
   - The place upload's answer gains `moved`. It is true when this newer reading puts the device in another time zone, or in another named city or country, than the row it replaces, and the owner lets Waldo's model read place (`model_processing`).
@@ -175,13 +175,17 @@ The owner ruled on §4's open decision: landing after travel, or coming home, ma
   - The look is told why it runs and that "a move is a reason to look, not a reason to speak". It reads `get_device_context`, calendar and mail.
   - It decides `none`, `say` or `act` as on any look.
   - Every limit of the look holds: the owner's consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget and the gap.
-  - Looks stay one per owner-local hour, so a phone that flips zones cannot run more.
+  - A move pulls the look forward at most once per look cadence (`PROACTIVE_REVIEW_EVERY_MIN`, 3 hours by default). The time of the last pull is the only thing kept. A phone whose city keeps flipping, on a border or a train, costs no more looks than the cadence already allows. Looks also stay one per owner-local hour.
   - A move that lands on an hour whose look already ran, or is still running, is looked at in the next owner-local hour.
   - Limits are kept in the owner's set time zone, which a trip can make wrong for a while. The look is told this and weighs the local hour where the phone is before speaking. Holding quiet hours in the device's zone is a later change.
 - **Rollout order:**
   - Deploy the Worker that strips `moved` before applying migration `20261106190000`. An older Worker reads the extra key as a malformed receipt and answers 503.
   - To roll back, revert the migration first. Its receipts never stored the key, so a replay is safe either way.
-- **The notice can be replayed.** Like the health notices, it is signed with a fixed time, so a captured one could be sent again. Its only effect is bringing a look forward, at most one look an hour, and only the Worker can reach the route.
+- **The notice can be replayed.** Like the health notices, it is signed with a fixed time, so a captured one could be sent again. Its only effect is bringing a look forward, at most once per look cadence, and only the Worker can reach the route.
+- **Known follow-ups, not in this amendment:**
+  - A move after the Close arms the next Brief's look with `cause_id: place_moved`. Withdrawing place consent overnight does not clear that cause.
+  - The look's refs (`now`, `moved`) sit in the owner object's `task_jobs` as timestamps and a fixed phrase. "Nothing new is stored" holds for Supabase.
+  - A move look held by quiet hours or the budget loses its cause; the next look runs without it.
 - **What it does not do:**
   - It adds no geofence, no arrival rule, no "home" or "gym" label and no fine location.
   - Arriving at a named place (the gym, home) needs place history (§5) and stays with A3.

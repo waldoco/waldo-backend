@@ -37,6 +37,10 @@ export const armInterventionReview = async (scheduler: Scheduler, at: number, ag
   if (!again && found.state === 'entry' && found.entry.recurrence === null) return;
   await scheduler.schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID, ...(moved ? { cause_id: PLACE_MOVED_CAUSE } : {}) }, occurrenceAt: at, dueAt: at, recurrence: null });
 };
+// A move pulls the look forward at most once per look cadence, so a phone whose city keeps flipping (on a border, on a train)
+// costs no more looks than the cadence already allows. The time of the last pull is all that is kept.
+export const MOVE_PULL_KEY = 'intervention:move_pulled_at';
+export const movePullAllowed = (last: number | undefined, now: number, everyMs: number): boolean => last === undefined || now - last >= everyMs;
 export const lookMoved = (entry: Readonly<{ payload_refs: Readonly<Record<string, string>> }>): boolean => entry.payload_refs.cause_id === PLACE_MOVED_CAUSE;
 export const MOVED_REF = 'moved';
 

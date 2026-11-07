@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { interruptBook, type InterruptLimits } from '../src/channels/interruptions';
-import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, nextLocalHour, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
+import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, movePullAllowed, nextLocalHour, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
 import { verifiedPlaceMoved } from '../src/health/zone-change-route';
 import { routerSignature } from '../src/identity/owner-directory';
 import { triageTools } from '../src/channels/update-sweep';
@@ -188,5 +188,14 @@ describe('a look brought forward by a move', () => {
     expect(await verifiedPlaceMoved(await notice('owner-1', '{"timezone":"Asia/Dubai"}'), secret, mine)).toBe(false);
     expect(await verifiedPlaceMoved(await notice('owner-1', '{}', 'forged'), secret, mine)).toBe(false);
     expect(await verifiedPlaceMoved(await notice('owner-1', '{}'), undefined, mine)).toBe(false);
+  });
+});
+
+describe('a move pulling the look forward', () => {
+  it('pulls it at most once per cadence', () => {
+    const every = 120 * 60_000;
+    expect(movePullAllowed(undefined, 1_000, every)).toBe(true);
+    expect(movePullAllowed(1_000, 1_000 + every - 1, every)).toBe(false);
+    expect(movePullAllowed(1_000, 1_000 + every, every)).toBe(true);
   });
 });
