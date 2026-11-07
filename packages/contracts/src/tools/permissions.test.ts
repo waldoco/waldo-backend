@@ -145,6 +145,7 @@ describe('toolName', () => {
       'set_quest',
       'set_experiment',
       'review_experiment',
+      'check_task',
     ]);
   });
 
@@ -372,6 +373,7 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_load',
       'start_task',
       'cancel_task',
+      'check_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',

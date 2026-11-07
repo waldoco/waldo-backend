@@ -152,6 +152,8 @@ export const toolNameSchema = z.enum([
   // (ADR-0064 health-quests amendment); the owner's own chat turn only.
   'set_experiment',
   'review_experiment',
+  // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
+  'check_task',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -360,6 +362,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_load',
     'start_task',
     'cancel_task',
+    'check_task',
     'record_owner_finding',
     'list_owner_findings',
     'search_history',
