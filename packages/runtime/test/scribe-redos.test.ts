@@ -134,7 +134,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'tsh', 'vitamin d (', '25-oh vitamin d', 'psa', 'psa level', 'hb 12', 'ferritin 12', 'egfr >'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'tsh', 'vitamin d (', '25-oh vitamin d', 'psa', 'psa level', 'hb 12', 'ferritin 12', 'egfr >', 'tsh (ultra', 'creatinine,', 'hb 9.8', 'psa 2.1', 'tsh:'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });

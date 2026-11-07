@@ -152,21 +152,38 @@ const STAGE_MINUTES = String.raw`\d{1,2}\s*m(?:ins?|inutes?)?\b`;
 const STAGE_DURATION = `${STAGE_HOURS}${STAGE_MINUTES}`;
 const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
 // Lab results as a report or a clinic mail sets them out: the analyte, then its value with a unit, a reference range or a
-// high or low flag. A dose is not a result ("Vitamin D 1000 IU"), nor is a date, a clock time or a count after the name.
+// high or low flag. A dose is not a result ("Vitamin D 1000 IU", "60k weekly"), nor is a date, a year, a clock time or a count
+// after the name.
 const LAB_GAP = gapOf(String.raw`${READING_WORDS}|results?|levels?|values?`);
-const LAB_VALUE = String.raw`(?:[<>≤≥]\s*)?\d{1,4}(?:[.,]\d+)?(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|(?:iu|i\.u\.|mcg|µg|ug|mg|capsules?|tablets?|tabs?|units?|minutes?|mins?|hours?|weeks?|days?)\b))`;
-// The units only a lab result uses: thyroid hormone, vitamin D, PSA, ferritin, creatinine and eGFR.
-const LAB_UNIT = String.raw`(?:[mµμu]\s*iu\s*\/\s*m?l|ng\s*\/\s*ml|[nµμup]mol\s*\/\s*l|[µμu]g\s*\/\s*l|ml\s*\/\s*min(?:\s*\/\s*1[.,]73\s*m?(?:2|²)?)?)`;
+// A gap with a separator or a reading word in it ("TSH: 4", "ferritin is 15"), as against blanks alone ("TSH 14 Nov").
+const LAB_SAID = String.raw`(?:\s*(?:[:=~]|\b(?:${READING_WORDS}|results?|levels?|values?)\b))+\s*`;
+const MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*`;
+const NOT_A_RESULT = String.raw`(?:iu|i\.u\.|mcg|µg|ug|mg|k|capsules?|tablets?|tabs?|units?|drops?|sachets?|bottles?|minutes?|mins?|hours?|weeks?|days?|daily|weekly|monthly|once|twice|a\s+(?:day|week|month)|${MONTH})\b`;
+const LAB_VALUE = String.raw`(?:[<>≤≥]\s*)?(?!(?:19|20)\d\d(?![\d.,]))\d{1,4}(?:[.,]\d+)?(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+const LAB_DECIMAL = String.raw`(?:[<>≤≥]\s*)?\d{1,4}[.,]\d+(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+// The units only a lab result uses: thyroid hormone, vitamin D, PSA, ferritin, haemoglobin. mL/min is also a pump or a drip
+// rate, so it counts only after an analyte's name.
+const LAB_UNIT_ALONE = String.raw`(?:[mµμu]\s*iu\s*\/\s*m?l|ng\s*\/\s*ml|[nµμup]mol\s*\/\s*l|[µμu]g\s*\/\s*l|g\s*\/\s*dl)`;
+const LAB_UNIT = String.raw`(?:${LAB_UNIT_ALONE}|ml\s*\/\s*min(?:\s*\/\s*1[.,]73\s*m?(?:2|²)?)?)`;
+// A bare H or L is a flag only in brackets or after a decimal value ("Hb 9.8 L"); after a whole number it is as likely litres
+// or hours ("Hb 2 L of water"). A flag word never starts a compound ("high-priority").
+const LAB_RANGE = String.raw`(?:${LAB_UNIT}|g\s*\/\s*l|\(\s*(?:[<>]\s*)?\d|\(\s*(?:[HL]|high|low)\s*\)|\b(?:high|low)(?![\w-]))`;
+const LAB_FLAG = String.raw`\s*\b[HL](?![\w-])`;
 // One blank run, then a unit, a reference range or a flag; a second optional blank run beside it scanned blanks quadratically.
-const LAB_MARK = String.raw`\s*(?:${LAB_UNIT}|g\s*\/\s*d?l|\(\s*(?:[<>]\s*)?\d|\(\s*(?:[HL]|high|low)\b|\b(?:[HL]|high|low)\b)`;
-const QUALIFIER = String.raw`(?:\s*\(\s*[\w-]{1,8}\s*\))?`;
+const LAB_MARK = String.raw`\s*${LAB_RANGE}`;
+// A whole number after blanks alone counts only where the line or sentence ends, or a mark follows.
+const LAB_ENDS = String.raw`(?=\s*(?:[.,;!?)\]|]|$))`;
+const QUALIFIER = String.raw`(?:\s*\([\w\s-]{1,24}\)|\s*,\s*(?:serum|plasma|blood|total|free)\b)?`;
 const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|(?:25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*)?(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
 // "PSA" is also an announcement and "Hb" a pencil, so these count only with a unit, a range, a flag or a level.
 const SHARED_LAB_NAME = String.raw`(?:(?:total\s+|free\s+)?psa|hb)`;
 const LAB_READINGS: readonly RegExp[] = [
-  reading(String.raw`\b${READING_NUMBER}\s*${LAB_UNIT}`),
-  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}`),
+  reading(String.raw`\b${READING_NUMBER}\s*${LAB_UNIT_ALONE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_DECIMAL}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
   reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}${LAB_MARK}`),
+  casedReading(String.raw`\b(?:(?:[Tt]otal\s+|[Ff]ree\s+)?(?:PSA|psa|Psa)|H[Bb]|hb)\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}${LAB_FLAG}`),
   reading(String.raw`\b${SHARED_LAB_NAME}\s+(?:levels?|results?)\b${LAB_GAP}${LAB_VALUE}`),
 ];
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a

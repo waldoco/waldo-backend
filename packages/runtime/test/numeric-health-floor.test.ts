@@ -177,12 +177,12 @@ describe('the numeric health floor', () => {
   });
   // Lab results as a report or a clinic mail sets them out: a value with its unit, a reference range, a high or low flag.
   const LAB_READINGS: Record<string, readonly string[]> = {
-    tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |'],
+    tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |', 'TSH (ultrasensitive) 4.8', 'TSH 6'],
     vitamin_d: ['Vitamin D 18 ng/mL', '25-OH Vitamin D: 42 nmol/L (75-200) L', 'Vitamin D (25-OH) 18', 'vitamin D level was 22', 'Vit D3 31 ng/ml'],
-    haemoglobin: ['Haemoglobin 11.2 g/dL', 'Hemoglobin: 135 g/L', 'Hb 10.9 g/dL L', 'Hgb 14.1', 'haemoglobin of 9.8'],
+    haemoglobin: ['Haemoglobin 11.2 g/dL', 'Hemoglobin: 135 g/L', 'Hb 10.9 g/dL L', 'Hgb 14.1', 'haemoglobin of 9.8', 'Hb 10.9 → 11.4 g/dL', 'Hb 9.8 L'],
     egfr: ['eGFR 58 mL/min/1.73m2', 'eGFR: >90', 'eGFR 45 (>60) L', 'eGFR was 72'],
-    creatinine: ['Creatinine 1.3 mg/dL', 'Serum creatinine 112 umol/L (H)', 'creatinine was 0.9', 'Creatinine: 88 µmol/L'],
-    psa: ['PSA 4.5 ng/mL', 'PSA: 6.1 (0-4.0) H', 'Total PSA 2.1 ng/mL', 'PSA level 3.2'],
+    creatinine: ['Creatinine 1.3 mg/dL', 'Serum creatinine 112 umol/L (H)', 'creatinine was 0.9', 'Creatinine: 88 µmol/L', 'Creatinine, serum 1.3'],
+    psa: ['PSA 4.5 ng/mL', 'PSA: 6.1 (0-4.0) H', 'Total PSA 2.1 ng/mL', 'PSA level 3.2', 'PSA 5 (H)'],
     ferritin: ['Ferritin 12 ng/mL', 'Ferritin: 8 µg/L L', 'ferritin is 15', 'Ferritin 210 (30-400)'],
   };
   it.each(Object.entries(LAB_READINGS).flatMap(([analyte, texts]) => texts.map((text) => [analyte, text])))('holds a %s lab reading: %s', (_analyte, text) => {
@@ -201,6 +201,22 @@ describe('the numeric health floor', () => {
     'eGFR explained in 5 minutes',
     'Order #4821 for vitamin D gummies, $12.99',
     'Haemoglobin talk at 10:30 in room 204',
+    // A dose, a date, a year or a count after the name, and a flag word that starts a compound.
+    'Vitamin D3 60k sachet weekly',
+    'vitamin D 60K once a week',
+    'Take Vitamin D3 60K',
+    'Vitamin D 400 daily',
+    'Vitamin D 2 drops daily',
+    'Vitamin D: 2 sachets a month',
+    'TSH 14 Nov',
+    'TSH 2024 report attached',
+    'eGFR 2021 equation',
+    'Hb 2 L of water',
+    'PSA 2 h left',
+    'Hgb 3 slides in the deck',
+    'PSA: 3 high-priority items',
+    'PSA 2 low-hanging fruits',
+    'Set the pump at 200 ml/min',
   ])('leaves a lab-adjacent ordinary sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
