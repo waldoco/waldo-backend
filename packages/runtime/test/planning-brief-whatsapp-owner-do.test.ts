@@ -14,7 +14,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const BRIEF = 'The Brief\nBack to back until 4:45, with Team sync on top of your deck time. Want me to move Team sync to 5?';
+const BRIEF = 'The Daily Brief\nBack to back until 4:45, with Team sync on top of your deck time. Want me to move Team sync to 5?';
 const model = vi.hoisted(() => ({ briefTools: [] as string[][], briefRounds: 0 }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -22,7 +22,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const reply = (text: string, tool_calls?: { call_id: string; name: string; arguments: string }[]) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
     const asked = String(request.messages.at(-1)?.content ?? '');
-    if (!asked.includes('[Scheduled card "The Brief"')) return reply('Noted.');
+    if (!asked.includes('[Scheduled card "The Daily Brief"')) return reply('Noted.');
     model.briefTools.push((request.tools ?? []).map(tool => tool.name));
     if (model.briefRounds++ === 0) return reply('', [{ call_id: 'move-sync', name: 'propose_calendar_change', arguments: JSON.stringify(MOVE) }]);
     return reply(BRIEF);

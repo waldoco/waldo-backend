@@ -49,11 +49,11 @@ const CODE_MAX_DIGITS = 8;
 // The keyword may run straight into the code ("Verification code482913") when its table cell had no separator.
 const KEYWORD_END = String.raw`(?![a-z])`;
 
-// Between a keyword and its code: whitespace, then an optional "is", ":" or "-", then an optional "#", each
-// owning the whitespace after it. Three adjacent optional whitespace runs backtracked cubically on a long run of
-// spaces after a keyword; this form matches the same text in one pass.
-const LEAD = String.raw`\s*(?:(?:is|:|-)\s*)?(?:#\s*)?`;
-const BARE_LEAD = String.raw`\s*(?:(?:is|:)\s*)?(?:#\s*)?`;
+// Between a keyword and its code: whitespace, then an optional "is" (itself optionally followed by ":" or "-"), ":"
+// or "-", then an optional "#", each owning the whitespace after it. Adjacent optional whitespace runs backtracked
+// cubically on a long run of spaces after a keyword; in this form every optional part starts with a literal, so it
+// matches in one pass. A hyphen may be a minus sign ("error code -4821"); the digits are still taken as a code.
+const LEAD = String.raw`\s*(?:is\s*(?:[:-]\s*)?|[:-]\s*)?(?:#\s*)?`;
 
 // URL boundary: stop at whitespace or the punctuation that commonly wraps a pasted link.
 const URL_TAIL = String.raw`[^\s"'<>)\]]*`;
@@ -87,7 +87,7 @@ const OTPS: readonly RegExp[] = [
   new RegExp(String.raw`(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s*(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE, 'gi'),
   // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed. It starts
   // mid-word too ("Enter thiscode: 482913"), so a postcode or barcode followed by digits is quarantined as well.
-  new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + BARE_LEAD + CODE, 'gi'),
+  new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + LEAD + CODE, 'gi'),
 ];
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct

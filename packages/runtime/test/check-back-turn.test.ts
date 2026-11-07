@@ -6,6 +6,7 @@ import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
+import { EGRESS_READ_TOOLS } from '../src/tasks/profiles';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { claimStore, textFingerprint } from '../src/memory/claims';
 import { FORGET_PURGE_ID } from '../src/memory/forget-purge';
@@ -133,6 +134,39 @@ describe('a due reminder runs a fresh check-back turn', () => {
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'search_episodes']));
       for (const effect of ['send_email', 'draft_email', 'set_reminder', 'open_loop', 'remember', 'browse_act']) expect(offered(first!)).not.toContain(effect);
       expect(second!.tool_turns?.map(turn => turn.call.name)).toEqual(['get_context']);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([FOUND]);
+    });
+  });
+
+  // A check-back runs inside the alarm's own budget, so a careful one that needs more than 25 tool rounds (two minutes' worth)
+  // finishes instead of stopping at a flat two-minute cap.
+  it('runs on the alarm\'s time: more rounds than a flat two minutes allows', async () => {
+    await withOwner('check-back-reminder-long', async (owner, state) => {
+      await dueReminder(state);
+      fixture.script = (request) => (request.tool_turns?.length ?? 0) < 30
+        ? { text: '', calls: [{ call_id: `look-${request.tool_turns?.length ?? 0}`, name: 'get_context', arguments: '{}' }] }
+        : { text: FOUND };
+      await schedulePass(owner, state);
+      expect(checkBackRequests().at(-1)!.tool_turns).toHaveLength(30);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([FOUND]);
+    });
+  });
+
+  // A reminder set while the owner's turn had read outside text may carry that text's words, so it fires as outside text: the
+  // note is data, the turn holds no read that sends text out, and any change it wants goes on the owner's card.
+  it('a reminder set after outside text fires as outside text, with no egress reads', async () => {
+    await withOwner('check-back-reminder-outside', async (owner, state) => {
+      await reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(AT - 3_600_000) }, () => 'rem-o')
+        .set({ note: NOTE, at: new Date(AT - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' }, { outside: true });
+      fixture.script = looksThen(FOUND);
+      await schedulePass(owner, state);
+      const [first] = checkBackRequests();
+      expect(first!.messages.at(-1)!.content).toContain(NOTE);
+      expect(first!.messages.at(-1)!.content).toContain('not the owner\'s own words');
+      for (const egress of EGRESS_READ_TOOLS) expect(offered(first!)).not.toContain(egress);
+      expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'propose_action']));
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
     });

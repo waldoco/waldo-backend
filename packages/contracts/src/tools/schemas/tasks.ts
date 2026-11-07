@@ -23,6 +23,9 @@ export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;
 export const cancelTaskArgsSchema = z.strictObject({ job_id: taskJobIdSchema });
 export type CancelTaskArgs = z.infer<typeof cancelTaskArgsSchema>;
 
+export const checkTaskArgsSchema = z.strictObject({ job_id: taskJobIdSchema });
+export type CheckTaskArgs = z.infer<typeof checkTaskArgsSchema>;
+
 // What a worker hands back. findings carry where each came from, so the brain can follow one up; proposals are actions the
 // worker suggests, which only the brain can take, on its approval path.
 export const taskResultSchema = z.strictObject({
