@@ -19,11 +19,6 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
 // Unsent app uploads expire here: the app lane drops each at its expiry (app-uploads). It is apart from the inbox's own
 // wake, so an upload nobody sends never reads as an owner message waiting (owner-first).
 export const APP_UPLOADS_DUE_KEY = 'app_uploads_due_v1';
-// The upload's key is written in the staging commit; this moves the alarm slot earlier only, so no other lane's wake drops.
-export async function armAppUploadsWake(storage: DurableObjectStorage, due: number): Promise<void> {
-  const existing = await storage.getAlarm();
-  await armAlarm(storage, existing === null ? due : Math.min(existing, due));
-}
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';

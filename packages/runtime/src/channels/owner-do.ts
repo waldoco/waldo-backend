@@ -86,7 +86,7 @@ import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-m
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, armAppUploadsWake, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -2246,8 +2246,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(data.length>APP_CHAT_UPLOAD_MAX_BYTES)return answer({error:'too_large'},413);
     const staged=stageAppUpload(this.ctx.storage,{owner:name,kind,mime,name:named.name,data},Date.now());
     if(staged==='capacity')return answer({error:'uploads_waiting'},429);
-    // The alarm wakes at the upload's expiry, to drop it if no message took it.
-    await armAppUploadsWake(this.ctx.storage,staged.expiresAt);
+    // The alarm wakes at the upload's expiry, to drop it if no message took it. The key was written with the upload, so the
+    // slot only moves earlier and no other lane's wake drops.
+    const armed=await this.ctx.storage.getAlarm();await armAlarm(this.ctx.storage,armed===null?staged.expiresAt:Math.min(armed,staged.expiresAt));
     return answer(appChatUploadResultV1Schema.parse({upload_id:staged.id,kind,bytes:data.length,expires_at:staged.expiresAt}),201);
   }
   // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
