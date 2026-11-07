@@ -12,7 +12,7 @@ export type GoogleHealthDailyKind = 'overnight_hrv' | 'resting_heart_rate' | 'sp
 export type GoogleHealthDaily = Readonly<{ kind: GoogleHealthDailyKind; date: string; value: number }>;
 export type GoogleHealthExercise = Readonly<{ id: string | null; start: string; end: string; offset: number; updatedAt: string; activity: string; kcal: number | null }>;
 export type GoogleHealthBody = Readonly<{ kind: 'body_mass' | 'body_fat_percentage'; at: string; offset: number; value: number }>;
-export type GoogleHealthRollup = Readonly<{ start: string; end: string; value: number }>;
+export type GoogleHealthInterval = Readonly<{ start: string; end: string; value: number }>;
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -93,11 +93,13 @@ export const googleHealthBody = (raw: unknown): GoogleHealthBody | null => {
   return percent === null ? null : { kind: 'body_fat_percentage', at, offset, value: percent };
 };
 
-export const googleHealthRollup = (kind: 'steps' | 'active_energy', raw: unknown): GoogleHealthRollup | null => {
-  const point = record(raw);
-  const start = instant(point?.startTime), end = instant(point?.endTime);
-  const value = kind === 'steps' ? int64(record(point?.steps)?.countSum) : num(record(point?.activeEnergyBurned)?.kcalSum);
-  return start && end && value !== null && value >= 0 ? { start, end, value } : null;
+// One listed steps or active-energy point: a short interval and its count or kilocalories.
+export const googleHealthInterval = (kind: 'steps' | 'active_energy', raw: unknown): GoogleHealthInterval | null => {
+  const point = record(raw), body = record(kind === 'steps' ? point?.steps : point?.activeEnergyBurned), interval = record(body?.interval);
+  if (!point || !body || !interval || imported(point)) return null;
+  const start = instant(interval.startTime), end = instant(interval.endTime);
+  const value = kind === 'steps' ? int64(body.count) : num(body.kcal);
+  return start && end && Date.parse(start) < Date.parse(end) && value !== null && value >= 0 ? { start, end, value } : null;
 };
 
 const MIN = 60_000;
@@ -164,14 +166,23 @@ export const googleHealthBodySamples = (body: GoogleHealthBody, fetchedAtSeconds
   return [body.kind === 'body_mass' ? { ...base, signal: 'body_mass', unit: 'kilograms', value: round(body.value) } : { ...base, signal: 'body_fat_percentage', unit: 'percent', value: round(body.value) }];
 };
 
-// Hourly rollups as local-hour windows in the owner's offset. A bucket that is not exactly one hour starting on a local hour
-// (the last one of a range, or a range not aligned to the offset) is not a window and is dropped. Only the current hour
-// grows, so the fetch time is the revision.
-export const googleHealthWindowSamples = (kind: 'steps' | 'active_energy', rollups: readonly GoogleHealthRollup[], offset: number, fetchedAtSeconds: number): HealthSampleV1[] =>
-  rollups.flatMap((bucket): HealthSampleV1[] => {
-    const start = Date.parse(bucket.start);
-    if (Date.parse(bucket.end) - start !== HOUR_MS || (start + offset * MIN) % HOUR_MS !== 0) return [];
-    const base = { day: localDayOf(start, offset), utc_offset_minutes: offset, start_at: bucket.start, end_at: bucket.end, revision: fetchedAtSeconds };
-    if (kind === 'steps') return bucket.value <= 300_000 ? [{ ...base, sample_id: `${SOURCE}:steps_window:${bucket.start}`, signal: 'steps_window', unit: 'count', value: bucket.value }] : [];
-    return bucket.value <= 30_000 ? [{ ...base, sample_id: `${SOURCE}:active_energy_window:${bucket.start}`, signal: 'active_energy_window', unit: 'kilocalories', value: round(bucket.value, 1) }] : [];
+// Listed points summed into local-hour windows in the owner's offset. A point that crosses a local hour cannot be split
+// honestly, so the hour it starts in is dropped rather than guessed at. Only the current hour grows, so the fetch time is
+// the revision.
+export const googleHealthWindowSamples = (kind: 'steps' | 'active_energy', points: readonly GoogleHealthInterval[], offset: number, fetchedAtSeconds: number): HealthSampleV1[] => {
+  const hours = new Map<number, { value: number; whole: boolean }>();
+  for (const point of points) {
+    const start = Date.parse(point.start), local = start + offset * MIN, hour = local - (((local % HOUR_MS) + HOUR_MS) % HOUR_MS) - offset * MIN;
+    const bucket = hours.get(hour) ?? { value: 0, whole: true };
+    bucket.value += point.value;
+    if (Date.parse(point.end) > hour + HOUR_MS) bucket.whole = false;
+    hours.set(hour, bucket);
+  }
+  return [...hours].sort(([a], [b]) => a - b).flatMap(([hour, bucket]): HealthSampleV1[] => {
+    if (!bucket.whole) return [];
+    const startAt = new Date(hour).toISOString().replace('.000Z', 'Z'), endAt = new Date(hour + HOUR_MS).toISOString().replace('.000Z', 'Z');
+    const base = { day: localDayOf(hour, offset), utc_offset_minutes: offset, start_at: startAt, end_at: endAt, revision: fetchedAtSeconds };
+    if (kind === 'steps') return bucket.value <= 300_000 ? [{ ...base, sample_id: `${SOURCE}:steps_window:${startAt}`, signal: 'steps_window', unit: 'count', value: bucket.value }] : [];
+    return bucket.value <= 30_000 ? [{ ...base, sample_id: `${SOURCE}:active_energy_window:${startAt}`, signal: 'active_energy_window', unit: 'kilocalories', value: round(bucket.value, 1) }] : [];
   });
+};

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { healthSampleV1Schema } from '../../contracts/src/app/health-ingest';
 import {
-  googleHealthBody, googleHealthBodySamples, googleHealthDaily, googleHealthExercise, googleHealthNightSamples, googleHealthRollup, googleHealthSleep,
+  googleHealthBody, googleHealthBodySamples, googleHealthDaily, googleHealthExercise, googleHealthInterval, googleHealthNightSamples, googleHealthSleep,
   googleHealthWindowSamples, googleHealthWorkoutSamples, utcOffsetMinutes,
 } from '../src/health/providers/google-health-map';
 
@@ -127,17 +127,30 @@ describe('Google Health workouts and body readings', () => {
 });
 
 describe('Google Health hourly windows', () => {
-  const hour = (startTime: string, endTime: string, value: Record<string, unknown>) => ({ startTime, endTime, ...value });
+  const minute = (field: 'steps' | 'activeEnergyBurned', startTime: string, endTime: string, body: Record<string, unknown>, source = fitbit) =>
+    ({ dataSource: source, [field]: { interval: { startTime, startUtcOffset: IST, endTime, endUtcOffset: IST }, ...body } });
 
-  it('maps hourly steps and active energy as local-hour windows, and drops a bucket that is not exactly one local hour', () => {
-    const steps = [hour('2026-11-06T03:30:00Z', '2026-11-06T04:30:00Z', { steps: { countSum: '812' } }), hour('2026-11-06T04:30:00Z', '2026-11-06T05:00:00Z', { steps: { countSum: '90' } }),
-      hour('2026-11-06T05:00:00Z', '2026-11-06T06:00:00Z', { steps: { countSum: '300' } })].map(r => googleHealthRollup('steps', r));
-    const out = googleHealthWindowSamples('steps', steps.filter(r => r !== null), 330, FETCHED);
-    expect(out.map(s => [s.sample_id, s.value, s.day])).toEqual([['google_health:steps_window:2026-11-06T03:30:00Z', 812, '2026-11-06']]);
-    const energy = googleHealthWindowSamples('active_energy', [googleHealthRollup('active_energy', hour('2026-11-06T03:30:00Z', '2026-11-06T04:30:00Z', { activeEnergyBurned: { kcalSum: 61.5 } }))!], 330, FETCHED);
-    expect(energy.map(s => [s.signal, s.value])).toEqual([['active_energy_window', 61.5]]);
+  it('sums listed points into local-hour windows in the owner\'s offset, revised by the fetch', () => {
+    const steps = [minute('steps', '2026-11-06T03:30:00Z', '2026-11-06T03:31:00Z', { count: '500' }), minute('steps', '2026-11-06T04:29:00Z', '2026-11-06T04:30:00Z', { count: '312' }),
+      minute('steps', '2026-11-06T04:30:00Z', '2026-11-06T04:31:00Z', { count: '40' })].map(r => googleHealthInterval('steps', r)!);
+    const out = googleHealthWindowSamples('steps', steps, 330, FETCHED);
+    expect(out.map(s => [s.sample_id, s.start_at, s.end_at, s.value, s.day])).toEqual([
+      ['google_health:steps_window:2026-11-06T03:30:00Z', '2026-11-06T03:30:00Z', '2026-11-06T04:30:00Z', 812, '2026-11-06'],
+      ['google_health:steps_window:2026-11-06T04:30:00Z', '2026-11-06T04:30:00Z', '2026-11-06T05:30:00Z', 40, '2026-11-06'],
+    ]);
+    const energy = googleHealthWindowSamples('active_energy', [googleHealthInterval('active_energy', minute('activeEnergyBurned', '2026-11-06T03:30:00Z', '2026-11-06T03:31:00Z', { kcal: 1.25 }))!,
+      googleHealthInterval('active_energy', minute('activeEnergyBurned', '2026-11-06T03:31:00Z', '2026-11-06T03:32:00Z', { kcal: 2 }))!], 330, FETCHED);
+    expect(energy.map(s => [s.signal, s.value])).toEqual([['active_energy_window', 3.3]]);
     for (const s of [...out, ...energy]) expect([s.revision, at(s)], s.sample_id).toEqual([FETCHED, true]);
-    expect(googleHealthRollup('steps', hour('2026-11-06T03:30:00Z', '2026-11-06T04:30:00Z', { steps: { countSum: '-4' } }))).toBeNull();
-    expect(googleHealthRollup('active_energy', hour('2026-11-06T03:30:00Z', '2026-11-06T04:30:00Z', { steps: { countSum: '4' } }))).toBeNull();
+  });
+
+  it('drops an hour a point crosses rather than splitting it, and refuses imported or malformed points', () => {
+    const crossing = [minute('steps', '2026-11-06T04:40:00Z', '2026-11-06T04:41:00Z', { count: '30' }), minute('steps', '2026-11-06T05:29:00Z', '2026-11-06T05:31:00Z', { count: '20' })]
+      .map(r => googleHealthInterval('steps', r)!);
+    expect(googleHealthWindowSamples('steps', crossing, 330, FETCHED)).toEqual([]);
+    expect(googleHealthInterval('steps', minute('steps', '2026-11-06T03:30:00Z', '2026-11-06T03:31:00Z', { count: '5' }, { platform: 'HEALTH_KIT', recordingMethod: 'PASSIVELY_MEASURED' }))).toBeNull();
+    expect(googleHealthInterval('steps', minute('steps', '2026-11-06T03:30:00Z', '2026-11-06T03:31:00Z', { count: '-4' }))).toBeNull();
+    expect(googleHealthInterval('steps', minute('steps', '2026-11-06T03:31:00Z', '2026-11-06T03:30:00Z', { count: '4' }))).toBeNull();
+    expect(googleHealthInterval('active_energy', minute('steps', '2026-11-06T03:30:00Z', '2026-11-06T03:31:00Z', { count: '4' }))).toBeNull();
   });
 });
