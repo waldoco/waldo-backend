@@ -177,6 +177,7 @@ export const taskHost = (deps: TaskHostDeps) => {
   const busy = new Map<string, number>();
   const attemptKey = (ticket: Pick<TaskTicket, 'jobId' | 'attempt'>) => `${ticket.jobId}:${ticket.attempt}`;
   const logEvents = (events: readonly TurnLogEntry[]) => { for (const event of events) deps.log(event); };
+  const spentAfterFence = new Set<string>();
   // Called only once the book has accepted the call's ticket: a fenced or stale call's outcomes are not replayed.
   const replay = (outcomes: readonly ProviderOutcome[]) => {
     for (const { provider, ok } of outcomes) {
@@ -374,6 +375,13 @@ export const taskHost = (deps: TaskHostDeps) => {
     })),
     // The worker keeps its lease while a model call runs.
     heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
+    // Spend only, accepted after a fence: the attempt's own worker model calls are logged once per attempt, nothing else is.
+    spent: async (ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void> => {
+      const key = attemptKey(ticket);
+      if (spentAfterFence.has(key)) return;
+      spentAfterFence.add(key);
+      logEvents(events.filter((event) => event.job_id === ticket.jobId && event.cost_kind === 'worker'));
+    },
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
       // The same attempt rejoining while the brain still serves a call of its earlier invocation (a worker alarm that fired
       // again): that call may still be waiting for the serial lane, with no intent written yet. Both are fenced, so neither

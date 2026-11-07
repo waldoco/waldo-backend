@@ -129,7 +129,7 @@ describe('an approved browser card runs as a replay job', () => {
       await serial(() => pass().then(() => undefined));
       await serial(() => pass().then(() => undefined));
       expect([...sent.keys()]).toEqual([replayKey(id)]);
-      expect(sent.get(replayKey(id))).toMatch(/^Done: Run browse_act: .*table for two, 8pm/);
+      expect(sent.get(replayKey(id))).toBe('Done: Run browse_act: The restaurant email offered the 8pm table.');
       expect(status(sql, id)).toBe('done');
       expect(book.byKey(replayKey(id))!.status).toBe('applied');
       expect(await desk.decide(id, 'a', 'late-tap')).toEqual({ toast: 'Already handled.', message: 'Already handled.' });

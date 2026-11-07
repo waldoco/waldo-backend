@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { provisionDoSchema } from '../src/do-schema';
-import { toolNameSchema } from '@waldo/contracts';
+import { EXTERNAL_ORIGIN_TOOLS, toolNameSchema } from '@waldo/contracts';
 import { CHILD_TOOL_NAMES } from '../src/conversation/subagent';
 import { guardExternalReads, EXTERNAL_READ_TOOLS, SOURCE_SCOPE_CLASS, SourceScopeStore } from '../src/tools/source-scope';
 
@@ -108,7 +108,7 @@ it('guard denies a read handler only while the limit is on', async () => {
   });
 });
 
-it('delegate children: every child tool is either denied under the limit or content-free, and the guard survives the child filter', async () => {
+it('delegate children: every outside read a child holds is denied under the limit, and the guard survives the child filter', async () => {
   await withDo('scope-child', async (sql) => {
     const s = new SourceScopeStore(sql);
     s.set('pasted_only', owner, NOW);
@@ -120,6 +120,8 @@ it('delegate children: every child tool is either denied under the limit or cont
       const r = await h.handle() as { ok: boolean; code?: string };
       if (r.ok) open.push(h.name); else expect(r.code).toBe('forbidden');
     }
-    expect(open).toEqual(['get_context']);
+    // What stays open reads only the owner's own Waldo state (clock, reminders, lists, skills), never a source.
+    expect(open).toContain('get_context');
+    for (const name of open) expect(EXTERNAL_ORIGIN_TOOLS as readonly string[], name).not.toContain(name);
   });
 });

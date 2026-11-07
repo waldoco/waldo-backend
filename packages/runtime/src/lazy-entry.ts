@@ -39,7 +39,7 @@ export const lazyWorker = (load: () => Promise<FullWorker>) => ({
     scheduled: async (controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> => (await load()).default.scheduled(controller, env, ctx),
   } satisfies ExportedHandler<Env>,
   OwnerDO: lazyDurableObject(async () => (await load()).OwnerDO, { fetch: true, alarm: true, taskClaim: true, taskTool: true, taskCheckpoint: true,
-    taskReport: true, taskHeartbeat: true, admitIMessageTurn: true, noteIMessageReaction: true, recordIMessageResult: true, admitAgentMail: true, admitMacDelivery: true }),
+    taskReport: true, taskHeartbeat: true, taskSpent: true, admitIMessageTurn: true, noteIMessageReaction: true, recordIMessageResult: true, admitAgentMail: true, admitMacDelivery: true }),
   DeviceBridgeDO: lazyDurableObject(async () => (await load()).DeviceBridgeDO, { fetch: true, alarm: true, webSocketMessage: true, webSocketClose: true,
     webSocketError: true, admitNonce: true, enqueueCommand: true, listCommands: true, revoke: true, status: true }),
   IMessageBridgeDO: lazyDurableObject(async () => (await load()).IMessageBridgeDO, { alarm: true, hostRequest: true, enqueueReply: true, tapbacksReady: true,

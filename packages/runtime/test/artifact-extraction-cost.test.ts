@@ -31,6 +31,9 @@ describe('artifact extraction on hostile text', () => {
     ['one digit run glued to "is your"', '1'.repeat(N) + 'is your code'],
     ['"code" glued to itself', 'code'.repeat(N / 4) + ' 1'],
     ['letters and digits in turn, then "is your"', 'a1'.repeat(N / 2) + ' is your code'],
+    ['a keyword and "is", then one long run of spaces', 'code is' + ' '.repeat(N) + 'x'],
+    ['a keyword, "is" and a colon, then one long run of spaces', 'code is' + ' '.repeat(N / 2) + ':' + ' '.repeat(N / 2) + 'x'],
+    ['"code is -" repeated', 'code is -'.repeat(N / 9)],
     ['an adjective glued to itself', 'verification'.repeat(N / 12) + 'code 1'],
   ])('stays linear: %s', (_shape, text) => {
     const started = performance.now();
