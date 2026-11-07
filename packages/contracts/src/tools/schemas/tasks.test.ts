@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TOOL_PERMISSIONS, toolNameSchema } from '../permissions';
-import { cancelTaskArgsSchema, startTaskArgsSchema, taskJobIdSchema, taskResultSchema, TASK_PROFILES } from './tasks';
+import { cancelTaskArgsSchema, checkTaskArgsSchema, startTaskArgsSchema, taskJobIdSchema, taskResultSchema, TASK_PROFILES } from './tasks';
 
 // ADR-0029 valid + invalid pair per schema. A worker sees only its brief, so the brief's parts are required words; no
 // length bound sits on the body parts (a bound in constrained decoding makes the model emit a cut-off body that still
@@ -40,6 +40,15 @@ describe('cancel_task arguments', () => {
   it('job ids are trace identifiers', () => {
     expect(taskJobIdSchema.safeParse('job_0123456789ab').success).toBe(true);
     expect(/^[A-Za-z0-9:_.-]{1,64}$/.test('job_0123456789ab')).toBe(true);
+  });
+});
+
+describe('check_task arguments', () => {
+  it('accepts a job id and rejects anything else', () => {
+    expect(checkTaskArgsSchema.safeParse({ job_id: 'job_0123456789ab' }).success).toBe(true);
+    for (const value of [{}, { job_id: 'job_x' }, { job_id: 'job_0123456789ab', detail: 'full' }, { job_ids: ['job_0123456789ab'] }]) {
+      expect(checkTaskArgsSchema.safeParse(value).success, JSON.stringify(value)).toBe(false);
+    }
   });
 });
 

@@ -17,17 +17,19 @@ for (const guard of REQUIRED_GUARDS) {
   }
 }
 
+// Every guard runs, and every failure is listed at the end: a guard that cannot run where it is (pgTAP's download behind a
+// proxy) must not hide a real violation in a guard after it.
+const failed = [];
 for (const file of guardFiles) {
   const result = spawnSync(process.execPath, [join(here, file)], {
     stdio: 'inherit',
   });
 
-  if (result.error) {
-    process.stderr.write(`guard-runner: failed to run ${file}: ${result.error.message}\n`);
-    process.exit(1);
-  }
+  if (result.error) failed.push(`${file} (could not run: ${result.error.message})`);
+  else if (result.status !== 0) failed.push(`${file} (exit ${result.status ?? result.signal})`);
+}
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
+if (failed.length > 0) {
+  process.stderr.write(`guard-runner: ${failed.length} of ${guardFiles.length} guards failed:\n${failed.map((line) => `  ${line}\n`).join('')}`);
+  process.exit(1);
 }

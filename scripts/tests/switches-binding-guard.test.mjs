@@ -70,15 +70,18 @@ test('every handler of the Worker\'s default export flattens its env', () => {
 });
 
 // Moving the switches into WALDO_SWITCHES changed no var the Worker reads: every name 1808c6ed (the last config before the
-// move) declared is still declared in the same environment with the same value. A later deliberate change to one of those
-// values moves this pin to the commit that made it.
+// move) declared is still declared in the same environment with the same value, except the values named in CHANGED_SINCE,
+// which a later change set on purpose.
 const BEFORE_MOVE = '1808c6ed83c9d84be2b4ae36ad05e9d27343b772';
+const CHANGED_SINCE = {
+  staging: { OPEN_SIGNUP: '1', PHONE_SMS_VERIFY: '1', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', MEDICATIONS: '1' },
+};
 test('the move kept every var the Worker reads, by name and value, in both environments', (t) => {
   const old = spawnSync('git', ['show', `${BEFORE_MOVE}:packages/runtime/wrangler.jsonc`], { cwd: root, encoding: 'utf8' });
   if (old.status !== 0) { t.skip(`${BEFORE_MOVE} is not in this clone's history`); return; }
   const before = parseJsonc(old.stdout), now = flatConfig(config);
   assert.equal(Object.keys(before.vars).length, 109);
   for (const [label, was, is] of [['production', before.vars, now.vars], ['staging', before.env.staging.vars, now.env.staging.vars], ['previews', before.previews.vars, now.previews.vars]]) {
-    for (const [name, value] of Object.entries(was)) assert.deepEqual([label, name, is[name]], [label, name, value]);
+    for (const [name, value] of Object.entries(was)) assert.deepEqual([label, name, is[name]], [label, name, CHANGED_SINCE[label]?.[name] ?? value]);
   }
 });

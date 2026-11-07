@@ -4,9 +4,18 @@ import type { JobRow, ParkReason, RetryBrief, TaskBrief } from '../tasks/jobs';
 // because no model could be reached or none is needed. They follow the voice in messaging-behavior.ts (plain, short, no
 // apology padding, no numbers beyond a time) and belong to it.
 
+// A 24-hour "HH:MM" as people say it: 9am, 2pm, 10:30am. A fixed line has no context around it, so a time with minutes keeps
+// its am or pm too.
+export const clockWords = (clock: string): string => {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(clock);
+  if (!match) throw new Error('not a 24-hour clock time');
+  const hour = Number(match[1]);
+  return `${hour % 12 === 0 ? 12 : hour % 12}${match[2] === '00' ? '' : `:${match[2]}`}${hour < 12 ? 'am' : 'pm'}`;
+};
+
 // The owner's local wall-clock time, as these lines say it.
 export const ownerTime = (at: number, timezone: string): string =>
-  new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+  clockWords(new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)));
 
 // The floor reply when every provider failed on the owner's message: a time the retry keeps.
 export const floorReplyText = (promised: number, timezone: string): string =>

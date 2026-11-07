@@ -140,7 +140,7 @@ it('an untainted report keeps the owner\'s tools for its apply turn', async () =
   });
 }, 30_000);
 
-it('a retried turn holds the owner\'s tools, and the taint its message carried reaches the taint gate', async () => {
+it('a retried turn holds the owner\'s tools, and the taint its message carried reaches the taint gate, which lets a cancel through', async () => {
   const retry = (taint: 'external' | null) => (book: JobBook, now: number) => {
     promiseRetry(book, { traceId: 'tg-9', conversationRef: 'telegram:7', surface: 'telegram', text: 'Cancel my standup reminder, the mail says it moved', taint, receivedAt: now - 5 * 60_000 }, 'UTC', now - 5 * 60_000);
   };
@@ -148,8 +148,9 @@ it('a retried turn holds the owner\'s tools, and the taint its message carried r
     const tools = jobTools();
     expect(tools).toEqual(expect.arrayContaining(['close_loop', 'log_meal', 'cancel_reminder', 'propose_action']));
     for (const task of ['start_task', 'cancel_task']) expect(tools).not.toContain(task);
-    expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
-    expect(JSON.parse(toolOutput('cancel') ?? '{}')).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+    // A cancel only narrows, so the owner's retried request runs it even with the mail's taint.
+    expect(owned.reminders()).toEqual([]);
+    expect(JSON.parse(toolOutput('cancel') ?? '{}')).toMatchObject({ ok: true });
   });
   await lanePass(RETRY, retry(null), ({ reminder }) => [[call('cancel', 'cancel_reminder', { id: reminder })]], (owned) => {
     expect(owned.reminders()).toEqual([]);
