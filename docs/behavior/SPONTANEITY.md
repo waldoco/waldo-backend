@@ -51,10 +51,15 @@ New moments are inputs to that layer, never a second path to the owner.
   - An app build below revision 9 never gets the card; its chat carries the card's words and asks it to update.
   - Source: `channels/calendar-plan.ts`; the `calendar_plan` branch of the approval desk.
 
+- **Arrived home or at the gym (`ARRIVAL_LOOK`, device-context ADR §9).**
+  - The owner names home and the gym on their phone, which keeps those places. When it arrives at one, its place upload says `arrived: home` or `gym`; only the word travels, and nothing stores it.
+  - For a reading observed within the hour, while the owner lets Waldo's model read place, the owner's object brings Waldo's look to now, as a move to another city does. The look is told an arrival is a reason to look, not a reason to speak, and keeps every limit of the look.
+  - Source: `channels/app-device-context.ts`, `health/zone-change-route.ts` (`placearrived`), `channels/interventions.ts` (`LookCause`), migration `20261107100000`.
+
 ## Not built: follow-ups for the proactive layer's seams
 
 - **Workout ended, and meeting ended or meeting notes ready.** These are inputs to the proactive layer's look (`intervention-review`) or triage, under `PROACTIVE_GATE`. They are not a separate `/signals` route with its own budget.
-- **Arrived or left a place.** This needs device context, which is in scope under consent and an ADR, so it waits for that ADR.
+- **Left a place.** Only arriving home or at the gym brings a look forward (above). Leaving one does nothing yet.
 - **Model-scheduled check-backs.** A "look again at HH:MM" belongs on the look's own one-shot schedule (`nextLookAt`), under the same limits.
 - **Oura and other cloud wearables.** Only the app upload and WHOOP say `woke` today.
 
