@@ -75,19 +75,25 @@ third-party security review (CASA, repeated yearly).
 
    | Google Health type | Waldo signal |
    |---|---|
-   | `sleep` (session, with LIGHT/DEEP/REM/AWAKE stages) | `sleep_duration` with stages, `sleep_efficiency`, `sleep_midpoint` |
+   | `sleep` (main sleep only) | `sleep_duration`, `sleep_efficiency`, `sleep_midpoint`; stage totals follow once a v2 sleep context is built from Google's stage segments, since the ingest contract accepts stages only with one |
    | `daily-heart-rate-variability` (RMSSD, ms) | `overnight_hrv`, method `rmssd` |
    | `daily-resting-heart-rate` | `resting_heart_rate`, method `provider_resting_daily` |
    | `daily-respiratory-rate` | `respiratory_rate` |
    | `daily-oxygen-saturation` | `spo2` |
-   | `daily-sleep-temperature-derivations` (nightly skin temperature against the owner's baseline, °C) | `wrist_temperature`, method `baseline_delta` |
+   | `daily-sleep-temperature-derivations` (`nightlyTemperatureCelsius`, the absolute nightly mean) | `wrist_temperature`, method `absolute` (Waldo keeps its own per-source baseline) |
    | `steps`, `active-energy-burned` (hourly `rollUp`) | `steps_window`, `active_energy_window` |
-   | `heart-rate` (hourly `rollUp`, min/mean/max) | `heart_rate_window` |
-   | `exercise` | `workout` |
+      | `exercise` | `workout` |
    | `weight`, `body-fat` | `body_mass`, `body_fat_percentage` |
 
    - Second-level heart rate and intraday HRV samples are not stored, matching the ingest addendum: the beat-level series
      stays with the provider.
+   - Heart-rate windows are not mapped: `heart_rate_window` needs a sample count, and Google's rollup gives only min,
+     average and max.
+   - Daily vitals carry only a date, so they are placed on that date's main sleep (its window and offset), with the fetch
+     time as their revision.
+   - A record whose `dataSource.platform` is `HEALTH_KIT` or `HEALTH_CONNECT` is refused: Google Health imported it from a
+     source Waldo reads itself. Reads use `dataSourceFamily=users/me/dataSourceFamilies/google-wearables` where Google
+     allows it; sleep does not, so the platform check covers it.
    - A field Google hasn't computed produces no sample, never a zero.
 5. **Linking before connected.**
    - After the code is exchanged, the edge calls `GET /v4/users/me/identity`.
