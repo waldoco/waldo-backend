@@ -58,6 +58,41 @@ const reported = (book: JobBook, key: string, taskResult: TaskResult = result) =
   return job.id;
 };
 
+describe('an early ending is always told', () => {
+  for (const status of ['partial', 'blocked', 'failed'] as const) {
+    it(`a ${status} result the apply turn would pass over in silence still reaches the owner, with a way to try again`, async () => {
+      await withLane(async ({ book, sent, deps }) => {
+        const id = reported(book, `k-${status}`, { ...result, status, left: ['Two names were not found.'] });
+        const asked: string[] = [];
+        await runJobsLane(deps({ turn: async (_job, _trace, text) => { asked.push(text); return 'SKIP'; } }));
+        expect(asked[0]).toContain(`It ended early (${status}): say so plainly`);
+        expect(asked[0]).not.toContain('reply with exactly SKIP');
+        expect(sent.get(`task:${id}`)).toMatch(/^Your background task "Inbox since Monday" .+\. Tell me to try again and I'll start it again\.$/);
+        expect(book.get(id)!.status).toBe('applied');
+      });
+    });
+  }
+
+  it('a task the brain stopped is told even when the apply turn says nothing', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const { job } = book.create(task('k-parked'));
+      book.startAttempt(job.id);
+      expect(book.park(job.id, 'no_progress')).toBe(true);
+      await runJobsLane(deps({ turn: async () => 'SKIP' }));
+      expect(sent.get(`task:${job.id}`)).toContain("stopped before it finished, because it wasn't getting anywhere");
+    });
+  });
+
+  it('a finished task the model judges not worth a word stays silent, as before', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const id = reported(book, 'k-done');
+      await runJobsLane(deps({ turn: async () => 'SKIP' }));
+      expect(sent.has(`task:${id}`)).toBe(false);
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+});
+
 describe('the jobs lane', () => {
   it('applies a reported task once: one apply turn, one delivery under the job key, then applied', async () => {
     await withLane(async ({ book, sent, turns, deps, log }) => {

@@ -80,7 +80,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         await deps.wake(now);
       }
       const made = taskBrief(job);
-      return { ok: true as const, data: { status: 'started', job_id: job.id, profile: job.profile, title: made.title }, source_taint: null };
+      return { ok: true as const, data: { status: 'started', job_id: job.id, profile: job.profile, title: made.title, note: STARTED_NOTE }, source_taint: null };
     },
   } satisfies ToolHandler<StartTaskArgs, unknown, ToolDispatcherContext>,
   {
@@ -122,6 +122,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         ok: true as const,
         data: {
           job_id, title: titleOf(row), profile: row.profile, state: stateOf(row),
+          ...(row.outcome ? { outcome: row.outcome } : {}), ...(row.settled_at ? { told_minutes_ago: Math.floor((deps.now() - row.settled_at) / 60_000) } : {}),
           ...(row.park_reason ? { why: PARK_WORDS[row.park_reason] } : {}),
           age_minutes: Math.floor((deps.now() - row.created_at) / 60_000), steps: row.rounds, tools_called,
           ...(asked ? { approval_id: asked } : {}), ...(result ? { result } : {}),
@@ -163,6 +164,9 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
     },
   } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>] : []),
 ];
+
+// The work is never invisible: the owner hears it started where they asked, and its report or early ending comes back there.
+const STARTED_NOTE = 'Tell the owner in one short line that it has started and that the report will come back here.';
 
 // The jobs the owner's turn may name: tasks the model started, and actions the owner approved. A retried owner message is the
 // brain's own promise, kept or noticed by the jobs lane, and a machine job is the brain's own background check, which the owner
