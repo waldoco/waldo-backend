@@ -1,5 +1,6 @@
 import { APP_UPDATE_BASE } from './app-api';
 import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot';
+import type { AbortedTurn } from '../observability/turn-aborted';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
@@ -99,11 +100,13 @@ export class AppInbox {
       return {kind:'admitted' as const,record};
     });
   }
-  recover(live:ReadonlySet<string>):void {
-    this.storage.transactionSync(()=>{
-      const rows=this.records();
-      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(row);this.storage.kv.put(PREFIX+row.id,row);}
+  // Returns each turn this cut off.
+  recover(live:ReadonlySet<string>):AbortedTurn[] {
+    return this.storage.transactionSync(()=>{
+      const rows=this.records(),aborted:AbortedTurn[]=[];
+      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {aborted.push({updateId:row.updateId,phase:'running'});row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(row);this.storage.kv.put(PREFIX+row.id,row);}
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
+      return aborted;
     });
   }
   // While the directory is unavailable, admitted work stays queued. Its wake moves out so the shared

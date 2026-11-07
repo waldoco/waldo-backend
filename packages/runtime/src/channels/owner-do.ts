@@ -140,6 +140,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
+import { turnAbortedEntry, type AbortedTurn } from '../observability/turn-aborted';
 import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
@@ -2247,7 +2248,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // A read can be the first request after a restart. A turn it finds interrupted gets its "did not finish" reply from a drain.
   private recoverApp(): void {
-    this.appInbox.recover(this.appAttempts);
+    this.traceAborted('app', this.appInbox.recover(this.appAttempts));
     if(this.appInbox.noticesDue().length)this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
   }
   // A thread message's turn runs only while its thread is active at the revision it was sent against: archiving or deleting
@@ -2257,8 +2258,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const current = () => { const record = threadRecord(this.ctx.storage.kv, thread); if (record?.state !== 'active' || record.revision !== revision) throw new ClosedRunError(); };
     return { ...scope, admit: () => { scope.admit(); current(); }, commit: work => scope.commit(() => { current(); return work(); }) };
   }
+  // A cut-off turn's trace closes here. Recovery has already committed, so a runtime that can't be set up costs only the trace.
+  private traceAborted(surface: 'app' | 'whatsapp', turns: readonly AbortedTurn[]): void {
+    if (!turns.length) return;
+    try { const { log } = this.setup(surface); for (const turn of turns) log(turnAbortedEntry(surface, turn)); }
+    catch { console.error(JSON.stringify({ hop: 'turn_aborted', ok: false, detail: String(turns.length) })); }
+  }
   private async drainApp(alarmEnd?: number): Promise<void> {
-    this.appInbox.recover(this.appAttempts);
+    this.traceAborted('app', this.appInbox.recover(this.appAttempts));
     await this.writeAppNotices();
     const untitled=new Map<string,string>(),compactable=new Map<string,AppInboxRecord>();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
@@ -2420,7 +2427,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Without a WhatsApp transport nothing can be claimed or sent: open rows wake again in a minute, not at the floor. A row
     // cut off while running is recovered once the transport returns, so its notice can go out.
     if (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID) { inbox.deferWake(WHATSAPP_RUNNING_CHECK_MS); return; }
-    for (const record of this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts))) await this.whatsappNotice(record);
+    const cut = this.ctx.storage.transactionSync(() => inbox.recover(this.whatsappAttempts));
+    this.traceAborted('whatsapp', cut.map(record => ({ updateId: record.updateId, phase: 'running' })));
+    for (const record of cut) await this.whatsappNotice(record);
     while (inbox.next()) {
       // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this turn
       // sees what the owner has seen.
@@ -3291,7 +3300,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         protectedAttempts.add(final.inbox.attempt);
         await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
       }
-      await this.inbox.recover(protectedAttempts);
+      for (const turn of await this.inbox.recover(protectedAttempts)) log(turnAbortedEntry('telegram', turn));
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || ((r.status === 'pending' || r.status === 'accepted') && r.dueAt <= Date.now()) || (r.status !== 'pending' && r.status !== 'accepted' && !r.settled));
