@@ -1,9 +1,9 @@
 # ADR draft: care circle (A4)
 
-Status: **proposed, not pre-accepted.** This is a design for the owner to rule on, written for waldoco/waldo-backend#1980
-item A4. The Wave 2 rule pre-accepts bounded amendments, but this one lifts a launch deferral and adds the first exchange
-between two owners, so it needs the owner's ruling, a security review and a legal review before any code. Until then
-nothing in the runtime reads or writes a care circle.
+Status: **split by owner ruling, 7 November 2026** (waldoco/waldo-backend#1980, item A4).
+
+- **§1, who restores and who drains: accepted and shipped** in waldoco/waldo-backend#2005. It uses the owner's own words only and is kept as correctable memory.
+- **§2, a family member's health signal: deferred** until a legal and privacy review. Nothing in the runtime reads or writes a care-circle link, and the conditions in §3 still stand before any code for it.
 
 ## Why it cannot simply be built
 
@@ -25,9 +25,14 @@ nothing in the runtime reads or writes a care circle.
 - **Source.** Only what the owner says, for example "time with my sister always lifts me" or "calls with X wear me out". Waldo never infers it from calendar co-attendance, message tone or health readings. That would profile other people, and health-pattern mining is deferred.
 - **Storage.** The existing `remember` tool already holds it: a claim in the `people` area, grounded in the owner's own quote, correctable and forgettable on What Waldo knows. Nothing new is stored.
 - **Use.** A planning instruction for the Brief and the Close. When the day is heavy, make room for someone the owner said restores them, and keep a draining commitment away from a low-recovery evening. The model weighs it; no rule fires on it.
-- **Shipping.** This half crosses no owner boundary and could ship as a small prompt-and-scenario PR once the owner agrees with the wording.
+- **Shipped** in waldoco/waldo-backend#2005, as two rules:
+  - every background memory pass keeps it to the owner's words and never infers it from the calendar, messages, how a day went or health. On the owner's turn, `remember` already needs a verbatim owner quote;
+  - the Brief, Check-in and Close plan with it on a heavy day or a low-recovery evening.
+  - Nightly scenarios m28 to m30 judge both, including the case where a tiring week with one name on the calendar must not become a claim about that person.
 
-### 2. A family member's health signal: a minimal, consented, revocable exchange
+### 2. A family member's health signal: a minimal, consented, revocable exchange (deferred)
+
+Deferred by the owner's ruling of 7 November 2026 until a legal and privacy review. The design below is the proposal that review starts from.
 
 The two people are a **sharer**, for example a parent, and a **watcher**, for example their adult child. Each has their own Waldo.
 
@@ -51,9 +56,9 @@ The two people are a **sharer**, for example a parent, and a **watcher**, for ex
   - Both sides see the ending, and the sharer sees each delivery receipt.
 - **Minimal by construction.** One signal kind at launch. Adding a kind needs another dated ADR-0081 amendment.
 
-### 3. Conditions before any code
+### 3. Conditions before any code for §2
 
-- The owner lifts the Trusted Relationships deferral for this case.
+- The owner lifts the Trusted Relationships deferral for this case. The ruling of 7 November keeps it deferred until the review below.
 - A legal review. The sharer's health is special-category data (GDPR Art. 9) going to a named third party. Consent, its copy and withdrawal must satisfy Art. 9(2)(a) and DPDP.
 - Privacy notice lines for both the sharer and the watcher.
 - A security-reviewer pass on the RLS policy, the RPCs and the delivery path. This includes the cross-tenant golden test from ADR-0066: a watcher reads zero rows of any other link.
