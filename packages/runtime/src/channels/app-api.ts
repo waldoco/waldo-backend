@@ -1,5 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
+import { appUploadHeaders } from './app-uploads';
 import { APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { appQuickRepliesPart } from './surfaces/app';
@@ -277,6 +278,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-upload:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const length = request.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
+    const asked = appUploadHeaders(request.headers);
+    if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
     const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
     if (!body) return fail(413);
     const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {

@@ -37,6 +37,12 @@ export const listHealthLogsArgsSchema = z.strictObject({
 });
 export type ListHealthLogsArgs = z.infer<typeof listHealthLogsArgsSchema>;
 
+// The undo for log_meal and log_workout: the id comes from their result or from list_health_logs.
+export const deleteHealthLogArgsSchema = z.strictObject({
+  id: z.int().positive().describe('The id of the meal or workout log to remove.'),
+});
+export type DeleteHealthLogArgs = z.infer<typeof deleteHealthLogArgsSchema>;
+
 // The owner's own sleep need, set from chat on any surface. The figure goes to the health plane's setting and nowhere else:
 // the answer is a word, so nothing in the turn's output carries it on.
 export const setSleepNeedArgsSchema = z.strictObject({

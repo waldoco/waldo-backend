@@ -117,6 +117,7 @@ const expectedMigrations = [
   '20261105233000_device_weather.sql',
   '20261106120000_health_zones_read.sql',
   '20261106190000_device_place_moved.sql',
+  '20261107080000_health_log_delete.sql',
   '20261107100000_device_place_arrived.sql',
 ];
 
