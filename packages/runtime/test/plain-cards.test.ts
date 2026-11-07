@@ -17,14 +17,14 @@ const proposal = async (tool: string, args: Record<string, unknown>, extra: Part
   ({ tool, args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The Loops alert lists five new signups to look up.', source: 'external', ...extra });
 const research = { profile: 'reader', title: 'Five new signups', goal: 'Find each signup on the public web and in my mail.', context: 'Names from the alert.', done_when: 'A line on each.' };
 
-const whatsappDesk = (state: DurableObjectState) => {
+const whatsappDesk = (state: DurableObjectState, extra: Partial<Parameters<typeof approvalDesk>[1]> = {}) => {
   const graph = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: `wamid.${graph.mock.calls.length}` }], contacts: [{ wa_id: String(OWNER) }] }));
   const call = whatsappTelegramShim('tok', 'pn1', String(OWNER), graph as unknown as typeof fetch, { replyButtons: true });
   let n = 0;
   const desk = approvalDesk(state.storage.sql, {
     owner: OWNER, surface: 'whatsapp', call, appLink: appApprovalLink, appIdentity: () => true, writesFirstNow: () => true,
     google: async () => null, newId: () => `c${++n}`, now: () => NOW, timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work),
-    replayTaintedAction: async () => ({ status: 'done', message: '' }),
+    replayTaintedAction: async () => ({ status: 'done', message: '' }), ...extra,
   });
   const sent = () => graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)) as Record<string, any>);
   return { desk, sent };
@@ -64,6 +64,19 @@ describe('a card raised after outside content', () => {
     const [card] = sent();
     expect(card!.type).toBe('interactive');
     expect(card!.interactive.body.text.length).toBeLessThanOrEqual(WHATSAPP_REPLY_BODY_MAX);
+  }));
+
+  it('a WhatsApp card cut to its short form is not recorded as shown in full, so a typed yes cannot approve it later', () => owner(async (state) => {
+    let inChat = false;
+    const { desk, sent } = whatsappDesk(state, { approvesInChat: () => inChat, ownerMessageAt: () => NOW + 60_000 });
+    const body = 'All the notes from today. '.repeat(120);
+    const raw = `To: sam@example.test\r\nSubject: Notes\r\nMessage-ID: <notes@waldo-send>\r\n\r\n${body}`;
+    const id = await desk.proposeSendEmail({ to: ['sam@example.test'], subject: 'Notes', body, message_id: '<notes@waldo-send>', raw, digest: await sha256Hex(raw) } as never);
+    expect(sent()[0]!.interactive.body.text).not.toContain(body);
+    const shown = state.storage.sql.exec<{ in_full: number }>("SELECT in_full FROM approval_presentations WHERE approval_id = ? AND surface = 'whatsapp'", id).toArray();
+    expect(shown).toEqual([{ in_full: 0 }]);
+    inChat = true;
+    await expect(desk.approveShown(id, { messageRef: 'wamid.yes', receivedAt: NOW + 60_000 }, 'trace-yes')).resolves.toEqual({ outcome: 'not_shown_here' });
   }));
 
   it('keeps the exact call one step below the words in the app review', () => owner(async (state) => {

@@ -894,10 +894,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Where a request a chat surface hands to the app can be approved: in the app, by its link when there is one, or nowhere.
   // A card handed to the app is approved there, so its chat message only has to say what it is and where: on WhatsApp it is cut
   // to the short form when the whole review would push it past the reply buttons' body limit, so its buttons still show.
-  const handedText = (review: string, handoff: string, short: string) => {
+  // whole: the message kept the review it was given.
+  const handedText = (review: string, handoff: string, short: string): Readonly<{ text: string; whole: boolean }> => {
     const text = `${review}\n\n${handoff}`;
     const max = BUTTON_BODY_MAX[surface];
-    return max === undefined || text.length <= max ? text : `${short.slice(0, max - handoff.length - 3)}\n\n${handoff}`;
+    return max === undefined || text.length <= max ? { text, whole: true } : { text: `${short.slice(0, max - handoff.length - 3)}\n\n${handoff}`, whole: false };
   };
   const appHandoff = (id: string, inApp: boolean) => !inApp ? `${NOT_IN_APP} Nothing was done.` : deps.appLink ? `Review and approve it there: ${deps.appLink(id)}` : 'Approve it in the Waldo app.';
   // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
@@ -942,12 +943,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
+      const handed = handsToApp && !inWords ? handedText(fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`, `${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}${unsent ? `\n\n${unsent}` : ''}`, `${title} ${summaryOf(entry)}`) : null;
+      // Shown in full only when the message sent here holds the whole review: a card cut to its short form never authorizes a
+      // decision in words, even after approving in chat is switched on while it waits.
+      const inFull = fits && handed?.whole !== false;
       const text = inWords ? `${card}\n\n${GO_AHEAD_HERE}${link}`
-        : handsToApp ? handedText(fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`, `${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}${unsent ? `\n\n${unsent}` : ''}`, `${title} ${summaryOf(entry)}`)
+        : handed ? handed.text
         : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
         const sent = await say(unsent && !handsToApp ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
-        if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable, in_full: fits }; shown.push(sentHere); }
+        if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable, in_full: inFull }; shown.push(sentHere); }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
       } catch (error) { sendFailure = error; }

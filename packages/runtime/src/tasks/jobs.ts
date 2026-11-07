@@ -66,8 +66,9 @@ export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id
 // later attempt resumes from, so the brief and its digest stay frozen and the job keeps its id. key: the turn and tool call
 // that made it, so a replayed call adds nothing. shown: the attempt whose claim first showed it to a worker; until then an
 // interrupt ends the running attempt at its next checkpoint, and either kind turns its report into a new attempt.
-// outside_text: the turn that wrote it had read someone else's words (tasks/profiles jobTools).
-export type Steer = Readonly<{ key: string; text: string; mode: 'interrupt' | 'enqueue'; at: number; shown?: number; outside_text?: true }>;
+// outside_text: the turn that wrote it had read someone else's words; owner_approved: it ran from the owner's own card for this
+// change (tasks/profiles jobTools).
+export type Steer = Readonly<{ key: string; text: string; mode: 'interrupt' | 'enqueue'; at: number; shown?: number; outside_text?: true; owner_approved?: true }>;
 // draft: the result an attempt reported while a change waited for it, which the next attempt finishes from.
 export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep; steers?: readonly Steer[]; draft?: TaskResult }>;
 

@@ -148,7 +148,9 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const title = titleOf(row), now = deps.now();
       const outside = ctx.toolArgSourceTaint === 'external';
-      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now, ...(outside ? { outside_text: true as const } : {}) }, outside ? 'external' : null);
+      // As for a brief: a change replayed from the owner's own card for it keeps a task's mail and web together.
+      const approved = outside && ctx.approvedTaintedAction?.tool === 'steer_task';
+      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now, ...(outside ? { outside_text: true as const } : {}), ...(approved ? { owner_approved: true as const } : {}) }, outside ? 'external' : null);
       if (written === 'closed') {
         const after = deps.book.get(job_id);
         return refusal(`"${title}" ${after?.status === 'cancelled' ? 'was cancelled' : after?.park_reason ? 'already stopped' : 'already finished'}, so it cannot change. For more work, call start_task with a brief that says all of it.`);
@@ -159,7 +161,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         await deps.wake(now);
       }
       // A change written after outside text takes the web from a task that also reads the owner's data (tasks/profiles jobTools).
-      const webWithheld = outside && holdsPrivateAndEgress(row.profile ? TASK_PROFILE_SPECS[row.profile].tools : []);
+      const webWithheld = outside && !approved && holdsPrivateAndEgress(row.profile ? TASK_PROFILE_SPECS[row.profile].tools : []);
       return { ok: true as const, data: { job_id, title, mode, steered: true, ...(webWithheld ? { note: 'This change came after outside content, so the task goes on without the web: it keeps the owner\'s mail, calendar and files.' } : {}) }, source_taint: null };
     },
   } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>] : []),

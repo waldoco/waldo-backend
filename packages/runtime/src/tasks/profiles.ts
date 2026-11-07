@@ -27,11 +27,12 @@ export const unreplayable = (name: string): boolean => {
   return row === undefined || (row.replay !== 'safe_read' && row.replay !== 'provider_idempotent');
 };
 
-// The job's instructions came after outside text: its brief was written in a turn that had read it, unless the owner approved
-// this very task on a card, or a later change to it was.
+// The job's instructions came after outside text: its brief or a later change to it was written in a turn that had read it,
+// and the owner did not approve that brief or change on its own card.
 export const outsideInstructions = (row: Pick<JobRow, 'brief_json' | 'checkpoint_json'>): boolean => {
   const brief = taskBrief(row as JobRow);
-  return (brief.outside_text === true && brief.owner_approved !== true) || (jobCheckpoint(row as JobRow).steers ?? []).some((steer) => steer.outside_text === true);
+  return (brief.outside_text === true && brief.owner_approved !== true)
+    || (jobCheckpoint(row as JobRow).steers ?? []).some((steer) => steer.outside_text === true && steer.owner_approved !== true);
 };
 
 // The tools a job's worker may call: its profile's, or the machine reader's for a job the brain started itself. A job whose
