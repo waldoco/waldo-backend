@@ -47,6 +47,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'words joined by dots': n => 'a.'.repeat(n / 2),
   'digits and dots': n => '1.'.repeat(n / 2),
   'percent runs': n => 'a%'.repeat(n / 2),
+  'fullwidth digit groups': n => '\uff14\uff11\uff11\uff11 '.repeat(n / 5),
+  'mathematical digits': n => '\u{1d7cf}'.repeat(n / 2),
   'stray percents between escapes': n => '%41%'.repeat(n / 4),
   'bytes that are not UTF-8': n => '%FF'.repeat(n / 3),
   'cut-off multibyte sequences': n => '%E0%A4 '.repeat(n / 7),
