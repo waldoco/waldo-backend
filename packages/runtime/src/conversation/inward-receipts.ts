@@ -25,6 +25,7 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
     : result.cancelled !== true ? null
     : `Cancelled the reminder${text(result, 'at') ? ` for ${text(result, 'at').replace('T', ' ')}` : ''}: "${text(result, 'note')}"`,
   cancel_task: (args) => `Stopped background task ${text(args, 'job_id')} (you can start it again)`,
+  steer_task: (args) => `Changed background task ${text(args, 'job_id')}: "${text(args, 'instruction')}" (you can change it again or cancel it)`,
   cancel_standing_order: (args) => `Ended standing order ${text(args, 'id')}`,
   revoke_standing_grant: (args) => `Ended your standing permission for ${text(args, 'class')}`,
   pause_autonomy: () => 'Paused Waldo acting on its own (you can resume it in the app)',

@@ -145,7 +145,10 @@ describe('toolName', () => {
       'get_weather',
       'propose_calendar_plan',
       'set_quest',
+      'set_experiment',
+      'review_experiment',
       'check_task',
+      'steer_task',
     ]);
   });
 
@@ -345,6 +348,8 @@ describe('TOOL_PERMISSIONS', () => {
         'set_proactivity',
         'set_schedule_preference',
         'set_quest',
+        'set_experiment',
+        'review_experiment',
         'read_tool_output',
         'log_meal',
         'log_workout',
@@ -374,6 +379,7 @@ describe('TOOL_PERMISSIONS', () => {
       'start_task',
       'cancel_task',
       'check_task',
+      'steer_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',
