@@ -87,7 +87,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // A turn that read outside content may say who a note is about, never how close they are: the ring is the owner's
         // relationship, not something a mail can set.
         const links = (deps.people ? args.people ?? [] : []).map(link => ctx.toolArgSourceTaint === 'external' ? { ...link, ring: undefined } : link);
-        if (links.some(link => link.name !== undefined && blocked(link.name))) return fail('This memory names a person the owner asked to forget.');
+        if (links.some(link => (link.name !== undefined && blocked(link.name)) || (link.relation !== undefined && blocked(link.relation)))) return fail('This memory names a person the owner asked to forget.');
         const unknown = store.people.unknownRefs(links);
         if (unknown.length) return fail(`Memory has no person with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Read memory with people: true, and pass ref only for a person it lists, or name to start a new one.`);
         // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected

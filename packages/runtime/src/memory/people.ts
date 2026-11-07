@@ -64,6 +64,8 @@ export const peopleTables = (sql: Sql) => {
     // A person's live claims, each with how it names them, newest first.
     claimsOf: (entityId: number): (Claim & Readonly<{ role: string; relation: string | null }>)[] =>
       sql.exec<Claim & { role: string; relation: string | null }>(`SELECT claims.*, claim_links.role AS role, claim_links.relation AS relation FROM claim_links JOIN claims ON claims.id = claim_links.claim_id WHERE claim_links.entity_id = ? AND claims.status IN ${LIVE} ORDER BY claims.last_seen_at DESC, claims.id DESC`, entityId).toArray(),
+    // Whether the owner has said or confirmed something about them: what outside content may then add to them is only claims.
+    ownersOwn: (entityId: number): boolean => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM claim_links JOIN claims ON claims.id = claim_links.claim_id WHERE claim_links.entity_id = ? AND claims.origin = 'owner' AND claims.status IN ${LIVE}`, entityId).one().n > 0,
     claimIdsOf: (entityId: number): number[] => sql.exec<{ claim_id: number }>('SELECT claim_id FROM claim_links WHERE entity_id = ?', entityId).toArray().map(row => row.claim_id),
     // The people a forgotten topic names exactly, by their name, another name or an address: their claims go with the topic. A
     // topic inside a name ("Acme" in sam@acme.com, a shared surname) names no one.
@@ -117,8 +119,10 @@ export const nextOccurrence = (onDate: string, today: string): string | null => 
   return null;
 };
 
-// The address a From header names: inside the angle brackets, or the header itself when it is a bare address.
+// The address a From header names: the angle address it ends with (a display name can itself hold one, "Priya <p@x>" <m@y>),
+// or the header itself when it is a bare address.
 export const fromAddress = (header: string): string | null => {
-  const inside = /<([^<>\s]+@[^<>\s]+)>/.exec(header)?.[1] ?? (/^[^<>\s]+@[^<>\s]+$/.test(header.trim()) ? header.trim() : null);
+  const trimmed = header.trim();
+  const inside = /<([^<>\s]+@[^<>\s]+)>$/.exec(trimmed)?.[1] ?? (/^[^<>\s]+@[^<>\s]+$/.test(trimmed) ? trimmed : null);
   return inside ? inside.toLowerCase() : null;
 };

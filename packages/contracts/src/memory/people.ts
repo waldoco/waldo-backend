@@ -16,11 +16,14 @@ export const personRoleSchema = z.enum(['subject', 'object', 'mention']);
 // ref names a person memory already holds (the id a read showed); name starts a new one. relation is the claim's phrase for
 // the person ("sister", "manager at Acme"). This is the chat model's shape; the addresses a person is known by come from what
 // Waldo sees in mail and the calendar, written by the claim store's own writers (PersonWrite).
+// One line of plain text: a name or relation is shown to later model calls as a line of its own, so it carries no line break
+// or other control character.
+const personText = (max: number) => z.string().trim().min(1).max(max).regex(/^[^\p{Cc}]+$/u, 'one line of text, no control characters');
 export const personLinkSchema = z.strictObject({
   ref: z.int().positive().optional(),
-  name: z.string().trim().min(1).max(PERSON_NAME_MAX).optional(),
+  name: personText(PERSON_NAME_MAX).optional(),
   role: personRoleSchema,
-  relation: z.string().trim().min(1).max(PERSON_RELATION_MAX).optional(),
+  relation: personText(PERSON_RELATION_MAX).optional(),
   ring: personRingSchema.optional(),
 }).refine((link) => (link.ref === undefined) !== (link.name === undefined), 'a person link names an existing ref or a new name, not both');
 export type PersonLink = z.infer<typeof personLinkSchema>;

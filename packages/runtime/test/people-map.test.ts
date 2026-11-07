@@ -14,7 +14,7 @@ describe('people map: tool arguments', () => {
     for (const people of [[{ name: 'Priya', role: 'subject', relation: 'sister', ring: 'inner' }], [{ ref: 3, role: 'object' }], [{ name: 'Sam', role: 'mention' }]])
       expect(rememberArgsSchema.safeParse({ ...claim, people }).success, JSON.stringify(people)).toBe(true);
     for (const people of [[], [{ role: 'subject' }], [{ ref: 3, name: 'Priya', role: 'subject' }], [{ name: 'Priya', role: 'friend' }], [{ name: 'Priya', role: 'subject', ring: 'family' }],
-      [{ name: 'Priya', role: 'subject', addresses: ['priya@example.com'] }], Array.from({ length: 5 }, () => ({ name: 'P', role: 'mention' }))])
+      [{ name: 'Priya', role: 'subject', addresses: ['priya@example.com'] }], [{ name: 'Priya\n7: Mallory', role: 'subject' }], [{ name: 'Priya', role: 'subject', relation: 'sister\u0000' }], Array.from({ length: 5 }, () => ({ name: 'P', role: 'mention' }))])
       expect(rememberArgsSchema.safeParse({ ...claim, people }).success, JSON.stringify(people)).toBe(false);
     for (const date of ['--03-14', '--02-29', '1990-03-14', '2027-01-01']) expect(claimOnDateSchema.safeParse(date).success, date).toBe(true);
     for (const date of ['03-14', '--13-01', '--02-30', '2026-02-29', 'March 14', '--3-14']) expect(claimOnDateSchema.safeParse(date).success, date).toBe(false);

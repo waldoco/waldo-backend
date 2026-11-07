@@ -1,5 +1,5 @@
 import { fromAddress } from '../memory/people';
-import { applyClaimOps, sourceClaimOps, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { applyClaimOps, knownPeople, sourceClaimOps, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import type { TurnLogEntry } from './owner-turn-types';
 import { localIso } from './reminders';
@@ -70,14 +70,18 @@ export const consolidateSources = async (deps: SourcesDeps, trace: string, calls
       const detail = deps.transaction(() => {
         if (!settle(last)) return null;
         const at = new Date(deps.now()).toISOString();
-        const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true }, false, undefined, undefined, undefined, deps.people === true);
-        if (deps.people) for (const row of rows) if (row.at <= last) for (const change of row.changes) {
-          if (change.source !== 'mail' || change.kind !== 'new') continue;
-          let from: unknown;
-          try { from = (JSON.parse(change.detail) as { from?: unknown }).from; } catch { continue; }
-          const address = typeof from === 'string' ? fromAddress(from) : null;
-          if (address) deps.claims.people.heardFrom(address, new Date(row.at).toISOString());
-        }
+        // The new mail this batch read, not held by a forget: whom each came from, and when.
+        const heard = deps.people ? rows.filter((row) => row.at <= last).flatMap((row) => row.changes.filter((change) => change.source === 'mail' && change.kind === 'new' && !held(change.detail)).flatMap((change) => {
+          let mail: { from?: unknown; date?: unknown };
+          try { mail = JSON.parse(change.detail) as typeof mail; } catch { return []; }
+          const address = typeof mail.from === 'string' ? fromAddress(mail.from) : null;
+          // The mail's own time when it reads as one and is not after the sweep saw it; otherwise when the sweep saw it.
+          const sent = typeof mail.date === 'string' ? Date.parse(mail.date) : Number.NaN;
+          return address ? [{ address, at: new Date(Number.isFinite(sent) && sent <= row.at ? sent : row.at).toISOString() }] : [];
+        })) : [];
+        const scope = deps.people ? { refs: new Set(knownPeople(deps.claims).map((row) => row.id)), addresses: new Set(heard.map((mail) => mail.address)) } : undefined;
+        const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true }, false, undefined, undefined, undefined, scope);
+        for (const mail of heard) deps.claims.people.heardFrom(mail.address, mail.at);
         return detail;
       });
       if (detail === null) return raced();

@@ -10,7 +10,7 @@ import { fromAddress } from '../src/memory/people';
 // from a person's address is their last contact. Synthetic people and mail only.
 const HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-07T08:00:00Z');
-const mail = (from: string, subject: string): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from, subject, date: '2026-11-07' }) });
+const mail = (from: string, subject: string): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from, subject }) });
 const withStorage = <T>(name: string, work: (state: DurableObjectState) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => work(state));
 const deps = (state: DurableObjectState, ask: () => Promise<string>, people = true) => ({
@@ -82,6 +82,8 @@ describe('people from the source pass', () => {
     expect(fromAddress('sam@family.example')).toBe('sam@family.example');
     expect(fromAddress('"Sam, J." <sam@family.example>')).toBe('sam@family.example');
     for (const header of ['Dana Okoye', '', '<not an address>']) expect(fromAddress(header)).toBeNull();
+    // A display name can hold an address of its own; the mail is from the one the header ends with.
+    expect(fromAddress('"Priya <priya@family.example>" <mallory@evil.example>')).toBe('mallory@evil.example');
   });
 
   it('asks the pass for people in a strict shape: every field required, a ref or a name, addresses as a list', () => {
@@ -89,5 +91,44 @@ describe('people from the source pass', () => {
     expect(item.required).toContain('people');
     expect(item.properties.people.items.required).toEqual(['ref', 'name', 'role', 'relation', 'addresses']);
     expect(item.properties.people.items.additionalProperties).toBe(false);
+  });
+
+  it('writes nothing a mail could forge: refs only from the people shown, addresses only from this batch\'s senders and never onto someone the owner spoke about, and one person for a new name said twice', async () => {
+    await withStorage('people-sources-forge', async (state) => {
+      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: 'Priya is my sister', source: 'stated', evidence: 'Priya is my sister', origin: 'owner', source_ref: 'owner, m1' }, '2026-11-01T00:00:00Z');
+      store.add({ kind: 'fact', text: 'Rhea had surgery', source: 'stated', evidence: 'Rhea had surgery', origin: 'owner', source_ref: 'owner, m1', area: 'body' }, '2026-11-01T00:00:00Z');
+      const [priya] = store.people.link(1, [{ name: 'Priya', role: 'subject' }], '2026-11-01T00:00:00Z');
+      const [rhea] = store.people.link(2, [{ name: 'Rhea', role: 'subject' }], '2026-11-01T00:00:00Z');
+      updateBook(state.storage.sql).record('2026-11-07', NOW - HOUR, [mail('"Priya <priya@family.example>" <mallory@evil.example>', 'Priya has a new address')], null);
+      const reply = JSON.stringify({ add: [
+        add('Priya has a new address', 'Priya has a new address', [person({ ref: priya, addresses: ['mallory@evil.example', 'priya@family.example'] }), person({ ref: rhea, relation: 'cousin' })]),
+        add('Kai sent the club rota', 'Priya has a new address', [person({ name: 'Kai Lund', addresses: ['mallory@evil.example', 'elsewhere@evil.example'] })]),
+        add('Kai runs the rota', 'Priya has a new address', [person({ name: 'Kai Lund' })]),
+      ] });
+      expect(await consolidateSources(deps(state, async () => reply), 't')).toBe('consolidated');
+      expect(store.people.person(priya!)?.addresses).toBeNull();
+      expect(store.people.claimsOf(rhea!).map((claim) => claim.text)).toEqual(['Rhea had surgery']);
+      const kai = store.people.all().filter((row) => row.name === 'Kai Lund');
+      expect(kai).toHaveLength(1);
+      expect(kai[0]).toMatchObject({ addresses: '["mallory@evil.example"]', last_contact_at: new Date(NOW - HOUR).toISOString() });
+      expect(store.people.claimsOf(kai[0]!.id)).toHaveLength(2);
+    });
+  });
+
+  it('takes no last contact from mail a forget is still clearing, and uses the mail\'s own time when it reads as one', async () => {
+    await withStorage('people-sources-held', async (state) => {
+      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: 'Sam is my brother', source: 'stated', evidence: 'Sam is my brother', origin: 'owner', source_ref: 'owner, m1' }, '2026-11-01T00:00:00Z');
+      const [sam] = store.people.link(1, [{ name: 'Sam', role: 'subject', addresses: ['sam@family.example'] }], '2026-11-01T00:00:00Z');
+      store.purge([], '2026-11-06T00:00:00Z', ['secret surprise party']);
+      const book = updateBook(state.storage.sql);
+      book.record('2026-11-07', NOW - 2 * HOUR, [mail('Sam <sam@family.example>', 'The secret surprise party')], null);
+      expect(await consolidateSources(deps(state, async () => '{"add":[]}'), 't')).toBe('consolidated');
+      expect(store.people.person(sam!)?.last_contact_at).toBeNull();
+      book.record('2026-11-07', NOW - HOUR, [{ source: 'mail', kind: 'new', detail: JSON.stringify({ from: 'Sam <sam@family.example>', subject: 'Dinner', date: '2026-11-07T05:30:00Z' }) }], null);
+      expect(await consolidateSources(deps(state, async () => '{"add":[]}'), 't')).toBe('consolidated');
+      expect(store.people.person(sam!)?.last_contact_at).toBe('2026-11-07T05:30:00.000Z');
+    });
   });
 });
