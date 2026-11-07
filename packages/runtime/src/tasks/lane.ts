@@ -106,12 +106,14 @@ export const resultApplyText = (row: JobRow, exchange?: string): string => {
 
 export const parkedApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
-  const { turns, draft } = jobCheckpoint(row);
+  const { turns, draft, steers = [] } = jobCheckpoint(row);
   const done = turns.map((turn) => ({ tool: turn.call.name, args: turn.call.arguments }));
+  // The changes Waldo made while it ran: one no worker was shown was not done; one a worker was shown may be unfinished.
+  const changes = steers.length ? { changes: steers.map((steer) => ({ change: steer.text, worker_saw_it: steer.shown !== undefined })) } : {};
   return [
     `[A background task you started stopped before it finished: ${quoted(brief.title)} (${row.profile} worker, ${row.id}), because ${PARK_WORDS[row.park_reason!]}. The steps it finished, as data:]`,
-    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) ?? draft ?? null })}\n</task_progress>`,
-    'Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way. Do not start it again yourself.',
+    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) ?? draft ?? null, ...changes })}\n</task_progress>`,
+    `Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way.${steers.length ? ' Name each change Waldo made to it that was not done: one the worker never saw was not done at all.' : ''} Do not start it again yourself.`,
   ].join('\n\n');
 };
 
