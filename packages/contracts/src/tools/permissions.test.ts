@@ -143,6 +143,7 @@ describe('toolName', () => {
       'get_weather',
       'propose_calendar_plan',
       'set_quest',
+      'check_task',
     ]);
   });
 
@@ -368,6 +369,7 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_load',
       'start_task',
       'cancel_task',
+      'check_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',
