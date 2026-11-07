@@ -47,6 +47,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'words joined by dots': n => 'a.'.repeat(n / 2),
   'digits and dots': n => '1.'.repeat(n / 2),
   'percent runs': n => 'a%'.repeat(n / 2),
+  'fullwidth digit groups': n => '\uff14\uff11\uff11\uff11 '.repeat(n / 5),
+  'mathematical digits': n => '\u{1d7cf}'.repeat(n / 2),
   'stray percents between escapes': n => '%41%'.repeat(n / 4),
   'bytes that are not UTF-8': n => '%FF'.repeat(n / 3),
   'cut-off multibyte sequences': n => '%E0%A4 '.repeat(n / 7),
@@ -138,7 +140,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'hrv →', 'hrv now', '42 ms', 'sleep was', 'hrv 42,', 'hrv 42 ms →', 'hrv 48 down'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'hrv →', 'hrv now', '42 ms', 'sleep was', 'hrv 42,', 'hrv 42 ms →', 'hrv 48 down', 'tsh', 'vitamin d (', '25-oh vitamin d', 'psa', 'psa level', 'hb 12', 'ferritin 12', 'egfr >', 'tsh (ultra', 'creatinine,', 'hb 9.8', 'psa 2.1', 'tsh:', 'vitamin d 3', 'vitamin d (25', 'hb 10.9 →', 'tsh 5'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });

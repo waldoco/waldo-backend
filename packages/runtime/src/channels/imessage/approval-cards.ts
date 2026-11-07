@@ -1,6 +1,6 @@
 import type { RunEffectScope } from '../run-effect-scope';
 import { sha256Hex } from './crypto';
-import { IMessageFinalOutbox, sentByTurn, targetOf, type IMessageOutboxRecord } from './final-outbox';
+import { IMessageFinalOutbox, STOP_ANSWER, sentByTurn, targetOf, type IMessageOutboxRecord } from './final-outbox';
 import type { IMessageInboxRecord } from './owner-inbox';
 
 export type IMessageRunningTurn = Readonly<{ record: IMessageInboxRecord; scope: RunEffectScope }>;
@@ -25,12 +25,13 @@ export const iMessageApprovalCaller = (storage: DurableObjectStorage, running: (
 
 // Whether the card sent as `commandId` is still Waldo's latest message in the chat `record` came from, so a bare 1 or 2 there
 // answers it. The turn that sent the card follows it with its reply, and may send more cards, so that turn's own messages do
-// not write past it; any other message frozen to that chat since does. A card sent to another chat, or gone, is not the latest.
+// not write past it, and neither does a /stop's answer (a decision the owner sent before or after it still decides); any
+// other message frozen to that chat since does. A card sent to another chat, or gone, is not the latest.
 export const iMessageCardIsLatest = (storage: DurableObjectStorage, record: IMessageInboxRecord) => (commandId: string): boolean => {
   const { bridgeDoName, subject } = targetOf(record), rows = new IMessageFinalOutbox(storage).records();
   const inChat = (row: IMessageOutboxRecord) => row.bridgeDoName === bridgeDoName && row.subject === subject;
   const card = rows.find(row => row.commandId === commandId && row.replyRef.startsWith(CARD) && inChat(row));
   if (card?.seq === undefined) return false;
   const turn = card.replyRef.slice(CARD.length, card.replyRef.lastIndexOf(':')), after = card.seq;
-  return !rows.some(row => inChat(row) && (row.seq ?? 0) > after && !sentByTurn(row.replyRef, turn) && !row.replyRef.startsWith(`${CARD}${turn}:`));
+  return !rows.some(row => inChat(row) && (row.seq ?? 0) > after && !sentByTurn(row.replyRef, turn) && !row.replyRef.startsWith(`${CARD}${turn}:`) && !row.replyRef.startsWith(STOP_ANSWER));
 };

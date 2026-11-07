@@ -127,6 +127,8 @@ describe('the progress watchdog', () => {
       const text = taskBriefText(brief, 3, nudge!);
       expect(text.endsWith(NUDGE_LINES.drifting)).toBe(true);
       expect(taskBriefText(brief, 3)).not.toContain(NUDGE_LINES.drifting);
+      // A changed task drifts from its changes, not from the goal it started with.
+      expect(NUDGE_LINES.drifting).toMatch(/changes Waldo made/);
     });
   });
 

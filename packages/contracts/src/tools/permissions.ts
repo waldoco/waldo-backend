@@ -42,6 +42,8 @@ export const toolNameSchema = z.enum([
   'draft_document',
   'create_artifact',
   'revise_artifact',
+  // restore_artifact: bring back a kept earlier revision as a new one, so a revise can be undone.
+  'restore_artifact',
   'export_artifact',
   'draft_email',
   'send_email',
@@ -84,6 +86,8 @@ export const toolNameSchema = z.enum([
   'log_meal',
   'log_workout',
   'list_health_logs',
+  // delete_health_log: remove one meal or workout log by id, the undo for log_meal and log_workout.
+  'delete_health_log',
   'set_sleep_need',
   // track/log/list/stop_medication: the owner's medicines, on the health plane; owner turns only, offered while MEDICATIONS is on.
   'track_medication',
@@ -148,8 +152,14 @@ export const toolNameSchema = z.enum([
   'propose_calendar_plan',
   // set_quest: start or change one of the owner's quests (ADR-0064 GoalRecord); the owner's own chat turn only.
   'set_quest',
+  // set_experiment and review_experiment: one change tried inside a quest and its zone comparison with the owner's usual
+  // (ADR-0064 health-quests amendment); the owner's own chat turn only.
+  'set_experiment',
+  'review_experiment',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
+  // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
+  'steer_task',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -299,6 +309,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'draft_document',
     'create_artifact',
     'revise_artifact',
+    'restore_artifact',
     'export_artifact',
     'draft_email',
     'send_email',
@@ -329,10 +340,13 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'set_proactivity',
     'set_schedule_preference',
     'set_quest',
+    'set_experiment',
+    'review_experiment',
     'read_tool_output',
     'log_meal',
     'log_workout',
     'list_health_logs',
+    'delete_health_log',
     'set_sleep_need',
     'track_medication',
     'log_medication',
@@ -357,6 +371,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'start_task',
     'cancel_task',
     'check_task',
+    'steer_task',
     'record_owner_finding',
     'list_owner_findings',
     'search_history',

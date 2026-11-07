@@ -1,0 +1,15 @@
+[
+  [
+    "packages/runtime/src/channels/common-public-browser-configuration.ts",
+    "packages/runtime/src/channels/owner-public-browser-spend.ts"
+  ],
+  [
+    "packages/runtime/src/channels/imessage/bridge-do.ts",
+    "packages/runtime/src/channels/imessage/console.ts",
+    "packages/runtime/src/channels/imessage/enrollment.ts"
+  ],
+  [
+    "packages/runtime/src/devices/mac-wire.ts",
+    "packages/runtime/src/devices/wire.ts"
+  ]
+]
