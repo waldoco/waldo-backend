@@ -61,6 +61,17 @@ describe('telegram media', () => {
     expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]) })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but voice reading is not set up here.]' }] });
   });
 
+  it('ends each provider\'s transcription request with the signal it is given', async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetcher = (async (_url: string, init: RequestInit) => { signals.push(init.signal); return new Response(JSON.stringify({ text: 'hi', transcription: 'hi' })); }) as unknown as typeof fetch;
+    const given = new AbortController().signal;
+    for (const transcribe of [createOpenAITranscriber('sk-test', fetcher), createElevenLabsTranscriber('xi-test', fetcher), createSmallestTranscriber('sm-test', 'en', fetcher)]) {
+      expect(await transcribe(new Uint8Array([1]), 'voice.ogg', 'audio/ogg', given)).toBe('hi');
+      expect(await transcribe(new Uint8Array([1]), 'voice.ogg', 'audio/ogg')).toBe('hi');
+    }
+    expect(signals).toEqual([given, undefined, given, undefined, given, undefined]);
+  });
+
   it('posts audio to the transcription endpoint and surfaces failures without the key', async () => {
     let form: FormData | undefined;
     const ok = createOpenAITranscriber('sk-test', (async (_url: string, init: RequestInit) => { form = init.body as FormData; return new Response(JSON.stringify({ text: 'hi' })); }) as unknown as typeof fetch);
