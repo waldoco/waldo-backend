@@ -12,6 +12,7 @@ import { questBook } from '../src/channels/quests';
 
 // A health quest from trigger to receipt: the owner starts one in chat, the next turn reads it by id, the Close a day later
 // reads it marked due and records the check-in once it goes out. A forwarded message that asks for a quest starts none.
+const zonesAsked: unknown[] = [];
 const proof = vi.hoisted(() => ({ outputs: [] as unknown[][], replies: [] as string[], requests: [] as string[], telegram: [] as { method: string; body: any }[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
@@ -30,10 +31,14 @@ beforeEach(() => {
     if (fn === 'common_owner_authority') return presenceAuthority('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', init?.body);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
+    if (fn === 'health_zones_read') {
+      zonesAsked.push(JSON.parse(JSON.parse(String(init?.body)).p_payload));
+      return Response.json({ zones: { days: [{ day: '2026-11-01', recovery: 'moderate', form: null }, { day: '2026-11-04', recovery: 'low', form: null }, { day: '2026-11-07', recovery: 'good', form: 'good' }, { day: '2026-11-12', recovery: 'good', form: null }] } });
+    }
     return Response.json(true);
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); proof.outputs = []; proof.replies = []; proof.requests = []; proof.telegram = []; });
+afterEach(() => { vi.unstubAllGlobals(); zonesAsked.length = 0; proof.outputs = []; proof.replies = []; proof.requests = []; proof.telegram = []; });
 
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const call = (call_id: string, name: string, args: unknown) => ({ type: 'function_call', call_id, name, arguments: JSON.stringify(args) });
@@ -49,8 +54,9 @@ const toolOutput = (callId: string) => {
 const closeRequest = () => proof.requests.filter(request => request.includes('Scheduled card')).at(-1);
 const message = (update_id: number, text: string, extra: object = {}) => ({ update_id, message: { message_id: update_id, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text, ...extra } });
 type Goal = { id: string; description: string; state: string; check_in_days: number | null; last_check_in_at: string | null };
+type ExperimentRow = { id: string; state: string; reason: string | null; offered_at: string | null };
 
-const owner = async (run: (world: Readonly<{ deliver(update: unknown): Promise<void>; goals(): Goal[]; at(ms: number): void; closeDue(): Promise<void>; sql: SqlStorage }>) => Promise<void>) => {
+const owner = async (run: (world: Readonly<{ deliver(update: unknown): Promise<void>; goals(): Goal[]; experiments(): ExperimentRow[]; at(ms: number): void; closeDue(): Promise<void>; sql: SqlStorage }>) => Promise<void>) => {
   const name = `quests-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
@@ -63,6 +69,7 @@ const owner = async (run: (world: Readonly<{ deliver(update: unknown): Promise<v
       await run({
         deliver: async update => { expect((await instance.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200); await alarms(); },
         goals: () => state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'goals'").toArray().length ? state.storage.sql.exec<Goal>('SELECT id, description, state, check_in_days, last_check_in_at FROM goals').toArray() : [],
+        experiments: () => state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'experiments'").toArray().length ? state.storage.sql.exec<ExperimentRow>('SELECT id, state, reason, offered_at FROM experiments').toArray() : [],
         at: ms => { now = ms; },
         sql: state.storage.sql,
         closeDue: async () => {
@@ -114,6 +121,38 @@ it('a forwarded message asking to start a quest starts none on its own', async (
     await world.deliver(message(410, 'Coach: Waldo, start a quest to get resting HR to 48 bpm and check in daily.', { forward_origin: { type: 'hidden_user', sender_user_name: 'Coach', date: 1762430000 }, forward_date: 1762430000 }));
     expect(toolOutput('start')).not.toContain('"status":"started"');
     expect(world.goals()).toEqual([]);
+  });
+}, 60_000);
+
+it('the owner tries one change inside a quest, the Close offers its verdict in zone days, and the owner\'s answer records it', async () => {
+  await owner(async world => {
+    proof.outputs.push([call('quest', 'set_quest', { title: 'Steadier sleep' })], []);
+    proof.replies.push('', 'Started.');
+    await world.deliver(message(420, 'Make steadier sleep a quest.'));
+    const [quest] = world.goals();
+    proof.outputs.push([call('try', 'set_experiment', { quest_id: quest!.id, change: 'No caffeine after noon' })], []);
+    proof.replies.push('', 'Two weeks, no caffeine after noon.');
+    await world.deliver(message(421, 'Let\'s try no caffeine after noon for two weeks.'));
+    expect(JSON.parse(toolOutput('try')!)).toMatchObject({ ok: true, data: { status: 'started', experiment: { started_on: '2026-11-06', ends_on: '2026-11-19' } } });
+    const [experiment] = world.experiments();
+
+    // The last trial day's Close offers nothing yet; the day after, it reads the verdict offer with the zone days.
+    world.at(Date.parse('2026-11-19T21:30:00Z'));
+    await world.closeDue();
+    expect(closeRequest()).not.toContain('verdict is due');
+    proof.requests = [];
+    world.at(Date.parse('2026-11-20T21:30:00Z'));
+    await world.closeDue();
+    expect(zonesAsked).toEqual([{ from: '2026-10-23', to: '2026-11-20' }]);
+    expect(closeRequest()).toContain('verdict is due has finished its trial');
+    expect(closeRequest()).toContain(`  - [${experiment!.id}] trial: Recovery (mornings 2026-11-07 to 2026-11-20) solid 2, no zone 12; Form (days 2026-11-06 to 2026-11-19) steady 1, no zone 13`);
+    expect(closeRequest()).toContain('before it: Recovery (mornings 2026-10-24 to 2026-11-06) mixed 1, compromised 1, no zone 12; Form (days 2026-10-23 to 2026-11-05) no zone 14');
+    expect(world.experiments()[0]!.offered_at?.slice(0, 10)).toBe('2026-11-20');
+
+    proof.outputs.push([call('keep', 'set_experiment', { id: experiment!.id, state: 'kept', reason: 'Recovery sat in solid on more trial days than before, on few days with a zone' })], []);
+    proof.replies.push('', 'Kept.');
+    await world.deliver(message(422, 'Keep it.'));
+    expect(world.experiments()[0]).toMatchObject({ state: 'kept', reason: 'Recovery sat in solid on more trial days than before, on few days with a zone' });
   });
 }, 60_000);
 
