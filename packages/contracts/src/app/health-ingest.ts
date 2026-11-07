@@ -15,7 +15,7 @@ export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 // Device sources arrive from the app's uploads. A provider source is a cloud API Waldo syncs for the owner, so it never
 // arrives through the app's ingest route; its consent rows and requests are health contract revision 2, and an older build
 // never sees them (it parses the consent list strictly).
-export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
+export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop', 'google_health'] as const;
 export const HEALTH_PROVIDER_REVISION_V1 = 2;
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
 export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
@@ -26,12 +26,16 @@ export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PRO
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
 // had (WHOOP's first grants were written on copy 2). The app owns the wording; a changed notice takes the next number.
 export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 3;
+// Copy 4 is Google Health's (Fitbit, Pixel Watch): it carries the disclosure Google's Limited Use terms ask for immediately
+// before consent, names the AI model providers that process the data as third parties, and links the Limited Use statement.
+export const GOOGLE_HEALTH_CONSENT_VERSION_V1 = 4;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
 const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
   apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+  google_health: { current: GOOGLE_HEALTH_CONSENT_VERSION_V1, had: [GOOGLE_HEALTH_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
 const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
