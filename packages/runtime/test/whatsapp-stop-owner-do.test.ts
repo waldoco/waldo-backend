@@ -10,6 +10,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { ensureSchema } from '../src/tracer/schema';
+import { WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -148,6 +149,32 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
       await drainWhatsAppTurns(o);
       expect(world.sent).toEqual([]);
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('stops a turn already claimed but not yet under way, read from the inbox rather than the turn in memory', async () => {
+    await owner('wa-stop-claimed-gap', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      // Claimed, as a drain does before the turn starts: nothing in memory names it yet.
+      expect(new WhatsAppOwnerInbox(state.storage).claimNext(Date.now() + 60_000)?.wamid).toBe('wamid.in.long');
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await vi.waitFor(() => expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]), { timeout: 5_000, interval: 20 });
+      world.release();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(0);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('lands with the /stop\'s own admission: work that fails after that commit cannot undo the stop', async () => {
+    await owner('wa-stop-in-commit', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      vi.spyOn(o as unknown as { stopOwnerWork(): Promise<void> }, 'stopOwnerWork').mockRejectedValue(new Error('synthetic failure after the commit'));
+      await admit(message('wamid.in.stop', '/stop')).catch(() => 500);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'revoked'], ['wamid.in.stop', 'completed']]));
+      world.release();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(0);
     });
   });
 
