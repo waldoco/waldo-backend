@@ -23,6 +23,18 @@ export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;
 export const cancelTaskArgsSchema = z.strictObject({ job_id: taskJobIdSchema });
 export type CancelTaskArgs = z.infer<typeof cancelTaskArgsSchema>;
 
+export const checkTaskArgsSchema = z.strictObject({ job_id: taskJobIdSchema });
+export type CheckTaskArgs = z.infer<typeof checkTaskArgsSchema>;
+
+// A change to a running task's work, kept with the job so the task keeps its id. The worker never sees the conversation, so
+// the instruction must stand on its own; no length bound, for the same reason as the brief's body parts.
+export const steerTaskArgsSchema = z.strictObject({
+  job_id: taskJobIdSchema,
+  instruction: z.string().min(1),
+  mode: z.enum(['interrupt', 'enqueue']).describe('interrupt: a correction; the worker stops after its current step and continues with this. enqueue: an addition; the worker finishes what it is doing, then does this before it reports.'),
+});
+export type SteerTaskArgs = z.infer<typeof steerTaskArgsSchema>;
+
 // What a worker hands back. findings carry where each came from, so the brain can follow one up; proposals are actions the
 // worker suggests, which only the brain can take, on its approval path.
 export const taskResultSchema = z.strictObject({

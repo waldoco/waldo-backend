@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   APP_SEND_MAX_WIRE_BYTES, appHistoryResultV1Schema, appMessageReceiptV1Schema,
-  appRatingRequestV1Schema, appRatingResultV1Schema, appSendRequestV1Schema, appSendResultV1Schema,
+  appRatingRequestV1Schema, appRatingResultV1Schema, appSendFieldsV1Schema, appSendResultV1Schema, refineAppSendV1,
 } from './core';
 
 // A thread is a chat beside main: its own transcript, sharing the owner's memory and approvals. Messaging
@@ -40,9 +40,9 @@ export const appThreadReadQueryV1Schema = z.strictObject({
   cursor: z.string().max(512).regex(/^(?:\d{1,9}|before:.{1,500})$/).optional(), limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 export const appThreadReadV1Schema = z.strictObject({ thread: appThreadV1Schema, history: appHistoryResultV1Schema });
-export const appThreadSendV1Schema = appSendRequestV1Schema.extend({ expected_revision: revision });
+export const appThreadSendV1Schema = appSendFieldsV1Schema.extend({ expected_revision: revision }).superRefine(refineAppSendV1);
 // Failures carry `error`: thread_not_found and message_not_found (404), thread_deleted (410), thread_revision_conflict,
-// title_revision_conflict, thread_archived and operation_conflict (409), thread_capacity (429).
+// title_revision_conflict, thread_archived, operation_conflict and upload_unavailable (409), thread_capacity (429).
 export const appThreadRoutesV1 = [
   { method: 'GET', path: '/app/v1/threads', query: appThreadListQueryV1Schema, response: appThreadListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/threads', request: appThreadCreateV1Schema, response: appThreadOperationResultV1Schema, authenticated: true, success_status: 200 },
