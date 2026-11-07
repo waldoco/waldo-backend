@@ -146,6 +146,10 @@ export const toolNameSchema = z.enum([
   'get_weather',
   // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
   'propose_calendar_plan',
+  // set_quest: start or change one of the owner's quests (ADR-0064 GoalRecord); the owner's own chat turn only.
+  'set_quest',
+  // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
+  'check_task',
   // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
   'show_chart',
   // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
@@ -331,6 +335,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
+    'set_quest',
     'read_tool_output',
     'log_meal',
     'log_workout',
@@ -358,6 +363,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_load',
     'start_task',
     'cancel_task',
+    'check_task',
     'record_owner_finding',
     'list_owner_findings',
     'search_history',
