@@ -150,6 +150,8 @@ export const toolNameSchema = z.enum([
   'set_quest',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
+  // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
+  'show_chart',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -304,6 +306,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_email',
     'send_agent_mail',
     'offer_replies',
+    'show_chart',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',
