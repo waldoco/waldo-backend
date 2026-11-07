@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
 import {
-  IMESSAGE_MEDIA_FILES_MAX, IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, iMessageMediaOf, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource,
+  IMESSAGE_MEDIA_FILES_MAX, IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, iMessageMediaNotes, iMessageMediaOf, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource,
   type IMessageMedia, type PhotonAttachmentSource,
 } from '../src/channels/imessage/photon-media';
-import { openedForTurn } from '../src/channels/imessage/owner-runtime';
+import { iMessageTranscriber, openedForTurn } from '../src/channels/imessage/owner-runtime';
 import { renderIMessage } from '../src/channels/imessage/console';
 
 // Every value here is fictional. The secret and token are distinctive so a leak into any output is found by substring.
@@ -213,14 +213,44 @@ describe('openIMessageMedia', () => {
     });
 
     it.each([
-      ['Photon cannot give it', vi.fn(async () => ({ ok: false as const, code: 'attachment_unavailable' as const })), [voice]],
-      ['it is not on Photon', opened([AUDIO]), [{ name: voice.name, mimeType: voice.mimeType, size: voice.size }]],
-      ['it comes with other files', opened([AUDIO, PNG]), [voice, photo]],
-      ['it is too large', opened([AUDIO]), [{ ...voice, size: IMESSAGE_MEDIA_MAX_BYTES + 1 }]],
-    ])('keeps the honest voice reply when %s', async (_name, source, files) => {
+      ['Photon cannot give it', vi.fn(async () => ({ ok: false as const, code: 'attachment_unavailable' as const })), [voice], true],
+      ['it is not on Photon', opened([AUDIO]), [{ name: voice.name, mimeType: voice.mimeType, size: voice.size }], false],
+      ['it comes with other files', opened([AUDIO, PNG]), [voice, photo], false],
+      ['it is too large', opened([AUDIO]), [{ ...voice, size: IMESSAGE_MEDIA_MAX_BYTES + 1 }], false],
+    ])('keeps the honest voice reply when %s', async (_name, source, files, fetched) => {
       const transcribe = heard('unused');
       expect(await openIMessageMedia(media(...files), { ...deps(source), transcribe })).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
       expect(transcribe).not.toHaveBeenCalled();
+      expect(source).toHaveBeenCalledTimes(fetched ? 1 : 0);
+    });
+
+    it('fetches under the turn\'s signal, and a cancelled turn stops a transcription that never answers', async () => {
+      const turn = new AbortController();
+      let fetchSignal: AbortSignal | undefined;
+      const source = vi.fn(async (input: { signal: AbortSignal }) => { fetchSignal = input.signal; return { ok: true as const, bytes: [AUDIO] }; });
+      const transcribe = vi.fn(() => { setTimeout(() => turn.abort(), 0); return new Promise<string>(() => undefined); });
+      const result = await openIMessageMedia(media(voice), { ...deps(source as never), signal: turn.signal, transcribe });
+      expect(fetchSignal!.aborted).toBe(true);
+      expect(result).toEqual({ kind: 'opened', attachments: [], parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
+    });
+
+    it('logs whether it was heard, as a code, never its words or name', async () => {
+      const lines: string[] = [];
+      vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+      await openIMessageMedia(media(voice), { ...deps(opened([AUDIO])), transcribe: heard('Call Sam back.') });
+      await openIMessageMedia(media(voice), { ...deps(opened([AUDIO])), transcribe: vi.fn(async () => { throw new Error('transcription failed: 400'); }) });
+      expect(lines.map(line => JSON.parse(line))).toEqual([{ hop: 'imessage_media', ok: true, voice: true }, { hop: 'imessage_media', ok: false, voice: true, code: 'no_transcript' }]);
+      expect(lines.join('\n')).not.toMatch(/Call Sam|Audio Message/);
+    });
+
+    it('is named a voice note, not a file, wherever the turn names what the owner sent', () => {
+      expect(iMessageMediaNotes([voice, photo, pdf]).map(note => note.text)).toEqual(['[Owner sent a voice note.]', '[Owner sent a photo, attached.]', '[Owner sent a file "notes.pdf", attached.]']);
+    });
+
+    it('is heard only with IMESSAGE_VOICE on and a transcriber set up', () => {
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '0', OPENAI_API_KEY: 'synthetic' } as never)).toBeUndefined();
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1' } as never)).toBeUndefined();
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1', OPENAI_API_KEY: 'synthetic' } as never)).toBeTypeOf('function');
     });
 
     it('a closed turn stops before the fetch and before the transcript is used', async () => {

@@ -17,6 +17,9 @@ const PHOTON_HOSTS = new Set(Object.values(PHOTON_ORIGINS).map(origin => new URL
 // may carry, keeps that well inside a Worker's 128 MiB.
 export const IMESSAGE_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 export const IMESSAGE_MEDIA_TIMEOUT_MS = 30_000;
+// A voice note's transcription: the providers take no signal, so it is raced against the turn and this bound, and the turn
+// is told the note could not be transcribed when either ends first.
+export const IMESSAGE_TRANSCRIBE_TIMEOUT_MS = 60_000;
 
 // The most files one message carries across, so a stored inbox record stays small. Above LLM_ATTACHMENTS_MAX, so a message
 // with more files than the model reads is still answered with the too-many reply.
@@ -141,7 +144,7 @@ export const IMESSAGE_MEDIA_REPLIES = {
 
 /** What the owner sent, as the model and the conversation read it beside the files. */
 export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly InboundPart[] => files.map(file => ({ authorship: 'media_note',
-  text: readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
+  text: isVoice(file) ? '[Owner sent a voice note.]' : readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
     ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached.]` }));
 
 export type OpenedIMessageMedia =
@@ -164,10 +167,18 @@ const hear = async (media: IMessageMedia, deps: OpenIMessageMediaDeps, transcrib
     maxBytes: IMESSAGE_MEDIA_MAX_BYTES, signal: AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_MEDIA_TIMEOUT_MS)]) });
   deps.admit();
   if (!fetched.ok || fetched.bytes.length !== 1) return reply(IMESSAGE_MEDIA_REPLIES.voice, fetched.ok ? 'unexpected_response' : fetched.code);
+  const bounded = AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_TRANSCRIBE_TIMEOUT_MS)]);
+  const raced: Transcriber = (audio, name, mime) => new Promise((resolve, reject) => {
+    const stop = () => reject(bounded.reason);
+    if (bounded.aborted) return stop();
+    bounded.addEventListener('abort', stop, { once: true });
+    transcribe(audio, name, mime).then(resolve, reject).finally(() => bounded.removeEventListener('abort', stop));
+  });
   const heard = await loadTelegramMedia({ kind: 'voice', fileId: voice!.id, fileName: voice!.name, mimeType: voice!.mimeType, fileSize: voice!.size },
-    { download: async () => fetched.bytes[0]!, transcribe });
+    { download: async () => fetched.bytes[0]!, transcribe: raced });
   deps.admit();
-  console.log(JSON.stringify({ hop: 'imessage_media', ok: true, voice: true }));
+  const transcript = heard.parts.some(part => part.authorship === 'file_transcript');
+  console.log(JSON.stringify({ hop: 'imessage_media', ok: transcript, voice: true, ...(transcript ? {} : { code: 'no_transcript' }) }));
   return { kind: 'opened', parts: heard.parts, attachments: [] };
 };
 
