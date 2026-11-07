@@ -35,6 +35,8 @@ export const retryParkedNotice = (brief: RetryBrief, timezone: string, reason: P
 // An owner turn that stopped before it finished, said as retryParkedNotice says its own uncertain stop, naming what to look
 // at. Each keeps what is known: a change may still go through, may already have gone through, or a result was saved unsent.
 const CHANGING = 'anything I was changing for you, such as your calendar, sent mail or reminders';
+// A typed /stop with nothing running, on every chat surface.
+export const NOTHING_RUNNING = 'Nothing is running right now.';
 export const INTERRUPTED_NOTICES = {
   unfinished: `I was interrupted partway through your message, so I can't tell what I'd already done about it, and a change I'd started may still go through. Check ${CHANGING} before you send it again.`,
   stopped: `Stopped. A change I'd already started may still go through, so check ${CHANGING}.`,

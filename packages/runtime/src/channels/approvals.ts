@@ -544,7 +544,7 @@ const CARDS_STAY: ReadonlySet<string> = new Set<ApprovalSurface>(['whatsapp', 'i
 // The surfaces that show no buttons and approve a one-tap card by the owner's numbered reply.
 const NUMBERED: ReadonlySet<ApprovalSurface> = new Set(['imessage']);
 // The reply protocol, not a reading of intent: only a message that is the digit itself decides.
-const NUMBERED_REPLY = /^\s*([12])\s*$/;
+export const NUMBERED_REPLY = /^\s*([12])\s*$/;
 const approvedInApp = (entry: LedgerRow): boolean => stepUpFor(entry, 'approve');
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const GO_AHEAD_HERE = 'Tell me here to go ahead and I will do it. Nothing is done until you do.';
