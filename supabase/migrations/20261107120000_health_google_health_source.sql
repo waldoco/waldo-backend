@@ -492,7 +492,7 @@ end $$;
 insert into waldo.connection_custody (provider, custodian) values ('google_health', 'oauth-proxy');
 
 -- A Google Health user id is case-sensitive, so the edge's store keeps it as Google gave it; every other account is
--- stored lowered as before.
+-- stored lowered as before. The answer names the account as stored, so the edge hands the owner object the same id.
 create or replace function waldo.oauth_store(p_do_name text, p_provider text, p_account text, p_scopes text, p_pins jsonb, p_secret text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid; v_row waldo.connections;
@@ -505,12 +505,12 @@ begin
   if found then
     perform vault.update_secret(v_row.secret_id, p_secret);
     update waldo.connections set scopes = string_to_array(p_scopes, ' '), pins = p_pins, status = 'active', last_error = null, last_refresh_at = now() where id = v_row.id;
-    return jsonb_build_object('id', v_row.id);
+    return jsonb_build_object('id', v_row.id, 'account', v_account);
   end if;
   insert into waldo.connections (owner_id, provider, account, scopes, secret_id, pins, last_refresh_at)
     values (v_owner, p_provider, v_account, string_to_array(p_scopes, ' '), vault.create_secret(p_secret), p_pins, now())
     returning id into v_row.id;
-  return jsonb_build_object('id', v_row.id);
+  return jsonb_build_object('id', v_row.id, 'account', v_account);
 exception when unique_violation then
   return '{"error":"account_linked"}';
 end $$;
