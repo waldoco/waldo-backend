@@ -144,6 +144,7 @@ describe('toolName', () => {
       'propose_calendar_plan',
       'set_quest',
       'check_task',
+      'steer_task',
     ]);
   });
 
@@ -370,6 +371,7 @@ describe('TOOL_PERMISSIONS', () => {
       'start_task',
       'cancel_task',
       'check_task',
+      'steer_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',
