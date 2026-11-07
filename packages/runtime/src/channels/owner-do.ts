@@ -197,6 +197,7 @@ import { healthContextBook, healthZoneWords, toContextHealthMaterial, type Healt
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { questBook, questCardContext, questHandler, questsPrompt, type QuestBook } from './quests';
 import { standingGrants, type StandingGrants } from './standing-grants';
 import { appAutonomyRequest } from './app-autonomy';
 import { autonomyHandlers } from './autonomy-tools';
@@ -336,6 +337,7 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
+  quests: QuestBook;
   // The owner's standing grants, and a grant's uses today as the effect ledger counts them.
   autonomy: Readonly<{ grants: StandingGrants; usesToday(grant: StandingGrantRecord): Promise<number> }>;
   ledger(): Promise<string>;
@@ -2004,6 +2006,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             days:(date?:string)=>this.appDays(runtime,name,hash,date),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             ownerName:()=>ownerName(claimStore(this.ctx.storage.sql)),
+            quests:()=>runtime.quests.shown(),
             act:async(action:ConsoleAction,fields?:Readonly<Record<string,string>>)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true,signin:fields?.account==='signin'}):null,this.ctx.storage.kv.get<string>('origin'))
               :action.action==='granola.connect'?this.granolaConnect(runtime)
@@ -4634,6 +4637,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A kind the owner turns off stops its open machine jobs too, and fences their workers.
     const cancelMachine = (job: MachineJob) => { for (const id of this.jobs().cancelMachine(job)) this.tasks.cancelled(id); };
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
+    const quests = questBook(storage.sql, clock, () => crypto.randomUUID().replace(/-/g, '').slice(0, 12));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
     const artifactBodies = this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies();
@@ -4960,7 +4964,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -5003,7 +5007,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
-      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
+      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders), questsPrompt(quests)].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
@@ -5983,6 +5987,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const capacity = this.env.CAPACITY_PLAN === '1' && card.id !== 'card:midday';
       // CAPACITY_BUDGET: the planning Brief also reads the rest of the week, for a lighter day to move what can give.
       const budget = capacity && planning && this.env.CAPACITY_BUDGET === '1';
+      // The Brief plans around the owner's open quests; the Close checks in on those due tonight, which count as checked in once
+      // the Close reaches the owner, whether or not it spoke of them. A Close that never reaches them leaves them due.
+      const questText = questCardContext(card.id, quests), questsDue = card.id === 'card:close' ? quests.due().map(quest => quest.id) : [];
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
         ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
@@ -6000,9 +6007,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', ...(planning && this.env.CALENDAR_PLAN === '1' ? ['propose_calendar_plan' as const] : []), 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
-          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow,
-            capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
-              ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined)).trim();
+          const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
+            ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
+          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null,
+            [capacityText, questText].filter(Boolean).join('\n\n') || undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);
@@ -6023,7 +6031,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
           await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-            doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now } });
+            doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now, ...(questsDue.length ? { quests: questsDue } : {}) } });
           plans.waiting(day, card.id);
           await scheduler.rearm();
           log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: `${card.id} queued`, text: { input: said, output: text } });
@@ -6039,7 +6047,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if (otlp) rowTraces(this.ctx.storage.sql).link(appRow, trace, Date.now());
           }
         }
-        if (skipped) plans.skipped(day, card.id); else plans.sent(day, card.id);
+        if (skipped) plans.skipped(day, card.id); else { plans.sent(day, card.id); quests.checkedIn(questsDue); }
         updates.fold(now);
         // Pushed only once the Brief has a row in the app chat and is recorded as sent, so a push can never cause a second Brief.
         if (appRow !== undefined && card.id === 'card:brief') await push('brief');
@@ -6089,7 +6097,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (record.dayCard) {
         // A card the owner never saw keeps its day-plan row unsent and its updates for the next card.
-        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); }
+        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); quests.checkedIn(record.dayCard.quests ?? []); }
         log({ trace: record.trace, hop: 'day_card', ms: 0, ok: delivered, detail: `${record.dayCard.card} ${delivered ? 'delivered' : record.reason ?? record.status}` });
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
@@ -6205,7 +6213,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
