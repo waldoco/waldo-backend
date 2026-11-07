@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_QUESTS_REVISION, type AppQuestV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -17,6 +17,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
+import { googlePicturePaths } from './app-google-picture';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
 export type AppControlsHost = Readonly<{
@@ -38,6 +39,8 @@ export type AppControlsHost = Readonly<{
   welcome?():AppWelcomeBuildV1;
   // What the owner asked to be called, or null when the memory holds no name to serve.
   ownerName?():string|null;
+  // The owner's quests as the day view lists them (controls revision 17).
+  quests?():readonly AppQuestV1[];
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
   phone:PhoneSmsEnv;
   // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
@@ -52,6 +55,10 @@ export type AppControlsHost = Readonly<{
   chatLinks?():Promise<ChatLinks>;
   // Whether this deployment serves the claim controls of controls revision 15 (MEMORY_CLAIM_CONTROLS); absent means it does not.
   claimControls?:boolean;
+  // Controls revision 17: each connected Google account's picture address, by account id; absent means none are served.
+  googlePictures?():Promise<ReadonlyMap<string,string>>;
+  // Controls revision 17: every source of body readings Waldo lists on Connections; absent means the view carries none.
+  wearables?():Promise<readonly AppWearableV1[]>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -95,7 +102,10 @@ const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_C
 // A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
 // is still unfinished, so it reads as pending.
 const OLDER_CARD_STATE:Readonly<Record<string,string>>={generating:'pending',failed:'pending',paused:'pending'};
-const dayForRevision=(request:Request,shown:Record<string,unknown>)=>{
+const setsSchedules=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_SCHEDULE_REVISION;
+// A build below controls revision 16 never receives schedule_controls; it is in the day's revision, as schedule.set changes it.
+const dayForRevision=(request:Request,day:Record<string,unknown>)=>{
+  const {schedule_controls:_schedules,...older}=day.data as Record<string,unknown>,shown=setsSchedules(request)?day:{...day,data:older};
   if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_STATE_REVISION)return shown;
   const data=shown.data as {cards:readonly Record<string,unknown>[]};
   return {...shown,data:{...data,cards:data.cards.map(({state_reason:_reason,retries_left:_left,...card})=>typeof card.state==='string'&&OLDER_CARD_STATE[card.state]?{...card,state:OLDER_CARD_STATE[card.state]}:card)}};
@@ -120,6 +130,19 @@ const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
 const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
 const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit','claim.confirm':'spot.confirm','claim.forget':'spot.forget','claim.dismiss':'spot.dismiss','claim.quiet':'spot.quiet','claim.unquiet':'spot.unquiet'};
+// Controls revision 17 gives each Google account its picture and lists the wearables; builds below it never receive either.
+// Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
+const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
+// The Workspace services each account's saved grant lets Waldo read come from the same console read as calendar, mail and tasks.
+const SERVICES=['drive','docs','sheets','slides'] as const;
+const withRevision17=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[],grants:ConsoleView['google']['accounts'])=>{
+  const paths=await (async()=>{try{return await googlePicturePaths(await host.googlePictures?.()??new Map());}catch{return new Map<string,string>();}})();
+  return accounts.map(account=>{const grant=grants.find(known=>known.id===account.id);return {...account,picture:paths.get(account.id)??null,...Object.fromEntries(SERVICES.map(service=>[service,grant?.[service]===true]))};});
+};
+const wearablesOf=async(host:AppControlsHost)=>{
+  if(!host.wearables)return {};
+  try{return {wearables:await host.wearables()};}catch{return {};}
+};
 // Controls revision 15's claim controls are served to a build that asks for them, on a deployment that has them on.
 const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControls===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
 const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
@@ -207,12 +230,15 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
     const day=query.data.view==='day'?explainCards(request,host,dayForRevision(request,shown)):shown;
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
+    // The quests change in chat, never through a day action, so they too sit outside the day's revision.
+    const quests=query.data.view==='day'&&host.quests&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_QUESTS_REVISION?{quests:host.quests()}:{};
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv,host.bothDefault),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
-    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{email:string}[]}}).google:null;
-    const connections=google?{google:{...google,...await googleSignin(host.phone,host.account.owner,google)}}:{};
-    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
+    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
+    const catalogue=google!==null&&listsCatalogue(request);
+    const connections=google?{google:{...google,...(catalogue?{accounts:await withRevision17(host,google.accounts,built?.google.accounts??[])}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...quests,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
@@ -262,6 +288,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.action==='proactive_surface.set'&&!choosesSurface(request,host))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.action==='schedule.set'&&!setsSchedules(request))return reply({error:'invalid_action'},400);
   if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.

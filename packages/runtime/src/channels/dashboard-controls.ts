@@ -1,6 +1,7 @@
 import { DRAFT_SEND_KINDS, type ApprovalReview } from './approvals';
 import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
+import { APP_SCHEDULE_IDS_V1, APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
 export const CONTROLS_VIEWS = ['day', 'connections', 'waiting', 'activity', 'profile', 'setup', 'usage', 'files'] as const;
@@ -44,6 +45,11 @@ const projections = {
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     // app.v1 names five behaviors in a strict object; a later kind stays out until a contract revision names it.
     schedules: { daily_brief: view.schedules.daily_brief, followups: view.schedules.followups, event_briefs: view.schedules.event_briefs, nightly: view.schedules.nightly, heartbeat: view.schedules.heartbeat },
+    // What schedule.set changes: each schedule's switch, and the Brief and the Close at the owner's time (the default until set).
+    schedule_controls: [
+      ...APP_SCHEDULE_IDS_V1.map((id) => ({ id, on: view.schedules[id], accepts: 'on_off' as const, time: null, no_later_than: false })),
+      ...APP_SCHEDULE_TIME_IDS_V1.flatMap((id) => view.cards.filter((card) => card.id === id).map((card) => ({ id, on: view.schedules.daily_brief, accepts: 'time' as const, time: card.pin ?? card.defaultTime, no_later_than: id === 'card:brief' && view.wakeBrief === true }))),
+    ],
   }),
   connections: (view: ConsoleView) => ({
     google: {

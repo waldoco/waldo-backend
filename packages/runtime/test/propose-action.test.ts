@@ -441,7 +441,7 @@ describe('taint goes to a card', () => {
       const late = await desk.decide(rows('tainted_action')[0]!.id, 'a', 't');
       expect(late.toast).not.toBe('Done');
       expect(late.message).toContain('Nothing was done');
-      expect(late.message).toContain('already closed as done');
+      expect(late.message).toContain('It ran and changed nothing.');
       expect(rows('tainted_action')[0]!.status).toBe('failed');
       expect(status(power.id)).toBe('done');
 
@@ -453,7 +453,7 @@ describe('taint goes to a card', () => {
       expect((await desk.decide(first, 'a', 't')).toast).toBe('Done');
       const again = await desk.decide(second, 'a', 't');
       expect(again.toast).not.toBe('Done');
-      expect(again.message).toContain('already closed as dropped');
+      expect(again.message).toContain('It ran and changed nothing.');
       expect(status(passport.id)).toBe('dropped');
     });
   });

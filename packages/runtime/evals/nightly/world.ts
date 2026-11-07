@@ -13,6 +13,7 @@ import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../..
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
+import type { HealthWakeReason } from '../../src/health/wakes';
 import { composeDayCard } from '../../src/channels/day-cards';
 import { capacityBudgetContext } from '../../src/channels/capacity';
 import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
@@ -71,6 +72,10 @@ export type WorldSeed = Readonly<{
   health_before?: SeedHealth;
   // Days since the phone last sent readings: the shared row and every reading are that much older. 0 when unset.
   health_days_old?: number;
+  // Why a health_change step wakes the trigger, as the owner object marks it: a zone change when unset.
+  health_wake?: HealthWakeReason;
+  // More readings get_health returns beside the standard series: [signal, day offset from today, value, method].
+  health_series?: readonly SeriesSample[];
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   // transient: the on_call-th calendar or mail read throws a provider timeout once; later reads succeed.
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
@@ -168,7 +173,8 @@ const searchMail = (rows: readonly SeedMail[], query: string, now: number): read
 // The owner's own readings behind get_health while health is shared, as the health plane's series rows: signal, day
 // relative to today, value. Synthetic: last night short against the two before, chosen to be distinctive so a check
 // can tell when one is repeated where it must not be (SYNTHETIC_RENDERINGS).
-const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: number, method: string | null])[] = [
+export type SeriesSample = readonly [signal: string, day: number, value: number, method: string | null];
+const SYNTHETIC_SERIES: readonly SeriesSample[] = [
   ['sleep_duration', -2, 446, 'asleep_duration'], ['sleep_duration', -1, 454, 'asleep_duration'], ['sleep_duration', 0, 317, 'asleep_duration'],
   ['overnight_hrv', 0, 41.5, 'rmssd'], ['resting_heart_rate', 0, 63, null],
 ];
@@ -176,9 +182,9 @@ const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: 
 export const SYNTHETIC_RENDERINGS = ['317', '5h 17', '5 h 17', '5:17', '5 hours 17', '5 hr 17', '5hr 17', '5.3 h', '5.3 hours', '41.5', '63 bpm'] as const;
 const MODERATE_DAY: SeedHealth = { form_score: 48, recovery: 'moderate', load: 'good', drivers: ['sleep below baseline'] };
 const shift = (day: string, by: number) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86_400_000).toISOString().slice(0, 10);
-const healthSeries = (today: string, daysOld: number) => ({
+const healthSeries = (today: string, daysOld: number, extra: readonly SeriesSample[] = []) => ({
   access: 'granted', read_at: `${today}T03:00:00.000Z`,
-  sources: [{ source: 'apple', consent_epoch: 1, samples: SYNTHETIC_SERIES.map(([signal, offset, value, method]) => {
+  sources: [{ source: 'apple', consent_epoch: 1, samples: [...SYNTHETIC_SERIES, ...extra].map(([signal, offset, value, method]) => {
     const day = shift(today, offset - daysOld);
     const night = signal === 'resting_heart_rate' ? null : Date.parse(`${shift(day, -1)}T18:30:00Z`);
     return {
@@ -394,7 +400,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
-      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld);
+      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld, seed.health_series);
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
@@ -427,12 +433,12 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const triggerRow = () => {
     const rowDay = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load }, drivers: day.drivers },
       previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
   const healthChange = async (decide: (id: string, prompt: string, format: HealthDecisionFormat) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null; notice: string | null }>> => {
-    healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now());
+    healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now(), seed.health_wake);
     let proposal: ProposeCalendarChangeArgs | null = null;
     let notice: string | null = null;
     const outcome = await runHealthTrigger({

@@ -209,7 +209,7 @@ describe('a tainted turn sends every write to the owner card', () => {
       'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
+      'set_proactivity', 'set_quest', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
@@ -352,6 +352,54 @@ describe('a value encoded past the decode limit refuses an executable call', () 
       expect(rows(state)).toEqual([]);
       expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM ledger WHERE payload_json LIKE ?', `%${encoded.slice(0, 32)}%`).one().n).toBe(0);
       expect(runs).toEqual([]);
+    });
+  });
+});
+
+// What the owner reads after approving a card is the effect, never the tool's payload or the error text written for the
+// model, which can carry readings, ids or internal names. Synthetic values.
+describe('the outcome the owner reads after approving a carded write', () => {
+  const PAYLOAD = { calories_logged: 2400, row: 'meal_log#9177', trace: 'dispatcher.handle -> log_meal' };
+  const approve = async (state: DurableObjectState, handler: ToolHandler<unknown, unknown, ToolDispatcherContext>, handlers = [handler]) => {
+    const desk = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+    await proposeActionHandler(desk, replayHost(() => [handler])).handle({ tool: 'log_meal', args: { description: 'Lunch at the client office', calories_estimate: 2400 }, reasoning: 'A forwarded mail asked for it.' } as never, tainted());
+    return desk.decide(rows(state).find((row) => row.status === 'open')!.id, 'a', 't');
+  };
+
+  it('a write that ran says Done and what it did, with none of its payload', async () => {
+    await runInDurableObject(stub('outcome-done'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: true, data: PAYLOAD, source_taint: null }) }).handler);
+      expect(out.toast).toBe('Done');
+      expect(out.message).toMatch(/^Done: .+\.$/);
+      for (const leaked of ['9177', 'meal_log', 'dispatcher', 'calories_logged', '{']) expect(out.message).not.toContain(leaked);
+    });
+  });
+
+  it('a write that ran and failed gives a fixed line, never the error it returned', async () => {
+    await runInDurableObject(stub('outcome-failed'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: false, error: 'meal_log#9177 insert failed in dispatcher.handle for owner 42', code: 'auth_failed', source_taint: null }) as never }).handler);
+      expect(out.toast).toBe('That failed');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It ran and failed\.$/);
+      for (const leaked of ['9177', 'meal_log', 'dispatcher', 'owner 42']) expect(out.message).not.toContain(leaked);
+    });
+  });
+
+  it('a write the tool refused says it changed nothing, never the refusal text', async () => {
+    await runInDurableObject(stub('outcome-tool-refused'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: false, error: 'meal_log#9177 already holds this meal', code: 'rejected', source_taint: null }) as never }).handler);
+      expect(out.toast).toBe('That failed');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It ran and changed nothing\.$/);
+      expect(out.message).not.toContain('9177');
+    });
+  });
+
+  it('a write refused before it ran gives a fixed line, never the dispatcher text', async () => {
+    await runInDurableObject(stub('outcome-refused'), async (_instance, state) => {
+      const { handler } = recording('log_meal');
+      const out = await approve(state, handler, []);
+      expect(out.toast).toBe('Not done');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It was refused before it ran\.$/);
+      for (const leaked of ['handler', 'registered']) expect(out.message).not.toContain(leaked);
     });
   });
 });

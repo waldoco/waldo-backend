@@ -121,11 +121,29 @@ describe('trace health scrub at the gate, capture on', () => {
     expect(console).not.toContain('61.7');
   });
 
+  it('withholds a quest hop whole: an owner-stated target or progress never reaches a trace', () => {
+    const input = '{"title":"Resting HR down to 55","progress":"Walked twice this week"}';
+    for (const hop of ['tool_set_quest', 'task_tool_set_quest']) {
+      const gated = gateTraceEntry({ trace: 'tg-4', hop, ms: 1, ok: true, text: { input, output: '{"status":"started"}' } }, true);
+      expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+    }
+  });
+
   it('withholds a device-context or weather tool hop whole: no phone zone, city or forecast reaches a trace', () => {
     const output = '{"state":"available","devices":[{"device":1,"timezone":"Asia/Dubai","place":{"locality":"Testville"}}]}';
     for (const hop of ['tool_get_device_context', 'task_tool_get_device_context', 'tool_get_weather', 'task_tool_get_weather']) {
       const gated = gateTraceEntry({ trace: 'tg-3', hop, ms: 1, ok: true, text: { input: '{}', output } }, true);
       expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+    }
+  });
+
+  it('withholds a medicine tool hop whole: no medicine name, time or dose status reaches a trace', () => {
+    const output = '{"ok":true,"data":{"id":"med-1","name":"Testolin 5 mg","times":["13:00"],"today":[{"at":"13:00","status":"taken"}]}}';
+    for (const tool of ['track_medication', 'log_medication', 'list_medications', 'stop_medication']) {
+      for (const hop of [`tool_${tool}`, `task_tool_${tool}`]) {
+        const gated = gateTraceEntry({ trace: 'tg-med', hop, ms: 1, ok: true, text: { input: '{"name":"Testolin 5 mg"}', output } }, true);
+        expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+      }
     }
   });
 

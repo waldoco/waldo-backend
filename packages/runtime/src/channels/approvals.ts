@@ -152,7 +152,8 @@ const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.serve
 export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[] }>;
 // What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
 // refused before the handler ran; failed means the tool reported its own typed failure; uncertain is everything else.
-export type TaintedActionOutcome = Readonly<{ status: 'done' | 'rejected' | 'failed' | 'uncertain'; message: string }>;
+// message is owner-facing and fixed; code is the dispatcher's typed code, for the trace only.
+export type TaintedActionOutcome = Readonly<{ status: 'done' | 'rejected' | 'failed' | 'uncertain'; message: string; code?: string }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 // An approved call the desk does not run inside the decision: the host's jobs lane runs it later, under its own run scope.
@@ -301,6 +302,8 @@ export type ApprovalDesk = Readonly<{
   reraise(id: string): Promise<ReraiseOutcome>;
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
+  // Meta refused a card on this surface after accepting it (a failed status for its message id). True when it named a live card.
+  cardNotDelivered(messageRef: string): boolean;
   // A message that is exactly 1 or 2 decides the latest numbered card on this surface while its request is open and `latest` says
   // that card (by its message ref) is still Waldo's latest message in the chat the reply came from; anything else is a turn (null).
   numberedReply(text: string, trace: string, latest: (messageRef: string) => boolean): Promise<ApprovalDecision | null>;
@@ -408,6 +411,7 @@ const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It f
 const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...` : text;
 // The reasoning was written in a turn that read outside text and can name anything, so a card that read the owner's own
 // stores leads with that read, and the reasoning follows it as Waldo's.
+const sentence = (text: string) => /[.!?…]$/.test(text) ? text : `${text}.`;
 const describeTaintedAction = (p: TaintedActionProposal) => p.preview?.length
   ? `${PREVIEW_HEADING[p.tool] ?? 'It changes'}: ${p.preview[0]}${p.preview.length > 1 ? ` and ${p.preview.length - 1} more` : ''}`
   : `Run ${p.tool}: ${clipped(p.reasoning)}`;
@@ -1699,11 +1703,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               return { provider_id: `${operationRef}:apply`, result: outcome.message };
             }, async () => outcome?.status === 'rejected' || outcome?.status === 'failed' ? { status: 'not_applied' } : { status: 'unknown' });
             setStatus(id, 'done');
-            out = { toast: 'Done', message: `Done: ${describeTaintedAction(tp)}. ${String(receipt.result)}` };
+            out = { toast: 'Done', message: `Done: ${sentence(describeTaintedAction(tp))}` };
           } catch (error) {
             if (outcome?.status === 'rejected' || outcome?.status === 'failed') {
               setStatus(id, outcome.status);
-              out = { toast: outcome.status === 'rejected' ? 'Not done' : 'That failed', message: `Nothing was done: ${outcome.message}` };
+              deps.log({ trace, hop: 'tainted_action_not_done', ms: 0, ok: false, code: outcome.code ?? outcome.status });
+              out = { toast: outcome.status === 'rejected' ? 'Not done' : 'That failed', message: `Nothing was done: ${sentence(describeTaintedAction(tp))} ${outcome.message}` };
             } else {
               deps.log({ trace, hop: 'tainted_action_unknown', ms: 0, ok: false, error: String(error) });
               setStatus(id, 'uncertain');
@@ -1757,7 +1762,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             if(recorded && recorded.state !== 'rejected') {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check the result before retrying; nothing was run again.'};}
             if(error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending') || error instanceof McpRefusal) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
             setStatus(id, 'failed');
-            out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
+            deps.log({ trace, hop: 'mcp_call_failed', ms: 0, ok: false, error: String(error) });
+            out = { toast: 'That failed', message: 'The call failed. Nothing else ran - ask me to try again.' };
           }
         }
       } else if (entry.kind === 'calendar_plan') {
@@ -1803,7 +1809,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const durable = deps.effects?.get(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`);
       if(durable?.state === 'attempting' || durable?.state === 'unknown' || error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { if (action === 'u' && entry.kind === 'calendar_change') sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id); else setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
-      return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
+      return { toast: 'That failed', message: "That didn't work. Ask me to try again." };
     }
   };
   // Once a decision moves a row off its cards, every card is retired: durably first, then the
@@ -1857,7 +1863,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     replayReceipt(id, status, message) {
       const entry = row(id);
       const what = entry ? describeAny(entry) : 'the approved action';
-      if (status === 'done') return `Done: ${what}. ${message}`;
+      if (status === 'done') return `Done: ${sentence(what)}`;
       if (status === 'skipped') return `Stopped before it ran, so nothing was done: ${what}.`;
       if (status === 'uncertain') return `The outcome is unknown: ${what}. ${message} Check the result before asking again; nothing was run again.`;
       return `Nothing was done: ${what}. ${message}`;
@@ -1936,6 +1942,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
+    // The owner never saw that card, so its presentation is retired and its buttons decide nothing. With no approvable
+    // presentation left anywhere, a card still waiting on the owner waits for their next message here, which sends it again.
+    cardNotDelivered(messageRef) {
+      const card = sql.exec<{ approval_id: string }>('SELECT approval_id FROM approval_presentations WHERE surface = ? AND message_ref = ? AND retired_at IS NULL', surface, messageRef).toArray()[0];
+      if (!card) return false;
+      const id = card.approval_id;
+      sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE surface = ? AND message_ref = ? AND retired_at IS NULL', deps.now(), surface, messageRef);
+      const approvable = sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND approvable = 1 AND retired_at IS NULL', id).toArray().length > 0;
+      if (!approvable) sql.exec(`UPDATE ledger SET status = 'card_unconfirmed', card_waits_on = ? WHERE id = ? AND ${CARD_WAITING}`, surface, id);
+      deps.log({ trace: id, hop: 'approval_card_not_delivered', ms: 0, ok: false, code: approvable ? 'approvable_elsewhere' : 'waits_again' });
+      return true;
+    },
     async ownerWrote() {
       expireDue();
       const passStarted = deps.now();
