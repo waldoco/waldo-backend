@@ -27,7 +27,7 @@ describe('a code on its own line, a few lines after a line that names one', () =
     ['Your verification code is below.\n482913', '482913'],
     ['Enter the following code in the app\n4 8 2 9 1 3', '482913'],
     ['Your one-time password\n482913', '482913'],
-    ['Here is your sign-in code.\nIt expires soon.\nDo not share it.\n482913', '482913'],
+    ['Here is your sign-in code.\n\n482913', '482913'],
     ['Enter this OTP on the next screen\n48 29 13', '482913'],
   ])('is quarantined: %s', (text, code) => hidden(text, code));
 
@@ -63,6 +63,13 @@ describe('a code on its own line, a few lines after a line that names one', () =
     'Barcode label\nItem\n48291301',
     'Pincode lookup\nArea\n560001',
     'Unicode table\nCount\n4096',
+    // A code-naming line reaches only the next line, and not when it already shows its code.
+    'Here is your sign-in code.\nIt expires soon.\nDo not share it.\n482913',
+    'Use this code at checkout: SAVE20\nSubtotal\n1499',
+    'Use this code at checkout: SAVE20\n1499',
+    'Your code: WELCOME10\nValid till\n2026',
+    'Your code review is ready\nPR\n2009',
+    'Show this code at the counter\nToken\n0042',
   ])('leaves a line alone that is not a code by itself, or is too far from the naming line: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
@@ -126,9 +133,30 @@ describe('a code before "is your"', () => {
     ['482913 is your Acme Cloud Platform verification code', '482913'],
   ])('is quarantined: %s', (text, code) => hidden(text, code));
 
-  it.each(['12345678 is your order number and promo code', '48291301 is your referral code', '4821 is your gift card code'])('leaves a number named as something else alone: %s', (text) => {
+  it.each(['48291301 is your referral code', '4821 is your gift card code', '12345678 is your order number and promo code'])('leaves a number named as something else alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
+
+  it.each([
+    ['4829 is your order OTP. Share it with the delivery partner', '4829'],
+    ['482913 is your card OTP', '482913'],
+    ['482913 is your credit card OTP for txn of Rs 1499', '482913'],
+    ['482913 is your booking OTP for IRCTC', '482913'],
+    ['482913 is your gift card verification code', '482913'],
+    ['482913 is your booking verification code', '482913'],
+    ['482913 is your account and login code', '482913'],
+  ])('takes a one-time code whatever words come before its noun: %s', (text, code) => {
+    const found = extractArtifacts(text);
+    expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
+    expect(found.text).not.toContain(code);
+  });
+});
+
+describe('a postal or product number named by a compound', () => {
+  it.each(['Pincode: 560001', 'Barcode 48291301', 'Postcode: 4000', 'Zipcode 94107', 'Zip code: 94107', 'Postal code 560001', 'Unicode 4096'])('is left alone: %s', (text) => {
+    expect(extractArtifacts(text).artifacts).toEqual([]);
+  });
+  it.each([['Enter thiscode: 482913', '482913'], ['Your PIN code is 4821', '4821']])('a glued or PIN code is still taken: %s', (text, code) => hidden(text, code));
 });
 
 describe('a code in a plain link', () => {

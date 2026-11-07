@@ -85,9 +85,12 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
   { kind: 'magic_link', re: /^(?=https?:\/\/[^\s"'<>)\]?#]*(?:verif|log-?in|sign-?in|auth|confirm|activat|magic))https?:\/\/[^\s"'<>)\]]*[?&](?:code|otp|passcode|verification[-_]?code)=\d{4,8}(?![^&#])/i },
 ];
 
-// Words that make a "code" something other than a one-time code.
-const OTHER_CODES = String.raw`(?:and|or|number|order|promo|promotional|discount|coupon|voucher|gift|card|referral|invite|tracking|reference|booking|dress|qr|bar|zip|pin|area|post|postal|source|conduct|country|dial(?:ling)?)`;
-const NOT_A_ONE_TIME_CODE = String.raw`(?!${OTHER_CODES}\b)`;
+// The word right before a bare "code" that makes it something other than a one-time code ("promo code", "referral code").
+// It never vetoes an OTP or passcode, or a code a one-time word names ("your gift card verification code").
+const OTHER_CODES = String.raw`(?:number|order|promo|promotional|discount|coupon|voucher|gift|card|referral|invite|tracking|reference|booking|dress|qr|bar|zip|pin|area|post|postal|source|country|dial(?:ling)?)`;
+// "Pincode", "Postcode", "Zip code", "Barcode", "Unicode" name a postal or product number, not a one-time code. "PIN code" is
+// still taken: it can be a card's.
+const COMPOUND_CODE = String.raw`(?<!(?:pin|post|zip|bar|uni)|\b(?:zip|postal?)\s)`;
 
 // In this order. Google's SMS/mail prefix form keeps its prefix in the relay; "… is your code" comes before the
 // keyword forms, which would otherwise take its noun and the digits after it ("482913 is your code\n13 10 2026").
@@ -96,26 +99,26 @@ const OTPS: readonly RegExp[] = [
   // "123456 is your Google verification code", "123-456 is your WhatsApp code", "482913is your code". The code may
   // start right after a word ("Hello482913 is your code"), and the keyword may run into the next word.
   // A code in brackets or quotes, or with up to five words before its noun ("is your Acme Cloud Platform verification code").
-  // The words before the noun never name another kind of number ("is your order number and promo code").
-  new RegExp(String.raw`(?<!\d)["'(\[\u201c\u2018]?` + CODE_BEFORE + String.raw`["')\]\u201d\u2019]?\s*is\s+your\s+(?:${NOT_A_ONE_TIME_CODE}[\w-]+\s){0,5}(?:code|passcode|otp)`, 'gi'),
+  new RegExp(String.raw`(?<!\d)["'(\[\u201c\u2018]?` + CODE_BEFORE + String.raw`["')\]\u201d\u2019]?\s*is\s+your\s+(?:(?:[\w-]+\s){0,5}(?:otp|passcode)|(?:[\w-]+\s){0,4}(?!${OTHER_CODES}\s)[\w-]+\s+code|code)`, 'gi'),
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
   // Glue on either side of a word must not hide a code, since a table cell can end right against the next one:
   // the phrase starts at the adjective, even mid-word ("Xverification pin 123456"), and the noun may follow it
   // directly ("verificationcode"). Scanning a vendor word before the adjective also cost time on every word start.
   new RegExp(String.raw`(?:(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s*(?:code|passcode|pin|otp)|one[- ]?time\s*password)` + KEYWORD_END + LEAD + CODE, 'gi'),
   // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed. It starts
-  // mid-word too ("Enter thiscode: 482913"), so a postcode or barcode followed by digits is quarantined as well.
-  new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + LEAD + CODE, 'gi'),
+  // mid-word too ("Enter thiscode: 482913"), except in a postal or product compound ("Pincode: 560001").
+  new RegExp(String.raw`(?:${COMPOUND_CODE}code|otp|passcode)` + KEYWORD_END + LEAD + CODE, 'gi'),
 ];
 
-// A code alone on its line (a table row of its own), within STANDALONE_REACH lines after a line that names a one-time code
-// but shows none ("Use this code to sign in:", "Your verification code is below."). A bracketed or dashed note may follow it
-// ("482913 (expires in 10 minutes)"). Only wording that names a one-time code arms the reach: a promo, dress, QR or bar
-// code, or "code" inside a word ("Barcode", "Unicode"), does not, or the price, year or time under it would be taken.
-const STANDALONE_REACH = 3;
+// A code alone on its line (a table row of its own), on the line right after one that names a one-time code but shows none
+// ("Use this code to sign in:", "Your verification code is below."); blank lines between them are already gone. A bracketed
+// or dashed note may follow it ("482913 (expires in 10 minutes)"). Only wording that names a one-time code arms it: a promo,
+// dress, QR or bar code, or "code" inside a word ("Barcode", "Unicode"), does not, nor a line that already shows its code
+// ("Use this code at checkout: SAVE20"), or the price, year or time on the next line would be taken.
 const STANDALONE_CODE = new RegExp(String.raw`^[ ("'\u201c]*(?<code>${EVEN}|\d{4,8})(?!\d)[ )"'.\u201d]*(?:(?:\(|${DASH} )[^\n]*)?$`);
 const NAMES_CODE = new RegExp(String.raw`(?:\b(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|access)\s*(?:code|passcode|pin|otp)|\b(?:your|this|the\s+following)\s+(?:code|passcode|otp)|\bcode\s+below|\b(?:otp|passcode)|\bone[- ]?time\s*password)` + KEYWORD_END, 'i');
 const MARKER_START = '[quarantined: ';
+const SHOWS_CODE = /\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4,}\b/;
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct
 // kinds found; an empty kinds array means the text passed through untouched (same string identity).
@@ -166,15 +169,11 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
       return take('otp', code === undefined ? match : code.replace(/\s/g, ''));
     });
   }
-  let reach = 0;
+  let armed = false;
   redacted = redacted.split('\n').map((line) => {
-    const code = reach > 0 ? STANDALONE_CODE.exec(line)?.groups?.code : undefined;
-    if (code !== undefined) {
-      reach = 0;
-      return line.replace(code, take('otp', code.replace(/\s/g, '')));
-    }
-    reach = NAMES_CODE.test(line) && !line.includes(MARKER_START) ? STANDALONE_REACH : reach - 1;
-    return line;
+    const code = armed ? STANDALONE_CODE.exec(line)?.groups?.code : undefined;
+    armed = code === undefined && NAMES_CODE.test(line) && !line.includes(MARKER_START) && !SHOWS_CODE.test(line);
+    return code === undefined ? line : line.replace(code, take('otp', code.replace(/\s/g, '')));
   }).join('\n');
   return artifacts.length === 0 ? { text, artifacts: [] } : { text: redacted, artifacts };
 };
