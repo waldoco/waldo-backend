@@ -1,6 +1,7 @@
 import { iMessageBindingSchema, opaqueIMessageIdSchema, type IMessageStandardReaction } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
+import { selectTranscriber } from '../../llm/transcriber';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
@@ -136,8 +137,9 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
   if (!record.media) return { kind: 'text' };
   const keep = host.env.WALDO_FILE_TOOLS === '1'
     ? uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName) : undefined;
+  const transcribe = host.env.IMESSAGE_VOICE === '1' ? selectTranscriber(host.env)?.transcribe : undefined;
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
-    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}) });
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}), ...(transcribe ? { transcribe } : {}) });
   if (opened.kind === 'opened') return opened;
   scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
   return { kind: 'answered' };

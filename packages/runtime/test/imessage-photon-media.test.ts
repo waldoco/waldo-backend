@@ -192,6 +192,48 @@ describe('openIMessageMedia', () => {
     expect(await openIMessageMedia(media(zip), deps(opened([PNG])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
   });
 
+  describe('a voice note, with IMESSAGE_VOICE on (a transcriber given)', () => {
+    const AUDIO = new Uint8Array([0x63, 0x61, 0x66, 0x66, 9, 9]);
+    const voice = { id: 'att-voice', name: 'Audio Message.caf', mimeType: 'audio/x-caf', size: AUDIO.length };
+    const heard = (text: string) => vi.fn(async (_audio: Uint8Array, _name: string, _mime: string) => text);
+
+    it('is fetched from Photon and transcribed; the transcript is its own part and nothing is attached', async () => {
+      const transcribe = heard(' Book the dentist for Thursday. ');
+      const d = { ...deps(opened([AUDIO]), false), transcribe };
+      expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [],
+        parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'Book the dentist for Thursday.' }] });
+      expect(d.source).toHaveBeenCalledWith(expect.objectContaining({ messageGuid: 'msg-1', sender: SENDER, files: [{ id: 'att-voice', mimeType: 'audio/x-caf' }] }));
+      expect(transcribe).toHaveBeenCalledWith(AUDIO, 'Audio Message.caf', 'audio/x-caf');
+      expect(d.admit).toHaveBeenCalledTimes(3);
+    });
+
+    it('that cannot be transcribed says so to the model rather than failing the turn', async () => {
+      const d = { ...deps(opened([AUDIO])), transcribe: vi.fn(async () => { throw new Error('transcription failed: 400'); }) };
+      expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [], parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
+    });
+
+    it.each([
+      ['Photon cannot give it', vi.fn(async () => ({ ok: false as const, code: 'attachment_unavailable' as const })), [voice]],
+      ['it is not on Photon', opened([AUDIO]), [{ name: voice.name, mimeType: voice.mimeType, size: voice.size }]],
+      ['it comes with other files', opened([AUDIO, PNG]), [voice, photo]],
+      ['it is too large', opened([AUDIO]), [{ ...voice, size: IMESSAGE_MEDIA_MAX_BYTES + 1 }]],
+    ])('keeps the honest voice reply when %s', async (_name, source, files) => {
+      const transcribe = heard('unused');
+      expect(await openIMessageMedia(media(...files), { ...deps(source), transcribe })).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
+      expect(transcribe).not.toHaveBeenCalled();
+    });
+
+    it('a closed turn stops before the fetch and before the transcript is used', async () => {
+      const transcribe = heard('unused');
+      const d = { ...deps(opened([AUDIO])), transcribe, admit: vi.fn(() => { throw new Error('closed'); }) };
+      await expect(openIMessageMedia(media(voice), d)).rejects.toThrow('closed');
+      expect(d.source).not.toHaveBeenCalled();
+      let n = 0;
+      const late = { ...deps(opened([AUDIO])), transcribe, admit: vi.fn(() => { if (++n === 3) throw new Error('closed'); }) };
+      await expect(openIMessageMedia(media(voice), late)).rejects.toThrow('closed');
+    });
+  });
+
   it('a voice note stays refused with the flag off', async () => {
     expect(await openIMessageMedia(media({ ...photo, mimeType: 'audio/mp4', name: 'voice.m4a' }), deps(null, false))).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
   });
@@ -208,6 +250,8 @@ describe('openIMessageMedia', () => {
   });
 
   it('the console says what happens to a photo or file, by the flag, and claims tapbacks only for a host that verified them', () => {
+    expect(renderIMessage([], 'csrf', { media: true, voice: true })).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported.');
+    expect(renderIMessage([], 'csrf', { voice: true })).toContain('Direct iMessage text and voice notes. Photos and files get a reply asking you to send them in the app. Groups and SMS are not supported.');
     const off = renderIMessage([], 'csrf', {}), on = renderIMessage([], 'csrf', { media: true });
     const TAPBACKS = 'Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.';
     expect(off).toContain(`Direct iMessage text only. Photos and files get a reply asking you to send them in the app. ${TAPBACKS}`);

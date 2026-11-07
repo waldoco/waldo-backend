@@ -10,8 +10,8 @@ import { IMESSAGE_MEDIA_MAX_BYTES } from '../src/channels/imessage/photon-media'
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
-// IMESSAGE_MEDIA=1 (vitest.imessage-media.config.ts): an owner's photo or file is fetched from Photon and reaches the model
-// with its caption, or the owner gets one fixed reply. Photon, the directory and the model are all answered in-isolate.
+// IMESSAGE_MEDIA=1 and IMESSAGE_VOICE=1 (vitest.imessage-media.config.ts): an owner's photo or file is fetched from Photon and
+// reaches the model with its caption, a voice note reaches it as a transcript, or the owner gets one fixed reply. Photon, the directory and the model are all answered in-isolate.
 
 const proof = vi.hoisted(() => ({ turns: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
@@ -27,7 +27,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const UNOPENED = "I got your photo but couldn't open it here; send it in the app.";
-type File = { id: string; name: string; mimeType: string; bytes: Uint8Array };
+type Attached = { id: string; name: string; mimeType: string; bytes: Uint8Array };
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; });
 
@@ -40,11 +40,17 @@ async function world() {
     return null;
   } });
   // Photon as its HTTP routes answer: one project token, each message's own record, each attachment's bytes.
-  const photon = { calls: [] as string[], messages: new Map<string, unknown>(), bytes: new Map<string, Uint8Array | Response>(), egress: [] as string[] };
+  const photon = { calls: [] as string[], messages: new Map<string, unknown>(), bytes: new Map<string, Uint8Array | Response>(), egress: [] as string[], heard: [] as string[], transcript: 'Book the dentist for Thursday.' as string | null };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const handled = await fx.fetcher(input as RequestInfo, init);
     if (handled) return handled;
     const url = new URL(String(input instanceof Request ? input.url : input));
+    // The transcriber the config's model key selects, answered as OpenAI's transcription route answers.
+    if (url.href === 'https://api.openai.com/v1/audio/transcriptions') {
+      const file = (init?.body as FormData).get('file') as File;
+      photon.heard.push(`${file.name} ${file.type} ${file.size}`);
+      return photon.transcript === null ? Response.json({ error: { code: 'invalid_file_format' } }, { status: 400 }) : Response.json({ text: photon.transcript });
+    }
     if (url.origin === 'https://spectrum.photon.codes' || url.origin === 'https://imessage.spectrum.photon.codes') {
       photon.calls.push(`${init?.method ?? 'GET'} ${url.host}${url.pathname}`);
       if (url.pathname === '/projects/proj-fixture/imessage/tokens') {
@@ -90,7 +96,7 @@ async function world() {
   expect((await host.heartbeat()).status).toBe(200);
   expect((await host.capabilities()).status).toBe(200);
   /** A message carrying Photon attachments, with Photon holding its record and bytes as the sender's own. */
-  const media = (text: string, files: readonly File[], sender = SUBJECT) => {
+  const media = (text: string, files: readonly Attached[], sender = SUBJECT) => {
     const event = { ...host.message(text), photonAttachments: files.map(({ id, name, mimeType, bytes }) => ({ id, name, mimeType, size: bytes.length })) };
     photon.messages.set(event.messageGuid, { message: { guid: event.messageGuid, sender: { address: sender }, content: { attachments: files.map(f => ({ guid: f.id, mimeType: f.mimeType, totalBytes: String(f.bytes.length) })) } } });
     for (const file of files) photon.bytes.set(file.id, file.bytes);
@@ -110,13 +116,13 @@ async function world() {
   return { host, photon, pump, media, reply, counts, inbox, page };
 }
 
-it('the owner\'s iMessage console page says photos and documents reach Waldo', async () => {
+it('the owner\'s iMessage console page says voice notes, photos and documents reach Waldo', async () => {
   const w = await world();
-  expect(await w.page()).toContain('Direct iMessages: text, and photos and documents sent to your Waldo number.');
+  expect(await w.page()).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported.');
 });
 
-const photo: File = { id: 'photon-att-photo', name: 'IMG_0001.png', mimeType: 'image/png', bytes: PNG };
-const pdf: File = { id: 'photon-att-pdf', name: 'notes.pdf', mimeType: 'application/pdf', bytes: PDF };
+const photo: Attached = { id: 'photon-att-photo', name: 'IMG_0001.png', mimeType: 'image/png', bytes: PNG };
+const pdf: Attached = { id: 'photon-att-pdf', name: 'notes.pdf', mimeType: 'application/pdf', bytes: PDF };
 
 it('a photo with a caption reaches the model as an image beside the caption, and the reply goes out once', async () => {
   const w = await world();
@@ -173,7 +179,7 @@ it('a failed fetch gets the honest fallback once: settled, never held, never ret
 it.each([
   ['an oversized photo', { ...photo, bytes: new Uint8Array(0) }, IMESSAGE_MEDIA_MAX_BYTES + 1, 'I got your photo but it is too large to open here; send it in the app.'],
   ['a video', { ...photo, name: 'clip.mov', mimeType: 'video/quicktime' }, 8, "I got your file but can't read that format here; send it in the app."],
-  ['a voice note', { ...photo, name: 'Audio Message.caf', mimeType: 'audio/x-caf' }, 8, "I can't listen to voice notes here yet; type it out or send it in the app."],
+  ['an oversized voice note', { ...photo, name: 'Audio Message.caf', mimeType: 'audio/x-caf' }, IMESSAGE_MEDIA_MAX_BYTES + 1, "I can't listen to voice notes here yet; type it out or send it in the app."],
 ])('%s gets an honest refusal and nothing is fetched', async (_name, file, size, text) => {
   const w = await world();
   const event = w.media('', [file]);
@@ -183,6 +189,35 @@ it.each([
   expect(await w.reply()).toBe(text);
   expect(w.photon.calls).toEqual([]);
   expect(proof.turns).toHaveLength(0);
+});
+
+const voice: Attached = { id: 'photon-att-voice', name: 'Audio Message.caf', mimeType: 'audio/x-caf', bytes: new Uint8Array([0x63, 0x61, 0x66, 0x66, 0, 1, 0, 0]) };
+
+it('a voice note is fetched from Photon and transcribed; the model gets the transcript, never the audio, and the reply goes out once', async () => {
+  const w = await world();
+  expect((await w.host.send(w.media('', [voice]))).status).toBe(200);
+  await w.pump();
+  expect(w.photon.heard).toEqual([`Audio Message.caf audio/x-caf ${voice.bytes.length}`]);
+  expect(proof.turns).toHaveLength(1);
+  // With nothing attached, the model's input is plain text: the transcript, never the audio.
+  const said = JSON.parse(proof.turns[0]!);
+  expect(typeof said).toBe('string');
+  expect(said).toContain('[Owner sent a voice note.]');
+  expect(said).toContain('Book the dentist for Thursday.');
+  expect(await w.reply()).toBe('Scripted owner reply.');
+  expect(w.photon.calls.at(-1)).toBe('GET imessage.spectrum.photon.codes/v1/attachments/photon-att-voice/data');
+  expect((await w.inbox()).map(r => [r.state, r.media])).toEqual([['completed', undefined]]);
+  expect(w.photon.egress).toEqual([]);
+});
+
+it('a voice note the transcriber cannot read still gets a turn, which is told it could not be transcribed', async () => {
+  const w = await world();
+  w.photon.transcript = null;
+  expect((await w.host.send(w.media('', [voice]))).status).toBe(200);
+  await w.pump();
+  expect(proof.turns).toHaveLength(1);
+  expect(JSON.parse(proof.turns[0]!)).toContain('[Owner sent a voice note, but it could not be transcribed.]');
+  expect(await w.reply()).toBe('Scripted owner reply.');
 });
 
 it('an attachment Photon holds on someone else\'s message is never read, and a GUID typed as text is never fetched', async () => {
