@@ -1,6 +1,6 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
 import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
-import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
+import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
@@ -10,10 +10,9 @@ import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
+import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
 
-// Supplied by the authenticated conversation host, never by model arguments. Each text is
-// the owner's own message body; quote ranges exclude forwarded/provider-authored chunks.
-export type MemoryOwnerTurn = Readonly<{ message_ref: string; text: string; sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[] }>;
+export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
   // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
@@ -40,14 +39,6 @@ const HELD_NOTE = `Already held, but not as the owner's statement. ${CONFIRM_NOT
 // Why a write was kept as Waldo's read rather than the owner's word, said back to the model.
 const READ_BECAUSE = { tainted: 'this turn read outside content', earlier: 'the claim it replaces was not the owner\'s word and the quote is not from the owner\'s current message' } as const;
 const saidAs = (because?: keyof typeof READ_BECAUSE) => because ? { source: 'inferred', note: `Saved as Waldo's inference, because ${READ_BECAUSE[because]}. ${CONFIRM_NOTE}` } : {};
-// Split, rather than join, so evidence cannot bridge an excluded quote.
-const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {
-  const ranges = [...(turn.sourceQuoteRanges ?? [])].sort((a, b) => a.start - b.start);
-  if (ranges.some(range => !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > turn.text.length)) return [];
-  const parts: string[] = []; let end = 0;
-  for (const range of ranges) { if (range.start > end) parts.push(turn.text.slice(end, range.start)); end = Math.max(end, range.end); }
-  parts.push(turn.text.slice(end)); return parts;
-};
 // Evidence is the owner's words, not any characters in them: the quote starts and ends on word edges and holds more than one
 // letter or digit, unless it is the whole of an owner-written part. Marks count as word characters so a quote cannot end
 // inside an Indic word; a script written without spaces quotes to a punctuation edge.
@@ -159,6 +150,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }
         if (args.topic) {
           if (!turn || !ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
+          if (!forgettableTopic(args.topic)) return fail('That topic is too short to forget by itself: it would also be removed wherever it appears in unrelated text, so nothing was forgotten. Pass a longer phrase from the owner message, or read memory and pass claim_ids.');
           texts.add(args.topic);
           for (const claim of claims) if (carriesTopic(claim.text, args.topic) || carriesTopic(claim.evidence, args.topic)) selected.set(claim.id, claim);
         }

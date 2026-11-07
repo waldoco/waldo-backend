@@ -64,6 +64,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
+  // "1" sends what has no surface of its own (the console, Google consent, an event notice, the owner's runs) to the surface
+  // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
+  // Off: Telegram, as before.
+  OWNER_SURFACE_DEFAULT?: string;
   // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
   // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
   // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".

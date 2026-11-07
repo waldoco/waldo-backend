@@ -94,14 +94,14 @@ it('a reminder whose runs fail three times in a row says so once, with no conten
   // The pass that paused the job queued the notice and armed its delivery; the runtime's own next wake sends it.
   expect(await armed(w)).toBeLessThanOrEqual(Date.now() + 1_000);
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
   expect(sentTo(w).join()).not.toContain('Sam');
   // A later scheduled pass, here another reminder's first failure, doesn't repeat it.
   await remind(w, 'reminder:other', Date.now() + 60_000);
   await pass(w);
   expect((await job(w, 'reminder:other'))?.attempts).toBe(1);
   expect(await queued(w)).toHaveLength(1);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
 }, 30_000);
 
 it('quiet hours hold the notice, and the line they let through names the real retry time', async () => {
@@ -115,7 +115,7 @@ it('quiet hours hold the notice, and the line they let through names the real re
   expect((await queued(w)).map(record => record.status)).toEqual(['pending']);
   await passAt(w, Date.parse('2030-11-02T11:00:30Z')); // Sat 07:00 in New York
   // Delivered eight hours after the pause began, the line names the pause's end, not "this time tomorrow".
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 23:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 11:01pm')]);
 }, 30_000);
 
 it('a pause across the end of daylight time names the local hour it ends at', async () => {
@@ -124,7 +124,7 @@ it('a pause across the end of daylight time names the local hour it ends at', as
   await failThrice(w, 'reminder:dst');
   await pass(w);
   // 24 hours later the clocks have gone back an hour: 09:01 EST.
-  expect(sentTo(w)).toEqual([line('Sun 3 Nov, 09:01')]);
+  expect(sentTo(w)).toEqual([line('Sun 3 Nov at 9:01am')]);
 }, 30_000);
 
 it('a time-zone change does not repeat a notice, even across a midnight of the new zone', async () => {
@@ -132,14 +132,14 @@ it('a time-zone change does not repeat a notice, even across a midnight of the n
   await remind(w, 'reminder:zone', Date.now());
   await failThrice(w, 'reminder:zone');
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
   // The owner moves to Tokyo, and the next scheduled pass falls after midnight there: a new local day.
   await w.inObject(state => state.storage.kv.put('timezone', 'Asia/Tokyo'));
   await remind(w, 'reminder:after-move', Date.parse('2030-11-01T15:10:00Z'));
   await pass(w);
   expect((await job(w, 'reminder:after-move'))?.attempts).toBe(1);
   expect(await queued(w)).toHaveLength(1);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
 }, 30_000);
 
 it('a job paused again the same day stays silent, and paused again on a later day says so', async () => {
@@ -147,7 +147,7 @@ it('a job paused again the same day stays silent, and paused again on a later da
   await remind(w, 'reminder:cap', Date.now());
   await failThrice(w, 'reminder:cap');
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
   // The owner moves it to noon, which lifts the pause, and it fails three more times that day.
   vi.setSystemTime(Date.parse('2030-11-01T16:00:00Z'));
   await remind(w, 'reminder:cap', Date.now());
@@ -159,7 +159,7 @@ it('a job paused again the same day stays silent, and paused again on a later da
   await remind(w, 'reminder:cap', Date.now());
   await failThrice(w, 'reminder:cap');
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01'), line('Sun 3 Nov, 08:06')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am'), line('Sun 3 Nov at 8:06am')]);
 }, 30_000);
 
 it('two reminders that pause in the same pass each say so', async () => {
@@ -170,7 +170,7 @@ it('two reminders that pause in the same pass each say so', async () => {
   expect((await job(w, 'reminder:second'))?.status).toBe('quarantined');
   await pass(w);
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01'), line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am'), line('Sat 2 Nov at 10:01am')]);
 }, 30_000);
 
 it('a notice that cannot be queued never holds the jobs beside it, and the next scheduled pass queues it', async () => {
@@ -188,7 +188,7 @@ it('a notice that cannot be queued never holds the jobs beside it, and the next 
   await remind(w, 'reminder:next', Date.now() + 60_000);
   await pass(w);
   await pass(w);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
 }, 30_000);
 
 it('a notice queued by a pass that died before marking it is marked, never queued again under a new zone', async () => {
@@ -208,8 +208,8 @@ it('a notice queued by a pass that died before marking it is marked, never queue
   await remind(w, 'reminder:next', Date.now() + 60_000);
   await pass(w);
   await pass(w);
-  expect((await queued(w)).map(record => record.payload.text)).toEqual([line('Sat 2 Nov, 10:01')]);
-  expect(sentTo(w)).toEqual([line('Sat 2 Nov, 10:01')]);
+  expect((await queued(w)).map(record => record.payload.text)).toEqual([line('Sat 2 Nov at 10:01am')]);
+  expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
   const failures = await w.inObject(state => state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM trace_log WHERE hop = 'schedule_notice' AND ok = 0").one().n);
   expect(failures).toBe(1);
 }, 30_000);
@@ -246,8 +246,8 @@ it('names only a job\'s own failed runs, each pause once, and keeps a pause the 
     pause('reminder:ended', 'reminder', friday - 1, 'quarantined', 'run');
     const due = dueFailureNotices(sql, kv, friday, ZONE);
     expect(due.map(notice => [notice.scheduleId, notice.text])).toEqual([
-      ['card:midday', 'Your Check-in failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov, 10:00.'],
-      ['reminder:own', line('Sat 2 Nov, 10:00')],
+      ['card:midday', 'Your Check-in failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov at 10am.'],
+      ['reminder:own', line('Sat 2 Nov at 10am')],
     ]);
     for (const notice of due) markFailureNoticed(kv, notice, friday);
     expect(dueFailureNotices(sql, kv, friday + 60_000, ZONE)).toEqual([]);
@@ -259,7 +259,7 @@ it('names only a job\'s own failed runs, each pause once, and keeps a pause the 
     // Still paused the next morning, it stays silent; a new pause that day is that day's notice.
     expect(dueFailureNotices(sql, kv, saturday - 60 * 60_000, ZONE)).toEqual([]);
     pause('reminder:own', 'reminder', saturday + 3 * 60 * 60_000 + DAY_MS, 'quarantined', 'run');
-    expect(dueFailureNotices(sql, kv, saturday + 3 * 60 * 60_000, ZONE).map(notice => notice.text)).toEqual([line('Sun 3 Nov, 12:00')]);
+    expect(dueFailureNotices(sql, kv, saturday + 3 * 60 * 60_000, ZONE).map(notice => notice.text)).toEqual([line('Sun 3 Nov at 12pm')]);
   });
 });
 
@@ -282,15 +282,15 @@ it('the overnight memory pass says so once, then stays quiet through later pause
       return due.map(notice => notice.text);
     };
     pause(start);
-    expect(notify(start)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 03:00."]);
-    expect(pausedJobs(sql, start, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
+    expect(notify(start)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov at 3am."]);
+    expect(pausedJobs(sql, start, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Sat 2 Nov at 3am' }]);
     // Paused again on each of the next nights, past the daily cap and the two days the per-pause record keeps: silent.
     for (const night of [1, 2, 3]) { pause(start + night * DAY_MS); expect(notify(start + night * DAY_MS)).toEqual([null]); }
-    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
+    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ id: 'nightly-memory', name: 'My overnight memory pass', until: 'Tue 5 Nov at 2am' }]);
     // It runs well one night, then fails again: the owner hears once more.
     run(start + 4 * DAY_MS, 'ok', null);
     pause(start + 5 * DAY_MS);
-    expect(notify(start + 5 * DAY_MS)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Thu 7 Nov, 02:00."]);
+    expect(notify(start + 5 * DAY_MS)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Thu 7 Nov at 2am."]);
   });
 });
 
@@ -319,7 +319,7 @@ it('a paused forget cleanup is named to the owner and listed, without the topic'
       VALUES ('forget-purge', 'forget_purge', ?, ?, NULL, '{"id":"forget-purge"}', 'quarantined', 3, ?, ?, ?, ?)`, at, at, at, at + DAY_MS, at, at);
     sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES ('forget-purge:run', 'forget-purge', 'forget_purge', ?, 3, 'quarantined', 'run', ?, 0)", at, at);
     const [notice] = dueFailureNotices(sql, kv, at, ZONE);
-    expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 10:00.");
-    expect(pausedJobs(sql, at, ZONE)).toEqual([{ id: 'forget-purge', name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
+    expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov at 10am.");
+    expect(pausedJobs(sql, at, ZONE)).toEqual([{ id: 'forget-purge', name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov at 10am' }]);
   });
 });

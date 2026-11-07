@@ -28,7 +28,9 @@ describe('unattended turns on outside text hold no egress reads', () => {
     expect(LOOP_CHECK_BACK_TOOLS).toEqual([...reads, 'close_loop', 'propose_action']);
   });
 
-  it('leaves the reminder check-back, which starts on the owner\'s own words, with every child read', () => {
+  it('leaves the reminder check-back, which starts on the owner\'s own words, with every child read, page reads included', () => {
     expect(CHECK_BACK_TOOLS).toEqual(CHILD_READ_TOOLS);
+    expect(CHECK_BACK_TOOLS).toEqual(expect.arrayContaining(['web_search', 'browse_page']));
+    for (const tools of [LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS]) expect(tools).not.toContain('browse_page');
   });
 });
