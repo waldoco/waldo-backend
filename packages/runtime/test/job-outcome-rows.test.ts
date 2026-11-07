@@ -109,7 +109,7 @@ describe('a background job leaves its outcome in the owner\'s chain, never its p
       await owner().alarm();
       expect(await appChat(owner(), name)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
       expect(storedText(state)).not.toContain(jobPrompt(model.requests[0]!));
-      // Done-when for this step: a day of cards adds under 2k tokens (~8k characters) to the chain. One card stays inside a third.
+      // A day of cards must add under 2k tokens (~8k characters) to the chain, so one card stays inside a third of that.
       const chain = chainText(state);
       expect(chain).toContain(CARD_TEXT);
       expect(chain.length).toBeLessThan(8_000 / 3);
