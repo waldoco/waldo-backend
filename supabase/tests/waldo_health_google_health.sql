@@ -84,7 +84,7 @@ select is((select count(*)::int from pg_temp.route('google_health','HuId-AbC123'
 select lives_ok($$insert into waldo.connections(owner_id,provider,account,secret_id) values ('b3000000-0000-0000-0000-0000000000c4','google_health','HuId-AbC123',gen_random_uuid())$$,'and its account can be linked again');
 
 -- The edge stores tokens through oauth_store, which keeps a Google Health id exactly as Google gave it.
-select isnt(waldo.oauth_store('gh-owner-a','google_health','HuId-XyZ789','sleep','{"issuer":"https://accounts.google.com"}'::jsonb,'fixture-token-bundle')->>'id',null,'the edge stores a Google Health connection');
+select is(waldo.oauth_store('gh-owner-a','google_health','HuId-XyZ789','sleep','{"issuer":"https://accounts.google.com"}'::jsonb,'fixture-token-bundle')->>'account','HuId-XyZ789','the edge stores a Google Health connection and is told the id as stored');
 select is((select account from waldo.connections where provider='google_health' and status<>'revoked' and owner_id='a3000000-0000-0000-0000-0000000000c3'),'HuId-XyZ789','with its id in its own case');
 select is((select array_agg(x) from pg_temp.route('google_health','HuId-XyZ789') x),array['gh-owner-a'],'so a webhook naming that id routes to its owner');
 select lives_ok($$select waldo.oauth_store('gh-owner-a','whoop','WhOoP-9','read:sleep','{"issuer":"https://api.prod.whoop.com"}'::jsonb,'fixture-token-bundle')$$,'the edge stores a WHOOP connection');
