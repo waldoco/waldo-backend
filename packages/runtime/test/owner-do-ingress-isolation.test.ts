@@ -196,8 +196,8 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     // Before setup, which would otherwise arm the nightly job, heartbeat, brief sweep and day cards and plan the pinned day.
     const preferences = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }));
     for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) preferences.set(kind, false);
-    const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
-    await runtime.setup().ready;
+    const runtime = instance as unknown as { setup(channel: string): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
+    await runtime.setup('telegram').ready;
     await runtime.serial(async () => undefined);
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
@@ -252,8 +252,8 @@ it('actual recovery retains its notice wake after outbox capacity failure and qu
     const id = 'hermetic-test-bot-token:telegram:995002';
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995002, 'PRIVATE_CAPACITY_REQUEST');
     await inbox.claim(id, 'capacity-attempt', 'capacity-run', Date.now() - 1);
-    const runtime = instance as unknown as { setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainRecovery(): Promise<void> };
-    const box = runtime.setup().finalOutbox; const enqueue = box.enqueueFenced;
+    const runtime = instance as unknown as { setup(channel: string): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainRecovery(): Promise<void> };
+    const box = runtime.setup('telegram').finalOutbox; const enqueue = box.enqueueFenced;
     box.enqueueFenced = async () => { throw new Error('final outbox capacity'); };
     await instance.alarm();
     expect((await inbox.records()).find(row => row.id === id)).toMatchObject({ state: 'quarantined', reason: 'recovered_uncertain', body: '' });
@@ -297,8 +297,8 @@ it('actual failed run keeps a retry wake when its once-only status cannot be enq
     const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995006, JSON.stringify({ update_id: 995006, message: { message_id: 995006, from: { id: 81102, is_bot: false }, chat: { id: 81102, type: 'private' }, text: 'Fictional failed request.' } }));
-    const runtime = instance as unknown as { turn(...args: unknown[]): Promise<Response>; drainInbox(): Promise<void>; setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox } };
-    const box = runtime.setup().finalOutbox; const enqueue = box.enqueueFenced; const turn = runtime.turn;
+    const runtime = instance as unknown as { turn(...args: unknown[]): Promise<Response>; drainInbox(): Promise<void>; setup(channel: string): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox } };
+    const box = runtime.setup('telegram').finalOutbox; const enqueue = box.enqueueFenced; const turn = runtime.turn;
     runtime.turn = async () => { throw new Error('fixture interrupted turn'); };
     box.enqueueFenced = async () => { throw new Error('final outbox capacity'); };
     try { await runtime.drainInbox(); }
@@ -981,8 +981,8 @@ it.each([{ text: '/stop', updateId: 994471 }, { text: 'FALLTHROUGH-SYNTHETIC: mo
   const subject = 81101;
   await runInDurableObject(doStub(subject), async (instance, state) => {
     await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
-    const internal = instance as unknown as { setup(): { control: import('../src/channels/turn-control').TurnControl }; turn: (...args: unknown[]) => Promise<void> };
-    const control = internal.setup().control;
+    const internal = instance as unknown as { setup(channel: string): { control: import('../src/channels/turn-control').TurnControl }; turn: (...args: unknown[]) => Promise<void> };
+    const control = internal.setup('telegram').control;
     const turn = internal.turn;
     internal.turn = async () => undefined;
     control.begin(true);
@@ -1180,8 +1180,8 @@ it('late consumed-child recovery preserves a durable notice wake through outbox 
   await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
   await inbox.admit(binding,994701,'consumed fixture',{kind:'steer',targetRun:'old-parent'});const child=(await inbox.records()).find(row=>row.updateId===994701)!;
   await inbox.claim(child.id,'old-child-attempt','child-run',Date.now()-10*60000);await inbox.transition(child.id,'old-child-attempt','consumed');await inbox.recover(new Set());
-  const internal=instance as unknown as {setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox};notifyUncertainRecovery():Promise<void>};
-  const outbox=internal.setup().finalOutbox;const enqueue=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('fictional outbox capacity');};
+  const internal=instance as unknown as {setup(channel: string):{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox};notifyUncertainRecovery():Promise<void>};
+  const outbox=internal.setup('telegram').finalOutbox;const enqueue=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('fictional outbox capacity');};
   await expect(internal.notifyUncertainRecovery()).rejects.toThrow('outbox capacity');
   const retained=(await inbox.records()).find(row=>row.id===child.id)!;expect(retained.state).toBe('quarantined');expect(retained.outcomeNoticeQueued).not.toBe(true);
   expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now()-1000);
@@ -1199,8 +1199,8 @@ it('legacy erased never-consumed steering gets one truthful not-processed notice
   const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
   await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});await inbox.admit(binding,994801,'old erased message',{kind:'steer',targetRun:'old-run'});
   const child=(await inbox.records()).find(row=>row.updateId===994801)!;await inbox.claim(child.id,'old-attempt','old-control',Date.now()-10*60000);await inbox.transition(child.id,'old-attempt','quarantined','not_consumed');
-  const internal=instance as unknown as {notifyUncertainRecovery():Promise<void>;setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox}};
-  await internal.notifyUncertainRecovery();await internal.notifyUncertainRecovery();const notices=internal.setup().finalOutbox.records().filter(row=>row.trace==='tg-994801');
+  const internal=instance as unknown as {notifyUncertainRecovery():Promise<void>;setup(channel: string):{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox}};
+  await internal.notifyUncertainRecovery();await internal.notifyUncertainRecovery();const notices=internal.setup('telegram').finalOutbox.records().filter(row=>row.trace==='tg-994801');
   expect(notices).toHaveLength(1);expect(notices[0]!.payload.text).toContain('not processed');expect(notices[0]!.payload.text).not.toContain('was used');
   expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
  });
