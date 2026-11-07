@@ -298,6 +298,7 @@ import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runWatchdog, watchdogJudge, watchdogStore } from '../tasks/watchdog';
 import { consoleWatchdog, DASHBOARD_WATCHDOG_PATH } from './dashboard-watchdog';
+import { consoleHarness, DASHBOARD_HARNESS_PATH, type ConsoleHarnessCommand } from './dashboard-harness';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
 import { modelProviderSetting, ownerModels, type OwnerModelAccess } from '../llm/owner-routes';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -2836,6 +2837,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
     if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
+    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1', limited: kind => this.consoleRateLimited(kind),
+      run: command => this.consoleCommand(command),
+      ledger: async () => { const runtime = this.setup(this.ownerSurface()); await runtime.ready; return runtime.ledger(); } });
     if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), enabled: this.env.WALDO_WATCHDOG === '1', limited: () => this.consoleRateLimited('read') });
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request), renews);if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
@@ -3946,7 +3950,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
     const trace = `harness-${updateId}`;
-    const entry = { id: command.target, occurrence_at: Date.now(), attempts: 0 } as unknown as ScheduleEntry;
+    const now = Date.now();
+    const entry = { id: command.target, occurrence_at: now, due_at: now, attempts: 0, payload_refs: {} } as unknown as ScheduleEntry;
     try {
       // A harness fire runs the same job the schedule would, as the same owner.
       if (command.target === 'fetch') await this.asOwnerJob('heartbeat', trace, () => updateCheck(trace));
@@ -3957,6 +3962,32 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
     }
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
+  }
+
+  // An operator command from the owner console, with the receipt Telegram's commands leave. Reads answer at once, so /trace
+  // can look at a turn while it runs. A fire waits its turn on the queue and, like the scheduled pass, runs under the app
+  // delivery and job owner the directory admits; an app owner the directory cannot confirm gets nothing fired, since the
+  // job's sends would reach no one.
+  private async consoleCommand(command: ConsoleHarnessCommand): Promise<string> {
+    const channel = this.ownerSurface(), { log, ready } = this.setup(channel);
+    await ready;
+    const started = Date.now(), trace = `console-${crypto.randomUUID()}`, what = `/${command.kind}`;
+    const fire = () => this.serial(async () => {
+      const found = consoleAuth(this.env) && this.appBound() ? await this.appOwnerLookup() : null;
+      if (found && found.kind !== 'admitted') return 'Waldo could not confirm your account just now, so nothing was fired. Try again in a minute.';
+      if (found) { this.scheduledAppDelivery = this.appDeliveryFor(found.authority); this.jobOwner = Promise.resolve(this.appScheduledOwner(found.authority)); }
+      return this.runHarness(command, started, channel);
+    });
+    try {
+      const output = command.kind === 'fire' && command.target !== null ? await fire() : await this.runHarness(command, started, channel);
+      log({ trace, hop: 'command', ms: Date.now() - started, ok: true, detail: what });
+      log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'command' });
+      return output;
+    } catch (error) {
+      log({ trace, hop: 'command', ms: Date.now() - started, ok: false, error: String(error), detail: what });
+      log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'command' });
+      throw error;
+    }
   }
 
   private async checkLangfuse(): Promise<string> {

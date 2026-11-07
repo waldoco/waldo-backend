@@ -78,6 +78,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_WATCHDOG: inert('the progress watchdog checks running background jobs; the trial runs no background jobs'),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it on'),
   OWNER_SURFACE_DEFAULT: inert('where a notice outside any turn goes and which surface the console and harness commands open on; each trial turn names its own surface'),
+  CONSOLE_HARNESS: inert('operator commands in the owner\'s console; the trial runs no console'),
   WHATSAPP_STOP: inert('a typed /stop on WhatsApp ends the running turn; the trial runs the app surface and sends no stop'),
   CAPACITY_PLAN: gap('the nightly capacity pass is not run in a trial; the cap- case runs the Close with a seeded capacity note'),
   TOMORROW_TODAY: gap('the Close cases run with the switch in their steps; a trial runs no approval of the cards it raises'),
