@@ -6,6 +6,8 @@ import { routerSignature } from '../identity/owner-directory';
 // binds the owner and the body; a replay marks a day already marked, or asks for a recompute that one already waiting covers.
 export const HEALTH_ZONE_CHANGE_PATH = '/app/v1/internal/health-zone-change';
 export const HEALTH_SAMPLES_PATH = '/app/v1/internal/health-samples';
+// "One of the owner's phones moved to another time zone or city" carries nothing: no zone, city, cell or device.
+export const PLACE_MOVED_PATH = '/app/v1/internal/place-moved';
 const TIMEOUT_MS = 20_000;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -24,6 +26,7 @@ const SAMPLES: Notice = {
     : Object.keys(body).length === 1 && body.settings === true ? `healthsettings.${doName}`
       : Object.keys(body).length === 1 && body.woke === true ? `healthwoke.${doName}` : null),
 };
+const PLACE_MOVED: Notice = { path: PLACE_MOVED_PATH, header: 'x-waldo-moved-sig', statement: (doName, body) => (Object.keys(body).length === 0 ? `placemoved.${doName}` : null) };
 // Why the derived rows need a recompute: new readings, or a new stated sleep need with the same readings.
 export type HealthRecomputeCause = 'readings' | 'settings';
 
@@ -67,3 +70,6 @@ export const verifiedHealthSamples = async (request: Request, secret: string | u
   const body = await verified(SAMPLES, request, secret, addressesThisObject);
   return body === null ? null : { cause: body.settings === true ? 'settings' : 'readings', woke: body.woke === true };
 };
+export const notifyOwnerPlaceMoved = (owners: OwnerNamespace, secret: string, doName: string): Promise<void> => send(PLACE_MOVED, owners, secret, doName, {});
+export const verifiedPlaceMoved = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<boolean> =>
+  (await verified(PLACE_MOVED, request, secret, addressesThisObject)) !== null;

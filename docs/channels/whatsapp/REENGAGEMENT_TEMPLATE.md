@@ -122,6 +122,11 @@ Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars` (both em
 At most one knock goes out per closed window, whichever template it uses. The window's closing log line for a held
 proactive message without this configuration is `{"hop":"whatsapp_window","ok":false,"held":true,"code":"template_unconfigured"}`.
 
+## Staging status
+
+`waldo_update_ready` (`en`) reads back APPROVED and UTILITY with a static body and footer, and staging's `vars` carry it.
+`WHATSAPP_PROACTIVE_TEMPLATE` stays empty until `waldo_proactive_update` is approved.
+
 ## Opt-in comes first
 
 Meta requires opt-in that clearly tells people they will receive messages, and from which business

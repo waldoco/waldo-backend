@@ -30,7 +30,7 @@ const deliver = async (instance: OwnerDO, messages: readonly Record<string, unkn
   const owners = { idFromName: (name: string) => name, get: () => ({ fetch: (url: string, init?: RequestInit) => instance.fetch(new Request(url, init)) }) } as unknown as DurableObjectNamespace;
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'wa-forward', subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
-  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
+  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET, WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' }, () => undefined, directory)).status).toBe(200);
   await drainWhatsAppTurns(instance);
 };
 const message = (id: string, body: string, context: Record<string, unknown>) => ({ context, from: SUBJECT, id, timestamp: '1700000000', text: { body }, type: 'text' });

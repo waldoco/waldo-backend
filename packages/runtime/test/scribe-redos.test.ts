@@ -49,6 +49,9 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'percent runs': n => 'a%'.repeat(n / 2),
   'fullwidth digit groups': n => '\uff14\uff11\uff11\uff11 '.repeat(n / 5),
   'mathematical digits': n => '\u{1d7cf}'.repeat(n / 2),
+  'stray percents between escapes': n => '%41%'.repeat(n / 4),
+  'bytes that are not UTF-8': n => '%FF'.repeat(n / 3),
+  'cut-off multibyte sequences': n => '%E0%A4 '.repeat(n / 7),
   'a mail address that never ends': n => 'a.'.repeat(n / 2) + '@',
   'a local part, then an at sign, repeated': n => 'a.b@'.repeat(n / 4),
   'a domain that never has a top level': n => 'a@' + 'b.'.repeat(n / 2) + '1',
@@ -89,6 +92,20 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'hrv with its method in brackets, repeated': n => 'hrv (rmssd) '.repeat(n / 12),
   'a wrist temperature word repeated': n => 'wrist temperature '.repeat(n / 18),
   'a wrist temperature and filler words, repeated': n => 'wrist temp up up up up '.repeat(n / 23),
+  'a WhatsApp link, then a long run of digits': n => 'wa.me/' + '9'.repeat(n),
+  'WhatsApp links repeated': n => 'wa.me/9 '.repeat(n / 8),
+  'national numbers with a hyphen, repeated': n => '098765-'.repeat(n / 7),
+  'a letter, a plus sign and a digit, repeated': n => 'x+1'.repeat(n / 3),
+  'a country code and a date, repeated': n => '+1 2026-11-06 '.repeat(n / 14),
+  'a reference word and ten digits, repeated': n => 'order #1234567890 '.repeat(n / 18),
+  'an amount word and two five-digit groups, repeated': n => 'salary 75000 80000 '.repeat(n / 19),
+  'a currency sign and two five-digit groups, repeated': n => '₹75000 80000 '.repeat(n / 13),
+  'ten-digit runs that start with 1, repeated': n => '1730887200 '.repeat(n / 11),
+  'sleep, a tilde and hours, repeated': n => 'slept ~7h '.repeat(n / 10),
+  'sleep and glued hours and minutes, repeated': n => 'sleep 7h22 '.repeat(n / 11),
+  'sleep and hours glued to one digit, repeated': n => 'sleep 7h2'.repeat(n / 9),
+  'Devanagari digit groups': n => '\u096f\u096e\u096d\u096c\u096b '.repeat(n / 6),
+  'a WhatsApp link, then fullwidth digits': n => 'wa.me/' + '\uff19'.repeat(n),
 };
 
 // A health word followed by a run of blanks, a word run or a colon run: the shapes where a pattern that lets two
@@ -96,7 +113,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
 const TRIGGERS = ['hrv', 'HRV', 'heart rate', 'resting heart rate', 'sleep', 'slept', 'deep sleep', 'REM', 'steps', 'weight', 'body weight', 'bp',
   'blood pressure', 'systolic', 'spo2', 'blood oxygen', 'glucose', 'calorie burn', 'active energy', 'wrist temperature', 'body temperature',
   'respiratory rate', 'breathing rate', 'body fat', 'stand hours', 'zone 2', 'awake', 'move', 'burned', 'fever', 'recovery', 'crs', 'form score',
-  'vo2 max', 'rmssd', 'sdnn', 'hrv (rmssd)', 'wrist temp', 'sleep 7', 'Bearer', 'password', 'api_key', 'secret', 'sk-', 'eyJ', 'hr', 'pulse'];
+  'vo2 max', 'rmssd', 'sdnn', 'hrv (rmssd)', 'wrist temp', 'sleep 7', 'slept ~', 'sleep:', 'wa.me/', 'order #', '₹', 'Bearer', 'password', 'api_key',
+  'secret', 'sk-', 'eyJ', 'hr', 'pulse'];
 const FILLERS: Readonly<Record<string, (n: number) => string>> = {
   spaces: n => ' '.repeat(n), newlines: n => '\n'.repeat(n), 'no-break spaces': n => '\u00a0'.repeat(n), tabs: n => '\t'.repeat(n),
   'colons and spaces': n => ': '.repeat(n / 2), 'a number and a space': n => '1 '.repeat(n / 2), 'a word and a space': n => 'a '.repeat(n / 2), 'for a an': n => 'for a an '.repeat(n / 9),
@@ -118,7 +136,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });

@@ -319,7 +319,7 @@ describe('fixed lines name a task by its title only when the owner\'s own turn w
   it('a task started from a turn that read outside text: the progress note and the fixed report use a neutral label', () => {
     for (const line of [progressNote(row(true), 'UTC'), fixedReport(row(true), 'UTC')]) {
       expect(line).not.toContain('555');
-      expect(line).toMatch(/the background task you started at 09:05/i);
+      expect(line).toMatch(/the background task you started at 9:05am/i);
     }
   });
   it('a task the owner\'s own turn started keeps its title', () => {
@@ -333,7 +333,7 @@ describe('R-4: the retried turn', () => {
 
   it('the floor reply names a time, and the retry answers the message once a model is back', async () => {
     await withLane(async ({ book, sent, clock, deps }) => {
-      expect(floor(book, clock.at)).toBe("I can't answer properly right now. I'll come back to you by 08:30.");
+      expect(floor(book, clock.at)).toBe("I can't answer properly right now. I'll come back to you by 8:30am.");
       const [job] = book.open();
       expect(job).toMatchObject({ kind: 'retry_turn', status: 'queued' });
       let asked = '';
@@ -359,7 +359,7 @@ describe('R-4: the retried turn', () => {
         if (book.get(job!.id)!.status === 'queued') expect(book.get(job!.id)!.due_at).toBeLessThanOrEqual(promised);
       }
       expect(clock.at).toBe(promised);
-      expect(sent.get(`retry:${job!.id}`)).toBe('I still can\'t reach my model, so I couldn\'t answer your message from 08:00. Could you send it again in a little while?');
+      expect(sent.get(`retry:${job!.id}`)).toBe('I still can\'t reach my model, so I couldn\'t answer your message from 8am. Could you send it again in a little while?');
       expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'provider_unavailable' });
     });
   });
@@ -371,7 +371,7 @@ describe('R-4: the retried turn', () => {
       clock.at = JSON.parse(job!.brief_json).promised_by + JOB_START_GRACE_MS + 1;
       await runJobsLane(deps());
       expect(turns).toEqual([]);
-      expect(sent.get(`retry:${job!.id}`)).toBe('I couldn\'t get back to you by 08:30 as I said, so your message from 08:00 is still unanswered. Could you send it again?');
+      expect(sent.get(`retry:${job!.id}`)).toBe('I couldn\'t get back to you by 8:30am as I said, so your message from 8am is still unanswered. Could you send it again?');
       expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'deadline' });
     });
   });
@@ -381,7 +381,7 @@ describe('R-4: the retried turn', () => {
     expect(retryParkedNotice(brief, 'UTC', 'provider_unavailable')).toMatch(/can't reach my model/);
     for (const reason of ['deadline', 'crashed', 'uncertain_effect', 'brief_changed'] as const) {
       expect(retryParkedNotice(brief, 'UTC', reason)).not.toMatch(/model/);
-      expect(retryParkedNotice(brief, 'UTC', reason)).toMatch(/08:00/);
+      expect(retryParkedNotice(brief, 'UTC', reason)).toMatch(/8am/);
     }
   });
 
@@ -478,7 +478,7 @@ describe('R-4: the retried turn', () => {
       expect(turns).toEqual([`retry:${job!.id}`]);
       expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'uncertain_effect' });
       expect([...sent.keys()]).toEqual([`retry:${job!.id}`]);
-      expect(sent.get(`retry:${job!.id}`)).toBe('I was interrupted partway through answering your message from 08:00, so I can\'t tell what I\'d already done about it. Check before you send it again.');
+      expect(sent.get(`retry:${job!.id}`)).toBe('I was interrupted partway through answering your message from 8am, so I can\'t tell what I\'d already done about it. Check before you send it again.');
     });
   });
 

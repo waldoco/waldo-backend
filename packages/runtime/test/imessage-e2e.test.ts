@@ -1,6 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
-import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
+import { clockWords, INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -493,7 +493,7 @@ const expectNotice = (delivery: Delivery) => {
 // A turn no model answers (all failed, or one wrote nothing) gets the floor: a time the retry job keeps (R-4), never the error.
 const expectFloor = (delivery: Delivery) => {
   const text = JSON.parse(delivery.body).text as string;
-  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d\d)?[ap]m\.$/);
   expect(text).not.toContain('upstream-detail-9f2');
 };
 
@@ -2037,7 +2037,7 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
 // R-4 on iMessage. When no model answers an iMessage-only owner, the floor reply promises a time in the owner's own zone, and
 // the retried turn's late answer comes back on iMessage. If the retry finds no model either, the owner is still told.
 const OWNER_ZONE = 'Asia/Kolkata';
-const zoneTime = (at: number, timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+const zoneTime = (at: number, timeZone: string) => clockWords(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)));
 type RetryRow = { id: string; status: string; park_reason: string | null; brief_json: string };
 const retryRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<RetryRow>("SELECT id, status, park_reason, brief_json FROM task_jobs WHERE kind = 'retry_turn'").toArray());

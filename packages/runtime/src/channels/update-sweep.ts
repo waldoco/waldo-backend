@@ -7,6 +7,7 @@ import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
 import { PUSHES, pushTitle } from './expo-push';
 import { DAY_CARDS } from '../prompt/day-cards';
+import { clockWords } from '../prompt/fixed-lines';
 import { OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS } from './check-back';
 import { localIso } from './reminders';
 import { spendOf, withinBudget, type InterruptBook, type InterruptHold, type InterruptLimits, type InterruptSpend } from './interruptions';
@@ -140,7 +141,7 @@ const pushWhen = (item: Readonly<Record<string, unknown>>, timezone: string, now
   const at = Date.parse(start);
   if (!Number.isFinite(at)) return null;
   const local = localIso(at, timezone);
-  return { day: local.slice(0, 10) === today ? null : LOCAL_DATE(timezone).format(at), time: local.slice(11, 16) };
+  return { day: local.slice(0, 10) === today ? null : LOCAL_DATE(timezone).format(at), time: clockWords(local.slice(11, 16)) };
 };
 export const updatePushLine = (changes: readonly Change[], event: string | undefined, rules: Readonly<{ named: boolean; timezone: string; now: number }>): string => {
   const fixed = PUSHES.update.body;

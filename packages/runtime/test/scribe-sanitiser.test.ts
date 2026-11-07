@@ -1319,6 +1319,38 @@ describe('Scribe sanitiser', () => {
   });
 });
 
+describe('percent escapes decode where they sit, whatever else the string carries', () => {
+  const encoded = (text: string) => [...text].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+  const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const atEach = (text: string) => [
+    ['internal_context', inspect([{ role: 'user', content: text }], 'internal_context')],
+    ['memory_block', inspect(text, 'memory_block')],
+  ] as const;
+
+  it.each([
+    ['a canary beside a stray percent', `50% off today, ref ${encoded(CANARIES[0]!)}`],
+    ['a secret beside a stray percent', `50% off today, ref ${encoded(SECRET)}`],
+    ['a canary after a byte that is not UTF-8', `ref %FF${encoded(CANARIES[0]!)}`],
+    ['a secret after a cut-off multibyte sequence in the same run', `ref %E0%A4${encoded(` ${SECRET}`)}`],
+    ['a canary beside a malformed escape', `20%DEALS ref ${encoded(CANARIES[0]!)}`],
+  ])('denies %s in internal_context and memory_block', (_shape, text) => {
+    for (const [destination, result] of atEach(text)) expect(result, destination).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+
+  it('carriesSecretOrCanary reads the escapes beside a stray percent', () => {
+    expect(carriesSecretOrCanary(`50% off, ${encoded(CANARIES[1]!)}`, [...CANARIES])).toBe(true);
+    expect(carriesSecretOrCanary(`50% off, ${encoded(SECRET)}`)).toBe(true);
+  });
+
+  it.each([
+    '50% off at https://example.com/sale?q=winter%20coats',
+    'Flat 20%DEALS, see https://example.com/a%2Fb',
+    'up 12% on %E0%A4%A8%E0%A4%AE',
+  ])('passes ordinary text with a stray percent and real escapes: %s', (text) => {
+    for (const [destination, result] of atEach(text)) expect(result, destination).toMatchObject({ ok: true });
+  });
+});
+
 describe('issue #152 - malformed percent escapes are plain text, not a payload deny', () => {
   // Live RCA 2026-09-25 (trace 6adaddf55019f408e0545d3dac134f7b): strict decodeURIComponent on
   // "20%DEALS"-shaped text threw and decodedViews converted the throw into invalid_payload,

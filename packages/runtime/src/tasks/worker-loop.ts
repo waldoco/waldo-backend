@@ -44,6 +44,9 @@ export type TaskBrainPort = Readonly<{
   report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   // Renews the lease; false once the attempt is fenced.
   heartbeat(ticket: TaskTicket): Promise<boolean>;
+  // The model calls a fenced attempt made since its last checkpoint: they were paid for, so they reach the owner's spend
+  // even though the brain takes nothing else from the attempt.
+  spent(ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void>;
 }>;
 
 // A model step for one task round: the job's system prompt and brief, the profile's tools and the turns so far.
@@ -145,6 +148,7 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     checkpoint: (t, n, turns, events, spent, outcomes) => toBrain(() => deps.brain.checkpoint(t, n, turns, events, spent, outcomes)),
     report: (t, outcome, events, spent, outcomes) => toBrain(() => deps.brain.report(t, outcome, events, spent, outcomes)),
     heartbeat: (t) => deps.brain.heartbeat(t),
+    spent: (t, events) => deps.brain.spent(t, events),
   };
   let claim: TaskClaim | 'fenced';
   try { claim = await brain.claim(ticket); } catch { return 'lost'; }
@@ -200,9 +204,9 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
         let step: Awaited<ReturnType<TaskModel>>;
         try { step = await deps.model({ ticket, claim, system: TASK_WORKER_SYSTEM_PROMPT, content, tools, turns, canaries }); }
         finally { clearInterval(beat); }
-        if (fenced) throw new TaskFenced();
         const { response, event, billed = [] } = step;
         bill([event, ...billed]);
+        if (fenced) throw new TaskFenced();
         spend = { ...spend, rounds: spend.rounds + 1 };
         return response;
       },
@@ -216,7 +220,12 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     });
     return await report({ kind: 'result', result: finished ?? fallbackResult(exit, text) });
   } catch (error) {
-    if (error instanceof TaskFenced) return 'fenced';
+    if (error instanceof TaskFenced) {
+      const { events: unsent } = flush();
+      // Sent once. If the owner's object cannot be reached, these calls go unrecorded, as before this call existed.
+      if (unsent.length) await deps.brain.spent(ticket, unsent).catch(() => console.warn(JSON.stringify({ hop: 'task_spend_unsent', ok: false, job_id: ticket.jobId, detail: String(unsent.length) })));
+      return 'fenced';
+    }
     if (error instanceof TaskBrainLost) return 'lost';
     if (error instanceof TaskSliceEnded) return 'continue';
     if (error instanceof TaskProviderUnavailable) { bill([error.event, ...error.billed]); return report({ kind: 'unavailable' }); }

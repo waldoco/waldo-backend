@@ -62,7 +62,7 @@ type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; ala
 
 it.each([
   { names: undefined, body: 'Waldo has a note before your next meeting' },
-  { names: '1', body: 'Prep: Design review at 10:30' },
+  { names: '1', body: 'Prep: Design review at 10:30am' },
 ])('an app owner\'s delivered prep note raises the prep push (PREP_PUSH_NAMES=$names)', async ({ names, body }) => {
   const name = `push-prep-app-${names ?? 'off'}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {

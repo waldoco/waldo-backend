@@ -2,6 +2,7 @@
 // tap, the owner's answer is an ordinary turn that puts a change on an approval card, and the calendar changes only on yes.
 // The model is scripted, so these prove the path (tools offered, cards raised, what reaches the owner and when), not the
 // judgment; whether a live model plans well is the judged eval's. Every reading and event is synthetic.
+import { APP_SCHEDULE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +25,7 @@ import { toContextHealthMaterial } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { routerSignature } from '../src/identity/owner-directory';
 
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -456,14 +458,65 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('a phone that moved brings the look to now, and the look it starts knows why; off, or for a forged notice, nothing moves', async () => {
+    const moved = async (owner: Steps['owner'], name: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-moved', { method: 'POST', body: '{}',
+      headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));
+    const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
+      .map(row => ({ due_at: row.due_at, moved: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
+    await owned('intervention-moved', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      expect(armed(state).map(row => row.moved)).toEqual([null]);
+      expect((await moved(owner, 'intervention-moved', 'forged')).status).toBe(403);
+      expect(armed(state).map(row => row.moved)).toEqual([null]);
+      expect((await moved(owner, 'intervention-moved')).status).toBe(200);
+      expect(armed(state)).toEqual([{ due_at: AT, moved: 'place_moved' }]);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
+      expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'moved']]);
+      expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+      // A city that keeps flipping pulls the look forward once per cadence, no more.
+      for (const minutes of [5, 60, 119]) {
+        const at = Date.now;
+        Date.now = () => AT + minutes * 60_000;
+        try { expect((await moved(owner, 'intervention-moved')).status).toBe(200); } finally { Date.now = at; }
+        expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+      }
+      const later = Date.now;
+      Date.now = () => AT + 121 * 60_000;
+      try {
+        expect((await moved(owner, 'intervention-moved')).status).toBe(200);
+        expect(armed(state)).toEqual([{ due_at: AT + 121 * 60_000, moved: 'place_moved' }]);
+      } finally { Date.now = later; }
+    });
+    await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+      await owner.alarm();
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n).toBe(1);
+      expect((await moved(owner, 'intervention-moved-same-hour')).status).toBe(200);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n).toBe(1);
+      const hour = Date.parse(new Date(AT).toISOString().slice(0, 13) + ':00:00Z') + 3_600_000;
+      expect(armed(state)).toEqual([{ due_at: hour, moved: 'place_moved' }]);
+    });
+    await owned('intervention-moved-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+      expect((await moved(owner, 'intervention-moved-off')).status).toBe(200);
+      expect(armed(state)).toEqual([]);
+    });
+  });
+
   it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
     await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
-      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<boolean> }).act({ action: 'schedule.set', id: 'heartbeat', value });
+      const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<unknown> }).act({ action: 'schedule.set', id: 'heartbeat', value });
       expect(armed()).toBe(1);
-      expect(await set('off')).toBe(true);
+      expect(await set('off')).toEqual(APP_SCHEDULE_RECEIPTS_V1.off);
       expect(armed()).toBe(0);
-      expect(await set('on')).toBe(true);
+      expect(await set('on')).toEqual(APP_SCHEDULE_RECEIPTS_V1.on);
       expect(armed()).toBe(1);
     });
   });

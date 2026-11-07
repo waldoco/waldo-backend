@@ -99,6 +99,11 @@ export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' |
   return { updateId: record.updateId, parts: [...ownerWords(record.text), ...notes, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
 };
 
+// The files an iMessage turn opened, for the turn being answered: the same run and the same update id. Update ids are
+// numbered per channel from the same base, so a turn on another channel can carry the same one; its run is never this one.
+export const openedForTurn = <Opened extends { updateId: number; runId: string }>(opened: Opened | null, turn: Readonly<{ updateId: number; runScope?: Readonly<{ runId: string }> }>): Opened | null =>
+  opened !== null && opened.updateId === turn.updateId && opened.runId === turn.runScope?.runId ? opened : null;
+
 /** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */
 export const iMessageTurnText = (record: Pick<IMessageInboxRecord, 'text' | 'media'>): string =>
   record.text || iMessageMediaNotes(record.media?.files ?? []).map(note => note.text).join('\n');
