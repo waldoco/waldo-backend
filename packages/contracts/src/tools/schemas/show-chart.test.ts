@@ -46,7 +46,7 @@ describe('show_health_chart arguments', () => {
   });
 
   it('keeps only the query in a stored chart, so a forget reads its words and nothing else', () => {
-    const stored: ConversationChart = { title: query.title, alt_text: query.alt_text, health: { signal: 'hrv', from: query.from, to: query.to } };
+    const stored: ConversationChart = { title: query.title, alt_text: query.alt_text, unit: '', series: [], health: { signal: 'hrv', from: query.from, to: query.to } };
     expect(isHealthChart(stored)).toBe(true);
     expect(conversationChartTexts(stored)).toEqual([query.title, query.alt_text]);
   });

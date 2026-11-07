@@ -391,17 +391,25 @@ export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
     return false;
   };
 };
+// The rows one page of the transcript shows, oldest first, and where they sit among the rows that can be shown.
+const transcriptWindow = (entries: readonly ConversationEntry[], cursor: string | null, limit: number) => {
+  const shown = entries.filter(shownRow);
+  const { taken, size, before: beforeId } = pageWindow(cursor, limit);
+  const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
+  const end = beforeId !== null ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
+  return { shown, start: Math.max(end - size, 0), end };
+};
+export const appTranscriptPageRows = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): readonly ConversationEntry[] => {
+  const { shown, start, end } = transcriptWindow(entries, cursor, limit);
+  return shown.slice(start, end);
+};
 // consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
   consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined,
   memoryUsed: (turnId: string) => readonly Readonly<{ id: string; text: string }>[] | undefined = () => undefined, charts = false,
   healthCharts: (chart: ConversationHealthChart) => ChartSeriesPart | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
-  const shown = entries.filter(shownRow);
-  const { taken, size, before: beforeId } = pageWindow(cursor, limit);
-  const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
-  const end = beforeId !== null ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
-  const start = Math.max(end - size, 0);
+  const { shown, start, end } = transcriptWindow(entries, cursor, limit);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
     const newest = entry.parentId && newestReply.get(entry.parentId) === entry.id ? entry.parentId : null;

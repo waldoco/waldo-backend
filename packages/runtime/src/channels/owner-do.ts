@@ -136,7 +136,7 @@ import { consoleLinkHandler } from '../tools/live/console-link';
 import { progressNoteHandler, type ProgressNoteDeliver } from '../tools/live/progress-note';
 import { attachFileHandler } from '../tools/live/attach-file';
 import { cardReplyBook, offerRepliesHandler } from '../tools/live/offer-replies';
-import { drawHealthChart, showChartHandler, showHealthChartHandler, turnChartBook, type ChartSeriesPart } from '../tools/live/show-chart';
+import { healthChartPart, readHealthSeries, showChartHandler, showHealthChartHandler, turnChartBook, type HealthSeries } from '../tools/live/show-chart';
 import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
@@ -243,7 +243,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_CHART_REVISION, APP_CHAT_HEALTH_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
-import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
+import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, appTranscriptPageRows, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, IMESSAGE_CONNECT_GUIDANCE, WHATSAPP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
@@ -406,6 +406,7 @@ type OwnerRuntime = Readonly<{
 const LATE_FIRE_MS = 5 * 60_000;
 // Health charts read live per app chat page: each is one health-plane read.
 const HEALTH_CHART_READS = 6;
+const HEALTH_CHART_READ_MS = 3_000;
 const healthChartKey = (chart: ConversationHealthChart): string => `${chart.health.signal}|${chart.health.from}|${chart.health.to}`;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
 const LOOKUP_STARTED_KEY = 'owner_lookup_started';
@@ -2048,27 +2049,38 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false, charts = false, healthCharts = false) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='health_charts';
-    const drawnHealth=healthCharts?await this.healthChartParts(entries):new Map<string,ChartSeriesPart>();
+    const healthSeries=healthCharts?await this.healthChartSeries(appTranscriptPageRows(entries,cursor,limit)):new Map<string,HealthSeries>();
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
     // Only main chat has a rating route, so only main rows are read against the ratings, and only for a build that names them.
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
     // Main chat only, like ratings; each claim is read as it is now, so a forgotten one is gone from the answer.
     const used=memoryUsed&&thread===undefined?memoryUsedFor(memoryUsedBook(this.ctx.storage.sql),()=>[...claimStore(this.ctx.storage.sql).claims(),...claimStore(this.ctx.storage.sql).claims('promoted')],()=>heldTopicsOf(claimStore(this.ctx.storage.sql))):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used,charts,chart=>drawnHealth.get(healthChartKey(chart)));
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used,charts,chart=>{const series=healthSeries.get(healthChartKey(chart));return series?healthChartPart(chart,series):undefined;});
   }
-  // The page's health charts, each read live from the health plane once; the points live only in this response. A read that
-  // fails or is refused leaves that chart to its words. At most HEALTH_CHART_READS per page, newest first; older ones are words.
-  private async healthChartParts(entries: readonly ConversationEntry[]): Promise<Map<string, ChartSeriesPart>> {
+  // The readings for the health charts this page shows, each query read live from the health plane once, with consent read once
+  // for the page. The points live only in this response. A read that fails, is refused or runs past HEALTH_CHART_READ_MS leaves
+  // its charts to their words; past HEALTH_CHART_READS queries a page, the older ones are words too.
+  private async healthChartSeries(rows: readonly ConversationEntry[]): Promise<Map<string, HealthSeries>> {
     const kv=this.ctx.storage.kv;
     const fallbackZone=this.env.WALDO_OWNER_TIMEZONE??'UTC';
     const clock={get timezone():string{return kv.get<string>('timezone')??fallbackZone;},now:()=>new Date()};
-    const read=getHealthHandler(healthReadBook(signedRpc(this.env),kv.get<string>('do_name')??null),clock);
-    const asked=new Map<string,ConversationHealthChart>();
-    for(const entry of [...entries].reverse())for(const chart of entry.charts??[])if(isHealthChart(chart)&&asked.size<HEALTH_CHART_READS)asked.set(healthChartKey(chart),chart);
-    const drawn=new Map<string,ChartSeriesPart>();
-    await Promise.all([...asked].map(async([key,chart])=>{const result=await drawHealthChart(chart,args=>read.handle(args,{} as never)).catch(()=>null);if(result&&'part' in result)drawn.set(key,result.part);}));
-    return drawn;
+    const book=healthReadBook(signedRpc(this.env),kv.get<string>('do_name')??null);
+    let consent:ReturnType<typeof book.consent>|undefined;
+    const read=getHealthHandler({consent:()=>consent??=book.consent(),series:range=>book.series(range)},clock);
+    const asked=new Map<string,ConversationHealthChart['health']>();
+    for(const entry of [...rows].reverse())for(const chart of entry.charts??[])if(isHealthChart(chart)&&asked.size<HEALTH_CHART_READS)asked.set(healthChartKey(chart),chart.health);
+    const found=new Map<string,HealthSeries>();
+    await Promise.all([...asked].map(async([key,query])=>{
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      const late=new Promise<'late'>(resolve=>{timer=setTimeout(()=>resolve('late'),HEALTH_CHART_READ_MS);});
+      const result=await Promise.race([readHealthSeries(query,args=>read.handle(args,{} as never)),late]).catch(()=>'failed' as const).finally(()=>clearTimeout(timer));
+      if(typeof result==='object'&&'series' in result){found.set(key,result.series);return;}
+      // A content-free code: why a chart was told in words, never what it would have shown.
+      const code=result==='late'?'timeout':result==='failed'?'read_failed':'refused' in result?'refused':result.unavailable;
+      console.log(JSON.stringify({hop:'app_health_chart',ok:false,code}));
+    }));
+    return found;
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {

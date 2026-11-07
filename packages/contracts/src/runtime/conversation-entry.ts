@@ -59,8 +59,10 @@ export type ConversationPointsChart = Readonly<{
 }>;
 // A chart of the owner's own readings keeps the query only: which signal, which local days. The points are read live each
 // time the chat is read, so no reading is ever stored with the reply.
+// unit and series are stored empty, so code that predates health charts reads one as a chart with nothing to draw and shows
+// its alt text.
 export type ConversationHealthChart = Readonly<{
-  title: string; alt_text: string;
+  title: string; alt_text: string; unit: ''; series: readonly [];
   health: Readonly<{ signal: string; from: string; to: string }>;
 }>;
 export type ConversationChart = ConversationPointsChart | ConversationHealthChart;

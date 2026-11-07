@@ -62,18 +62,40 @@ export const showChartHandler = (book: TurnChartBook): ToolHandler<ShowChartArgs
 // something to draw, and the chat read draws the points for the response it is building.
 export type HealthChartRead = (args: GetHealthArgs) => Promise<ToolResult<GetHealthResult>>;
 export type ChartSeriesPart = z.infer<typeof replyChartSeriesPartV1Schema>;
-type HealthDrawn = Readonly<{ part: ChartSeriesPart }> | Readonly<{ unavailable: Extract<GetHealthResult, { state: 'unavailable' }>['reason'] }> | Readonly<{ refused: string }>;
+export type HealthChartQuery = ConversationHealthChart['health'];
+export type HealthSeries = Readonly<{ unit: string; points: readonly Readonly<{ t: number; v: number }>[] }>;
+type HealthRead = Readonly<{ series: HealthSeries }> | Readonly<{ unavailable: Extract<GetHealthResult, { state: 'unavailable' }>['reason'] }> | Readonly<{ refused: string }>;
 const dayStart = (day: string): number => Date.parse(`${day}T00:00:00Z`);
-export const drawHealthChart = async (chart: ConversationHealthChart, read: HealthChartRead): Promise<HealthDrawn> => {
-  const answer = await read({ signals: [chart.health.signal as GetHealthArgs['signals'][number]], from: chart.health.from, to: chart.health.to, aggregation: 'daily' });
+// Only days with a value become points: nothing is invented for a day the store has none for.
+export const readHealthSeries = async (query: HealthChartQuery, read: HealthChartRead): Promise<HealthRead> => {
+  const answer = await read({ signals: [query.signal as GetHealthArgs['signals'][number]], from: query.from, to: query.to, aggregation: 'daily' });
   if (!answer.ok) return { refused: answer.error };
   if (answer.data.state === 'unavailable') return { unavailable: answer.data.reason };
   const [series] = answer.data.signals;
   const points = (series?.days ?? []).flatMap(day => day.value === null ? [] : [{ t: dayStart(day.day), v: day.value }]);
-  const part = replyChartSeriesPartV1Schema.safeParse({ type: 'chart_series', title: chart.title, unit: series?.unit ?? '',
-    series: [{ label: chart.health.signal.replaceAll('_', ' '), points }], alt_text: chart.alt_text, fallback_text: chart.alt_text });
-  return part.success ? { part: part.data } : { unavailable: 'no_readings' };
+  return points.length && series ? { series: { unit: series.unit, points } } : { unavailable: 'no_readings' };
 };
+const SIGNAL_LABELS: Readonly<Record<string, string>> = {
+  sleep: 'Sleep', sleep_midpoint: 'Sleep midpoint', hrv: 'HRV', resting_hr: 'Resting heart rate', heart_rate: 'Heart rate', movement: 'Movement',
+  daylight: 'Daylight', sleep_light: 'Light sleep', sleep_deep: 'Deep sleep', sleep_rem: 'REM sleep', sleep_awake: 'Awake in bed',
+  sleep_efficiency: 'Sleep efficiency', respiratory_rate: 'Breathing rate', spo2: 'Blood oxygen', wrist_temperature: 'Wrist temperature',
+  walking_hr: 'Walking heart rate', hr_recovery: 'Heart rate recovery', vo2_max: 'VO2 max', steps: 'Steps', active_energy: 'Active energy',
+  mindful: 'Mindful minutes', body_mass: 'Weight', body_fat: 'Body fat', lean_body_mass: 'Lean mass', stand_hours: 'Stand hours',
+};
+// One chart's part from a series read for its query; each chart keeps its own title and words.
+export const healthChartPart = (chart: ConversationHealthChart, series: HealthSeries): ChartSeriesPart | undefined => {
+  const part = replyChartSeriesPartV1Schema.safeParse({ type: 'chart_series', title: chart.title, unit: series.unit,
+    series: [{ label: SIGNAL_LABELS[chart.health.signal] ?? chart.health.signal, points: series.points }], alt_text: chart.alt_text, fallback_text: chart.alt_text });
+  return part.success ? part.data : undefined;
+};
+// The words are kept with the reply, where readings never go: Scribe's health floor, and any number in them that is one of
+// the readings drawn as people write one, rounded (within half a unit, or 1% of a large reading: 14,000 steps for 14,003).
+const NUMBER = /\d[\d,]*(?:\.\d+)?/g;
+const carriesDrawnReading = (text: string, points: readonly Readonly<{ v: number }>[]): boolean =>
+  (text.match(NUMBER) ?? []).map(number => Number(number.replaceAll(',', ''))).some(number => points.some(point => Math.abs(point.v - number) <= Math.max(0.5, Math.abs(point.v) * 0.01)));
+// What a stored health chart holds: the query, its words, and an empty series and unit, so code that predates health charts
+// reads it as a chart with nothing to draw and shows its words.
+export const storedHealthChart = (title: string, alt_text: string, health: HealthChartQuery): ConversationHealthChart => ({ title, alt_text, unit: '', series: [], health });
 
 const HEALTH_DESCRIPTION = [
   'Draw a chart of the owner\'s own readings in your app reply: one signal over the local days your reply talks about (from before to, at most 31 days ending today).',
@@ -92,14 +114,14 @@ export const showHealthChartHandler = (book: TurnChartBook, read: HealthChartRea
   turn_bound: true,
   async handle(args, ctx) {
     if (ctx.trigger !== 'user_message' || ctx.ownerInitiated !== true || !ctx.turnId) return healthResult({ shown: false, reason: 'not_owner_turn' });
-    // The words are stored with the reply, where readings never go.
     if (numericHealthIn(args.title) || numericHealthIn(args.alt_text)) return healthResult({ shown: false, reason: 'readings_in_words' });
-    const kept = (text: string) => redactSecretUrls(text).text;
-    const chart: ConversationHealthChart = { title: kept(args.title), alt_text: kept(args.alt_text), health: { signal: args.signal, from: args.from, to: args.to } };
-    const drawn = await drawHealthChart(chart, read);
+    const query = { signal: args.signal, from: args.from, to: args.to };
+    const drawn = await readHealthSeries(query, read);
     if ('refused' in drawn) return { ok: false, code: 'invalid_args', error: drawn.refused, source_taint: null };
     if ('unavailable' in drawn) return healthResult({ shown: false, reason: 'health_unavailable', health_reason: drawn.unavailable });
-    const left = book.queue(ctx.turnId, chart);
+    if (carriesDrawnReading(args.title, drawn.series.points) || carriesDrawnReading(args.alt_text, drawn.series.points)) return healthResult({ shown: false, reason: 'readings_in_words' });
+    const kept = (text: string) => redactSecretUrls(text).text;
+    const left = book.queue(ctx.turnId, storedHealthChart(kept(args.title), kept(args.alt_text), query));
     return left === 'limit_reached' ? healthResult({ shown: false, reason: 'limit_reached' }) : healthResult({ shown: true, charts_left: left });
   },
 });
