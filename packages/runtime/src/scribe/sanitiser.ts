@@ -151,6 +151,51 @@ const STAGE_HOURS = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*`;
 const STAGE_MINUTES = String.raw`\d{1,2}\s*m(?:ins?|inutes?)?\b`;
 const STAGE_DURATION = `${STAGE_HOURS}${STAGE_MINUTES}`;
 const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
+// Lab results as a report or a clinic mail sets them out: the analyte, then its value with a unit, a reference range or a
+// high or low flag. A dose is not a result ("Vitamin D 1000 IU", "60k weekly"), nor is a date, a year, a clock time or a count
+// after the name.
+const LAB_GAP = gapOf(String.raw`${READING_WORDS}|results?|levels?|values?`);
+// A gap with a separator or a reading word in it ("TSH: 4", "ferritin is 15"), as against blanks alone ("TSH 14 Nov").
+const LAB_SAID = String.raw`(?:\s*(?:[:=~]|\b(?:${READING_WORDS}|results?|levels?|values?)\b))+\s*`;
+const MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*`;
+const NOT_A_RESULT = String.raw`(?:iu|i\.u\.|mcg|µg|ug|mg|k|capsules?|tablets?|tabs?|units?|drops?|sachets?|bottles?|minutes?|mins?|hours?|weeks?|days?|daily|weekly|monthly|once|twice|a\s+(?:day|week|month)|${MONTH})\b`;
+const LAB_VALUE = String.raw`(?:[<>≤≥]\s*)?(?!(?:19|20)\d\d(?![\d.,]))\d{1,4}(?:[.,]\d+)?(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+const LAB_DECIMAL = String.raw`(?:[<>≤≥]\s*)?\d{1,4}[.,]\d+(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+// The units only a lab result uses: thyroid hormone, vitamin D, PSA, ferritin, haemoglobin. mL/min is also a pump or a drip
+// rate, so it counts only after an analyte's name.
+const LAB_UNIT_ALONE = String.raw`(?:[mµμu]\s*iu\s*\/\s*m?l|ng\s*\/\s*ml|[nµμup]mol\s*\/\s*l|[µμu]g\s*\/\s*l|g\s*\/\s*dl)`;
+const LAB_UNIT = String.raw`(?:${LAB_UNIT_ALONE}|ml\s*\/\s*min(?:\s*\/\s*1[.,]73\s*m?(?:2|²)?)?)`;
+// A bare H or L is a flag only in brackets or after a decimal value ("Hb 9.8 L"); after a whole number it is as likely litres
+// or hours ("Hb 2 L of water"). A flag word never starts a compound ("high-priority").
+const LAB_RANGE = String.raw`(?:${LAB_UNIT}|g\s*\/\s*l|\(\s*(?:[<>]\s*)?\d|\(\s*(?:[HL]|high|low)\s*\)|\b(?:high|low)(?![\w-]))`;
+const LAB_FLAG = String.raw`\s*\b[HL](?![\w-])`;
+// One blank run, then a unit, a reference range or a flag; a second optional blank run beside it scanned blanks quadratically.
+const LAB_MARK = String.raw`\s*${LAB_RANGE}`;
+// A whole number after blanks alone counts only where a line, a table cell or the text ends, or a mark follows: a sentence
+// that ends on one ("Take Vitamin D 3.", "Hgb 3.") is a dose or a list as often as a result.
+const LAB_ENDS = String.raw`(?=[^\S\n]*(?:\||\n|$))`;
+const QUALIFIER = String.raw`(?:\s*\([\w\s-]{1,24}\)|\s*,\s*(?:serum|plasma|blood|total|free)\b)?`;
+const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
+// Plain vitamin D is bought, taken and dosed far more often than it is measured, and "D 2" or "D 3" is its form: it counts
+// only with a lab unit or a reference range ("(30-100)", "(<20)"), or after a lab qualifier ("Vitamin D (25-OH) 18").
+const VITAMIN_D = String.raw`(?:vitamin|vit\.?)\s*d(?:\s*[23](?![\d.,]))?`;
+const RANGE_SHAPE = String.raw`\(\s*(?:[<>≤≥]\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?)\s*\)`;
+const D_QUALIFIER = String.raw`\(\s*(?:25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)|hydroxy|total|serum)\s*\)`;
+// "PSA" is also an announcement and "Hb" a pencil, so these count only with a unit, a range, a flag or a level.
+const SHARED_LAB_NAME = String.raw`(?:(?:total\s+|free\s+)?psa|hb)`;
+const LAB_READINGS: readonly RegExp[] = [
+  reading(String.raw`\b${READING_NUMBER}\s*${LAB_UNIT_ALONE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_DECIMAL}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${VITAMIN_D}\b${LAB_GAP}${LAB_VALUE}\s*(?:${LAB_UNIT}|${RANGE_SHAPE})`),
+  reading(String.raw`\b${VITAMIN_D}\s*${D_QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}${LAB_MARK}`),
+  casedReading(String.raw`\b(?:(?:[Tt]otal\s+|[Ff]ree\s+)?(?:PSA|psa|Psa)|H[Bb]|hb)\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}${LAB_FLAG}`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\s+(?:levels?|results?)\b${LAB_GAP}${LAB_VALUE}`),
+  // A trend whose last value carries the unit ("Hb 10.9 → 11.4 g/dL") is the reading from its first value.
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}(?=\s*(?:→|->|=>|\bto\b)\s*\d+(?:[.,]\d+)?\s*${LAB_UNIT_ALONE})`),
+];
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
 // count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
@@ -227,6 +272,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal|calories)\s+(?:of\s+active\s+energy\b(?!\s+drinks?\b)|burned\b(?!\s+off\b))`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
+  ...LAB_READINGS,
 ];
 // Matched with only emphasis blanked. A word ordinary life shares (hr, pulse, steps, recovery), with no unit, names a
 // reading only when tied to its number as plain text would tie it: bold around "Steps:" keeps the tie, a table cell border
