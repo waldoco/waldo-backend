@@ -974,7 +974,7 @@ describe('task profiles', () => {
     memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory' && name !== 'read_tool_output'), 'read_memory', 'remember'],
     delegation: ['delegate_task', 'use_mac'],
     tasks: ['start_task', 'cancel_task'],
-    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
+    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health' || TOOL_RECORDS[name].brain === 'phone'), 'get_health'],
   };
 
   // Whatever list a tool is missing from, a profile can only read: every tool a worker holds is a safe read, except the
