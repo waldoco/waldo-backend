@@ -10,6 +10,7 @@ export * from './memory/trust';
 export * from './memory/sanitise';
 export * from './memory/hall';
 export * from './memory/area';
+export * from './memory/people';
 export * from './memory/episode';
 export * from './memory/recall';
 export * from './memory/skill';

@@ -7,6 +7,7 @@ import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
 import { MAX_FORGET_SOURCES } from './selective-forget';
+import { ensurePeopleSchema, peopleTables } from './people';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 // confirmed: the owner said it is right. waldo_confirmed: the nightly model read the owner's day as confirming it, which
@@ -29,7 +30,7 @@ const lineageOf = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): numb
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null; on_date?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
 // claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row.
@@ -57,7 +58,7 @@ export const textFingerprint = (text: string): string => {
 };
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
-type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[]; area?: string }>;
+type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[]; area?: string; on_date?: string }>;
 // The part of the owner's life a claim is filed under, as stored: unsorted is NULL, and anything outside the set is unsorted.
 const filedArea = (area: string | null | undefined): LifeArea | null =>
   area !== 'unsorted' && (LIFE_AREAS as readonly (string | null | undefined)[]).includes(area) ? area as LifeArea : null;
@@ -384,7 +385,7 @@ export const memoryRevision = (sql: Sql): number =>
 
 // The most claims one recall returns: twelve as full lines, and with memory selection on, twelve more as stubs.
 const RECALL_CAP = 24;
-const MEMORY_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(?:claims|constellation_nodes|constellation_edges)\b/i;
+const MEMORY_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(?:claims|constellation_nodes|constellation_edges|entities|claim_links)\b/i;
 const RETURNING = /\bRETURNING\b/i;
 
 export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
@@ -421,6 +422,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     ['area', 'TEXT'], ['area_by', 'TEXT'],
     // bring_up_less_at: when the owner asked Waldo to stop raising this on its own. The claim stays and is used when asked.
     ['bring_up_less_at', 'TEXT'],
+    // on_date: the day a claim is about when it comes round again (--MM-DD, a birthday) or is fixed (YYYY-MM-DD).
+    ['on_date', 'TEXT'],
   ] as const) {
     if (!sql.exec("SELECT name FROM pragma_table_info('claims') WHERE name = ?", column).toArray().length) {
       sql.exec(`ALTER TABLE claims ADD COLUMN ${column} ${definition}`);
@@ -499,6 +502,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_edges (
     from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, relation TEXT NOT NULL, strength REAL NOT NULL, evidence_count INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (from_id, to_id, relation))`);
+  ensurePeopleSchema(sql);
+  const people = peopleTables(sql);
   // A statement already being forgotten is left to the purge that holds its words.
   const dropStatements = (nodeId: number): void => {
     sql.exec(`DELETE FROM claims WHERE kind = '${NODE_STATEMENT}' AND source_ref LIKE ? AND status != 'purging'`, `node:${nodeId}:%`);
@@ -591,8 +596,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),
     add(claim: NewClaim, at: string, id?: number): void {
       const area = filedArea(claim.area);
-      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, at, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), area, area ? 'model' : null);
+      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, area, area_by, on_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at, claim.source_ref ?? null, at, at, claim.supersedes_id ?? null, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), area, area ? 'model' : null, claim.on_date ?? null);
     },
+    // The people claims are about. Written only here, beside the claims they hang on.
+    people,
     seen(id: number, at: string): void {
       db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
@@ -663,6 +670,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
           if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ? AND bring_up_less_at IS NULL', old.bring_up_less_at, twin.id);
           repointNodes(old, twin.id);
+          people.carryLinks(old.id, twin.id);
           return true;
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
@@ -674,6 +682,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, at, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
         // The owner's wish about raising a fact follows the fact into its corrected wording.
         if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ?', old.bring_up_less_at, replacement);
+        // The people a fact is about stay with its new wording, whoever corrected it. Its date is the new wording's own: a
+        // correction that names none leaves none, rather than keeping a day the new words may contradict.
+        if (claim.on_date) sql.exec('UPDATE claims SET on_date = ? WHERE id = ?', claim.on_date, replacement);
+        people.carryLinks(old.id, replacement);
         retire();
         repointNodes(old, replacement);
         return true;
@@ -706,6 +718,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     forget(id: number): void {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
+      people.prune();
     },
     barrier,
     revision: (): number => memoryRevision(db),
@@ -782,7 +795,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       forgetLanded();
       // An earlier version of a forgotten claim goes with it: what it replaced would otherwise stay as history that says the
       // same thing in older words.
-      ids = lineageOf(sql, ids);
+      // A person a topic names goes with it: every claim about them, so their name leaves memory whatever words the claims use.
+      ids = lineageOf(sql, [...ids, ...people.namedBy(topics.filter(forgettableTopic)).flatMap(row => people.claimIdsOf(row.id))]);
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -1111,6 +1125,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
+      people.prune();
       return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, refused, receipt, deletedClaims };
     },
 
@@ -1214,6 +1229,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
         sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
       }
+      people.prune();
     },
   };
 };
