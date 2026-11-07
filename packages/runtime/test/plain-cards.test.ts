@@ -57,6 +57,15 @@ describe('a card raised after outside content', () => {
     expect(card!.interactive.body.text).toContain('approved in the Waldo app');
   }));
 
+  it('an email card handed to the app keeps its buttons on WhatsApp, its closing lines inside the limit', () => owner(async (state) => {
+    const { desk, sent } = whatsappDesk(state);
+    const raw = `To: sam@example.test\r\nSubject: Notes\r\nMessage-ID: <notes@waldo-send>\r\n\r\n${'All the notes from today. '.repeat(120)}`;
+    await desk.proposeSendEmail({ to: ['sam@example.test'], subject: 'Notes', body: 'All the notes from today. '.repeat(120), message_id: '<notes@waldo-send>', raw, digest: await sha256Hex(raw) } as never);
+    const [card] = sent();
+    expect(card!.type).toBe('interactive');
+    expect(card!.interactive.body.text.length).toBeLessThanOrEqual(WHATSAPP_REPLY_BODY_MAX);
+  }));
+
   it('keeps the exact call one step below the words in the app review', () => owner(async (state) => {
     const { desk } = whatsappDesk(state);
     const id = await desk.proposeTaintedAction(await proposal('start_task', research));

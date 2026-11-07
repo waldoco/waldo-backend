@@ -146,11 +146,14 @@ describe('taint goes to a card', () => {
       expect(row!.status).toBe('open');
       expect(row!.proposal_digest).toBe(await sha256Hex(stableJson(taskArgs)));
       expect(JSON.parse(row!.payload_json)).toMatchObject({ tool: 'write_task', args: taskArgs, source: 'external' });
-      // The card says in words what will run and why it needs approval; the chat card carries no tool name or JSON.
+      // The card leads with what will run in words and why it needs approval; a card approved here shows the exact call under
+      // Details, after the words, so the owner approves only what they saw.
       expect(cards[0]!.split('\n')[0]).toBe('Do this? Add a task: "Pay invoice 44".');
       expect(cards[0]).toMatch(/email or web page/);
-      expect(cards[0]).not.toContain('write_task');
-      expect(cards[0]).not.toContain('{');
+      const details = cards[0]!.indexOf('Details: write_task');
+      expect(details).toBeGreaterThan(cards[0]!.indexOf('email or web page'));
+      expect(cards[0]!.slice(0, details)).not.toContain('{');
+      expect(cards[0]!.slice(details)).toContain('"title": "Pay invoice 44"');
 
       const approved = await desk.decide(row!.id, 'a', 't');
       expect(approved.toast).toBe('Done');

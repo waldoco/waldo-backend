@@ -3315,9 +3315,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
         // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
         if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', waitingForWhatsApp(leftForWhatsApp))));
-        // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work.
+        // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work. Once
+        // the number is unbound it goes to the app, so the answer is never left with no route.
         const whatsappSubject = this.ctx.storage.kv.get<string>('whatsapp_subject');
         if (this.whatsappBound() && whatsappSubject) routes.unshift(this.outboxRoute('whatsapp', askedOnWhatsApp(whatsappSubject)));
+        else if (this.appBound()) routes.push(this.linkingAppRows(this.outboxRoute('app', record => record.askedOn === 'whatsapp')));
         const settled = copies.length ? this.copiedFollowups(settleFinal, copies) : settleFinal;
         try { await lane('transport', () => finalOutbox.drain({ ...routedDelivery(routes), settled })); } finally { await scheduler.rearm(); }
         return;

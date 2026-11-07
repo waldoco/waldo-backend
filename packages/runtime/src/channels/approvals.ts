@@ -16,7 +16,8 @@ import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
 import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
-import { replyApprovalPartV1Schema } from '@waldo/contracts';
+import { replyApprovalPartV1Schema, taskProfileSchema } from '@waldo/contracts';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
 import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { addPlan, planOnCalendar, planReview, planSummary, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
@@ -360,7 +361,8 @@ const REVIEW_BUDGET = 3800;
 // Room an email card keeps for its closing lines: "Nothing has been sent." and the console review link.
 const EMAIL_TAIL_ROOM = 300;
 // Whether a card shows the whole review: present() and placement() both decide it here, so they never disagree.
-const reviewFits = (entry: LedgerRow) => reviewText(entry, true, true).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
+// chat: the card is handed to the app, so the chat shows the words only and the app review carries the exact call.
+const reviewFits = (entry: LedgerRow, chat = false) => reviewText(entry, true, chat).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
 // signed: the owner reviews the words the recipient reads; the model reads its own draft, so a rewrite never signs twice.
 const reviewEmail = (p: EmailSendProposal, signed: boolean) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
@@ -436,6 +438,10 @@ const TAINTED_PLAIN: Readonly<Partial<Record<string, (args: Record<string, unkno
 };
 // The one plain reason a background task is on a card at all: its worker would hold the owner's data and the web together.
 const COMBINED_TASK_WHY = 'It would read your mail and the web together, after reading outside content.';
+const combinedProfile = (profile: unknown): boolean => {
+  const parsed = taskProfileSchema.safeParse(profile);
+  return parsed.success && holdsPrivateAndEgress(TASK_PROFILE_SPECS[parsed.data].tools);
+};
 const words = (tool: string) => `${tool.charAt(0).toUpperCase()}${tool.slice(1).replaceAll('_', ' ')}`;
 // A tool with no words of its own is named plainly and described by Waldo's reasoning, as before.
 const plainTaintedAction = (p: TaintedActionProposal) => TAINTED_PLAIN[p.tool]?.(p.args) ?? `${words(p.tool)}: ${clipped(p.reasoning)}`;
@@ -444,7 +450,7 @@ const describeTaintedAction = (p: TaintedActionProposal) => p.preview?.length
   : plainTaintedAction(p);
 const reviewTaintedAction = (p: TaintedActionProposal) => [
   !p.preview?.length || p.preview.length === 1 ? `Do this? ${sentence(describeTaintedAction(p))}` : `${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${p.preview.map((line) => `- ${line}`).join('\n')}`,
-  ...(p.tool === 'start_task' && typeof p.args.profile === 'string' && (p.args.profile === 'reader' || p.args.profile === 'errand') ? [COMBINED_TASK_WHY] : []),
+  ...(p.tool === 'start_task' && combinedProfile(p.args.profile) ? [COMBINED_TASK_WHY] : []),
   `Waldo's reasoning: ${clipped(p.reasoning)}`,
 ].join('\n\n');
 const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
@@ -900,7 +906,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const present = async (id: string, raise?: Readonly<{ runRef: string | undefined }>) => {
     const entry = row(id)!;
     const deferrable = raise !== undefined || entry.deferred_at == null;
-    const card = reviewText(entry, true, true), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
+    // A card approved here shows the exact call it runs under Details; one handed to the app shows only its words here.
+    const handsToApp = HANDS_TO_APP.has(surface) && approvedInApp(entry);
+    const card = reviewText(entry, true, handsToApp), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
     // An email's card also links its console review; the lookup runs while the app card is built, not ahead of the card.
     const reviewing = entry.kind === 'email_send' ? deps.reviewUrl?.().catch(() => null) ?? null : null;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
@@ -908,7 +916,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, waits = false;
     let sentHere: Readonly<{ surface: string; message_ref: string; approvable: boolean; in_full: boolean }> | undefined;
     // A request this chat surface hands to the app is put there even before the owner has the app, so the link has a card to open.
-    const handsToApp = HANDS_TO_APP.has(surface) && approvedInApp(entry);
     if (surface === 'app' || handsToApp || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
@@ -925,7 +932,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
       const review = await reviewing;
       // An app handoff that cannot approve already ends with "Nothing was done."
-      const fits = reviewFits(entry), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
+      const fits = reviewFits(entry, handsToApp), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       // A card handed to the app that shows every word here is approved by the owner telling Waldo to go ahead, or in the app.
       const inWords = handsToApp && fits && approvesInWords(entry);
       const unsent = entry.kind !== 'email_send' ? '' : [...(handsToApp && inApp?.approvable !== true && !inWords ? [] : ['Nothing has been sent.']), ...(review ? [`You can also review it at ${review}.`] : [])].join(' ');
@@ -933,10 +940,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
       const text = inWords ? `${card}\n\n${GO_AHEAD_HERE}${link}`
-        : handsToApp ? handedText(fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`, `${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}`, `${title} ${summaryOf(entry)}`)
+        : handsToApp ? handedText(fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`, `${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}${unsent ? `\n\n${unsent}` : ''}`, `${title} ${summaryOf(entry)}`)
         : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
-        const sent = await say(unsent ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
+        const sent = await say(unsent && !handsToApp ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
         if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable, in_full: fits }; shown.push(sentHere); }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
@@ -2284,7 +2291,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
       const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
       // A card handed to the app shows the review whenever it fits, as present() decides.
-      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!));
+      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!, true));
       const chatApprovable = !!entry && shownInFullHere(entry).length > 0;
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}), ...(chatApprovable ? { chatApprovable } : {}) };
     },

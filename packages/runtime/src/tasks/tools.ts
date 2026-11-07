@@ -6,7 +6,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
-import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from './profiles';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from './profile-tools';
 import { quoted } from '../prompt/turn-prompt';
 import { threadOfChain } from '../channels/app-threads';
 import { PARK_WORDS } from '../prompt/fixed-lines';

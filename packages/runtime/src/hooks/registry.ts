@@ -621,7 +621,8 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       let needsOwner: boolean;
       try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
       catch { return halt('loop lookup failed', 'transient'); }
-      if (needsOwner) return halt(isExternalSourceTaint(sourceTaint.data) && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
+      // Only the owner's own turn can start the narrower task at once, so only there is the model pointed at it.
+      if (needsOwner) return halt(ctx.ownerInitiated === true && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
     // A write that is not privileged runs past the taint law on the owner's own turn as any tool does.

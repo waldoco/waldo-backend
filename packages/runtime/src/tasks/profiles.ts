@@ -37,10 +37,10 @@ export const outsideInstructions = (row: Pick<JobRow, 'brief_json' | 'checkpoint
 // The tools a job's worker may call: its profile's, or the machine reader's for a job the brain started itself. A job whose
 // instructions came after outside text and whose profile holds both halves loses its way out, so the brain refuses the web on
 // every call however the job came to hold both. The worker keeps the owner's data the brief was about.
-export const jobTools = (row: Pick<JobRow, 'profile' | 'origin' | 'kind' | 'brief_json' | 'checkpoint_json'>): readonly ToolName[] => {
+export const jobTools = (row: Pick<JobRow, 'profile' | 'origin' | 'brief_json' | 'checkpoint_json'>): readonly ToolName[] => {
   if (row.origin === LOOKUP_ORIGIN) return LOOKUP_READER;
   if (isMachine(row)) return MACHINE_READER;
   if (row.profile === null) return [];
   const tools = TASK_PROFILE_SPECS[row.profile].tools;
-  return row.kind === 'task' && holdsPrivateAndEgress(tools) && outsideInstructions(row) ? withoutEgress(tools) : tools;
+  return holdsPrivateAndEgress(tools) && outsideInstructions(row) ? withoutEgress(tools) : tools;
 };
