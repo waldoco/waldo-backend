@@ -156,7 +156,7 @@ import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
-import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerSpokeSince, scrubEpisodeTexts, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerSpokeSince, recentExchange, scrubEpisodeTexts, transcript } from './episodes';
 import { consolidateSources, type SourcesDeps } from './nightly-sources';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
@@ -3611,7 +3611,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         followUp: this.env.WALDO_TASK_NOTES === '1',
         // Read whatever the switch says, so a job already waiting when the switch is turned off still resumes.
         askedCard: id => this.asks.card(runtime.desk, id),
-        ...(this.env.WALDO_TASK_PICKUP === '1' ? { held: (chat: string | undefined) => cardWaitsIn(runtime.desk.wordsAwaited(), chat) } : {}),
+        ...(this.env.WALDO_TASK_PICKUP === '1' ? { held: (chat: string | undefined) => cardWaitsIn(runtime.desk.wordsAwaited(), chat),
+          recentExchange: (since: number) => recentExchange(episodeIndex(storage.sql), since) } : {}),
       });
       next = ran;
       if (this.env.WALDO_WATCHDOG === '1') {

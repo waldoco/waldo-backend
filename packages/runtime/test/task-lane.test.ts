@@ -6,7 +6,8 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, TASK_LEASE_MS, TASK_MAX_RUNNING, type CreateJob, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
-import { cardWaitsIn, REPORT_HOLD_MAX_MS, REPORT_HOLD_RECHECK_MS, runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
+import { cardWaitsIn, REPORT_HOLD_MAX_MS, REPORT_HOLD_RECHECK_MS, resultApplyText, runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { promiseRetry } from '../src/tasks/retry-turn';
 import { fixedReport, progressNote, retryParkedNotice } from '../src/prompt/fixed-lines';
 import { JOB_START_GRACE_MS } from '../src/tasks/jobs';
@@ -374,6 +375,60 @@ describe('a report while the owner has a card to answer in words', () => {
       await runJobsLane(deps({ held: () => true }));
       expect(sent.size).toBe(0);
       expect(book.get(job.id)!.status).toBe('reported');
+    });
+  });
+});
+
+describe('a report after the owner may already have heard it', () => {
+  type Turn = Readonly<{ text: string; taint: 'external' | null; tools?: readonly string[] }>;
+  const capture = (turns: Turn[], reply = 'Reported.'): Partial<JobsLaneDeps> => ({
+    turn: async (_job, _trace, text, _current, taint, tools) => { turns.push({ text, taint, ...(tools ? { tools } : {}) }); return reply; },
+  });
+
+  it('reads what Waldo and the owner said since the task finished, and is told to send nothing or only what is new', async () => {
+    await withLane(async ({ book, clock, deps }) => {
+      const id = reported(book, 'k1');
+      const turns: Turn[] = [], asked: number[] = [];
+      clock.at = T0 + 60_000;
+      await runJobsLane(deps({ ...capture(turns), recentExchange: since => { asked.push(since); return { text: 'Owner: how is it going?\nWaldo: Asha asked for the quote.', outside: false }; } }));
+      expect(asked).toEqual([T0]);
+      expect(turns[0]!.text).toContain('Waldo: Asha asked for the quote.');
+      expect(turns[0]!.text).toMatch(/already told the owner what this result says, reply with exactly SKIP/);
+      expect(turns[0]!.text).toMatch(/only what is new/);
+      expect(turns[0]!.text).not.toContain('The owner has not heard about it yet');
+      expect(turns[0]!.taint).toBeNull();
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+
+  it('a covered result settles with no message', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const id = reported(book, 'k1');
+      await runJobsLane(deps({ turn: async () => 'SKIP', recentExchange: () => ({ text: 'Waldo: Asha asked for the quote.', outside: false }) }));
+      expect(sent.size).toBe(0);
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+
+  it('an exchange that carried outside text runs the report tainted, with the outside-text ceiling', async () => {
+    await withLane(async ({ book, deps }) => {
+      reported(book, 'k1');
+      const turns: Turn[] = [];
+      await runJobsLane(deps({ ...capture(turns), recentExchange: () => ({ text: 'Waldo: the vendor says yes.', outside: true }) }));
+      expect(turns[0]).toMatchObject({ taint: 'external', tools: OUTSIDE_TEXT_JOB_TOOLS });
+    });
+  });
+
+  it('with nothing said since, or without the switch, the report text is exactly what it was', async () => {
+    await withLane(async ({ book, deps }) => {
+      const id = reported(book, 'k1');
+      const row = book.get(id)!;
+      const turns: Turn[] = [];
+      await runJobsLane(deps({ ...capture(turns), recentExchange: () => ({ text: '', outside: true }) }));
+      expect(turns[0]).toMatchObject({ text: resultApplyText(row), taint: null });
+      const other = book.get(reported(book, 'k2'))!;
+      await runJobsLane(deps(capture(turns)));
+      expect(turns[1]!.text).toBe(resultApplyText(other));
     });
   });
 });
