@@ -103,6 +103,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
   IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
+  IMESSAGE_VOICE: gap('iMessage voice notes; the trial runs the app surface'),
 
   WALDO_ENVIRONMENT: inert('names the deployment'),
   PREP_PUSH_NAMES: inert('the app push text raised after a prep note is delivered; the model never sees it'),
@@ -131,6 +132,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WHATSAPP_REENGAGE_TEMPLATE: inert(WHATSAPP),
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: inert(WHATSAPP),
   WHATSAPP_REPLY_BUTTONS: inert(WHATSAPP),
+  WHATSAPP_LIST_CARDS: inert(WHATSAPP),
   WHATSAPP_PROACTIVE_TEMPLATE: inert(WHATSAPP),
   WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: inert(WHATSAPP),
   WHATSAPP_ONBOARDING_URL: inert(WHATSAPP),
