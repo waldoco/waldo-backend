@@ -4,7 +4,6 @@ import {
   appRatingRequestV1Schema, appRatingResultV1Schema, appSendRequestV1Schema, appSendResultV1Schema,
 } from './core';
 import { replyApprovalPartV1Schema } from './parts';
-import { taskJobIdSchema } from '../tools/schemas/tasks';
 
 // A thread is a chat beside main: its own transcript, sharing the owner's memory and approvals. Messaging
 // surfaces and proactive messages use main only. Deleting a thread erases its transcript and recall index;
@@ -48,7 +47,9 @@ export const appThreadReadQueryV1Schema = z.strictObject({
 // revision 9 never receive the key: their cards stay in the Approvals list, where every card always is.
 export const APP_CHAT_TASK_CARDS_REVISION = 9;
 export const APP_TASK_CARDS_MAX_V1 = 10;
-export const appTaskCardV1Schema = z.strictObject({ job_id: taskJobIdSchema, title: z.string().min(1).max(80).nullable(), approval: replyApprovalPartV1Schema });
+// The same id start_task returns (tools/schemas/tasks taskJobIdSchema); the app pins this directory alone, so it is spelled here.
+export const appTaskJobIdV1Schema = z.string().regex(/^job_[0-9a-f]{12}$/);
+export const appTaskCardV1Schema = z.strictObject({ job_id: appTaskJobIdV1Schema, title: z.string().min(1).max(80).nullable(), approval: replyApprovalPartV1Schema });
 export type AppTaskCardV1 = z.infer<typeof appTaskCardV1Schema>;
 export const appThreadReadV1Schema = z.strictObject({
   thread: appThreadV1Schema, history: appHistoryResultV1Schema,
