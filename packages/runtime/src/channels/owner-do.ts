@@ -18,6 +18,7 @@ import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
+import { appMessageBody, appTurnText, appUploadName, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
@@ -244,7 +245,7 @@ import { approvalHandlers, approveShownHandler } from '../tools/live/raise-appro
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_KINDS, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
 import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -272,7 +273,7 @@ import { approvalJobReplay, approvalReplayContext, proposeActionHandler, replayH
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { sanitise } from '../scribe/sanitiser';
 import { newSessionCanaryTokens, OvertakenTurnError, ownerToolApproval } from './owner-turn';
-import { createTelegramFileDownloader } from './telegram-media';
+import { createTelegramFileDownloader, type TelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { WHATSAPP_RUNNING_CHECK_MS, WHATSAPP_TURN_DEADLINE_MS, WhatsAppInboxFull, WhatsAppOwnerInbox, redactWhatsAppInboxEntries, type WhatsAppInboxRecord } from './whatsapp-inbox';
@@ -474,6 +475,9 @@ const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindow
 // Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
 // as a new message, which is itself the notification, so quiet hours hold it there.
 const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
+// Whether a surface's media stays with its provider, so the owner's file list can point at it later (owner_files). An app
+// attachment is dropped once its message closes, so the list would keep a name and caption with nothing behind them.
+const MEDIA_STAYS_WITH_PROVIDER: Readonly<Record<ChannelKind, boolean>> = { telegram: true, whatsapp: true, app: false, imessage: false };
 // How a surface takes a notice outside any turn. The app's caller acknowledges nothing outside a turn, so the notice is
 // written into the transcript of the owner the directory admits. iMessage takes none: its caller acknowledges a send it only
 // drops while an iMessage turn runs. A chat surface sends, and its ack proves the send in the surface's own shape.
@@ -1143,7 +1147,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const app = this.activeApp;
     if (app) return {
       turnId: app.id,
-      waiting: () => this.appInbox.records().filter(row => row.state === 'admitted' && row.conversationRef === app.conversationRef && row.owner === app.owner && row.id !== app.id)
+      waiting: () => this.appInbox.records().filter(row => row.state === 'admitted' && row.conversationRef === app.conversationRef && row.owner === app.owner && row.id !== app.id && !row.upload)
         .map(row => ({ id: row.id, text: row.text, at: row.admittedAt })),
       fold: id => this.appInbox.fold(id, app.id),
     };
@@ -1938,6 +1942,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // An owner who joined openly writes nothing outside the first run and the consents until they accept the agreements.
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
+    if(path===APP_CHAT_UPLOAD_PATH&&request.method==='POST')return this.appUpload(request,name);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
       try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')));}catch{return fail(503);}
     }
@@ -2085,9 +2090,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
-      admit:async(ref,clientId,text,assertCurrent,revision)=>{
+      admit:async(ref,clientId,text,assertCurrent,revision,upload)=>{
+        if(upload&&this.env.APP_CHAT_ATTACHMENTS!=='1')return {kind:'upload_unavailable' as const};
         this.bindAppSubject(name);
-        const result=await this.appInbox.admit(name,hash,clientId,text,ref,assertCurrent,revision);
+        const result=await this.appInbox.admit(name,hash,clientId,text,ref,assertCurrent,revision,upload);
         if(result.kind==='admitted')this.appAdmitted();
         return result;
       },
@@ -2216,13 +2222,39 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async appSend(request: Request, ownerId: string): Promise<Response> {
     const name=request.headers.get('x-waldo-do-name')!,hash=request.headers.get('x-waldo-app-session-hash')!,send=parseAppSend(await request.text());
     if(!send)return Response.json({error:'unavailable'},{status:403});
+    const upload=send.attachments?.[0]?.upload_id;
+    if(upload&&this.env.APP_CHAT_ATTACHMENTS!=='1')return Response.json({error:'upload_unavailable'},{status:409});
     this.bindAppSubject(name);
     const conversationRef=ownerChainRef('app',ownerPrincipalRef(ownerId));
-    const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
-    if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
+    const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef,undefined,undefined,upload);
+    if(result.kind==='conflict'||result.kind==='capacity'||result.kind==='upload_unavailable')return Response.json({error:result.kind},{status:result.kind==='capacity'?503:409});
     if(result.kind==='admitted')this.compactionAbort?.abort();
     this.drainOwnerMessages();
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
+  }
+  // A chat attachment the owner staged for a message: checked against its kind, then kept in this object until a message
+  // takes it or it expires (app-uploads).
+  private async appUpload(request: Request, name: string): Promise<Response> {
+    const answer=(body:object,status:number)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
+    if(this.env.APP_CHAT_ATTACHMENTS!=='1')return answer({error:'unavailable'},404);
+    // Everything that can refuse it is asked before the bytes are read.
+    const kind=APP_CHAT_UPLOAD_KINDS.find(known=>known===request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER));
+    if(!kind)return answer({error:'invalid_kind'},400);
+    const mime=(request.headers.get('content-type')??'').split(';')[0]!.trim().toLowerCase();
+    let given:string|null=null;
+    try{const raw=request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER);given=raw===null?null:decodeURIComponent(raw);}catch{return answer({error:'invalid_name'},400);}
+    const named=appUploadName(kind,mime,given);
+    if('refused' in named)return named.refused==='type'?answer({error:'unsupported_type'},415):answer({error:'invalid_name'},400);
+    if(!appUploadRoom(this.ctx.storage,Date.now()))return answer({error:'uploads_waiting'},429);
+    const data=new Uint8Array(await request.arrayBuffer());
+    if(!data.length)return answer({error:'empty'},400);
+    if(data.length>APP_CHAT_UPLOAD_MAX_BYTES)return answer({error:'too_large'},413);
+    const staged=stageAppUpload(this.ctx.storage,{owner:name,kind,mime,name:named.name,data},Date.now());
+    if(staged==='capacity')return answer({error:'uploads_waiting'},429);
+    // The alarm wakes at the upload's expiry, to drop it if no message took it. The key was written with the upload, so the
+    // slot only moves earlier and no other lane's wake drops.
+    const armed=await this.ctx.storage.getAlarm();await armAlarm(this.ctx.storage,armed===null?staged.expiresAt:Math.min(armed,staged.expiresAt));
+    return answer(appChatUploadResultV1Schema.parse({upload_id:staged.id,kind,bytes:data.length,expires_at:staged.expiresAt}),201);
   }
   // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
   private appAdmitted(): void {
@@ -2259,6 +2291,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     catch { console.error(JSON.stringify({ hop: 'turn_aborted', ok: false, detail: String(turns.length) })); }
   }
   private async drainApp(alarmEnd?: number): Promise<void> {
+    this.appInbox.sweepUploads();
     this.traceAborted('app', this.appInbox.recover(this.appAttempts));
     await this.writeAppNotices();
     const untitled=new Map<string,string>(),compactable=new Map<string,AppInboxRecord>();
@@ -2273,7 +2306,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const timeout=setTimeout(()=>abort.abort(),Math.max(0,scope.deadline-Date.now()));
       try{
         const subject=appSubjectFor(record.owner);
-        await this.turn({update_id:record.updateId,message:{message_id:record.updateId,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:record.text}},'app',true,scope);
+        await this.turn({update_id:record.updateId,message:{message_id:record.updateId,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},...appMessageBody(record.text,record.upload)}},'app',true,scope);
         await this.appAuthority(record.owner,record.sessionHash);scope.admit();completed=true;
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);if(completed&&thread){this.ctx.storage.transactionSync(()=>touchThread(this.ctx.storage.kv,thread,Date.now()));untitled.set(thread,threadRowsOfChain(record.conversationRef)!);}abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
@@ -4776,13 +4809,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
       },
       log: (code, count) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` }) });
-    // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
-    // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
-    const download = nativeSurface(channel)
-      ? async (): Promise<Uint8Array> => { throw new Error(`${channel} chat has no attachments`); }
-      : channel === 'whatsapp'
-        ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
-        : createTelegramFileDownloader(token ?? '');
+    // Media reads are per-surface and feed the one transcriber/attachment pipeline: Telegram file ids go through getFile,
+    // WhatsApp media ids through the Graph two-step, and an app attachment's id opens the upload staged in this object.
+    const mediaReaders: Readonly<Record<ChannelKind, () => TelegramFileDownloader>> = {
+      telegram: () => createTelegramFileDownloader(token ?? ''),
+      whatsapp: () => createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!),
+      app: () => async fileId => readAppUpload(this.ctx.storage.kv, fileId),
+      imessage: () => async () => { throw new Error('imessage chat has no attachments'); },
+    };
+    const download = mediaReaders[channel]();
     // Google-auth MCP servers: pick the serving account per call. A locally held refresh token
     // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
     // the call with the connection id (the runtime never sees a bearer).
@@ -4946,7 +4981,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const assertOwnerIdentity = async () => {
         scope.admit();
         if (!record || record !== this.activeApp || scope !== this.activeScope || record.id !== scope.runId || record.attempt !== scope.attempt
-          || identity.get<string>('do_name') !== doName || turn.surface !== 'app' || turn.text !== record.text
+          || identity.get<string>('do_name') !== doName || turn.surface !== 'app' || turn.text !== appTurnText(record)
           || turn.conversationRef !== surfaceChatRef('app', appSubjectFor(record.owner)) || turn.traceId !== ownerTurnTrace('app', record.updateId)) throw new ClosedRunError();
         scope.admit();
       };
@@ -5097,10 +5132,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
       channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeApp;
-        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
+        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==appTurnText(record))throw new ClosedRunError();
         // The composer runs on every tool round; one health read serves the whole turn.
         let health:ReturnType<typeof healthContext.latest>|undefined;
-        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine,...(threadOfChain(record.conversationRef)?{conversationRef:record.conversationRef}:{})});
+        const context=await this.appContext(record.owner,record.sessionHash,appTurnText(record),record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine,...(threadOfChain(record.conversationRef)?{conversationRef:record.conversationRef}:{})});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined,compactionSettings(this.env)),episodes,()=>Date.now()),
@@ -5144,11 +5179,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       respond: async (turn, time) => {
         const earlier = this.whatsappEarlier?.updateId === turn.updateId ? this.whatsappEarlier.turns : [];
-        for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
+        if (MEDIA_STAYS_WITH_PROVIDER[channel]) for (const one of [...earlier, turn]) if (one.media) files.record(one.media, one.text ?? '', Date.now());
         if (earlier.length) turn = { ...turn, earlier };
         // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
         const opened = openedForTurn(this.iMessageOpened, turn);
         if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
+        // An app message that is only an attachment is admitted under a note naming it (appTurnText); its parts stay as sent.
+        const app = this.activeApp;
+        if (app?.upload && !app.text && turn.updateId === app.updateId) turn = { ...turn, text: appTurnText(app) };
         const notes = turnHooks?.notes(turn) ?? [];
         if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
