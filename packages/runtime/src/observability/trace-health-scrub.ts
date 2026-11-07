@@ -12,7 +12,7 @@ export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 // diagnostics the same way. The medicines brain's tools carry the owner's medicine names, times and dose statuses, and quests carry
 // the owner's own targets and progress, so both brains are withheld too. show_chart's points are numbers no prose floor can read
 // as health, so its call is withheld whole too.
-const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', ...toolsWhere((record) => record.brain === 'health' || record.brain === 'medicines' || record.brain === 'quests')]);
+const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', 'show_health_chart', ...toolsWhere((record) => record.brain === 'health' || record.brain === 'medicines' || record.brain === 'quests')]);
 // Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 

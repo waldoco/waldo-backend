@@ -145,6 +145,7 @@ describe('toolName', () => {
       'set_quest',
       'check_task',
       'show_chart',
+      'show_health_chart',
     ]);
   });
 
@@ -319,6 +320,7 @@ describe('TOOL_PERMISSIONS', () => {
         'send_agent_mail',
         'offer_replies',
         'show_chart',
+        'show_health_chart',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
