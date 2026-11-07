@@ -409,6 +409,9 @@ type OwnerRuntime = Readonly<{
   progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
 }>;
 
+// A failure as its class only: its text can carry provider or internal detail.
+const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';
+
 const LATE_FIRE_MS = 5 * 60_000;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
 const LOOKUP_STARTED_KEY = 'owner_lookup_started';
@@ -2844,7 +2847,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
     if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
-    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1', limited: kind => this.consoleRateLimited(kind),
+    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1', kv: this.ctx.storage.kv, now: Date.now(),
+      admin: async () => { const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name'); return Boolean(auth && doName && await auth.adminOverview(doName)); },
+      limited: kind => this.consoleRateLimited(kind),
       run: command => this.consoleCommand(command),
       ledger: async () => { const runtime = this.setup(this.ownerSurface()); await runtime.ready; return runtime.ledger(); } });
     if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), enabled: this.env.WALDO_WATCHDOG === '1', limited: () => this.consoleRateLimited('read') });
@@ -3966,7 +3971,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       else if (command.target === 'nightly') await this.asOwnerJob('dreaming', trace, () => nightly(entry));
       else await this.asOwnerJob('brief', trace, () => cards(entry));
     } catch (error) {
-      return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
+      console.error(JSON.stringify({ hop: 'harness_fire', ok: false, target: command.target, error_class: errorClass(error) }));
+      return `Fired ${command.target}; it failed (${errorClass(error)}).\n\n${traces.recent(timezone, null, 10)}`;
     }
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
   }
@@ -3981,7 +3987,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const started = Date.now(), trace = `console-${crypto.randomUUID()}`, what = `/${command.kind}`;
     const fire = () => this.serial(async () => {
       const found = consoleAuth(this.env) && this.appBound() ? await this.appOwnerLookup() : null;
-      if (found && found.kind !== 'admitted') return 'Waldo could not confirm your account just now, so nothing was fired. Try again in a minute.';
+      if (found && found.kind !== 'admitted') return 'Waldo could not confirm your account just now, so nothing was fired.';
       if (found) { this.scheduledAppDelivery = this.appDeliveryFor(found.authority); this.jobOwner = Promise.resolve(this.appScheduledOwner(found.authority)); }
       return this.runHarness(command, started, channel);
     });
@@ -3991,7 +3997,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'command' });
       return output;
     } catch (error) {
-      log({ trace, hop: 'command', ms: Date.now() - started, ok: false, error: String(error), detail: what });
+      log({ trace, hop: 'command', ms: Date.now() - started, ok: false, error: errorClass(error), detail: what });
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'command' });
       throw error;
     }
