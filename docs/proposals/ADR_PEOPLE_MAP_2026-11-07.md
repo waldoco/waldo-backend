@@ -76,13 +76,13 @@ There is no frequency rule ("emailed 5 times, so inner ring") and no fuzzy name 
 
 The source pass already reads the owner's recorded mail and calendar changes (`update_cards`).
 
-[proposed] When it applies a batch, `ClaimStore` sets a person's `last_contact_at` to the latest change involving one of that person's addresses:
-- `mail`: the person sent mail the owner received;
-- `meeting`: an event the person attended, not declined, that has ended.
+When the source pass applies a batch, `ClaimStore` sets a person's `last_contact_at` to the time of the newest new mail whose From address is one of that person's addresses (`last_contact_via: mail`). The match is the exact address, lower-cased, and nothing else is inferred. An older time never replaces a newer one. Built in slice 3.
 
-The match is the exact address, lower-cased. Nothing else is inferred.
+[verified] Two limits shape what v1 can say:
+- Sent mail is not among the changes: `SENT` is excluded from the mail the update cards record (`connectors/google.ts:1280`).
+- Calendar changes keep attendee names and counts, not addresses.
 
-[verified] Sent mail is not among the changes today: `SENT` is excluded from the mail the update cards record (`connectors/google.ts:1280`). So v1's last contact means **last heard from or met**, and the app and the model say it that way. Counting sent mail is a later change to what the cards record, with its own review.
+So v1's last contact means **last heard from by mail**, and the app and the model say it that way. Meetings, and mail the owner sent, are later changes to what the cards record, each with its own review. The contract already admits `meeting` for when they come.
 
 ### 4. Confirm, correct and forget, per person
 
@@ -207,6 +207,6 @@ Names and email addresses are normal owner context within the owner's own author
    - forgetting a person.
    - Behind `PEOPLE_MAP` (production `0`).
 2. **The app view:** `people` and its actions, at the gate's controls revision.
-3. **Source pass and skill:** people and addresses from the source pass, last contact, and the relationship-upkeep skill reading the cards.
+3. **Source pass and skill:** people and addresses from the source pass (it is shown the people it may name by id, never one known only through body or mind), last contact from mail, and the relationship-upkeep skill reading the cards.
 
 **Rollback:** with `PEOPLE_MAP` `0`, the new fields stay in the tool schemas but nothing is linked, dated or read: the handlers refuse them and say so. The tables stay, and old code ignores them. A revert leaves claims as they are.
