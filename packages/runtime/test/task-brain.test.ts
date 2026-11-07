@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL, TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -214,6 +214,22 @@ describe('the task brain host', () => {
       host.fence(t.jobId);
       expect(await pending).toBe('fenced');
       expect(aborted).toBe(true);
+    });
+  });
+
+  it('a cancelled attempt\'s spend since its last checkpoint reaches the log once, and only its own worker calls', async () => {
+    await withHost(async ({ host, ticket, book, log }) => {
+      const t = ticket();
+      await host.claim(t);
+      expect(book.cancel(t.jobId, 'owner')).toBe(true);
+      host.fence(t.jobId);
+      const usage = { model: OPENAI_GPT_6_LUNA_MODEL, input: 10, output: 2, cached: 0 };
+      const spent: TurnLogEntry = { trace: `task:${t.jobId}:${t.attempt}`, hop: 'llm_task', ms: 1, ok: true, job_id: t.jobId, job_profile: 'reader', cost_kind: 'worker', usage };
+      const foreign: TurnLogEntry = { ...spent, job_id: 'job-other' };
+      const unpriced: TurnLogEntry = { ...spent, cost_kind: undefined };
+      await host.spent(t, [spent, foreign, unpriced]);
+      await host.spent(t, [spent]);
+      expect(log.filter(entry => entry.hop === 'llm_task')).toEqual([spent]);
     });
   });
 

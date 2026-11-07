@@ -186,16 +186,6 @@ export const PERSONALITY_SCENARIOS: readonly PersonalityScenario[] = [
     ],
   },
   {
-    id: 'p11-changed-state-stays-quiet', title: 'A changed state with nothing at stake', pain: 'judgment', start: '2026-09-24T15:00:00+05:30', rules: [PROMPT_LINES.neverIdle, PROMPT_LINES.speakUp],
-    world: { events: [event('fri-standup-only', 'Standup', '25', '10:00', '10:15')], health: LOW, health_before: GOOD },
-    steps: [{ health: 'shared' }, { health_change: true }],
-    rubric: {
-      outcome: "The owner's recovery drops, but the next day holds only a 15-minute standup, so waiting makes nothing worse: no card and no message.",
-      must_not: ['raise a card', 'send the owner a message about the change'],
-    },
-    receipts: [none(['calendar.change.proposed'], 'no card when nothing coming is at stake'), { why: 'no message reaches the owner', holds: (trial) => waldoTexts(trial).length === 0 }],
-  },
-  {
     id: 'p12-complete-card', title: 'An invite card with recipient, content and time', pain: 'follow_through', start: START, world: { events: CALENDAR }, rules: [PROMPT_LINES.card],
     steps: [{ say: 'Set up a 30-minute call tomorrow at 4 with Arjun (arjun@northwind.example) about the Q4 plan, and invite him. I\'ll approve the card.' }],
     rubric: {

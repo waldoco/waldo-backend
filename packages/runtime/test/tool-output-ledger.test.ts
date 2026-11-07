@@ -148,6 +148,25 @@ describe('a tool output that proposed an approval', () => {
   const proposed = (padding = '') => JSON.stringify({ ok: true, data: { ...(padding ? { url: padding } : {}), proposal_id: ID, status: 'review card requested in chat; nothing was sent', sent: false } });
   const states = (state: string | null) => async (id: string) => (id === ID && state ? { kind: 'email_send', state } : null);
 
+  it('what a later turn may read, a job\'s included: internal results, the desk\'s state, a failure\'s code; no outside text, from any origin, in its own chat', async () => {
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: states('done') });
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', origin: 'owner', summary: proposed() });
+    await ledger.record({ tool: 'read_thread', ok: true, at: 1001, taint: 'external', origin: 'owner', summary: '{"ok":true,"data":{"body":"OUTSIDE-1"}}' });
+    await ledger.record({ tool: 'web_search', ok: false, at: 1002, taint: 'external', origin: 'machine', summary: '{"ok":false,"code":"upstream_error","error":"OUTSIDE-2"}' });
+    await ledger.record({ tool: 'get_tasks', ok: false, at: 1003, taint: null, origin: 'machine', summary: '{"ok":false,"code":"unavailable","error":"NOTE-1"}' });
+    await ledger.record({ tool: 'get_tasks', ok: true, at: 1004, taint: null, origin: 'machine', summary: 'job result' });
+    await ledger.record({ tool: 'get_tasks', ok: true, at: 1005, taint: null, origin: 'owner', summary: 'side chat', thread: 'side' });
+    const carried = await ledger.carried();
+    expect(carried.map(fragment => fragment.text)).toEqual([
+      `send_email succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is done; this replaces what the tool reported when it proposed.`,
+      'get_tasks failed (unavailable)',
+      'get_tasks succeeded: job result',
+    ]);
+    expect(carried.every(fragment => fragment.source.source_kind === 'tool_result' && fragment.source.source_taint === 'external')).toBe(true);
+    expect((await ledger.carried([], 'side')).map(fragment => fragment.text)).toEqual(['get_tasks succeeded: side chat']);
+    expect(JSON.stringify(await ledger.recent())).toContain('OUTSIDE-1');
+  });
+
   it.each(['done', 'skipped', 'open'])('shows the desk\'s current state (%s) instead of the snapshot', async (state) => {
     const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: states(state) });
     await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: proposed() });

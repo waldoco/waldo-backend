@@ -70,8 +70,9 @@ class RateLimited extends Error { constructor(readonly afterMs: number) { super(
 class Failed extends Error {}
 
 // What the object keeps of a connection: the edge's id for it, WHOOP's account id, the version of the token last used (so a
-// refresh can say which token failed) and when that token lapses. Never a token.
-type Conn = Readonly<{ id: string; account: string; version: string; expires_at: number | null }>;
+// refresh can say which token failed), when that token lapses, and when the owner connected (absent on a connection made
+// before Waldo recorded it). Never a token.
+type Conn = Readonly<{ id: string; account: string; version: string; expires_at: number | null; linked_at?: number }>;
 type Cursor = Readonly<{ backfilled: boolean; next_from: number | null; last_sync_at: number | null }>;
 const FRESH: Cursor = { backfilled: false, next_from: null, last_sync_at: null };
 
@@ -329,7 +330,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const previous = connection();
       // One WHOOP account per owner: a different account replaces the old connection, whose saved access is dropped.
       if (previous && previous.id !== linked.id) await proxy.revoke(doName(), previous.id).catch(() => undefined);
-      remember({ id: linked.id, account: linked.account, version: linked.version, expires_at: linked.expires_at ?? null });
+      remember({ id: linked.id, account: linked.account, version: linked.version, expires_at: linked.expires_at ?? null, linked_at: deps.now() });
       kv.put('whoop:cursor', FRESH);
       kv.delete('whoop:reconnect');
       await deps.arm(deps.now());
@@ -342,7 +343,9 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     }
   };
 
-  const status = async (): Promise<Readonly<{ provider: 'whoop'; state: ProviderState; last_sync_at: string | null }>> => {
+  // A directory or consent read that fails reads as connected for the health routes; strict callers get the failure instead,
+  // so they never show a state Waldo could not check.
+  const status = async (strict = false): Promise<Readonly<{ provider: 'whoop'; state: ProviderState; last_sync_at: string | null }>> => {
     const last = cursor().last_sync_at;
     const last_sync_at = last === null ? null : new Date(last).toISOString();
     const conn = connection();
@@ -354,7 +357,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (row.status === 'failing' || reconnecting()) return { provider: 'whoop', state: 'needs_reconnect', last_sync_at };
       const consent = await consents();
       return { provider: 'whoop', state: consent && missingGrants(consent).length === 0 ? 'connected' : 'consent_required', last_sync_at };
-    } catch { return { provider: 'whoop', state: 'connected', last_sync_at }; }
+    } catch (error) { if (strict) throw error; return { provider: 'whoop', state: 'connected', last_sync_at }; }
   };
 
   // The saved access is removed whether or not WHOOP confirms. What WHOOP has already shared stays stored until the owner
@@ -373,6 +376,8 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     return { revoked_at_provider: revoked };
   };
 
-  return { connect, exchange, status, disconnect, hint, sync };
+  const connectedAt = (): number | null => connection()?.linked_at ?? null;
+
+  return { connect, exchange, status, connectedAt, disconnect, hint, sync };
 };
 export type WhoopOwner = ReturnType<typeof whoopOwner>;

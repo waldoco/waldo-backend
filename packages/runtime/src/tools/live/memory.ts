@@ -1,6 +1,6 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
 import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
-import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
+import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
@@ -150,6 +150,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }
         if (args.topic) {
           if (!turn || !ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
+          if (!forgettableTopic(args.topic)) return fail('That topic is too short to forget by itself: it would also be removed wherever it appears in unrelated text, so nothing was forgotten. Pass a longer phrase from the owner message, or read memory and pass claim_ids.');
           texts.add(args.topic);
           for (const claim of claims) if (carriesTopic(claim.text, args.topic) || carriesTopic(claim.evidence, args.topic)) selected.set(claim.id, claim);
         }

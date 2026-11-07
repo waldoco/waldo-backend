@@ -144,6 +144,7 @@ describe('toolName', () => {
       'get_device_context',
       'get_weather',
       'propose_calendar_plan',
+      'set_quest',
     ]);
   });
 
@@ -342,6 +343,7 @@ describe('TOOL_PERMISSIONS', () => {
         'track_responsibility',
         'set_proactivity',
         'set_schedule_preference',
+        'set_quest',
         'read_tool_output',
         'log_meal',
         'log_workout',
