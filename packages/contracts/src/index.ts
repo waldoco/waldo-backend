@@ -102,5 +102,6 @@ export * from './tools/schemas/skills';
 
 export * from './tools/schemas/memory';
 export * from './tools/schemas/lookup';
+export * from './tools/schemas/imports';
 
 export * from './tools/use-mac';

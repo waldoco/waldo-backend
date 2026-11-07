@@ -144,6 +144,8 @@ describe('toolName', () => {
       'propose_calendar_plan',
       'set_quest',
       'check_task',
+      'read_import',
+      'import_memories',
     ]);
   });
 
@@ -372,6 +374,8 @@ describe('TOOL_PERMISSIONS', () => {
       'check_task',
       'record_owner_finding',
       'list_owner_findings',
+      'read_import',
+      'import_memories',
       'search_history',
       ],
       dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],

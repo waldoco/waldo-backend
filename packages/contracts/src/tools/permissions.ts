@@ -150,6 +150,10 @@ export const toolNameSchema = z.enum([
   'set_quest',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
+  // read_import/import_memories: the owner's own messages in a ChatGPT or Claude export they uploaded, and what Waldo keeps
+  // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.
+  'read_import',
+  'import_memories',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -359,6 +363,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'check_task',
     'record_owner_finding',
     'list_owner_findings',
+    'read_import',
+    'import_memories',
     'search_history',
   ],
   dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],

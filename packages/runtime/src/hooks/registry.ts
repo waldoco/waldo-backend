@@ -132,6 +132,8 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
   recordOwnerFindingArgsSchema,
+  readImportArgsSchema,
+  importMemoriesArgsSchema,
   listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
@@ -307,6 +309,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   cancel_task: cancelTaskArgsSchema,
   check_task: checkTaskArgsSchema,
   record_owner_finding: recordOwnerFindingArgsSchema,
+  read_import: readImportArgsSchema,
+  import_memories: importMemoriesArgsSchema,
   list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
