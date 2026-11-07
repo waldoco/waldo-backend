@@ -77,6 +77,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
   WHATSAPP_STOP?: string;
+  // "1" lets a typed /stop on iMessage stop the running turn, the messages waiting ahead of it and the owner's background work.
+  // Off, it runs as any message does.
+  IMESSAGE_STOP?: string;
   // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
   // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
   // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
@@ -173,6 +176,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
   WALDO_TASK_ASK?: string;
   WALDO_TASK_STEER?: string;
+  WALDO_TASK_PICKUP?: string;
   // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
   WALDO_TASK_NOTES?: string;
   // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
