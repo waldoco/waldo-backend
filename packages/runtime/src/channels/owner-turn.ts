@@ -1,5 +1,5 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
-import { jobPromptKey, jobPromptStub } from '../conversation/job-outcome';
+import { jobPromptKey, jobPromptStub, sameJobPrompt } from '../conversation/job-outcome';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OwnerHeldError } from '../identity/open-owner-hold';
 import { OWNER_REQUEST_HOP } from './harness';
@@ -1158,8 +1158,7 @@ export const createOwnerResponder = (
         // saved for this exact id and text instead of asking the model again; request and reply
         // are saved together, so re-adding the request would otherwise fail.
         const replayed = tree.get(`${id}-reply`);
-        const asked = tree.get(id)?.modelPayload;
-        if (!decision && replayed && (asked === said || asked === await jobPromptKey(said))) return replayed.appPayload;
+        if (!decision && replayed && await sameJobPrompt(tree.get(id)?.modelPayload, said)) return replayed.appPayload;
         if (decision) {
           if (!current || !toolNames || toolNames.length) throw new Error('transient decision requires currentness and no tools');
           const source = promptMemory();

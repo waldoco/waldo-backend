@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { literalTextRedactor, redactConversationEntry } from '@waldo/contracts';
-import { jobOutcomeRowsEnabled, jobPromptKey, jobPromptStub } from '../src/conversation/job-outcome';
+import { sha256Hex } from '../src/context-composer/canonical';
+import { jobOutcomeRowsEnabled, jobPromptKey, jobPromptStub, sameJobPrompt } from '../src/conversation/job-outcome';
 
 it('the switch is on only for exactly "1"', () => {
   expect(jobOutcomeRowsEnabled({ WALDO_JOB_OUTCOME_ROWS: '1' })).toBe(true);
@@ -25,4 +26,12 @@ it('no forget, of a word or a number, can rewrite a stub\'s key, so a retried jo
     const stub = jobPromptStub(row, await jobPromptKey(`Write the Brief about my job, number ${n}.`));
     expect(redactConversationEntry(stub, forget)).toEqual(stub);
   }
+});
+
+it('a retried job is the same job when its stored request is the prompt itself, its key, or a key in the earlier hex form', async () => {
+  const said = 'Write the Brief for Saturday.';
+  for (const stored of [said, await jobPromptKey(said), `#${await sha256Hex(said)}`]) expect(await sameJobPrompt(stored, said)).toBe(true);
+  expect(await sameJobPrompt('# Weekly review', '# Weekly review')).toBe(true);
+  for (const stored of [undefined, '', 'Write the Brief for Sunday.', await jobPromptKey('Write the Brief for Sunday.'), `#${await sha256Hex('Write the Brief for Sunday.')}`])
+    expect(await sameJobPrompt(stored, said)).toBe(false);
 });
