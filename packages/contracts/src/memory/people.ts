@@ -21,11 +21,11 @@ export const personLinkSchema = z.strictObject({
   name: z.string().trim().min(1).max(PERSON_NAME_MAX).optional(),
   role: personRoleSchema,
   relation: z.string().trim().min(1).max(PERSON_RELATION_MAX).optional(),
-  ring: personRingSchema.optional(),
 }).refine((link) => (link.ref === undefined) !== (link.name === undefined), 'a person link names an existing ref or a new name, not both');
 export type PersonLink = z.infer<typeof personLinkSchema>;
 export const personAddressesSchema = z.array(z.email().max(320)).min(1).max(PERSON_ADDRESSES_MAX);
-export type PersonWrite = PersonLink & Readonly<{ addresses?: readonly string[] }>;
+// How close someone is stays the owner's to set (the app's person.ring); the model's link names who, not how close.
+export type PersonWrite = PersonLink & Readonly<{ ring?: PersonRing; addresses?: readonly string[] }>;
 
 // A date that comes round each year (a birthday) is --MM-DD; one with a known year is YYYY-MM-DD. Both must be real days.
 const realDay = (month: number, day: number, year = 2024): boolean => {
