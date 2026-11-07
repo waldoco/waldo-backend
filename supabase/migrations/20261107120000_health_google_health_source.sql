@@ -490,6 +490,30 @@ exception
 end $$;
 
 insert into waldo.connection_custody (provider, custodian) values ('google_health', 'oauth-proxy');
+
+-- A Google Health user id is case-sensitive, so the edge's store keeps it as Google gave it; every other account is
+-- stored lowered as before.
+create or replace function waldo.oauth_store(p_do_name text, p_provider text, p_account text, p_scopes text, p_pins jsonb, p_secret text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_owner uuid; v_row waldo.connections;
+  v_account text := case when p_provider = 'google_health' then p_account else lower(p_account) end;
+begin
+  v_owner := waldo.owner_id_for(p_do_name);
+  if v_owner is null or p_secret is null or p_secret = '' or p_account is null or p_account = '' or p_pins is null or jsonb_typeof(p_pins) <> 'object' then return '{"error":"invalid"}'; end if;
+  if not exists (select 1 from waldo.connection_custody where provider = p_provider and custodian = 'oauth-proxy') then return '{"error":"invalid"}'; end if;
+  select * into v_row from waldo.connections where owner_id = v_owner and provider = p_provider and account = v_account and status <> 'revoked' for update;
+  if found then
+    perform vault.update_secret(v_row.secret_id, p_secret);
+    update waldo.connections set scopes = string_to_array(p_scopes, ' '), pins = p_pins, status = 'active', last_error = null, last_refresh_at = now() where id = v_row.id;
+    return jsonb_build_object('id', v_row.id);
+  end if;
+  insert into waldo.connections (owner_id, provider, account, scopes, secret_id, pins, last_refresh_at)
+    values (v_owner, p_provider, v_account, string_to_array(p_scopes, ' '), vault.create_secret(p_secret), p_pins, now())
+    returning id into v_row.id;
+  return jsonb_build_object('id', v_row.id);
+exception when unique_violation then
+  return '{"error":"account_linked"}';
+end $$;
 drop index waldo.connections_live_provider_account;
 create unique index connections_live_provider_account on waldo.connections (provider, account) where provider in ('whoop', 'google_health') and status <> 'revoked';
 
