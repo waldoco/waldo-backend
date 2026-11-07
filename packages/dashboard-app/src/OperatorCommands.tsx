@@ -1,5 +1,4 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { fetchControls } from './controls-model';
 import { SignInRequired } from './model';
 
 export const HARNESS_URL = '/console/dashboard/api/v1/harness';
@@ -14,6 +13,19 @@ const FAILED = 'The command didn’t finish. Try again.';
 
 type Result = { kind: 'idle' } | { kind: 'running' } | { kind: 'output'; text: string } | { kind: 'refused'; message: string };
 
+type Offer = { csrf: string; commands: readonly string[] };
+// Whether this Waldo takes operator commands, and this session's token for them. Null when it does not (404).
+export async function readOperatorCommands(signal?: AbortSignal): Promise<Offer | null> {
+  const response = await fetch(HARNESS_URL, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { accept: 'application/json' }, signal });
+  if (response.status === 404) return null;
+  if (response.status === 401) throw new SignInRequired();
+  if (!response.ok) throw new Error(FAILED);
+  const body: unknown = await response.json().catch(() => null);
+  const offer = body as { version?: unknown; csrf?: unknown; commands?: unknown } | null;
+  if (!offer || offer.version !== 1 || typeof offer.csrf !== 'string' || !offer.csrf || !Array.isArray(offer.commands) || !offer.commands.every(c => typeof c === 'string')) throw new Error(FAILED);
+  return { csrf: offer.csrf, commands: offer.commands as string[] };
+}
+
 export async function runOperatorCommand(csrf: string, command: string): Promise<Result> {
   const response = await fetch(HARNESS_URL, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { accept: 'application/json' }, body: new URLSearchParams({ csrf, command }) });
   if (response.status === 401) throw new SignInRequired();
@@ -23,27 +35,27 @@ export async function runOperatorCommand(csrf: string, command: string): Promise
   return typeof output === 'string' ? { kind: 'output', text: output } : { kind: 'refused', message: FAILED };
 }
 
-// The operator commands Telegram took (/trace, /e2e, /usage, /langfuse, /heldrows, /fire, /ledger), run as the signed-in owner.
-// Like every console action, the form appears only once the signed-in read has given this session's token.
+// Operator commands (/trace, /e2e, /usage, /langfuse, /heldrows, /fire, /ledger), run as the signed-in owner. The panel
+// shows only on a Waldo that takes them, and, like every console action, only once the signed-in read gave this session's token.
 export function OperatorCommandsPanel() {
-  const [csrf, setCsrf] = useState<string | null>(null);
+  const [offer, setOffer] = useState<Offer | null>(null);
   const [command, setCommand] = useState('');
   const [result, setResult] = useState<Result>({ kind: 'idle' });
   useEffect(() => {
     const abort = new AbortController();
-    fetchControls('activity', abort.signal).then(read => { if (!abort.signal.aborted) setCsrf(read.csrf); }, () => undefined);
+    readOperatorCommands(abort.signal).then(read => { if (!abort.signal.aborted) setOffer(read); }, () => undefined);
     return () => abort.abort();
   }, []);
-  if (csrf === null) return null;
+  if (offer === null) return null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!command.trim() || result.kind === 'running') return;
     setResult({ kind: 'running' });
-    runOperatorCommand(csrf, command.trim()).then(setResult, (error: unknown) => setResult({ kind: 'refused', message: error instanceof SignInRequired ? error.message : FAILED }));
+    runOperatorCommand(offer.csrf, command.trim()).then(setResult, (error: unknown) => setResult({ kind: 'refused', message: error instanceof SignInRequired ? error.message : FAILED }));
   };
   return <section className="panel operator-panel" aria-labelledby="operator-commands-title">
     <h2 id="operator-commands-title">Operator commands</h2>
-    <p>The commands Telegram took: <code>/trace</code>, <code>/e2e</code>, <code>/usage</code>, <code>/langfuse</code>, <code>/heldrows</code>, <code>/fire &lt;job&gt;</code> and <code>/ledger</code>. A fire runs the job now, as it would on schedule.</p>
+    <p>{offer.commands.map((name, index) => <span key={name}>{index ? ', ' : ''}<code>{name}</code></span>)}. <code>/fire &lt;job&gt;</code> runs the job now, as it would on schedule.</p>
     <form className="operator-commands" onSubmit={submit}>
       <input name="operator-command" aria-label="Command" placeholder="/trace" value={command} onChange={event => setCommand(event.target.value)} autoComplete="off" spellCheck={false}/>
       <button type="submit" disabled={result.kind === 'running'}>{result.kind === 'running' ? 'Running…' : 'Run'}</button>
