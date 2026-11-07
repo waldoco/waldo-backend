@@ -38,7 +38,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
   ...[
   {
     name: 'start_task',
-    description: 'Background work while you keep talking: long backlogs, many sources, web errands. The worker sees this brief, never this conversation; it cannot message, change or approve, and reports once. Need the answer in this reply? Use delegate_task.',
+    description: 'Background work while you keep talking, for work that will take minutes: long backlogs, many sources, web errands. The worker sees this brief, never this conversation; it cannot message, change or approve, and reports once. Need the answer in this reply, in about a minute? Use delegate_task.',
     schema: startTaskArgsSchema,
     trigger_allowlist: allowlist('start_task'),
     autonomy_gated: false,
