@@ -1,5 +1,6 @@
 import type { TaskResult } from '@waldo/contracts';
 import { calendarPromptProjection, sha256Hex, type CalendarItem, type GoogleClient } from '../connectors/google';
+import { clockWords } from '../prompt/fixed-lines';
 import { quoted } from '../prompt/turn-prompt';
 import { sanitise } from '../scribe/sanitiser';
 import { PUSHES, pushTitle } from './expo-push';
@@ -135,7 +136,7 @@ export type PrepCode = 'queued' | 'no_note' | 'malformed_reply' | 'stale' | 'not
 export const prepPushBody = (prep: Readonly<{ title: string | undefined; start: string; timezone: string; named: boolean }>): string => {
   const title = pushTitle(prep.title);
   if (!prep.named || !title || !Number.isFinite(Date.parse(prep.start))) return PUSHES.prep.body;
-  return `Prep: ${title} at ${localIso(Date.parse(prep.start), prep.timezone).slice(11, 16)}`;
+  return `Prep: ${title} at ${clockWords(localIso(Date.parse(prep.start), prep.timezone).slice(11, 16))}`;
 };
 // One meeting occurrence's identity: its outbox key, and the event_briefs row that records the digest it was prepped on.
 export type PrepIdentity = Readonly<{ id: string; occurrence: string; key: string; startKey: string; canonicalStart: string }>;

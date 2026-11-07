@@ -11,7 +11,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// The Brief pushes one fixed line to the owner's app devices, and only when it was delivered to the app.
+// The Daily Brief pushes one fixed line to the owner's app devices, and only when it was delivered to the app.
 const CARD_TEXT = 'Your morning is clear until noon.';
 const EXPO_TOKEN = 'ExponentPushToken[synthetic-fixture-token]';
 const EXPO_ACCESS_TOKEN = 'synthetic-expo-access';
@@ -98,7 +98,7 @@ const pushLog = (state: DurableObjectState) => state.storage.sql.exec<{ ok: numb
 it('an app owner\'s Brief reaches the app chat, then pushes the fixed line to their Expo device', async () => {
   await briefFires('push-brief-app', 'app', async (owner, state) => {
     expect(await appChat(owner, 'push-brief-app')).toEqual([CARD_TEXT]);
-    expect(wire.pushes).toEqual([[{ to: EXPO_TOKEN, body: 'Your Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' }, sound: 'default' }]]);
+    expect(wire.pushes).toEqual([[{ to: EXPO_TOKEN, body: 'Your Daily Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' }, sound: 'default' }]]);
     expect(wire.authorization).toEqual([`Bearer ${EXPO_ACCESS_TOKEN}`]);
     expect(pushLog(state)).toEqual([{ ok: 1, note: expect.stringMatching(/^sent\b/) }]);
   });

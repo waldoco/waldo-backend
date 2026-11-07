@@ -548,7 +548,7 @@ it.each([undefined, 0])('default MD and TXT writes return authenticated download
 
 // Reading the workspace reads text that can quote someone else, so an edit made after a read goes to the owner's card,
 // and the owner's tap writes exactly the frozen edit. The bytes survive the card as they survive a direct write.
-it('a create in the owner\'s own turn and an edit approved on its card preserve exact private contact bytes through revision, guarded read and authenticated download', async () => {
+it('a create and an edit in the owner\'s own turn preserve exact private contact bytes through revision, guarded read and authenticated download', async () => {
   await proof(async h => {
     await h.state.storage.put('origin', 'https://local.invalid');
     const initial = 'To: demo@example.test\nPhone: +1 415 555 0100\nAddress: 123 Main Street\nDemo at 13:00\nThanks.';
@@ -560,8 +560,7 @@ it('a create in the owner\'s own turn and an edit approved on its card preserve 
       if (!done.createContact) return [call('workspace_write', { path: 'docs/contact.md', text: initial, mime: 'text/markdown', expected_revision: 0 }, 'createContact')];
       if (!done.initialRead) return [call('workspace_read', { file_id: done.createContact.data.file_id, revision: 1 }, 'initialRead')];
       if (!done.reviseContact) return [call('workspace_write', edit, 'reviseContact')];
-      if (!done.proposeRevision) return [call('propose_action', { tool: 'workspace_write', args: edit, reasoning: 'Change the time and tone as asked.' }, 'proposeRevision')];
-      return 'Saved. The edit is on a card for you to approve.';
+      return 'Saved.';
     };
     await h.send(`Save these exact private document fields, then change the time and tone: ${initial}`);
     const result = allOutputs();
@@ -571,13 +570,8 @@ it('a create in the owner\'s own turn and an edit approved on its card preserve 
     // Owner direction 2026-10-04: model-bound reads keep the owner's own contact details readable.
     expect(result.initialRead!.data.text).toContain('demo@example.test');
     expect(result.initialRead!.data.text).not.toContain('[REDACTED_EMAIL]');
-    expect(result.reviseContact).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
-    expect(result.proposeRevision).toMatchObject({ ok: true, data: { executed: false } });
-    expect(h.puts).toHaveLength(1);
-
-    const [card] = h.state.storage.sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'tainted_action' AND status = 'open'").toArray();
-    await h.approve(card!.id);
-    expect(h.state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card!.id).one().status).toBe('done');
+    // The read made the turn's text outside text; a private workspace edit in the owner's own turn still runs, listed in the reply.
+    expect(result.reviseContact).toMatchObject({ ok: true, data: { revision: 2 } });
     expect(h.puts).toHaveLength(2);
     expect(h.bytes.get(h.puts[1]!)).toEqual(new TextEncoder().encode(revised));
 

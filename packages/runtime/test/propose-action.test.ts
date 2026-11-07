@@ -264,7 +264,9 @@ describe('taint goes to a card', () => {
     });
   });
 
-  it('cancelling a background task from a tainted turn goes to the card and cancels on approval; untainted, it cancels directly', async () => {
+  // Stopping a task only narrows what Waldo does, so outside text may stop one directly, and the reply lists it
+  // (inward-receipts). A turn that does not hold the tool can still put it on the owner's card.
+  it('cancelling a background task runs directly, tainted or not, and a card for it cancels on approval', async () => {
     await runInDurableObject(stub('cancel-task'), async (_instance, state) => {
       let n = 0;
       const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
@@ -275,14 +277,15 @@ describe('taint goes to a card', () => {
       const started = async (id: string) => ((await dispatchTool({ id, name: 'start_task', args: start }, context({ hasApproval: undefined, toolCallId: id }), { handlers })) as { data: { job_id: string } }).data.job_id;
       const first = await started('s1'), second = await started('s2');
 
-      expect(await dispatchTool({ id: 'c1', name: 'cancel_task', args: { job_id: first } }, tainted({ toolCallId: 'c1' }), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
-      expect(book.get(first)!.status).toBe('queued');
-      expect(fenced).toEqual([]);
       expect(await proposeActionHandler(desk).handle({ tool: 'cancel_task', args: { job_id: first }, reasoning: 'A vendor mail asked for it.' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({ ok: true, data: { executed: false } });
+      expect(book.get(first)!.status).toBe('queued');
       const [row] = rows('tainted_action');
       expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
       expect(book.get(first)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
       expect(fenced).toEqual([first]);
+      const third = await started('s3');
+      expect(await dispatchTool({ id: 'c1', name: 'cancel_task', args: { job_id: third } }, tainted({ toolCallId: 'c1' }), { handlers })).toMatchObject({ ok: true });
+      expect(book.get(third)!.status).toBe('cancelled');
 
       expect(await dispatchTool({ id: 'c2', name: 'cancel_task', args: { job_id: second } }, context({ hasApproval: undefined, toolCallId: 'c2' }), { handlers })).toMatchObject({ ok: true });
       expect(book.get(second)!.status).toBe('cancelled');
@@ -438,7 +441,7 @@ describe('taint goes to a card', () => {
       const late = await desk.decide(rows('tainted_action')[0]!.id, 'a', 't');
       expect(late.toast).not.toBe('Done');
       expect(late.message).toContain('Nothing was done');
-      expect(late.message).toContain('already closed as done');
+      expect(late.message).toContain('It ran and changed nothing.');
       expect(rows('tainted_action')[0]!.status).toBe('failed');
       expect(status(power.id)).toBe('done');
 
@@ -450,7 +453,7 @@ describe('taint goes to a card', () => {
       expect((await desk.decide(first, 'a', 't')).toast).toBe('Done');
       const again = await desk.decide(second, 'a', 't');
       expect(again.toast).not.toBe('Done');
-      expect(again.message).toContain('already closed as dropped');
+      expect(again.message).toContain('It ran and changed nothing.');
       expect(status(passport.id)).toBe('dropped');
     });
   });

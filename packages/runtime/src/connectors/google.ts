@@ -42,7 +42,7 @@ export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
 // What Google says about the account at connect, validated by shape only (parseGoogleProfile). A provider fact, not the owner's word.
-export type GoogleProfile = Readonly<{ name?: string; given_name?: string; family_name?: string; phone?: string }>;
+export type GoogleProfile = Readonly<{ name?: string; given_name?: string; family_name?: string; phone?: string; picture?: string }>;
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null; profile?: GoogleProfile }>;
 type Fetch = typeof fetch;
 
@@ -89,7 +89,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return constantTimeEqual(await sign(secret, `${owner}.${nonce}`), mac) ? { owner, nonce } : null;
 }
 
-// The account's name (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
+// The account's name and picture (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
 // feature: no tool is gated on them, and a grant without them connects as before.
 export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
@@ -140,10 +140,19 @@ const PROFILE_TEXT_MAX = 100;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const profileText = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() !== '' && value.length <= PROFILE_TEXT_MAX && !/\p{Cc}/u.test(value) ? value : undefined;
+// The picture is kept only as an https address on Google's profile image hosts, the one place Waldo fetches it from.
+const GOOGLE_PICTURE_HOST = /^lh[3-6]\.googleusercontent\.com$/;
+const GOOGLE_PICTURE_URL_MAX = 2048;
+export const googlePictureUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || value.length > GOOGLE_PICTURE_URL_MAX) return undefined;
+  let url: URL;
+  try { url = new URL(value); } catch { return undefined; }
+  return url.protocol === 'https:' && GOOGLE_PICTURE_HOST.test(url.hostname) && !url.port && !url.username && !url.password && url.href === value ? value : undefined;
+};
 export const parseGoogleProfile = (value: unknown): GoogleProfile => {
   const record = isObject(value) ? value : {};
   const phone = typeof record.phone === 'string' && E164.test(record.phone) ? record.phone : undefined;
-  const fields = { name: profileText(record.name), given_name: profileText(record.given_name), family_name: profileText(record.family_name), phone };
+  const fields = { name: profileText(record.name), given_name: profileText(record.given_name), family_name: profileText(record.family_name), phone, picture: googlePictureUrl(record.picture) };
   return Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== undefined));
 };
 
@@ -180,7 +189,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   const claims = result.id_token ? idTokenClaims(result.id_token) : {};
   const scopes = (result.scope ?? '').split(' ').filter(Boolean);
   const phone = scopes.includes(GOOGLE_PHONE_SCOPE) ? await peopleMePhone(result.access_token, fetcher, phoneTimeoutMs) : undefined;
-  const profile = parseGoogleProfile({ name: claims.name, given_name: claims.given_name, family_name: claims.family_name, phone });
+  const profile = parseGoogleProfile({ name: claims.name, given_name: claims.given_name, family_name: claims.family_name, phone, picture: claims.picture });
   return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 

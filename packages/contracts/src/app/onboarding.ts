@@ -41,6 +41,9 @@ export const appConsentStateV1Schema = z.strictObject({
   // Whether the yes counts now: granted, at the current copy, offered by this server, with its prerequisite live. A yes the
   // server holds back (a switch off) or an older copy reads granted and not active; a settings screen shows active.
   active: z.boolean(),
+  // The copy version this server requires now. Listed for a build at onboarding revision 3 (see
+  // APP_ONBOARDING_CONSENT_VERSION_REVISION_V1), never in a grant or withdrawal answer.
+  current_version: z.int().positive().optional(),
 }).superRefine((state, ctx) => {
   if (state.active && state.status !== 'granted') ctx.addIssue({ code: 'custom', path: ['active'], message: 'only a granted purpose can be active' });
   if ((state.status === 'not_granted') !== (state.granted_at === null) || (state.status === 'not_granted') !== (state.version === null)) ctx.addIssue({ code: 'custom', path: ['granted_at'], message: 'only a never-granted purpose has no version or grant time' });
@@ -61,6 +64,13 @@ export const appConsentListV1Schema = z.strictObject({
   consents: z.array(appConsentStateV1Schema).length(appConsentPurposeV1Schema.options.length)
     .refine(rows => new Set(rows.map(row => row.purpose)).size === rows.length, 'each purpose is listed once'),
 });
+// Onboarding revision 3 (`onboarding=3`) adds current_version to each listed consent, so a build that carries an older copy can
+// say "update Waldo" before the owner ticks and Accept is refused stale_version. It is listed while the agreements are held back
+// too, naming the copy that would be required. A build below revision 3 gets each row exactly as before, without it.
+export const APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 = 3;
+export const appConsentListAtRevision = (list: AppConsentListV1, revision: number): AppConsentListV1 =>
+  revision >= APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 ? list
+    : { ...list, consents: list.consents.map(({ current_version: _current, ...row }) => row) };
 export const appConsentGrantV1Schema = z.strictObject({
   request_id: requestId, purpose: appConsentPurposeV1Schema, version: z.int().positive(), age_attested_18_plus: z.literal(true),
 });
@@ -284,6 +294,7 @@ export const appOnboardingRoutesV1 = [
 
 export type AppConsentPurposeV1 = z.infer<typeof appConsentPurposeV1Schema>;
 export type AppConsentStateV1 = z.infer<typeof appConsentStateV1Schema>;
+export type AppConsentListV1 = z.infer<typeof appConsentListV1Schema>;
 export type AppOnboardingV1 = z.infer<typeof appOnboardingV1Schema>;
 export type AppOnboardingActionV1 = z.infer<typeof appOnboardingActionV1Schema>;
 export type AppOnboardingStepV1 = z.infer<typeof appOnboardingStepV1Schema>;

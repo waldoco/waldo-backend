@@ -116,7 +116,7 @@ const history = async (owner: Owner, name: string) => JSON.stringify(appHistoryR
 const jobs = (sql: SqlStorage) => sql.exec<JobRow>('SELECT * FROM task_jobs').toArray();
 // The worker's side, run against this owner object exactly as a TaskWorkerDO runs it over RPC.
 const worker = (host: Host, ticket: TaskTicket, access: Parameters<typeof taskModel>[0] = { openaiApiKey: 'synthetic-fixture', primary: 'openai' }, strong = false) => runTaskAttempt(ticket, {
-  brain: { claim: t => host.taskClaim(t), tool: (t, c, k) => host.taskTool(t, c, k), checkpoint: (...args) => host.taskCheckpoint(...args), report: (...args) => host.taskReport(...args), heartbeat: t => host.taskHeartbeat(t) },
+  brain: { claim: t => host.taskClaim(t), tool: (t, c, k) => host.taskTool(t, c, k), checkpoint: (...args) => host.taskCheckpoint(...args), report: (...args) => host.taskReport(...args), heartbeat: t => host.taskHeartbeat(t), spent: (t, events) => host.taskSpent(t, events) },
   model: taskModel(access, seen.gateway, strong), sliceEnd: Date.now() + 120_000,
 });
 const attemptOf = (state: DurableObjectState, id: string) => jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => crypto.randomUUID() }).startAttempt(id)!;
