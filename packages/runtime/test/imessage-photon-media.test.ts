@@ -203,7 +203,7 @@ describe('openIMessageMedia', () => {
       expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [],
         parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'Book the dentist for Thursday.' }] });
       expect(d.source).toHaveBeenCalledWith(expect.objectContaining({ messageGuid: 'msg-1', sender: SENDER, files: [{ id: 'att-voice', mimeType: 'audio/x-caf' }] }));
-      expect(transcribe).toHaveBeenCalledWith(AUDIO, 'Audio Message.caf', 'audio/x-caf');
+      expect(transcribe).toHaveBeenCalledWith(AUDIO, 'Audio Message.caf', 'audio/x-caf', expect.any(AbortSignal));
       expect(d.admit).toHaveBeenCalledTimes(3);
     });
 
@@ -228,9 +228,12 @@ describe('openIMessageMedia', () => {
       const turn = new AbortController();
       let fetchSignal: AbortSignal | undefined;
       const source = vi.fn(async (input: { signal: AbortSignal }) => { fetchSignal = input.signal; return { ok: true as const, bytes: [AUDIO] }; });
-      const transcribe = vi.fn(() => { setTimeout(() => turn.abort(), 0); return new Promise<string>(() => undefined); });
+      let heardSignal: AbortSignal | undefined;
+      const transcribe = vi.fn((_audio: Uint8Array, _name: string, _mime: string, given?: AbortSignal) => { heardSignal = given; setTimeout(() => turn.abort(), 0); return new Promise<string>(() => undefined); });
       const result = await openIMessageMedia(media(voice), { ...deps(source as never), signal: turn.signal, transcribe });
       expect(fetchSignal!.aborted).toBe(true);
+      // The provider's own request is given the turn's signal, so it ends with the turn.
+      expect(heardSignal!.aborted).toBe(true);
       expect(result).toEqual({ kind: 'opened', attachments: [], parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
     });
 
@@ -245,6 +248,14 @@ describe('openIMessageMedia', () => {
 
     it('is named a voice note, not a file, wherever the turn names what the owner sent', () => {
       expect(iMessageMediaNotes([voice, photo, pdf]).map(note => note.text)).toEqual(['[Owner sent a voice note.]', '[Owner sent a photo, attached.]', '[Owner sent a file "notes.pdf", attached.]']);
+    });
+
+    it('an audio file that is no voice message is heard and named as the audio file it is, as on Telegram', async () => {
+      const song = { id: 'att-song', name: 'song.mp3', mimeType: 'audio/mpeg', size: AUDIO.length };
+      expect(iMessageMediaNotes([song]).map(note => note.text)).toEqual(['[Owner sent an audio file "song.mp3".]']);
+      const transcribe = heard('La la la.');
+      expect(await openIMessageMedia(media(song), { ...deps(opened([AUDIO])), transcribe })).toEqual({ kind: 'opened', attachments: [],
+        parts: [{ authorship: 'media_note', text: '[Owner sent an audio file "song.mp3".]' }, { authorship: 'file_transcript', text: 'La la la.' }] });
     });
 
     it('is heard only with IMESSAGE_VOICE on and a transcriber set up', () => {
