@@ -7,7 +7,7 @@ export const PROVIDER_API = `${PROVIDER_ORIGIN}/developer/v2/`;
 export const PROVIDER_CLIENT = { id: 'fixture-client', secret: 'fixture-client-secret' } as const;
 export const PROVIDER_ACCOUNT = 1001;
 
-type Options = Readonly<{ omitRefreshOnRotate?: boolean }>;
+type Options = Readonly<{ omitRefreshOnRotate?: boolean; account?: string | number }>;
 
 export const fakeOAuthProvider = (options: Options = {}) => {
   let clock = Date.UTC(2026, 9, 21, 9, 0, 0);
@@ -49,7 +49,7 @@ export const fakeOAuthProvider = (options: Options = {}) => {
     if (throttled) return new Response(null, { status: 429, headers: { 'x-ratelimit-reset': '42', 'x-private-detail': 'not for the DO' } });
     if (!authorized(request)) return new Response(null, { status: 401 });
     const path = url.pathname.slice('/developer/v2/'.length);
-    if (path === 'user/profile/basic' && request.method === 'GET') return Response.json({ user_id: PROVIDER_ACCOUNT });
+    if (path === 'user/profile/basic' && request.method === 'GET') return Response.json({ user_id: options.account ?? PROVIDER_ACCOUNT });
     if (path === 'activity/sleep' && request.method === 'GET') {
       const next = url.searchParams.get('nextToken');
       return Response.json(next ? { records: [{ id: 'sleep-2' }], next_token: null } : { records: [{ id: 'sleep-1' }], next_token: 'page-2' });
