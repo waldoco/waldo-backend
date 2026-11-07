@@ -26,6 +26,21 @@ const result: TaskResult = { status: 'done', summary: 'Three threads wait on you
 const spend = { rounds: 1, costUsd: 0.01 };
 const turn = (n: number) => ({ call: { call_id: `c${n}`, name: 'search_communication', arguments: '{}' }, output: `page ${n}` });
 
+it('a job book made before the web and accounts profiles is rebuilt to admit them, keeping every row', async () => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-profiles-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const sql = state.storage.sql;
+    for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement.replace(", 'web', 'accounts'", ''));
+    expect(sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'task_jobs'").one().sql).not.toContain("'web'");
+    sql.exec(`INSERT INTO task_jobs (id, kind, profile, idempotency_key, origin, surface, brief_json, brief_digest, status, deadline_at, created_at, updated_at)
+      VALUES ('job_000000000001', 'task', 'reader', 'k-old', 'app-1', 'app', '{}', 'd', 'queued', 2, 1, 1)`);
+    const book = jobBook(sql, { now: () => 1, newId: () => '000000000002', newToken: () => 'tok' });
+    expect(book.get('job_000000000001')).toMatchObject({ status: 'queued', profile: 'reader' });
+    const made = book.create({ kind: 'task', profile: 'web', idempotencyKey: 'k-web', origin: 'app-2', surface: 'app', dueAt: 1, deadlineAt: 2,
+      brief: { title: 'Signups', goal: 'Look them up.', context: '', done_when: 'One line each.', effort: 'standard', started_at: 1 } });
+    expect(made.job.profile).toBe('web');
+  });
+});
+
 describe('task job book', () => {
   it('a table an earlier build made, which does not admit approval replays, is rebuilt with its rows kept', async () => {
     const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-${seq += 1}`));

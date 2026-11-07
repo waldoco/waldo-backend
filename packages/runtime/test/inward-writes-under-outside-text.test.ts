@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, type LLMToolCall, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
-import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER, withInwardReceipts } from '../src/conversation/inward-receipts';
+import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER, inwardReceipt, withInwardReceipts } from '../src/conversation/inward-receipts';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -144,6 +144,20 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
 
   // The receipt lines and the exemptions name one set: a write that can run after outside text without a card (inward,
   // narrowing, or a figure the owner stated) and has no receipt line fails here.
+  it('background work the owner asked for, started after outside text, is listed with what it reads', () => {
+    expect(inwardReceipt('start_task', JSON.stringify({ profile: 'web', title: 'Five signups', goal: 'g', context: '', done_when: 'd' })))
+      .toBe('Started background task "Five signups", reading the public web only (you can stop it)');
+    expect(inwardReceipt('start_task', JSON.stringify({ profile: 'accounts', title: 'Unanswered clients', goal: 'g', context: '', done_when: 'd' })))
+      .toBe('Started background task "Unanswered clients", reading your own accounts only (you can stop it)');
+  });
+
+  it('a document rendered or an archive unpacked into the owner\'s workspace after outside text is listed with where it went', () => {
+    expect(inwardReceipt('workspace_render', JSON.stringify({ source_file_id: 'f1', source_revision: 2, path: 'notes/plan.pdf', expected_revision: 0, format: 'pdf' })))
+      .toBe('Rendered notes/plan.pdf in your workspace (its earlier versions are kept)');
+    expect(inwardReceipt('extract_archive', JSON.stringify({ file_id: 'f9', revision: 1 })))
+      .toBe('Unpacked archive f9 into your workspace (you can delete what it added)');
+  });
+
   it('every owner-inward, narrowing and owner-stated record has a receipt line, and nothing else does', () => {
     const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, { tainted }]) => tainted !== undefined
       && ('exempt' in tainted ? tainted.exempt === 'owner_inward' || tainted.exempt === 'narrows' : tainted.unless_owner_stated !== undefined)).map(([tool]) => tool).sort();

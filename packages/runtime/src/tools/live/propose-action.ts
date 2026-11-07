@@ -1,7 +1,7 @@
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import {
   TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, toolNameSchema, triggerTypeSchema,
-  type CloseLoopArgs, type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
+  type CloseLoopArgs, type ProposeActionArgs, type StartTaskArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import type { RunEffectScope } from '../../channels/run-effect-scope';
@@ -9,6 +9,7 @@ import { callWhy, proposalStatus, type ProposeOptions, type CardPlacement, type 
 import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 import { TOOL_RECORDS } from '../records';
+import { joinsPrivateAndEgress } from '../../tasks/profiles';
 
 export type TaintedActionDesk = Readonly<{
   proposeTaintedAction(proposal: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
@@ -95,6 +96,13 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       if (loop === undefined) return { ok: false, error: `There is no loop with the id ${id} that this turn can close. Propose close_loop only with an id from the open loops listed in this turn.`, code: 'invalid_args' };
       if (loop.status !== 'open') return { ok: false, error: `Loop ${id} is already closed (${loop.status}), so there is nothing to ask the owner. If you meant another loop, propose it with an id from the open loops listed in this turn.`, code: 'rejected' };
       preview = [`${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}, as ${outcome}`];
+    }
+    // A background task carded after outside text: the card says what its worker would read, in the host's words. Mail and the
+    // web together is the case the owner's own turn still cards; any profile is carded in a turn with no owner message.
+    if (tool.data === 'start_task') {
+      const { title, profile } = frozen as StartTaskArgs;
+      preview = [joinsPrivateAndEgress(profile) ? `"${title}", which would read your mail, calendar and files and the web together, after reading outside text`
+        : `"${title}", reading ${profile === 'web' ? 'the public web only' : 'your own accounts only'}`];
     }
     // A check-back runs every 4 hours and a card lasts 12, so the same close is asked again while its card waits; a second
     // card would leave one that closes nothing.

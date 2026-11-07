@@ -16,6 +16,12 @@ const READER: readonly ToolName[] = [
   'read_tool_output',
 ];
 export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
+// The way out for instructions hidden in outside text is a worker that holds the owner's private reads and an egress read
+// together: it could read the inbox and carry it out in a query or a URL. Each half alone has no such path, so the owner's own
+// turn may start either after outside text without a card (hooks/registry.ts); the brain enforces the profile on every call.
+// web: the public web only. accounts: the owner's own accounts, with no egress, as a machine job's reader has.
+const WEB: readonly ToolName[] = ['get_context', 'web_search', 'browse_page', 'read_tool_output'];
+const NOT_PRIVATE: ReadonlySet<ToolName> = new Set(['get_context', 'read_tool_output']);
 // The owner look-up's worker: the one machine job with egress reads. It holds no private read (no mail, calendar, memory or
 // health), and its brief holds no time zone, so the only owner data it can carry out in a query is the name and address the
 // owner agreed to be searched by. Its web search is the owner's without a location (lookupToolHandlers in the owner object),
@@ -31,6 +37,8 @@ export type ProfileSpec = Readonly<{ tools: readonly ToolName[]; unavailable?: s
 export const TASK_PROFILE_SPECS: Readonly<Record<TaskProfile, ProfileSpec>> = {
   reader: { tools: READER },
   errand: { tools: [...READER, 'browse_act'] },
+  web: { tools: WEB },
+  accounts: { tools: MACHINE_READER },
   // A code worker owns a sandbox container. execute_code has no handler on any deploy yet, so the profile is refused at
   // start with a reason the model can act on.
   code: {
@@ -53,3 +61,9 @@ export const unreplayable = (name: string): boolean => {
 // The tools a job's worker may call: its profile's, or the machine reader's for a job the brain started itself.
 export const jobTools = (row: Pick<JobRow, 'profile' | 'origin'>): readonly ToolName[] =>
   row.origin === LOOKUP_ORIGIN ? LOOKUP_READER : isMachine(row) ? MACHINE_READER : row.profile === null ? [] : TASK_PROFILE_SPECS[row.profile].tools;
+
+// Whether a profile's worker holds a private read and an egress read together.
+export const joinsPrivateAndEgress = (profile: TaskProfile): boolean => {
+  const tools = TASK_PROFILE_SPECS[profile].tools;
+  return tools.some((name) => EGRESS_READ_TOOLS.includes(name) || name === 'browse_act') && tools.some((name) => !EGRESS_READ_TOOLS.includes(name) && name !== 'browse_act' && !NOT_PRIVATE.has(name));
+};

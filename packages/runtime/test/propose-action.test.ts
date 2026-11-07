@@ -264,6 +264,29 @@ describe('taint goes to a card', () => {
     });
   });
 
+  // After outside text, the owner's own turn starts web-only or accounts-only work directly. Work that would read the owner's
+  // mail and the web together is the one case still carded, and its card says why in the host's words, not the model's.
+  it('in the owner\'s tainted turn a web task starts with no card; a mail-plus-web task gets one card that says why', async () => {
+    await runInDurableObject(stub('task-split'), async (_instance, state) => {
+      let n = 0;
+      const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+      const handlers = taskToolHandlers({ book, now: () => 1_800_000_000_000, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const brief = { title: 'Five signups', goal: 'Look up each new signup on the public web.', context: 'Names from the Loops alert.', done_when: 'One line each.' };
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const owner = (over: Partial<ToolDispatcherContext>) => tainted({ ownerInitiated: true, ...over });
+
+      expect(await dispatchTool({ id: 'w1', name: 'start_task', args: { ...brief, profile: 'web' } }, owner({ toolCallId: 'w1' }), { handlers })).toMatchObject({ ok: true, data: { status: 'started', profile: 'web' } });
+      expect(rows('tainted_action')).toEqual([]);
+
+      const both = { ...brief, profile: 'reader' };
+      expect(await dispatchTool({ id: 'r1', name: 'start_task', args: both }, owner({ toolCallId: 'r1' }), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(await proposeActionHandler(desk).handle({ tool: 'start_task', args: both, reasoning: 'Research them.' } as never, owner({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      const [card] = rows('tainted_action');
+      expect(JSON.parse(card!.payload_json).preview).toEqual(['"Five signups", which would read your mail, calendar and files and the web together, after reading outside text']);
+      expect(await proposeActionHandler(desk).handle({ tool: 'start_task', args: { ...brief, profile: 'web' }, reasoning: 'Research them.' } as never, owner({ toolCallId: 'p2' }))).toMatchObject({ ok: false, error: expect.stringMatching(/needs no approval; call it directly/) });
+    });
+  });
+
   // Stopping a task only narrows what Waldo does, so outside text may stop one directly, and the reply lists it
   // (inward-receipts). A turn that does not hold the tool can still put it on the owner's card.
   it('cancelling a background task runs directly, tainted or not, and a card for it cancels on approval', async () => {

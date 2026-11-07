@@ -20,10 +20,13 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
   track_responsibility: (args) => `Now tracking "${text(args, 'title')}" (you can close it)`,
   workspace_write: (args) => `Wrote ${text(args, 'path')} in your workspace (its earlier versions are kept)`,
   create_artifact: (args) => `Created "${text(args, 'name')}" in your artifacts`,
+  workspace_render: (args) => `Rendered ${text(args, 'path')} in your workspace (its earlier versions are kept)`,
+  extract_archive: (args) => `Unpacked archive ${text(args, 'file_id')} into your workspace (you can delete what it added)`,
   // The note is gone once cancelled, so the line carries it: the owner can set it again from here.
   cancel_reminder: (args, result) => args.all === true ? 'Cancelled all your reminders'
     : result.cancelled !== true ? null
     : `Cancelled the reminder${text(result, 'at') ? ` for ${text(result, 'at').replace('T', ' ')}` : ''}: "${text(result, 'note')}"`,
+  start_task: (args) => `Started background task "${text(args, 'title')}", reading ${args.profile === 'web' ? 'the public web only' : 'your own accounts only'} (you can stop it)`,
   cancel_task: (args) => `Stopped background task ${text(args, 'job_id')} (you can start it again)`,
   cancel_standing_order: (args) => `Ended standing order ${text(args, 'id')}`,
   revoke_standing_grant: (args) => `Ended your standing permission for ${text(args, 'class')}`,

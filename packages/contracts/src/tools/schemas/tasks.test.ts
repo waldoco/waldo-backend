@@ -15,7 +15,7 @@ const brief = {
 
 describe('start_task arguments', () => {
   it('accepts a complete brief, with or without effort', () => {
-    const accepted = [brief, { ...brief, effort: 'deep' }, { ...brief, profile: 'errand', effort: 'standard' }, { ...brief, context: 'x'.repeat(200_000) }, { ...brief, title: 't'.repeat(80) }];
+    const accepted = [brief, { ...brief, effort: 'deep' }, { ...brief, profile: 'errand', effort: 'standard' }, { ...brief, profile: 'web' }, { ...brief, profile: 'accounts' }, { ...brief, context: 'x'.repeat(200_000) }, { ...brief, title: 't'.repeat(80) }];
     for (const value of accepted) expect(startTaskArgsSchema.safeParse(value).success, JSON.stringify(value).slice(0, 80)).toBe(true);
   });
 
@@ -74,7 +74,7 @@ describe('task tool permissions', () => {
     }
   });
 
-  it('names three profiles, code among them', () => {
-    expect(TASK_PROFILES).toEqual(['reader', 'errand', 'code']);
+  it('names five profiles: two that split private reads from the web, besides reader, errand and code', () => {
+    expect(TASK_PROFILES).toEqual(['reader', 'errand', 'code', 'web', 'accounts']);
   });
 });

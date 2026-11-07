@@ -18,6 +18,7 @@ import type {
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  taskProfileSchema,
   toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
@@ -136,6 +137,7 @@ import {
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
+import { joinsPrivateAndEgress } from '../tasks/profiles';
 import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
@@ -536,9 +538,16 @@ export const recordNeedsOwnerCard = async (
     case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
-    case 'owner_inward': return ctx.ownerInitiated !== true;
+    case 'owner_inward': return ctx.ownerInitiated !== true || (tool === 'start_task' && startJoinsPrivateAndEgress(args));
     default: return true;
   }
+};
+
+// A background task whose worker would hold the owner's private reads and the web together is the one start that stays carded
+// after outside text: it is the path out for instructions hidden in that text. A profile the schema does not know is carded.
+const startJoinsPrivateAndEgress = (args: unknown): boolean => {
+  const profile = taskProfileSchema.safeParse(typeof args === 'object' && args !== null ? (args as { profile?: unknown }).profile : undefined);
+  return !profile.success || joinsPrivateAndEgress(profile.data);
 };
 
 // A narrowing call that removes everything of its kind at once is carded: its receipt cannot name what it removed, so outside

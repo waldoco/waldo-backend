@@ -13,7 +13,7 @@ import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
-import { MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
+import { EGRESS_READ_TOOLS, joinsPrivateAndEgress, MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
 import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
 import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { TOOL_RECORDS } from '../src/tools/records';
@@ -32,7 +32,7 @@ const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.st
 
 type Harness = Readonly<{
   book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[];
-  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined): void;
+  ticket(profile?: 'reader' | 'errand' | 'web' | 'accounts'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
   serial<T>(work: () => Promise<T>): Promise<T>;
@@ -81,7 +81,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       heldTopics: () => topics, lapsed: () => lapse.now,
       replayApproval: async () => { throw new Error('no approval replays in this harness'); },
     });
-    const ticket = (profile: 'reader' | 'errand' = 'reader') => {
+    const ticket = (profile: 'reader' | 'errand' | 'web' | 'accounts' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
@@ -966,6 +966,26 @@ describe('the task brain host', () => {
 // write or read their memory, hand work on, start or stop tasks, or read health. Read from the tool records, so a tool added
 // to one of those groups is covered without editing this list.
 describe('task profiles', () => {
+  it('web reads only the public web, accounts only the owner\'s own accounts; reader and errand hold both', () => {
+    expect(TASK_PROFILE_SPECS.web.tools).toEqual(['get_context', 'web_search', 'browse_page', 'read_tool_output']);
+    expect(TASK_PROFILE_SPECS.accounts.tools).toEqual(MACHINE_READER);
+    expect(TASK_PROFILE_SPECS.accounts.tools.some(name => EGRESS_READ_TOOLS.includes(name))).toBe(false);
+    expect((['reader', 'errand', 'code', 'web', 'accounts'] as const).filter(joinsPrivateAndEgress)).toEqual(['reader', 'errand']);
+  });
+
+  it('a hostile brief cannot reach the inbox from a web worker: every private read is refused before it runs', async () => {
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('web');
+      const claim = await host.claim(t);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['browse_page', 'read_tool_output']);
+      for (const name of ['search_communication', 'read_thread', 'get_communication', 'read_drive', 'query_calendar']) {
+        expect(await host.tool(t, call(name), CANARIES), name).toMatchObject({ ok: false, error_code: 'acl_denied' });
+      }
+      expect(await host.tool(t, { call_id: 'c-evil', name: 'browse_page', arguments: JSON.stringify({ url: 'https://example.com/?q=inbox', instruction: 'Read it.' }) }, CANARIES)).toMatchObject({ ok: true });
+      expect(ran).toEqual(['browse_page']);
+    });
+  });
+
   const names = Object.keys(TOOL_RECORDS) as ToolName[];
   const forbidden: Readonly<Record<string, readonly ToolName[]>> = {
     send: names.filter(name => name.startsWith('send_') || name === 'attach_file'),

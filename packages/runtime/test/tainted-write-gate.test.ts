@@ -202,6 +202,20 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   // The derived set, pinned: a record change that widens or narrows what a tainted turn may do shows up here in review.
+  // Background work needs a card to start only when its worker would hold private reads and the web together after outside
+  // text: the way out for injected instructions. Web-only and accounts-only work starts in the owner's own turn.
+  it('start_task after outside text: web-only or accounts-only work runs in the owner\'s turn; mail plus web, or no owner, is carded', async () => {
+    const brief = { title: 'Five signups', goal: 'Look them up.', context: 'Names from the Loops alert.', done_when: 'One line each.' };
+    const owner = { ownerInitiated: true };
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief, profile: 'web' }, owner)).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief, profile: 'accounts' }, owner)).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief, profile: 'reader' }, owner)).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief, profile: 'errand' }, owner)).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief }, owner)).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('start_task', 'external', { ...brief, profile: 'web' }, {})).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('start_task', null, { ...brief, profile: 'reader' }, {})).toBe(false);
+  });
+
   it('the carded set is every privileged action and every tool with a claim, less the named exemptions', async () => {
     const carded: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
@@ -217,7 +231,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     // background tasks, MCP writes and the writes with no undo stay on the owner's card.
     const ownerTurn: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
-    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'extract_archive', 'set_reminder', 'track_responsibility', 'update_todo', 'workspace_render', 'workspace_write']);
     expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'revise_artifact', 'forget_memory']));
   });
 });

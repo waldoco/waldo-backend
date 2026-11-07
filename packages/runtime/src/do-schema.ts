@@ -376,7 +376,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS task_jobs (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL CHECK (kind IN ('task', 'retry_turn', 'approval_replay')),
-    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code')),
+    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code', 'web', 'accounts')),
     idempotency_key TEXT NOT NULL UNIQUE,
     origin          TEXT NOT NULL,
     surface         TEXT NOT NULL,

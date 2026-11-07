@@ -147,11 +147,11 @@ type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; 
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string; archive?: HistoryArchive }>) => {
-  // A table an earlier build created does not admit approval replays, jobs awaiting the owner or the no_progress park; it is
-  // rebuilt with every column it had, and park_retries at its default, in this synchronous block, which the storage commits as
-  // one transaction.
+  // A table an earlier build created does not admit approval replays, jobs awaiting the owner, the no_progress park or the web
+  // and accounts profiles; it is rebuilt with every column it had, and park_retries at its default, in this synchronous block,
+  // which the storage commits as one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
-  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'") || !made.includes("'no_progress'"))) {
+  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'") || !made.includes("'no_progress'") || !made.includes("'accounts'"))) {
     sql.exec('DROP INDEX IF EXISTS task_jobs_open');
     sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_ask');
     for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
