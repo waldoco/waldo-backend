@@ -96,11 +96,11 @@ export const newVault = (): VaultFake => {
 export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, sessions: [], handoffs: [], vault: newVault() });
 
 // The database's own rules, in the parts a sync depends on.
-export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
+export const planeRpc = (plane: Plane, doName = 'owner-w', source = 'whoop') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
   // `consent` is the storage grant and `model` the model-use grant; the database refuses readings on storage alone.
   if (fn === 'health_consent_list') {
     const rows = [['storage_compute', plane.consent], ['model_processing', plane.model]] as const;
-    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 3, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
+    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source, purpose, version: 3, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
   if (fn === 'health_ingest') {
     const text = String(args.p_payload), body = JSON.parse(text);
@@ -121,7 +121,7 @@ export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string,
       const key = `${deletion.signal}|${deletion.sample_id}`, stored = plane.samples.get(key);
       if (stored && deletion.revision >= stored.revision) { plane.samples.delete(key); deleted += 1; } else ignored += 1;
     }
-    const response = { request_id: parsed.data.request_id, source: 'whoop', consent_epoch: plane.epoch, accepted, deleted, ignored, anchor_after: parsed.data.anchor_after, replayed: false };
+    const response = { request_id: parsed.data.request_id, source, consent_epoch: plane.epoch, accepted, deleted, ignored, anchor_after: parsed.data.anchor_after, replayed: false };
     plane.requests.set(parsed.data.request_id, { digest: text, response });
     return response;
   }
