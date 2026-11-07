@@ -299,3 +299,61 @@ describe('the numeric health floor', () => {
     expect(numericHealthIn(text)).toBe(true);
   });
 });
+
+// Shapes a relay or a summary gives a reading that the gate on the floor found still passing. Synthetic values.
+describe('readings tied by an arrow, a trend word, or a number before the label', () => {
+  it.each([
+    'HRV → 42 ms', 'HRV ↓ 35', 'HRV ↑ 52 ms', 'HRV slipped to 35', 'HRV now 35', '42 ms HRV', 'resting HR now 61',
+    // A night's sleep said as one, whatever follows it: "until" or "before" makes a plan only after bare wording.
+    'sleep was 6 hours until the alarm', 'Sleep averaged 6 hours before the trip', 'Your sleep: 7 hours until 6:10',
+    'sleep was 5.5 h before the race', 'Sleep: 6 h till the alarm',
+    // A habit said in the present tense is a reading too, and so is a plan's duration: both redact as beta-mvp does.
+    'I usually sleep 5 hours before work', 'I sleep 5 hours before night shifts', 'sleeps 7 hours before work',
+    'He sleeps 4 hours before every exam', 'sleeping 5 hours before shifts all week', "I've been sleeping 4 hours before every deadline",
+    'Sleep — 8 hours before the flight', 'sleep for 8 hours before the flight',
+  ])('holds %s', (text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it.each([
+    'Weight — 20 kg suitcase', 'Now 35 people are coming',
+    'Moved 42 ms of latency off the hot path', 'HR → 30 candidates', 'HR ↑ 12 roles', '42 ms HRV-style jitter',
+  ])('leaves %s alone', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
+});
+
+describe('trace redaction takes every value a reading carries', () => {
+  it.each([
+    ['| HRV | 42 | 45 | 48 |', ['42', '45', '48']],
+    ['HRV 42 → 38 → 35', ['42', '38', '35']],
+    ['HRV was 48, now 35', ['48', '35']],
+    ['HRV → 42 ms', ['42']],
+    ['42 ms HRV', ['42']],
+    ['HRV 42 ms → 38 ms → 35 ms', ['42', '38', '35']],
+    ['HRV 42, 45, 48', ['42', '45', '48']],
+    ['HRV went from 48 down to 35', ['48', '35']],
+    ['HRV 48 ⬇ 35', ['48', '35']],
+    ['HRV 48 ↘ 35', ['48', '35']],
+    ['HRV 48 => 35', ['48', '35']],
+  ])('%s', (text, values) => {
+    const redacted = redactNumericHealth(text, '[W]');
+    expect(redacted).toContain('[W]');
+    for (const value of values) expect(redacted).not.toContain(value);
+  });
+
+  it.each([
+    ['Owner slept 7h, 3 meetings today and a run at 6.', '3 meetings'],
+    ['Your resting HR was 61, 2 meetings moved to Friday.', '2 meetings'],
+    ['HRV 42 ms, 1 meeting moved.', '1 meeting'],
+  ])('stops at a count after a comma: %s', (text, kept) => {
+    const redacted = redactNumericHealth(text, '[W]');
+    expect(redacted).toContain('[W]');
+    expect(redacted).toContain(kept);
+  });
+
+  it('stops at a clock time in the next cell', () => {
+    const redacted = redactNumericHealth('Resting HR 61 | 10:30 check-in', '[W]');
+    expect(redacted).not.toContain('61');
+    expect(redacted).toContain('10:30');
+  });
+});
