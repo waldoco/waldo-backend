@@ -53,11 +53,20 @@ export type ConversationEntry = Readonly<{
   charts?: readonly ConversationChart[];
 }>;
 
-export type ConversationChart = Readonly<{
+export type ConversationPointsChart = Readonly<{
   title: string; unit: string; alt_text: string;
   series: readonly Readonly<{ label: string; points: readonly Readonly<{ t: number; v: number }>[] }>[];
 }>;
-export const conversationChartTexts = (chart: ConversationChart): readonly string[] => [chart.title, chart.unit, chart.alt_text, ...chart.series.map(series => series.label)];
+// A chart of the owner's own readings keeps the query only: which signal, which local days. The points are read live each
+// time the chat is read, so no reading is ever stored with the reply.
+export type ConversationHealthChart = Readonly<{
+  title: string; alt_text: string;
+  health: Readonly<{ signal: string; from: string; to: string }>;
+}>;
+export type ConversationChart = ConversationPointsChart | ConversationHealthChart;
+export const isHealthChart = (chart: ConversationChart): chart is ConversationHealthChart => 'health' in chart;
+export const conversationChartTexts = (chart: ConversationChart): readonly string[] =>
+  isHealthChart(chart) ? [chart.title, chart.alt_text] : [chart.title, chart.unit, chart.alt_text, ...chart.series.map(series => series.label)];
 
 export type ConversationReceipt = Readonly<{
   line: string;

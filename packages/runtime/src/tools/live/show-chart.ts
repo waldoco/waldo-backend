@@ -1,8 +1,11 @@
 import {
-  SHOW_CHART_MAX_PER_TURN, showChartArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConversationChart, type ShowChartArgs, type ShowChartResult, type ToolHandler, type ToolResult,
+  replyChartSeriesPartV1Schema, SHOW_CHART_MAX_PER_TURN, showChartArgsSchema, showHealthChartArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConversationChart, type ConversationHealthChart, type GetHealthArgs, type GetHealthResult, type ShowChartArgs, type ShowChartResult,
+  type ShowHealthChartArgs, type ShowHealthChartResult, type ToolHandler, type ToolResult,
 } from '@waldo/contracts';
+import type { z } from 'zod';
 import { redactSecretUrls } from '../../channels/egress-guard';
+import { numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // The charts the model drew for its turn's reply, by the turn's id. The owner turn takes them when it saves the reply, so they
@@ -53,3 +56,51 @@ export const showChartHandler = (book: TurnChartBook): ToolHandler<ShowChartArgs
     return left === 'limit_reached' ? result({ shown: false, reason: 'limit_reached' }) : result({ shown: true, charts_left: left });
   },
 });
+
+// The owner's readings for one chart, read live from the health plane through get_health's own read (its consent check, its
+// one source per signal, its folding by local day). Nothing it returns is kept: the tool only learns whether there is
+// something to draw, and the chat read draws the points for the response it is building.
+export type HealthChartRead = (args: GetHealthArgs) => Promise<ToolResult<GetHealthResult>>;
+export type ChartSeriesPart = z.infer<typeof replyChartSeriesPartV1Schema>;
+type HealthDrawn = Readonly<{ part: ChartSeriesPart }> | Readonly<{ unavailable: Extract<GetHealthResult, { state: 'unavailable' }>['reason'] }> | Readonly<{ refused: string }>;
+const dayStart = (day: string): number => Date.parse(`${day}T00:00:00Z`);
+export const drawHealthChart = async (chart: ConversationHealthChart, read: HealthChartRead): Promise<HealthDrawn> => {
+  const answer = await read({ signals: [chart.health.signal as GetHealthArgs['signals'][number]], from: chart.health.from, to: chart.health.to, aggregation: 'daily' });
+  if (!answer.ok) return { refused: answer.error };
+  if (answer.data.state === 'unavailable') return { unavailable: answer.data.reason };
+  const [series] = answer.data.signals;
+  const points = (series?.days ?? []).flatMap(day => day.value === null ? [] : [{ t: dayStart(day.day), v: day.value }]);
+  const part = replyChartSeriesPartV1Schema.safeParse({ type: 'chart_series', title: chart.title, unit: series?.unit ?? '',
+    series: [{ label: chart.health.signal.replaceAll('_', ' '), points }], alt_text: chart.alt_text, fallback_text: chart.alt_text });
+  return part.success ? { part: part.data } : { unavailable: 'no_readings' };
+};
+
+const HEALTH_DESCRIPTION = [
+  'Draw a chart of the owner\'s own readings in your app reply: one signal over the local days your reply talks about (from before to, at most 31 days ending today).',
+  'The reply keeps only which signal and which days; the app re-reads the readings each time it shows the chart, so they are never stored, and a chart whose readings are gone or no longer shared is shown as its alt_text.',
+  'Title and alt_text are kept with the reply, so they say what the chart shows in words and never carry a reading: "HRV rose over the last two weeks", not the values.',
+  `It shares show_chart's limit of ${SHOW_CHART_MAX_PER_TURN} charts per reply.`,
+].join(' ');
+
+export const showHealthChartHandler = (book: TurnChartBook, read: HealthChartRead): ToolHandler<ShowHealthChartArgs, ShowHealthChartResult, ToolDispatcherContext> => ({
+  name: 'show_health_chart',
+  description: HEALTH_DESCRIPTION,
+  schema: showHealthChartArgsSchema,
+  trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('show_health_chart')),
+  autonomy_gated: false,
+  mutates_state: true,
+  turn_bound: true,
+  async handle(args, ctx) {
+    if (ctx.trigger !== 'user_message' || ctx.ownerInitiated !== true || !ctx.turnId) return healthResult({ shown: false, reason: 'not_owner_turn' });
+    // The words are stored with the reply, where readings never go.
+    if (numericHealthIn(args.title) || numericHealthIn(args.alt_text)) return healthResult({ shown: false, reason: 'readings_in_words' });
+    const kept = (text: string) => redactSecretUrls(text).text;
+    const chart: ConversationHealthChart = { title: kept(args.title), alt_text: kept(args.alt_text), health: { signal: args.signal, from: args.from, to: args.to } };
+    const drawn = await drawHealthChart(chart, read);
+    if ('refused' in drawn) return { ok: false, code: 'invalid_args', error: drawn.refused, source_taint: null };
+    if ('unavailable' in drawn) return healthResult({ shown: false, reason: 'health_unavailable', health_reason: drawn.unavailable });
+    const left = book.queue(ctx.turnId, chart);
+    return left === 'limit_reached' ? healthResult({ shown: false, reason: 'limit_reached' }) : healthResult({ shown: true, charts_left: left });
+  },
+});
+const healthResult = (data: ShowHealthChartResult): ToolResult<ShowHealthChartResult> => ({ ok: true, data, source_taint: null });

@@ -11,7 +11,7 @@ export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 // get_device_context and get_weather, whose output (screen time, the phones' zones and cities, the weather there) is withheld from
 // diagnostics the same way.
 // show_chart's points are numbers no prose floor can read as health, so its call is withheld whole too.
-const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', ...toolsWhere((record) => record.brain === 'health')]);
+const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', 'show_health_chart', ...toolsWhere((record) => record.brain === 'health')]);
 // Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 
