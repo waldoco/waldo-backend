@@ -11,9 +11,9 @@ const part = {
   fallback_text: 'Your 3pm moved. 45 minutes free: finish the deck? Do it / Not now / Keep it free',
 };
 
-describe('free-window offer (chat revision 9)', () => {
-  it('is revision 9 and a message part', () => {
-    expect(APP_CHAT_FREE_WINDOW_REVISION).toBe(9);
+describe('free-window offer (chat revision 10)', () => {
+  it('is revision 10 and a message part', () => {
+    expect(APP_CHAT_FREE_WINDOW_REVISION).toBe(10);
     expect(replyFreeWindowPartV1Schema.safeParse(part).success).toBe(true);
     expect(appMessagePartV1Schema.safeParse(part).success).toBe(true);
     expect(replyFreeWindowPartV1Schema.safeParse({ ...part, choices: part.choices.slice(0, 2) }).success).toBe(true);

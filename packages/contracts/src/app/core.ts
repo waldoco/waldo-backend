@@ -120,9 +120,9 @@ export const APP_CHAT_RATING_REVISION = 6;
 // text. A reply that looked up nothing, a user row, a thread row and revisions below 7 leave the key out.
 export const APP_CHAT_MEMORY_USED_REVISION = 7;
 export const APP_CHAT_MEMORY_USED_MAX_V1 = 8;
-// Chat revision 9 (`chat=9`): a reply that carries a free-window offer's approval part also carries a free_window part naming
+// Chat revision 10 (`chat=10`): a reply that carries a free-window offer's approval part also carries a free_window part naming
 // it (parts.ts). Revisions below 9 receive the approval part alone, which shows the same offer as a full card.
-export const APP_CHAT_FREE_WINDOW_REVISION = 9;
+export const APP_CHAT_FREE_WINDOW_REVISION = 10;
 export const appMemoryUsedV1Schema = z.strictObject({ id: z.string().regex(/^memory:claim:[1-9][0-9]{0,15}$/), text: z.string().min(1).max(300) });
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time

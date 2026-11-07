@@ -43,7 +43,7 @@ export const replyQuickRepliesPartV1Schema = z.strictObject({
     .min(1).max(QUICK_REPLY_MAX_CHOICES).refine(choices => distinct(choices.map(choice => choice.id)), 'choice ids repeat'),
   fallback_text: fallbackTextV1Schema,
 });
-// A free-window offer (chat revision 9): a window that opens soon and the one thing Waldo suggests for it, as one line with
+// A free-window offer (chat revision 10): a window that opens soon and the one thing Waldo suggests for it, as one line with
 // its answers. It always sits beside the calendar_change approval part it names, which carries the review, the digest and the
 // actions, so a build that cannot read this part still shows the full card. A build that reads it may show the line with the
 // block's title and times in place of the card, and decides through that approval: approve adds the block titled `title`

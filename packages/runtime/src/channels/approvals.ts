@@ -575,7 +575,7 @@ const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart[
     actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text,
     ...(offer ? { question: offer.line, labels: offerLabels(shown.actions) } : {}) };
 };
-// Chat revision 9's line for an offer's live card: the same approval, its answers in the order the owner reads them.
+// Chat revision 10's line for an offer's live card: the same approval, its answers in the order the owner reads them.
 export type AppFreeWindowPart = z.infer<typeof replyFreeWindowPartV1Schema>;
 const freeWindowPartOf = (entry: LedgerRow, part: AppApprovalPart): AppFreeWindowPart | null => {
   const offer = offerOf(entry, true);
