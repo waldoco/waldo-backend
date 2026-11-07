@@ -404,6 +404,26 @@ describe('the task brain host', () => {
     });
   });
 
+  it.each([
+    ['TSH', 'Your TSH is 6.2 mIU/L (0.4-4.0) H.', /6\.2/],
+    ['vitamin D', '25-OH Vitamin D: 18 ng/mL, flagged low.', /\b18\b/],
+    ['haemoglobin', 'Haemoglobin 10.9 g/dL L.', /10\.9/],
+    ['eGFR', 'eGFR 45 mL/min/1.73m2 (>60) L.', /\b45\b/],
+    ['creatinine', 'Serum creatinine 1.6 mg/dL (H).', /1\.6/],
+    ['PSA', 'PSA 6.1 ng/mL (0-4.0) H.', /6\.1/],
+    ['ferritin', 'Ferritin 8 ng/mL, below range.', /\b8 ng/],
+  ])('a %s lab mail read by a reader task: the checkpoint keeps no reading', async (_analyte, body, reading) => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t = ticket();
+      handler.search = async () => ({ messages: [{ from: 'lab@clinic.example', subject: 'Your results', body: `${body} Please book a follow-up.` }] });
+      const model: TaskModel = async () => ({ response: { text: '', tool_calls: [{ call_id: 'c1:search', name: 'search_communication', arguments: JSON.stringify({ query: 'from:lab@clinic.example' }) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } });
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: 0 })).toBe('continue');
+      const checkpoint = book.get(t.jobId)!.checkpoint_json!;
+      expect(checkpoint).not.toMatch(reading);
+      expect(JSON.parse(checkpoint).turns[0].output).toBe(UNKEPT_OUTPUT);
+    });
+  });
+
   it('a lab-results mail: no checkpoint or result keeps the reading, and the resumed attempt reads the mail again', async () => {
     await withHost(async ({ host, ticket, book, handler, ran }) => {
       const t = ticket();
