@@ -146,6 +146,8 @@ export const toolNameSchema = z.enum([
   'get_weather',
   // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
   'propose_calendar_plan',
+  // set_quest: start or change one of the owner's quests (ADR-0064 GoalRecord); the owner's own chat turn only.
+  'set_quest',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -324,6 +326,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
+    'set_quest',
     'read_tool_output',
     'log_meal',
     'log_workout',
