@@ -1,6 +1,8 @@
 import { iMessageBindingSchema, opaqueIMessageIdSchema, type IMessageStandardReaction } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
+import { selectTranscriber } from '../../llm/transcriber';
+import type { Transcriber } from '../telegram-media';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
@@ -127,6 +129,8 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
  * reply instead, frozen as the turn's reply in the transaction that closes it, so the event is answered once and settled.
  */
 export type OpenedIMessageTurnMedia = Extract<OpenedIMessageMedia, { kind: 'opened' }>;
+/** IMESSAGE_VOICE: the transcriber an iMessage voice note is heard with, the one owner chat uses; absent, voice gets the fixed reply. */
+export const iMessageTranscriber = (env: IMessageEnv): Transcriber | undefined => env.IMESSAGE_VOICE === '1' ? selectTranscriber(env)?.transcribe : undefined;
 export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope)
   : Promise<Readonly<{ kind: 'text' | 'answered' }> | OpenedIMessageTurnMedia> => {
   if (record.unreadable) {
@@ -136,8 +140,9 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
   if (!record.media) return { kind: 'text' };
   const keep = host.env.WALDO_FILE_TOOLS === '1'
     ? uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName) : undefined;
+  const transcribe = iMessageTranscriber(host.env);
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
-    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}) });
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}), ...(transcribe ? { transcribe } : {}) });
   if (opened.kind === 'opened') return opened;
   scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
   return { kind: 'answered' };
