@@ -301,7 +301,10 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   // would refuse whole as invalid; this answers as the oversize body it is.
   if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(input, refuse('invalid_request', 413));
   const result = await invokeHealth(rpc, doName, operation, payload);
+  // A workout counts only when the ingest took it: a sample the database rejected never says one just ended.
+  const answered = healthIngestReceiptV1Schema.safeParse(result);
+  const refused = new Set(answered.success ? (answered.data.rejected ?? []).filter(rejection => rejection.change === 'sample').map(rejection => rejection.index) : []);
   recompute(input, result, body.data.timezone, input.wakeFreshMs !== undefined && sleepJustEnded(body.data.samples, Date.now(), input.wakeFreshMs),
-    input.workoutWake === true && workoutJustEnded(body.data.samples, Date.now()));
+    input.workoutWake === true && workoutJustEnded(body.data.samples.filter((_, index) => !refused.has(index)), Date.now()));
   return logRefusal(input, settle(result, responseSchema));
 };
