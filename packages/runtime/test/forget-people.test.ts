@@ -41,4 +41,38 @@ describe('forget a person', () => {
     expect(await w.call('forget_memory', { person: sam[0]!, claim_ids: [1], scope_note: 'Sam' }, replay)).toMatchObject({ ok: false });
     expect(w.store.people.all()).toHaveLength(1);
   }));
+
+  it('forgets one of two people with the same name without touching the other, or a longer name that contains it (m17 with m18)', () => runInDurableObject(stub('two-priyas'), async (_instance, state) => {
+    const w = world(state);
+    const said = 'Priya from work, my cousin Priya and Priya Patel are coming';
+    const work = (await w.data('remember', { kind: 'fact', text: 'Priya is a colleague', evidence_quote: 'Priya from work', people: [{ name: 'Priya', role: 'subject' }] }, w.ctx(said))).people as number[];
+    await w.data('remember', { kind: 'preference', text: 'Likes chess', evidence_quote: 'are coming', people: [{ ref: work[0]!, role: 'subject' }] }, w.ctx(said));
+    const cousin = (await w.data('remember', { kind: 'fact', text: 'Priya is a cousin', evidence_quote: 'my cousin Priya', people: [{ name: 'Priya', role: 'subject' }] }, w.ctx(said))).people as number[];
+    await w.data('remember', { kind: 'preference', text: 'Loves hiking', evidence_quote: 'coming', people: [{ ref: cousin[0]!, role: 'subject' }] }, w.ctx(said));
+    const patel = (await w.data('remember', { kind: 'fact', text: 'Priya Patel is a neighbour', evidence_quote: 'Priya Patel', people: [{ name: 'Priya Patel', role: 'subject' }] }, w.ctx(said))).people as number[];
+    await w.data('forget_memory', { person: work[0]!, scope_note: 'Priya from work' }, w.ctx('forget Priya from work'));
+    expect(w.store.people.all().map(row => row.id)).toEqual([cousin[0], patel[0]]);
+    expect(w.store.claims().map(claim => claim.text).sort()).toEqual(['Loves hiking', 'Priya Patel is a neighbour', 'Priya is a cousin']);
+    expect(w.hidden.flat()).not.toContain('Priya');
+    expect(await w.call('remember', { kind: 'fact', text: 'Priya called', evidence_quote: 'Priya called', people: [{ ref: cousin[0]!, role: 'subject' }] }, w.ctx('Priya called'))).toMatchObject({ ok: true });
+  }));
+
+  it('takes a person\'s claims with a topic only when it is one of their names or addresses exactly, never a domain or a surname inside one', () => runInDurableObject(stub('acme-topic'), async (_instance, state) => {
+    const w = world(state);
+    const sam = (await w.data('remember', { kind: 'fact', text: 'Sam is my brother', evidence_quote: 'Sam is my brother', people: [{ name: 'Sam Shah', role: 'subject' }] }, w.ctx('Sam is my brother'))).people as number[];
+    w.store.people.link(1, [{ ref: sam[0]!, role: 'subject', addresses: ['sam@acme.com'] }], '2026-11-07T09:00:00Z');
+    await w.data('remember', { kind: 'fact', text: 'Works with Acme on the launch', evidence_quote: 'Acme on the launch' }, w.ctx('I work with Acme on the launch'));
+    await w.data('forget_memory', { topic: 'Acme', scope_note: 'Acme' }, w.ctx('forget Acme'));
+    expect(await w.call('forget_memory', { topic: 'Shah', scope_note: 'Shah' }, w.ctx('forget Shah'))).toMatchObject({ ok: false, error: expect.stringContaining('No stored memory') });
+    expect(w.store.claims().map(claim => claim.text)).toEqual(['Sam is my brother']);
+    expect(w.store.people.all().map(row => row.id)).toEqual(sam);
+  }));
+
+  it('takes the earlier wordings of a person\'s claims too, so their words leave history', () => runInDurableObject(stub('history'), async (_instance, state) => {
+    const w = world(state);
+    const sam = await w.data('remember', { kind: 'fact', text: 'Sam Okafor lives in Pune', evidence_quote: 'Sam Okafor lives in Pune', people: [{ name: 'Sam Okafor', role: 'subject' }] }, w.ctx('Sam Okafor lives in Pune'));
+    await w.data('remember', { kind: 'fact', text: 'Sam Okafor lives in Lagos', evidence_quote: 'Sam Okafor moved to Lagos', replaces_id: sam.id }, w.ctx('Sam Okafor moved to Lagos'));
+    await w.data('forget_memory', { person: (sam.people as number[])[0]!, scope_note: 'Sam Okafor' }, w.ctx('forget Sam Okafor'));
+    expect(JSON.stringify(state.storage.sql.exec("SELECT text, status FROM claims WHERE status NOT IN ('purging')").toArray())).not.toContain('Okafor');
+  }));
 });

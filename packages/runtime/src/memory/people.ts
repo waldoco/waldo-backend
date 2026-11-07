@@ -28,8 +28,13 @@ const listOf = (raw: string | null): string[] => { try { const value: unknown = 
 const addressKey = (address: string): string => address.trim().toLowerCase();
 
 export const peopleTables = (sql: Sql) => {
-  const person = (id: number): Person | undefined => sql.exec<Person>("SELECT * FROM entities WHERE id = ? AND kind = 'person'", id).toArray()[0];
-  const all = (): Person[] => sql.exec<Person>("SELECT * FROM entities WHERE kind = 'person' ORDER BY id").toArray();
+  // A person counts only while a live claim names them: one whose last claim was dismissed or retired waits for prune() and is
+  // never resolved, offered or counted in the meantime.
+  const living = `kind = 'person' AND EXISTS (SELECT 1 FROM claim_links JOIN claims ON claims.id = claim_links.claim_id WHERE claim_links.entity_id = entities.id AND claims.status IN ${LIVE})`;
+  const person = (id: number): Person | undefined => sql.exec<Person>(`SELECT * FROM entities WHERE id = ? AND ${living}`, id).toArray()[0];
+  const all = (): Person[] => sql.exec<Person>(`SELECT * FROM entities WHERE ${living} ORDER BY id`).toArray();
+  const namesOf = (row: Person): string[] => [row.name, ...listOf(row.aliases)];
+  const same = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
   return {
     person,
     all,
@@ -40,7 +45,9 @@ export const peopleTables = (sql: Sql) => {
     link(claimId: number, links: readonly PersonWrite[], at: string): number[] {
       return links.map(link => {
         const id = link.ref ?? sql.exec<{ id: number }>("INSERT INTO entities (kind, name, created_at, last_seen_at) VALUES ('person', ?, ?, ?) RETURNING id", link.name!, at, at).one().id;
-        const row = person(id)!;
+        // A new person has no claim yet; a ref must still be a living person when the write commits.
+        const row = link.ref === undefined ? sql.exec<Person>('SELECT * FROM entities WHERE id = ?', id).one() : person(id);
+        if (!row) throw new StalePersonRef(id);
         const addresses = [...new Set([...listOf(row.addresses), ...(link.addresses ?? []).map(addressKey)])].slice(0, PERSON_ADDRESSES_MAX);
         const ring = link.ring !== undefined && row.ring_by !== 'owner' ? link.ring : row.ring;
         sql.exec('UPDATE entities SET last_seen_at = ?, addresses = ?, ring = ?, ring_by = CASE WHEN ? THEN \'model\' ELSE ring_by END WHERE id = ?',
@@ -58,16 +65,19 @@ export const peopleTables = (sql: Sql) => {
     claimsOf: (entityId: number): (Claim & Readonly<{ role: string; relation: string | null }>)[] =>
       sql.exec<Claim & { role: string; relation: string | null }>(`SELECT claims.*, claim_links.role AS role, claim_links.relation AS relation FROM claim_links JOIN claims ON claims.id = claim_links.claim_id WHERE claim_links.entity_id = ? AND claims.status IN ${LIVE} ORDER BY claims.last_seen_at DESC, claims.id DESC`, entityId).toArray(),
     claimIdsOf: (entityId: number): number[] => sql.exec<{ claim_id: number }>('SELECT claim_id FROM claim_links WHERE entity_id = ?', entityId).toArray().map(row => row.claim_id),
-    // The people a forgotten topic names, by name, other name or address: their claims go with the topic.
+    // The people a forgotten topic names exactly, by their name, another name or an address: their claims go with the topic. A
+    // topic inside a name ("Acme" in sam@acme.com, a shared surname) names no one.
     namedBy(topics: readonly string[]): Person[] {
-      return all().filter(row => topics.some(topic => [row.name, ...listOf(row.aliases), ...listOf(row.addresses)].some(text => carriesTopic(text, topic))));
+      return all().filter(row => topics.some(topic => [...namesOf(row), ...listOf(row.addresses)].some(text => same(text, topic))));
     },
-    // What forgetting one person bars: their full name, every address, and each other name no other live person also carries.
+    // What forgetting one person bars: every address, and each of their names that no other living person's name contains or is
+    // contained in, so forgetting one Priya never forgets another, nor "Priya Patel" with "Priya".
     forgetTexts(id: number): string[] {
       const row = person(id);
       if (!row) return [];
-      const others = new Set(all().filter(other => other.id !== id).flatMap(other => [other.name, ...listOf(other.aliases)].map(text => text.toLowerCase())));
-      return [row.name, ...listOf(row.addresses), ...listOf(row.aliases).filter(alias => !others.has(alias.toLowerCase()))];
+      const others = all().filter(other => other.id !== id).flatMap(namesOf);
+      const shared = (name: string) => others.some(other => carriesTopic(other, name) || carriesTopic(name, other));
+      return [...namesOf(row).filter(name => !shared(name)), ...listOf(row.addresses)];
     },
     // A person is derived: one with no live claim left is deleted, and so are links to claims that are gone or being forgotten.
     prune(): void {
@@ -78,6 +88,8 @@ export const peopleTables = (sql: Sql) => {
   };
 };
 export type PeopleTables = ReturnType<typeof peopleTables>;
+// A ref that named a living person when it was checked, and no longer did when the write committed.
+export class StalePersonRef extends Error { constructor(readonly ref: number) { super('stale_person_ref'); } }
 export const personAddresses = (row: Pick<Person, 'addresses'>): string[] => listOf(row.addresses);
 export const personAliases = (row: Pick<Person, 'aliases'>): string[] => listOf(row.aliases);
 

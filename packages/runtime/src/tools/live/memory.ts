@@ -10,7 +10,7 @@ import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
-import { nextOccurrence, personAliases, type Person } from '../../memory/people';
+import { nextOccurrence, personAliases, StalePersonRef, type Person } from '../../memory/people';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
 
 export type { MemoryOwnerTurn };
@@ -84,7 +84,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (!source) return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
         // A person the owner asked to forget stays forgotten: neither their name nor an address comes back as a new person.
-        const links = deps.people ? args.people ?? [] : [];
+        // A turn that read outside content may say who a note is about, never how close they are: the ring is the owner's
+        // relationship, not something a mail can set.
+        const links = (deps.people ? args.people ?? [] : []).map(link => ctx.toolArgSourceTaint === 'external' ? { ...link, ring: undefined } : link);
         if (links.some(link => link.name !== undefined && blocked(link.name))) return fail('This memory names a person the owner asked to forget.');
         const unknown = store.people.unknownRefs(links);
         if (unknown.length) return fail(`Memory has no person with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Read memory with people: true, and pass ref only for a person it lists, or name to start a new one.`);
@@ -106,12 +108,19 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const earlier = !tainted && (previous?.origin === 'agent' || previous?.origin === 'untrusted') && source !== turn.current;
         const because = tainted ? 'tainted' : earlier ? 'earlier' : undefined;
         const claim = { kind: args.kind, text: args.text, evidence: args.evidence_quote, source: because ? 'inferred' : 'stated', origin: because ? 'agent' : 'owner', source_ref: `owner, ${source.message_ref}`, aliases: args.aliases, ...(args.area ? { area: args.area } : {}), ...(deps.people && args.on_date ? { on_date: args.on_date } : {}) };
-        // The people a claim names are linked in the same commit as the claim; a correction keeps the people its earlier wording named.
-        const linked = (id: number, replaced?: number) => {
-          if (links.length) return { people: store.people.link(id, links, now()) };
-          if (replaced !== undefined && deps.people) store.people.carryLinks(replaced, id);
-          return {};
+        // The people a claim names are linked in the same commit as the claim (the store carries a corrected claim's people to its
+        // new wording). A ref is checked again as the commit runs, so a person forgotten meanwhile writes nothing.
+        const linked = (id: number) => {
+          if (!links.length) return {};
+          const people = store.people.link(id, links, now());
+          // A new person whose name memory already holds: which one is meant is the model's call, so it is shown the others.
+          const namesakes = links.flatMap((link, index) => link.name === undefined ? [] : store.people.all()
+            .filter(row => row.id !== people[index] && row.name.trim().toLowerCase() === link.name!.trim().toLowerCase())
+            .map(row => ({ person: row.id, name: row.name, relations: [...new Set(store.people.claimsOf(row.id).flatMap(claim => claim.relation ? [claim.relation] : []))].slice(0, 3) })));
+          return { people, ...(namesakes.length ? { same_name: namesakes, note: 'Memory already holds someone with this name. If this note is about one of them, correct it with replaces_id and people ref; otherwise it stays a new person.' } : {}) };
         };
+        const commit = <T>(work: () => T): T => ctx.runScope ? ctx.runScope.commit(work) : deps.transaction ? deps.transaction(work) : work();
+        const STALE = 'A person this names was forgotten or removed just now, so nothing was saved. Read memory with people: true and try again.';
         const peopleNote = !deps.people && (args.people || args.on_date) ? { people_note: PEOPLE_OFF } : {};
         const duplicate = claims.find(row => row.kind === args.kind && normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
         // The owner saying a held fact again in their own words, with no outside content in the turn, makes it theirs. Only their
@@ -119,6 +128,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const held = duplicate && (duplicate.origin !== 'owner' || duplicate.source !== 'stated') ? duplicate : undefined;
         const upgrade = !previous && !tainted && source === turn.current ? held : undefined;
         const replaced = previous ?? upgrade;
+        // Outside content never changes who the owner's own notes are about.
+        if (!replaced && duplicate && links.length && tainted && duplicate.origin !== 'agent' && duplicate.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change who the owner\'s own notes are about. Ask the owner; their own reply can say it.');
         await ready(ctx);
         if (replaced) {
           let named = {};
@@ -126,20 +137,22 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
             if (!store.correct(replaced.id, claim, now())) return false;
             const replacement = store.claims().find(row => row.supersedes_id === replaced.id || (row.kind === args.kind && normalizeForGrounding(row.text) === normalizeForGrounding(args.text)));
             if (!replacement) throw new Error('Correction receipt missing');
-            named = { id: replacement.id, ...linked(replacement.id, replaced.id) };
+            named = { id: replacement.id, ...linked(replacement.id) };
             return true;
           };
-          const corrected = ctx.runScope ? ctx.runScope.commit(correct) : correct();
+          let corrected: boolean;
+          try { corrected = commit(correct); } catch (error) { if (error instanceof StalePersonRef) return fail(STALE); throw error; }
           if (!corrected) return fail('Atomic correction could not be applied.');
           return success({ ...named, status: 'corrected', ...saidAs(because), ...peopleNote });
         }
         if (duplicate) {
-          const named = links.length ? (ctx.runScope ? ctx.runScope.commit(() => linked(duplicate.id)) : linked(duplicate.id)) : {};
+          let named = {};
+          try { named = links.length ? commit(() => linked(duplicate.id)) : {}; } catch (error) { if (error instanceof StalePersonRef) return fail(STALE); throw error; }
           return success({ id: duplicate.id, status: 'duplicate', ...named, ...(held ? { source: held.source, note: HELD_NOTE } : {}), ...peopleNote });
         }
         let saved = { id: 0 } as { id: number; people?: number[] };
         const add = () => { store.add(claim, now()); const id = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id; saved = { id, ...linked(id) }; };
-        if (ctx.runScope) ctx.runScope.commit(add); else add();
+        try { commit(add); } catch (error) { if (error instanceof StalePersonRef) return fail(STALE); throw error; }
         deps.semantic?.kick();
         return success({ ...saved, status: 'stored', ...saidAs(because), ...peopleNote });
       } },

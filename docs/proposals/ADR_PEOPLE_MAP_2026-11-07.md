@@ -98,9 +98,9 @@ The person is the unit the owner acts on. Each action reuses the claim machinery
   - A relation or a birthday is a claim, so the owner corrects it with the existing `claim.edit` on that claim in the person's detail. It is stored as an owner claim superseding the earlier one, so history keeps what it replaced, as every correction does today.
   - Each runs on the app session's authority, like `node.correct`.
 - **Forget** (`person.forget`) removes the person.
-  - **What it bars:** the full name and every address, using the existing forget barrier and topic purge.
+  - **What it bars:** every address, and each of their names that no other living person's name contains or is contained in. Forgetting one Priya never bars another Priya, or a "Priya Patel". Such a shared name is not barred: the person's claims still go by id.
   - **What it deletes:** every claim linked to the person, by id and with lineage, as a forget by `claim_ids` does now; then the entity.
-  - **Short names are protected:** an alias is barred only if no other live person carries it. Forgetting "Priya Shah" must not stop Waldo learning about another Priya. That is an exact check over stored aliases, not a judgment.
+  - **A topic forget** takes a person's claims only when the topic is exactly one of their names or addresses. "Acme" never takes the claims about someone with an @acme.com address, and a surname never takes everyone who carries it.
   - **The receipt is honest:** the person's mail and events stay in Gmail and Google Calendar; another person who shares a first name is untouched; backups expire per retention.
   - This keeps forget topic-based (the 25 Oct ruling): the topics are the person's name and addresses, and the claims are selected by their links.
 - **Merging two records, or splitting one:** in chat for v1 ("these are the same Priya"). The model re-links through the claim operations; an app action can follow.
@@ -109,7 +109,8 @@ The person is the unit the owner acts on. Each action reuses the claim machinery
 
 - **In turns:** S9's rule applies unchanged. A person is in a turn's view only if at least one linked claim is visible there.
   - A person known only from mail is absent until confirmed.
-  - In a turn that read outside content, a person linked only through `body` or `mind` claims is hidden, and so is one filed under those areas.
+  - In a turn that read outside content, a person linked only through `body` or `mind` claims is hidden.
+  - A turn that read outside content may link people to Waldo's own reads, but never to the owner's own claims, and never sets a ring.
 - **On the map:** the app shows the owner everyone, each marked **yours** or **Waldo thinks**, with the source behind each claim. Showing the owner what Waldo holds about their own contacts is the point of the map.
 - **In background summaries:** the Patrol summary line stays counts-only ("1 new person"). It never shows a name.
 
@@ -208,4 +209,4 @@ Names and email addresses are normal owner context within the owner's own author
 2. **The app view:** `people` and its actions, at the gate's controls revision.
 3. **Source pass and skill:** people and addresses from the source pass, last contact, and the relationship-upkeep skill reading the cards.
 
-**Rollback:** `PEOPLE_MAP` `0` stops every new field being offered or written. The tables stay, and old code ignores them. A revert leaves claims as they are.
+**Rollback:** with `PEOPLE_MAP` `0`, the new fields stay in the tool schemas but nothing is linked, dated or read: the handlers refuse them and say so. The tables stay, and old code ignores them. A revert leaves claims as they are.

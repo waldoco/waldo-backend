@@ -55,6 +55,7 @@ describe('people map: memory', () => {
     const work = await w.data('remember', { kind: 'fact', text: 'Priya is a colleague', evidence_quote: 'Priya from work', people: [{ name: 'Priya', role: 'subject', relation: 'colleague' }] }, w.ctx(said));
     const cousin = await w.data('remember', { kind: 'fact', text: 'Priya is a cousin', evidence_quote: 'my cousin Priya', people: [{ name: 'Priya', role: 'subject', relation: 'cousin' }] }, w.ctx(said));
     expect(work.people).not.toEqual(cousin.people);
+    expect(cousin).toMatchObject({ same_name: [{ person: (work.people as number[])[0], name: 'Priya' }], note: expect.stringContaining('already holds') });
     expect(w.store.people.all().map(row => row.name)).toEqual(['Priya', 'Priya']);
     const before = w.store.allClaims().length;
     expect(await w.call('remember', { kind: 'fact', text: 'Sam likes jazz', evidence_quote: 'are both coming', people: [{ ref: 99, role: 'subject' }] }, w.ctx(said))).toMatchObject({ ok: false, error: expect.stringContaining('99') });
@@ -92,5 +93,30 @@ describe('people map: memory', () => {
     expect(w.store.claims()[0]!.on_date).toBeNull();
     expect(await w.call('read_memory', { people: true }, w.ctx('my people'))).toMatchObject({ ok: false, error: expect.stringContaining('people map') });
     expect(await w.call('forget_memory', { person: 1, scope_note: 'Sam' }, w.ctx('forget Sam'))).toMatchObject({ ok: false, error: expect.stringContaining('people map') });
+  }));
+
+  it('a turn that read outside content never changes who the owner\'s own notes are about, nor how close someone is', () => runInDurableObject(stub('taint'), async (_instance, state) => {
+    const w = world(state);
+    const said = 'Priya is my sister';
+    const sister = (await w.data('remember', { kind: 'fact', text: said, evidence_quote: said, people: [{ name: 'Priya', role: 'subject', ring: 'inner' }] }, w.ctx(said))).people as number[];
+    const tainted = w.ctx(said, { toolArgSourceTaint: 'external' } as never);
+    expect(await w.call('remember', { kind: 'fact', text: said, evidence_quote: said, people: [{ name: 'Mallory', role: 'subject', relation: 'husband' }] }, tainted)).toMatchObject({ ok: false, error: expect.stringContaining('outside content') });
+    await w.data('remember', { kind: 'fact', text: 'Priya visits on Sundays', evidence_quote: said, people: [{ ref: sister[0]!, role: 'subject', ring: 'wider' }] }, tainted);
+    expect(w.store.people.all().map(row => [row.name, row.ring])).toEqual([['Priya', 'inner']]);
+  }));
+
+  it('keeps a fact\'s people through any correction, takes its date only from the new wording, and stops counting a person whose last claim was dismissed', () => runInDurableObject(stub('corrections'), async (_instance, state) => {
+    const w = world(state);
+    const said = 'Priya\'s birthday is 14 March';
+    const stored = await w.data('remember', { kind: 'event', text: said, evidence_quote: said, on_date: '--03-14', people: [{ name: 'Priya', role: 'subject' }] }, w.ctx(said));
+    const priya = (stored.people as number[])[0]!;
+    // The app's edit and the nightly correction go through the store's own correct.
+    expect(w.store.correct(stored.id as number, { kind: 'event', text: 'Priya\'s birthday is 14 April', source: 'stated', evidence: 'app', origin: 'owner', source_ref: 'app:claim.edit' }, '2026-11-07T10:00:00Z')).toBe(true);
+    expect(w.store.people.claimsOf(priya).map(claim => [claim.text, claim.on_date])).toEqual([['Priya\'s birthday is 14 April', null]]);
+    const dated = await w.data('remember', { kind: 'event', text: 'Priya\'s birthday is 15 April', evidence_quote: '15 April', replaces_id: w.store.people.claimsOf(priya)[0]!.id, on_date: '--04-15' }, w.ctx('No, it is 15 April'));
+    expect(w.store.people.claimsOf(priya).map(claim => [claim.id, claim.on_date])).toEqual([[dated.id, '--04-15']]);
+    w.store.setStatus(dated.id as number, 'dismissed');
+    expect(w.store.people.all()).toEqual([]);
+    expect(await w.call('remember', { kind: 'fact', text: 'Priya called', evidence_quote: 'Priya called', people: [{ ref: priya, role: 'subject' }] }, w.ctx('Priya called'))).toMatchObject({ ok: false });
   }));
 });

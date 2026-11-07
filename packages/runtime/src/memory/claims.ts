@@ -665,6 +665,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
           if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ? AND bring_up_less_at IS NULL', old.bring_up_less_at, twin.id);
           repointNodes(old, twin.id);
+          people.carryLinks(old.id, twin.id);
           return true;
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
@@ -676,6 +677,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, at, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
         // The owner's wish about raising a fact follows the fact into its corrected wording.
         if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ?', old.bring_up_less_at, replacement);
+        // The people a fact is about stay with its new wording, whoever corrected it. Its date is the new wording's own: a
+        // correction that names none leaves none, rather than keeping a day the new words may contradict.
+        if (claim.on_date) sql.exec('UPDATE claims SET on_date = ? WHERE id = ?', claim.on_date, replacement);
+        people.carryLinks(old.id, replacement);
         retire();
         repointNodes(old, replacement);
         return true;
