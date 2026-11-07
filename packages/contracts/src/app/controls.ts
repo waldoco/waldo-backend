@@ -286,11 +286,40 @@ export const appConnectorTileV1Schema = z.strictObject({
   id: z.string().regex(APP_CONNECTOR_ID_V1), label: text.min(1).max(60), about: text.min(1).max(500), consent: text.min(1).max(1000).nullable(),
   connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable(),
 });
+// Controls revision 17 (`controls=17`): each Google account may carry picture and says whether Waldo may read its Drive,
+// Docs, Sheets and Slides (drive, docs, sheets, slides, like calendar, mail and tasks: true only where the account's saved
+// grant lets Waldo read it), and the view carries wearables. A build below it receives none of them.
+export const APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION = 17;
+// A Google account's profile picture is served by Waldo, so the phone never calls Google's image host. picture is this path,
+// fetched from the same origin with the app session's bearer like any other app route, and is privately cacheable for an
+// hour. The answer is the image with its own image type, or a JSON 404 when Waldo holds no picture; the key changes when the picture
+// does, so the app may cache the image by path. null or absent: Waldo holds no picture for the account, and the app shows
+// its own fallback.
+export const APP_GOOGLE_PICTURE_PATH_V1 = '/app/v1/connections/google/pictures';
+export const APP_GOOGLE_PICTURE_MEDIA_V1 = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const;
+const googlePicture = z.string().regex(/^\/app\/v1\/connections\/google\/pictures\/[a-f0-9]{32}$/);
+export const appGooglePictureRouteV1 = { method: 'GET', path: `${APP_GOOGLE_PICTURE_PATH_V1}/{key}`, authenticated: true, success_status: 200, response_media: APP_GOOGLE_PICTURE_MEDIA_V1 } as const;
+// A wearable, as the Wearables section lists it: a source of body readings the owner can connect, a device (a watch, a ring, a strap) or, later, a single reading (body temperature,
+// weight). access says how it is reached: healthkit and samsung-health are a permission on the phone, so Waldo lists them
+// for their platform and the app knows their state; oauth is a cloud account Waldo syncs and reports in connection; manual
+// is a reading the owner enters. available is whether this Waldo can connect it now; an unavailable entry is one Waldo
+// lists before it can connect it. connection is Waldo's own state and is null for a phone permission, or for an account
+// that is not connected. connected_at is epoch ms, or null when Waldo did not record it.
+export const APP_WEARABLES_MAX_V1 = 32;
+export const appWearableV1Schema = z.strictObject({
+  id: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), kind: z.enum(['device', 'reading']), label: text.min(1).max(60),
+  access: z.enum(['healthkit', 'samsung-health', 'oauth', 'manual']), platform: z.enum(['ios', 'android']).nullable(), available: z.boolean(),
+  connection: z.strictObject({ status: z.enum(['active', 'reauth_needed', 'consent_required']), connected_at: z.int().positive().nullable() }).nullable(),
+}).refine(wearable => wearable.platform === (wearable.access === 'healthkit' ? 'ios' : wearable.access === 'samsung-health' ? 'android' : null), { error: 'healthkit is ios, samsung-health is android, and nothing else names a platform', path: ['platform'] })
+  .refine(wearable => wearable.connection === null || wearable.access === 'oauth', { error: 'only a cloud account carries Waldo\'s connection state', path: ['connection'] });
 export const appControlConnectionsDataV1Schema = z.strictObject({
   // signin: the owner signs in with Google and that account is not connected yet, so the app can offer to connect that same
   // account with google.connect account 'signin'. Its presence is the capability: a backend without it never offers it, and
   // an older app reads the view tolerantly and drops it. email is the owner's own confirmed address.
-  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
+  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']), picture: googlePicture.nullable().optional(),
+    drive: z.boolean().optional(), docs: z.boolean().optional(), sheets: z.boolean().optional(), slides: z.boolean().optional() })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
+  wearables: z.array(appWearableV1Schema).max(APP_WEARABLES_MAX_V1)
+    .refine(wearables => new Set(wearables.map(wearable => wearable.id)).size === wearables.length, 'A wearable is listed once').optional(),
   // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo
   // can no longer read it and connecting again fixes that. connected_at is epoch ms.
   granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
@@ -567,6 +596,7 @@ export type AppControlProjectionV1 = z.infer<typeof appControlProjectionV1Schema
 export type AppControlViewV1 = z.infer<typeof appControlViewV1Schema>;
 export type AppControlResultV1 = z.infer<typeof appControlResultV1Schema>;
 export type AppChannelStatusV1 = z.infer<typeof appChannelStatusV1Schema>;
+export type AppWearableV1 = z.infer<typeof appWearableV1Schema>;
 export type AppWelcomeBuildV1 = z.infer<typeof appWelcomeBuildV1Schema>;
 export type AppNodeSourceV1 = z.infer<typeof appNodeSourceV1Schema>;
 export type AppNodeSourceV13 = z.infer<typeof appNodeSourceV13Schema>;
