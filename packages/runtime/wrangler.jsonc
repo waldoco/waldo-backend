@@ -307,7 +307,7 @@
           "HEALTH_TRAINING_LOAD": "1",
           "HEALTH_COACHING": "1",
           "HEALTH_ACTIONS": "1",
-          "MEDICATIONS": "0",
+          "MEDICATIONS": "1",
           "SCREEN_TIME": "1",
           "DEVICE_PLACE": "1",
           "ARRIVAL_LOOK": "1",

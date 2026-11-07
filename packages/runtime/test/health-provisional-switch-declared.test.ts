@@ -75,9 +75,10 @@ describe('HISTORY_ARCHIVE in the Worker config', () => {
 });
 
 describe('MEDICATIONS in the Worker config', () => {
-  it('is off in both blocks until the gate turns it on at a named deploy with migration 20261101040000', () => {
+  // The owner turned it on for staging only; the staging deploy that carries it must have migration 20261101040000 applied.
+  it('is on in staging only, and off in production', () => {
     expect(parsed.vars.MEDICATIONS).toBe('0');
-    expect(parsed.env.staging.vars.MEDICATIONS).toBe('0');
+    expect(parsed.env.staging.vars.MEDICATIONS).toBe('1');
   });
 });
 
