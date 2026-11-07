@@ -2484,27 +2484,32 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     this.ownerBrowser.stop(); await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()])));
   }
-  // A typed /stop from the bound owner (WHATSAPP_STOP), the control Telegram has: it stops the owner's background work, and
-  // the running WhatsApp turn and the owner's messages waiting ahead of the /stop (inbox stop). When it stopped any, the
-  // owner is told once, quoting the message it stopped, after Meta has its acknowledgement; the /stop runs no turn of its own.
-  // When it stopped none, the /stop runs as ever ("Nothing is running right now."). A forward is someone else's text and
-  // stops nothing; any other words are the running turn's model to weigh.
-  private async whatsappStop(claimed: readonly WaIngressMessage[], subject: string): Promise<void> {
-    if (this.env.WHATSAPP_STOP !== '1') return;
+  // A typed /stop from the bound owner (WHATSAPP_STOP), the control Telegram has. In the admission's own commit, it closes the
+  // running WhatsApp turn's row and the owner's messages waiting ahead of it (inbox stop), so a restart after the commit
+  // cannot run what the owner stopped. Null when no /stop came; the rows it closed otherwise. A forward is someone else's text
+  // and stops nothing; any other words are the running turn's model to weigh.
+  private whatsappStops(claimed: readonly WaIngressMessage[], subject: string, inbox: WhatsAppOwnerInbox): WhatsAppInboxRecord[] | null {
+    if (this.env.WHATSAPP_STOP !== '1') return null;
     const stops = claimed.filter(m => m.from === subject && m.type === 'text' && m.text?.body?.trim() === '/stop' && !whatsappForwarded(m));
-    if (!stops.length) return;
-    await this.stopOwnerWork();
-    const active = this.activeWhatsApp;
-    const closed = this.whatsappInbox().stop(active ? { id: active.scope.runId, attempt: active.scope.attempt } : null, new Set(stops.flatMap(m => typeof m.id === 'string' ? [m.id] : [])));
-    if (!closed.length) return;
-    if (active && closed[0]!.id === active.scope.runId && this.activeScope === active.scope) this.activeAbort?.abort();
-    const quoted = closed[0]!.wamid;
-    this.ctx.waitUntil((async () => {
-      try {
-        const { api, owner } = this.setup('whatsapp');
-        await api.sendMessage({ chat_id: owner, text: INTERRUPTED_NOTICES.stopped, ...(quoted ? { quote_message_id: quoted } : {}) });
-      } catch { console.error('whatsapp stop notice unavailable'); }
-    })());
+    return stops.length ? inbox.stop(new Set(stops.flatMap(m => typeof m.id === 'string' ? [m.id] : []))) : null;
+  }
+  // After that commit: the stopped turn is aborted at once rather than at its next scope check, and when anything stopped the
+  // owner is told once, quoting the message it stopped, after Meta has its acknowledgement; the /stop runs no turn of its own.
+  // Then the owner's background work stops. None of this can fail the admission, whose commit already holds the stop. When
+  // nothing stopped, the /stop runs as ever ("Nothing is running right now.").
+  private async whatsappStopped(closed: readonly WhatsAppInboxRecord[]): Promise<void> {
+    if (closed.length) {
+      const active = this.activeWhatsApp;
+      if (active && closed[0]!.id === active.scope.runId && this.activeScope === active.scope) this.activeAbort?.abort();
+      const quoted = closed[0]!.wamid;
+      this.ctx.waitUntil((async () => {
+        try {
+          const { api, owner } = this.setup('whatsapp');
+          await api.sendMessage({ chat_id: owner, text: INTERRUPTED_NOTICES.stopped, ...(quoted ? { quote_message_id: quoted } : {}) });
+        } catch { console.error('whatsapp stop notice unavailable'); }
+      })());
+    }
+    try { await this.stopOwnerWork(); } catch (error) { console.error(JSON.stringify({ hop: 'whatsapp_stop', ok: false, code: 'background_stop_failed', error_class: error instanceof Error ? error.name : 'unknown' })); }
   }
   // One WhatsApp turn under its row's run scope. A commit holds only while the row is still running under this attempt, before
   // its deadline, and while the sender is still the bound, linked subject under an unchanged owner name. The scope is aborted
@@ -2583,7 +2588,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The wake is armed before the rows exist: a spurious alarm finds nothing, a missing one would strand a row.
     await armWhatsappPendingWake(this.ctx.storage, Date.now() + 250);
     let claimed: NonNullable<typeof value.messages> = [];
-    let changed = false, rebound = false, retired: readonly string[] = [];
+    let changed = false, rebound = false, retired: readonly string[] = [], stopped: WhatsAppInboxRecord[] | null = null;
     // A full inbox rolls the claims back with it, so Meta's retry is admitted once the queue has room.
     try { this.ctx.storage.transactionSync(() => {
       // The binding is decided again here, against what was read before the awaits: the first admission binds, a reconciled
@@ -2604,9 +2609,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (latestId) kv.put(WA_LAST_INBOUND_ID_KEY, latestId);
       const { updates, sources } = whatsappIngressUpdates(claimed, subject, inbox.seq(), id => whatsappSentText(kv, id, Date.now()));
       inbox.admit(updates.map((update, index) => ({ update, wamid: sources[index] ?? '' })), subject);
+      stopped = this.whatsappStops(claimed, subject, inbox);
     }); } catch (error) { if (error instanceof WhatsAppInboxFull) return new Response('unavailable', { status: 503 }); throw error; }
     if (changed) return new Response('unavailable', { status: 503 });
-    await this.whatsappStop(claimed, subject);
+    if (stopped) await this.whatsappStopped(stopped);
     // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
     if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
     return new Response('ok');
