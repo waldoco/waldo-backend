@@ -1076,19 +1076,41 @@ describe('a steered task', () => {
     });
   });
 
-  it('a report at or past the deadline, or with a step still recorded in flight, is accepted: a new attempt could not use the change, or could run the step again', async () => {
+  it('a report at or past the deadline, or with a step still recorded in flight, is accepted as partial and names each change it did not do', async () => {
     await withHost(async ({ book, ticket, clock }) => {
       const late = ticket();
       steer(book, late.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
       clock.at = book.get(late.jobId)!.deadline_at;
       book.touch(late, null);
       expect(book.report(late, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(late.jobId)!.result_json!)).toEqual({ ...result('Two tables found.'), status: 'partial', left: ['The change "Also check walk-ins." came too late for this task and was not done.'] });
+      expect(book.get(late.jobId)!.outcome).toBe('partial');
       clock.at = T0;
       const acting = ticket('errand');
       steer(book, acting.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
       expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
       expect(book.report(acting, result('Booked view of the form.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
-      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null });
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null, outcome: 'partial' });
+      expect(JSON.parse(book.get(acting.jobId)!.result_json!).left).toEqual(['The change "Also check walk-ins." came too late for this task and was not done.']);
+    });
+  });
+
+  it('a failed report keeps its status and still names the change it did not do; a shown change is never named', async () => {
+    await withHost(async ({ book, ticket, clock }) => {
+      const failed = ticket();
+      steer(book, failed.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1');
+      clock.at = book.get(failed.jobId)!.deadline_at;
+      book.touch(failed, null);
+      expect(book.report(failed, { status: 'failed', summary: 'Stopped.', findings: [], proposals: [], left: ['Prices'] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(failed.jobId)!.result_json!)).toMatchObject({ status: 'failed', left: ['Prices', 'The change "Only rooftop places." came too late for this task and was not done.'] });
+      clock.at = T0;
+      const shown = ticket();
+      steer(book, shown.jobId, 'interrupt', 'Only rooftop places.', 'turn-3:s1');
+      expect(book.report(shown, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      const next = book.startAttempt(shown.jobId)!;
+      expect(book.claim(next)).not.toBe('fenced');
+      expect(book.report(next, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(shown.jobId)!.result_json!)).toEqual(result('Two rooftops.'));
     });
   });
 
@@ -1104,6 +1126,16 @@ describe('a steered task', () => {
       expect(row).toMatchObject({ status: 'queued', taint: 'external' });
       expect(jobCheckpoint(row).turns.map(turn => turn.call.name)).toEqual(['search_communication']);
       expect(log.filter(entry => entry.hop === 'task_attempt_steered')).toHaveLength(1);
+    });
+  });
+
+  it('the judge reads a long change cut like the context beside it', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', `Rome. ${'r'.repeat(5_000)}`, 'turn-2:s1');
+      const text = watchdogJudgeText(book.get(t.jobId)!, null, [], T0);
+      expect(text).toContain('Rome.');
+      expect(text).not.toContain('r'.repeat(2_100));
     });
   });
 
