@@ -3,8 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { interruptBook, type InterruptLimits } from '../src/channels/interruptions';
-import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, nextLocalHour, nextLookAt, parseIntervention, type InterventionCode } from '../src/channels/interventions';
-import { verifiedPlaceMoved } from '../src/health/zone-change-route';
+import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, nextLocalHour, nextLookAt, parseIntervention, type LookCause, type InterventionCode } from '../src/channels/interventions';
+import { verifiedPlaceArrived, verifiedPlaceMoved } from '../src/health/zone-change-route';
 import { routerSignature } from '../src/identity/owner-directory';
 import { triageTools } from '../src/channels/update-sweep';
 import type { Scheduler } from '../src/scheduler/multiplexer';
@@ -20,12 +20,12 @@ const NUDGE = { decision: 'say', say: 'The deck block slipped this morning, and 
 
 type Look = Readonly<{ codes: InterventionCode[]; delivered: string[]; turns: number; tools: (readonly string[])[]; prompts: string[]; spent: ReturnType<ReturnType<typeof interruptBook>['spent']>; settled: number }>;
 let seq = 0;
-const look = (reply: unknown, setup: Readonly<{ moved?: boolean; quiet?: boolean; consent?: boolean; closes?: 'before' | 'during'; cards?: number; before?: (book: ReturnType<typeof interruptBook>) => void; during?: (book: ReturnType<typeof interruptBook>) => void; result?: TaskResult }> = {}) =>
+const look = (reply: unknown, setup: Readonly<{ cause?: LookCause; quiet?: boolean; consent?: boolean; closes?: 'before' | 'during'; cards?: number; before?: (book: ReturnType<typeof interruptBook>) => void; during?: (book: ReturnType<typeof interruptBook>) => void; result?: TaskResult }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`interventions-${seq += 1}`)), async (_instance, state): Promise<Look> => {
     const sql = state.storage.sql;
     let n = 0;
     const jobs = jobBook(sql, { now: () => NOW, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
-    const made = enqueueMachine(jobs, interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, moved: setup.moved }), []);
+    const made = enqueueMachine(jobs, interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, cause: setup.cause }), []);
     if (made.code !== 'enqueued') throw new Error(made.code);
     const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
     setup.before?.(book);
@@ -132,10 +132,43 @@ describe('the look\'s contract', () => {
   });
 });
 
+// Arriving home or at the gym, places the owner named on their phone, brings the same look forward (ARRIVAL_LOOK).
+describe('a look brought forward by an arrival', () => {
+  it('knows where the owner arrived, is told an arrival is a reason to look and not to speak, and reads health and place', async () => {
+    for (const [cause, where] of [['arrived_home', 'arrived home'], ['arrived_gym', 'arrived at the gym']] as const) {
+      const arrived = await look({ decision: 'none' }, { cause });
+      expect(arrived.codes).toEqual(['none']);
+      expect(arrived.prompts[0]).toContain(`brought forward because the owner's phone says they just ${where}`);
+      expect(arrived.prompts[0]).toContain('An arrival is a reason to look, not a reason to speak');
+      expect(arrived.prompts[0]).not.toContain('reported another time zone or city');
+      expect(arrived.tools[0]).toEqual(expect.arrayContaining(['get_device_context', 'get_health']));
+    }
+  });
+
+  it('answers to the owner\'s limits like any look: quiet hours hold it before any model is asked', async () => {
+    const held = await look(NUDGE, { cause: 'arrived_home', quiet: true });
+    expect([held.turns, held.delivered]).toEqual([0, []]);
+  });
+
+  it('takes only a signed notice that carries home or gym, addressed to this very object', async () => {
+    const secret = 'fictional-router-secret-00000000000000000';
+    const notice = async (doName: string, body: string, statement?: string, sig?: string) => new Request('https://telegram-owner/app/v1/internal/place-arrived', { method: 'POST', body,
+      headers: { 'x-waldo-do-name': doName, 'x-waldo-arrived-sig': sig ?? await routerSignature(secret, 0, statement ?? `placearrived.${(JSON.parse(body) as { place?: string }).place}.${doName}`) } });
+    const mine = (name: string) => name === 'owner-1';
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"home"}'), secret, mine)).toBe('home');
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"gym"}'), secret, mine)).toBe('gym');
+    expect(await verifiedPlaceArrived(await notice('owner-2', '{"place":"gym"}'), secret, mine)).toBeNull();
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"office"}'), secret, mine)).toBeNull();
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"gym","cell":"tdr1w"}'), secret, mine)).toBeNull();
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"gym"}', 'placearrived.home.owner-1'), secret, mine)).toBeNull();
+    expect(await verifiedPlaceArrived(await notice('owner-1', '{"place":"gym"}', undefined, 'forged'), secret, mine)).toBeNull();
+  });
+});
+
 // A phone that moves to another time zone or city brings the look forward; the look, not code, decides whether that matters.
 describe('a look brought forward by a move', () => {
   it('knows why it runs, is told a move is a reason to look and not to speak, and can read where the phones are', async () => {
-    const moved = await look({ decision: 'none' }, { moved: true });
+    const moved = await look({ decision: 'none' }, { cause: 'place_moved' });
     expect(moved.codes).toEqual(['none']);
     expect(moved.prompts[0]).toContain('brought forward because one of the owner\'s phones reported another time zone or city since the last look');
     expect(moved.prompts[0]).toContain('It may be night where they are now');
@@ -147,7 +180,7 @@ describe('a look brought forward by a move', () => {
   });
 
   it('still answers to the owner\'s limits: quiet hours hold it before any model is asked', async () => {
-    const held = await look(NUDGE, { moved: true, quiet: true });
+    const held = await look(NUDGE, { cause: 'place_moved', quiet: true });
     expect([held.turns, held.delivered]).toEqual([0, []]);
   });
 
@@ -157,15 +190,15 @@ describe('a look brought forward by a move', () => {
     expect(nextLookAt(Date.parse('2026-11-05T23:00:00Z'), 0, 'UTC', window)).toBe(Date.parse('2026-11-06T08:00:00Z'));
     const scheduled: unknown[] = [];
     const scheduler = { lookup: () => ({ state: 'entry', entry: { recurrence: null } }), schedule: async (entry: unknown) => { scheduled.push(entry); } } as unknown as Scheduler;
-    await armInterventionReview(scheduler, NOW, true, true);
+    await armInterventionReview(scheduler, NOW, true, 'place_moved');
     await armInterventionReview(scheduler, NOW + 1, true);
     expect(scheduled).toEqual([
       { id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID, cause_id: 'place_moved' }, occurrenceAt: NOW, dueAt: NOW, recurrence: null },
       { id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: NOW + 1, dueAt: NOW + 1, recurrence: null },
     ]);
-    expect([lookMoved({ payload_refs: { id: INTERVENTION_REVIEW_ID, cause_id: 'place_moved' } }), lookMoved({ payload_refs: { id: INTERVENTION_REVIEW_ID } })]).toEqual([true, false]);
-    expect(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, moved: true }).items.map(item => item.ref)).toEqual(['now', 'moved']);
-    expect(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, moved: true }).key).toBe(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW }).key);
+    expect(['place_moved', 'arrived_home', 'arrived_gym', 'tea_time', undefined].map(cause => lookCause({ payload_refs: { id: INTERVENTION_REVIEW_ID, ...(cause ? { cause_id: cause } : {}) } }))).toEqual(['place_moved', 'arrived_home', 'arrived_gym', null, null]);
+    expect((['place_moved', 'arrived_home', 'arrived_gym'] as const).map(cause => interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, cause }).items.map(item => item.ref))).toEqual([['now', 'moved'], ['now', 'arrived_home'], ['now', 'arrived_gym']]);
+    expect(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW, cause: 'arrived_gym' }).key).toBe(interventionSpec({ surface: 'app', timezone: 'UTC', now: NOW }).key);
     expect(triageTools(false, true)).toContain('get_device_context');
   });
 

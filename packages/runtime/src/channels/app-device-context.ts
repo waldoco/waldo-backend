@@ -5,6 +5,7 @@ import {
   devicePlaceStoredV1Schema, devicePlacesV1Schema,
 } from '../../../contracts/src/app/device-context';
 import { md5Hex } from './md5';
+import type { ArrivalPlace } from '../health/zone-change-route';
 
 // The app's device-context routes, first signal place. The Worker checks each body against the app contract, so nothing finer
 // than the contract's coarse cell is ever forwarded, and signs a call that binds the operation, the owner and the digest of the
@@ -18,6 +19,8 @@ export type AppDeviceContextInput = Readonly<{
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
   // Tells the owner's object that a phone moved to another time zone or city, so its next look comes now.
   moved?: () => Promise<void>;
+  // ARRIVAL_LOOK: tells the owner's object that a phone just arrived home or at the gym, so its next look comes now.
+  arrived?: (place: ArrivalPlace) => Promise<void>;
   // Runs work after the answer goes (the Worker's waitUntil), so a background upload is not held for the notice.
   defer?: (work: Promise<unknown>) => void;
 }>;
@@ -98,11 +101,14 @@ export const handleAppDeviceContext = async (input: AppDeviceContextInput): Prom
   const result = await invokeDeviceContext(rpc, doName, write.operation, JSON.stringify(body.data));
   // An upload's answer says whether the phone moved. The owner's object hears it once, on the upload that recorded it (a replay
   // does not tell it again), and the app's receipt stays as the contract has it. A notice that fails costs the upload nothing.
-  if (route === '/place' && result && typeof result === 'object' && 'moved' in result) {
-    const { moved, ...receipt } = result as Record<string, unknown>;
-    if (moved === true && receipt.replayed === false && input.moved) {
-      const told = input.moved().catch(() => console.error('app device context moved notice'));
-      if (input.defer) input.defer(told); else await told;
+  if (route === '/place' && result && typeof result === 'object' && ('moved' in result || 'arrived' in result)) {
+    const { moved, arrived, ...receipt } = result as Record<string, unknown>;
+    if (receipt.replayed === false) {
+      const told = [
+        ...(moved === true && input.moved ? [input.moved().catch(() => console.error('app device context moved notice'))] : []),
+        ...((arrived === 'home' || arrived === 'gym') && input.arrived ? [input.arrived(arrived).catch(() => console.error('app device context arrived notice'))] : []),
+      ];
+      if (told.length > 0) { const all = Promise.all(told); if (input.defer) input.defer(all); else await all; }
     }
     return settle(receipt, write.response, write.operation);
   }

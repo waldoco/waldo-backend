@@ -8,6 +8,10 @@ export const HEALTH_ZONE_CHANGE_PATH = '/app/v1/internal/health-zone-change';
 export const HEALTH_SAMPLES_PATH = '/app/v1/internal/health-samples';
 // "One of the owner's phones moved to another time zone or city" carries nothing: no zone, city, cell or device.
 export const PLACE_MOVED_PATH = '/app/v1/internal/place-moved';
+// "The owner's phone just arrived home, or at the gym" carries that word and nothing else: no cell, city, zone or device.
+export const PLACE_ARRIVED_PATH = '/app/v1/internal/place-arrived';
+export type ArrivalPlace = 'home' | 'gym';
+const arrivalPlace = (value: unknown): ArrivalPlace | null => (value === 'home' || value === 'gym' ? value : null);
 const TIMEOUT_MS = 20_000;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -27,6 +31,8 @@ const SAMPLES: Notice = {
       : Object.keys(body).length === 1 && body.woke === true ? `healthwoke.${doName}` : null),
 };
 const PLACE_MOVED: Notice = { path: PLACE_MOVED_PATH, header: 'x-waldo-moved-sig', statement: (doName, body) => (Object.keys(body).length === 0 ? `placemoved.${doName}` : null) };
+const PLACE_ARRIVED: Notice = { path: PLACE_ARRIVED_PATH, header: 'x-waldo-arrived-sig',
+  statement: (doName, body) => (Object.keys(body).length === 1 && arrivalPlace(body.place) ? `placearrived.${body.place}.${doName}` : null) };
 // Why the derived rows need a recompute: new readings, or a new stated sleep need with the same readings.
 export type HealthRecomputeCause = 'readings' | 'settings';
 
@@ -73,3 +79,8 @@ export const verifiedHealthSamples = async (request: Request, secret: string | u
 export const notifyOwnerPlaceMoved = (owners: OwnerNamespace, secret: string, doName: string): Promise<void> => send(PLACE_MOVED, owners, secret, doName, {});
 export const verifiedPlaceMoved = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<boolean> =>
   (await verified(PLACE_MOVED, request, secret, addressesThisObject)) !== null;
+export const notifyOwnerPlaceArrived = (owners: OwnerNamespace, secret: string, doName: string, place: ArrivalPlace): Promise<void> => send(PLACE_ARRIVED, owners, secret, doName, { place });
+export const verifiedPlaceArrived = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<ArrivalPlace | null> => {
+  const body = await verified(PLACE_ARRIVED, request, secret, addressesThisObject);
+  return body === null ? null : arrivalPlace(body.place);
+};

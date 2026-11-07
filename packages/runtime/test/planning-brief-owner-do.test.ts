@@ -496,6 +496,30 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('an arrival at the gym brings the same look to now, knowing where; with ARRIVAL_LOOK off, or for a forged notice, nothing moves', async () => {
+    const arrived = async (owner: Steps['owner'], name: string, place: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-arrived', { method: 'POST', body: JSON.stringify({ place }),
+      headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-arrived-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placearrived.${place}.${name}`) } }));
+    const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
+      .map(row => ({ due_at: row.due_at, cause: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
+    await owned('intervention-arrived', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
+      expect((await arrived(owner, 'intervention-arrived', 'gym', 'forged')).status).toBe(403);
+      expect((await arrived(owner, 'intervention-arrived', 'office')).status).toBe(403);
+      expect(armed(state).map(row => row.cause)).toEqual([null]);
+      expect((await arrived(owner, 'intervention-arrived', 'gym')).status).toBe(200);
+      expect(armed(state)).toEqual([{ due_at: AT, cause: 'arrived_gym' }]);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
+      expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'arrived_gym']]);
+      expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, cause: null }]);
+    });
+    await owned('intervention-arrived-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      expect((await arrived(owner, 'intervention-arrived-off', 'home')).status).toBe(200);
+      expect(armed(state).map(row => row.cause)).toEqual([null]);
+    });
+  });
+
   it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
     await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
