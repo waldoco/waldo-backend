@@ -10,7 +10,7 @@ import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
-import { nextOccurrence, personAliases, StalePersonRef, type Person } from '../../memory/people';
+import { personCard, StalePersonRef, type Person } from '../../memory/people';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
 
 export type { MemoryOwnerTurn };
@@ -171,13 +171,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           const shown = (row: Person) => {
             const claims = store.people.claimsOf(row.id).filter(readable);
             if (!claims.length || store.pendingTopics().some(topic => carriesTopic(row.name, topic))) return null;
-            // How the claims about them name them (newest first, each once), and the soonest date that comes round.
-            const relations = [...new Set(claims.flatMap(claim => claim.relation ? [claim.relation] : []))].slice(0, 3);
-            const next = claims.flatMap(claim => { const day = claim.on_date ? nextOccurrence(claim.on_date, today) : null; return day ? [{ date: day, claim_id: claim.id, text: claim.text }] : []; })
-              .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
-            const card = { person: row.id, name: row.name, other_names: personAliases(row), ring: row.ring, relations, next_date: next,
-              last_contact: row.last_contact_at ? { at: row.last_contact_at, via: row.last_contact_via } : null, claims: claims.length };
-            return { card, claims };
+            return { card: personCard(row, claims, today), claims };
           };
           if (person !== undefined) {
             const row = store.people.person(person);

@@ -595,6 +595,27 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     // The people claims are about. Written only here, beside the claims they hang on.
     people,
+    // The owner's yes to a person: one claim in their own name stating who the person is to them now, linked to the person, so
+    // the person is theirs on every turn. It grounds none of the claims Waldo read about them; those keep their own confirm.
+    confirmPerson(id: number, at: string, where: string): number | null {
+      const row = people.person(id);
+      if (!row) return null;
+      const relation = people.claimsOf(id).find(claim => claim.relation)?.relation;
+      const text = relation ? `${row.name}: ${relation}` : `${row.name} is someone the owner knows`;
+      const add = () => {
+        sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, verification_status, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'fact', text, 'confirmed', `confirmed: ${where}`, 'owner', at, at, where, at, at, 'owner-grounded', 'people', 'model');
+        const claim = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id;
+        people.link(claim, [{ ref: id, role: 'subject', ...(relation ? { relation } : {}) }], at);
+        return claim;
+      };
+      return transaction ? transaction(add) : add();
+    },
+    // What forgetting one person takes: every claim about them, earlier wordings included, and the words to bar.
+    personForget(id: number): Readonly<{ ids: readonly number[]; texts: readonly string[] }> | null {
+      if (!people.person(id)) return null;
+      return { ids: lineageOf(sql, people.claimIdsOf(id)), texts: people.forgetTexts(id) };
+    },
     seen(id: number, at: string): void {
       db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },

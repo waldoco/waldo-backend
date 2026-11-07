@@ -109,7 +109,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type PinBlock } from '../memory/claims';
-import { APP_CLAIM_TEXT_MAX_V1, APP_GOOGLE_PICTURE_PATH_V1, APP_NODE_CORRECTION_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, APP_SCHEDULE_TIME_IDS_V1, appScheduleTimeReceiptV1 } from '../../../contracts/src/app/controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_GOOGLE_PICTURE_PATH_V1, APP_NODE_CORRECTION_MAX_V1, APP_PERSON_NAME_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, APP_SCHEDULE_TIME_IDS_V1, appScheduleTimeReceiptV1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
@@ -180,7 +180,7 @@ import { recallChain, recallChainOn } from '../history/recall-chain';
 import { searchHistoryHandler } from '../tools/live/search-history';
 import { archiveMode, historyArchive, historyArchiveForgetStore, sweepScheduleRuns, type ArchiveDeps, type HistoryArchive } from '../history/archive';
 import { memoryHandlers } from '../tools/live/memory';
-import { LIFE_AREAS, SURFACE_CAPABILITIES_V1, toolNameSchema } from '@waldo/contracts';
+import { LIFE_AREAS, PERSON_RINGS, SURFACE_CAPABILITIES_V1, toolNameSchema } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
 import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
@@ -1996,7 +1996,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
-            chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',
+            chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',people:this.env.PEOPLE_MAP==='1',
             googlePictures:async()=>googlePictures(await this.ctx.storage.get<Record<string,GoogleProfileFact>>('google:profiles')),
             wearables:()=>wearablesCatalogue({whoopConfigured:whoopConfig(this.env)!==null,whoop:async()=>{const whoop=this.providerOwner();return {state:(await whoop.status(true)).state,connected_at:whoop.connectedAt()};}}),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
@@ -6366,6 +6366,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
         } else if (action === 'node.confirm') {
           if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), made ?? 'console:node.confirm'))) return false;
+        } else if (action === 'person.confirm') {
+          if (memory.confirmPerson(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:person.confirm'}`) === null) return false;
+        } else if (action === 'person.rename') {
+          // The owner's name for someone is kept as their word: the same bound the app holds it to, and the same scribe check.
+          const name = (value ?? '').trim();
+          if (name.length === 0 || name.length > APP_PERSON_NAME_MAX_V1) return 'person.rename.failed';
+          const checked = await sanitise({ payload: { text: name }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
+          if (!checked.ok) return 'person.rename.failed';
+          if (!memory.people.rename(spotId, name, new Date(now).toISOString())) return false;
+        } else if (action === 'person.ring') {
+          const ring = PERSON_RINGS.find((candidate) => candidate === value);
+          if (!ring) return 'person.ring.failed';
+          if (!memory.people.setRing(spotId, ring, new Date(now).toISOString())) return false;
+        } else if (action === 'person.forget') {
+          // Every claim about them goes to purging, their words into custody, and their name and addresses are barred; the
+          // forget purge job cleans every other store, as for one claim.
+          const chosen = memory.personForget(spotId);
+          if (!chosen) return false;
+          const at = new Date(now).toISOString();
+          for (const text of chosen.texts) memory.barrier(text, at);
+          await this.forgetPurgeJob().track(memory.purge(chosen.ids, at, chosen.texts).texts);
         } else if (action === 'node.correct') {
           // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
           // same scribe check a spot edit crosses, so a credential never enters memory.

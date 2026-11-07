@@ -7,7 +7,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail', 'people']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -37,6 +37,17 @@ const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
 export const APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 = 64;
 const agentMailNoticeVersion = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
+// Controls revision 22 (`controls=22`): the people view, the people in the owner's memory (ADR_PEOPLE_MAP_2026-11-07 §7). The
+// list names each person once; with id (memory:person:<n>) it is one person and the claims about them, which keep their own
+// claim actions in the constellation view. A person takes person.confirm (they are someone the owner knows), person.rename
+// (their name, in value), person.ring (inner, close or wider, in value) and person.forget (them and everything about them).
+// A build below 22 is refused the view and the actions; it still sees every claim about a person in the constellation view.
+export const APP_CONTROLS_PEOPLE_REVISION = 22;
+export const APP_PERSON_NAME_MAX_V1 = 120;
+export const APP_PEOPLE_MAX_V1 = 200;
+const personId = /^memory:person:[1-9][0-9]{0,15}$/;
+export const APP_PERSON_ACTIONS_V1 = ['person.confirm', 'person.rename', 'person.ring', 'person.forget'] as const;
+const PERSON_ACTIONS: readonly string[] = APP_PERSON_ACTIONS_V1;
 // One of the owner's local days, as the days view names it.
 const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
@@ -47,7 +58,8 @@ export const appControlQueryV1Schema = z.strictObject({
   max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(), date: historyDay.optional(),
 }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
-  if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
+  if (query.view === 'people' && query.id !== undefined && !personId.test(query.id)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'The people view names one person, memory:person:<n>' });
+  if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.max_nodes ?? query.max_links ?? (query.view === 'people' ? undefined : query.id)) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
   if (query.view !== 'days' && query.date !== undefined) ctx.addIssue({ code: 'custom', message: 'date requires the days view' });
 });
 // A signed-in device, as its connections row names it for session.revoke.
@@ -81,7 +93,7 @@ const isScheduleTimeId = (id: unknown): boolean => (APP_SCHEDULE_TIME_IDS_V1 as 
 const scheduleSetValid = (id: string | undefined, value: string | undefined): boolean =>
   (isScheduleId(id) && (value === 'on' || value === 'off')) || (isScheduleTimeId(id) && APP_CLOCK.test(value ?? ''));
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'schedule.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'schedule.set', 'person.confirm', 'person.rename', 'person.ring', 'person.forget']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -135,6 +147,15 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
   const edited = action.value?.trim() ?? '';
   if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
+  // The owner's word on one person in the people view.
+  const person = PERSON_ACTIONS.includes(action.action);
+  if (person !== (action.view === 'people')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The people view takes only the person actions, and they only it' });
+  if (person && !personId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A person action names one person, memory:person:<n>' });
+  if (person && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A person action carries only its id and value' });
+  if ((action.action === 'person.confirm' || action.action === 'person.forget') && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: `${action.action} carries no value` });
+  const renamed = action.value?.trim() ?? '';
+  if (action.action === 'person.rename' && (renamed.length === 0 || renamed.length > APP_PERSON_NAME_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `person.rename carries the name, 1 to ${APP_PERSON_NAME_MAX_V1} characters` });
+  if (action.action === 'person.ring' && !['inner', 'close', 'wider'].includes(action.value ?? '')) ctx.addIssue({ code: 'custom', path: ['value'], message: 'person.ring names inner, close or wider' });
   // The owner's word on one constellation node: confirm it, correct it in their own words, or forget it.
   const node = NODE_ACTIONS.includes(action.action);
   if (node && !nodeId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A node action names one node, memory:node:<n>' });
@@ -554,6 +575,23 @@ export const appScheduleTimeReceiptV1 = (outcome: Readonly<{ card: (typeof APP_S
   if (outcome.today === 'unchanged') return { state: 'recorded' as const, message: `Your ${name} already comes ${when}.` };
   return { state: 'recorded' as const, message: `Saved. Your ${name} comes ${when}${outcome.noLaterThan ? ', earlier when you wake before then' : ''}.${SCHEDULE_TODAY[outcome.today]}` };
 };
+// A person as the people view shows them. held_as: yours once the owner said or confirmed something about them, waldo_thinks
+// while Waldo only read them (from mail, an import, its own inference), to confirm or forget. relations: how the claims about
+// them name them, newest first. next_date: the soonest day a claim about them comes round (a birthday), with that claim's
+// id and words. last_contact: when they last wrote to the owner or met them, as far as Waldo saw. actions: what this person
+// can be sent now.
+const appPersonV1Schema = z.strictObject({
+  id: z.string().regex(personId), name: text.min(1).max(APP_PERSON_NAME_MAX_V1), other_names: z.array(text.max(APP_PERSON_NAME_MAX_V1)).max(10),
+  ring: z.enum(['inner', 'close', 'wider']).nullable(), ring_by: z.enum(['model', 'owner']).nullable(), relations: z.array(text.max(60)).max(3),
+  next_date: z.strictObject({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), claim_id: z.string().regex(claimId), text }).nullable(),
+  last_contact: z.strictObject({ at: text, via: z.enum(['mail', 'meeting']) }).nullable(),
+  held_as: z.enum(['yours', 'waldo_thinks']), claims: z.int().positive(), actions: z.array(z.enum(APP_PERSON_ACTIONS_V1)),
+});
+export type AppPersonV1 = z.infer<typeof appPersonV1Schema>;
+export const appControlPeopleDataV1Schema = z.union([
+  z.strictObject({ people: z.array(appPersonV1Schema).max(APP_PEOPLE_MAX_V1), more: z.boolean() }),
+  z.strictObject({ person: appPersonV1Schema, claims: z.array(memoryClaim).max(APP_MEMORY_PAGE_MAX_V1) }),
+]);
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -564,6 +602,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
   z.strictObject({ ...envelope, view: z.literal('agent_mail'), data: appControlAgentMailDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('people'), data: appControlPeopleDataV1Schema }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({

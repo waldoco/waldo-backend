@@ -124,7 +124,7 @@ The relationship-upkeep skill reads the cards and judges who is worth raising. N
 
 ### 7. The app view (additive app.v1)
 
-[proposed] A new controls view, `people`, at a controls revision the gate allocates. This PR asks it as a `Gate question:` on #1980.
+A new controls view, `people`, at controls revision **22**, which the gate allocated on 7 Nov (#1980). Built in slice 2.
 - **List:** one item per person, with:
   - `id` (`memory:person:<n>`), `name`, `ring`, `ring_by`;
   - the relations (as in the person cards);
@@ -206,7 +206,7 @@ Names and email addresses are normal owner context within the owner's own author
    - `read_memory` `{entity}` and `{people}`;
    - forgetting a person.
    - Behind `PEOPLE_MAP` (production `0`).
-2. **The app view:** `people` and its actions, at the gate's controls revision.
+2. **The app view:** `people` and its actions, at controls 22.
 3. **Source pass and skill:** people and addresses from the source pass, last contact, and the relationship-upkeep skill reading the cards.
 
 **Rollback:** with `PEOPLE_MAP` `0`, the new fields stay in the tool schemas but nothing is linked, dated or read: the handlers refuse them and say so. The tables stay, and old code ignores them. A revert leaves claims as they are.
