@@ -6,4 +6,4 @@ import { ownerTurnTrace } from '../channels/owner-turn-envelope';
 export type AbortedTurn = Readonly<{ updateId: number; phase: 'claimed' | 'consumed' | 'running' }>;
 
 export const turnAbortedEntry = (surface: string, turn: AbortedTurn): TurnLogEntry =>
-  ({ trace: ownerTurnTrace(surface, turn.updateId), hop: 'turn_aborted', ms: 0, ok: false, code: turn.phase });
+  ({ trace: ownerTurnTrace(surface, turn.updateId), hop: 'turn_aborted', ms: 0, ok: false, detail: turn.phase, code: turn.phase });

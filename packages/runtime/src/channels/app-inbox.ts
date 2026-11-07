@@ -100,7 +100,6 @@ export class AppInbox {
       return {kind:'admitted' as const,record};
     });
   }
-  // Returns each turn this cut off.
   recover(live:ReadonlySet<string>):AbortedTurn[] {
     return this.storage.transactionSync(()=>{
       const rows=this.records(),aborted:AbortedTurn[]=[];
