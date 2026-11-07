@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(38);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -82,6 +82,13 @@ select is((select count(*)::int from pg_temp.route('google','HuId-AbC123')),0,'G
 update waldo.connections set status='revoked',revoked_at=now() where provider='google_health' and account='HuId-AbC123';
 select is((select count(*)::int from pg_temp.route('google_health','HuId-AbC123')),0,'a revoked connection no longer routes');
 select lives_ok($$insert into waldo.connections(owner_id,provider,account,secret_id) values ('b3000000-0000-0000-0000-0000000000c4','google_health','HuId-AbC123',gen_random_uuid())$$,'and its account can be linked again');
+
+-- The edge stores tokens through oauth_store, which keeps a Google Health id exactly as Google gave it.
+select isnt(waldo.oauth_store('gh-owner-a','google_health','HuId-XyZ789','sleep','{"issuer":"https://accounts.google.com"}'::jsonb,'fixture-token-bundle')->>'id',null,'the edge stores a Google Health connection');
+select is((select account from waldo.connections where provider='google_health' and status<>'revoked' and owner_id='a3000000-0000-0000-0000-0000000000c3'),'HuId-XyZ789','with its id in its own case');
+select is((select array_agg(x) from pg_temp.route('google_health','HuId-XyZ789') x),array['gh-owner-a'],'so a webhook naming that id routes to its owner');
+select lives_ok($$select waldo.oauth_store('gh-owner-a','whoop','WhOoP-9','read:sleep','{"issuer":"https://api.prod.whoop.com"}'::jsonb,'fixture-token-bundle')$$,'the edge stores a WHOOP connection');
+select is((select account from waldo.connections where provider='whoop' and lower(account)='whoop-9'),'whoop-9','with its id lowered as before');
 
 -- WHOOP's numeric ids keep their lowered match and signature.
 insert into waldo.connections(owner_id,provider,account,secret_id) values ('a3000000-0000-0000-0000-0000000000c3','whoop','30311',gen_random_uuid());
