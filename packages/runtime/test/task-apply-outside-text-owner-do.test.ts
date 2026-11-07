@@ -125,7 +125,7 @@ it('a tainted report that asks the apply turn to close a loop and log a meal cha
     expect(toolOutput('meal')).not.toContain('"ok":true');
     expect(JSON.parse(toolOutput('card') ?? '{}')).toMatchObject({ ok: true });
     expect(cards()).toHaveLength(1);
-    expect(cards()[0]!.body.text).toContain('cancel_reminder');
+    expect(cards()[0]!.body.text).toMatch(/^Do this\? Cancel reminder: /);
     expect(jobText()).toContain('propose it with propose_action');
     expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
   });
