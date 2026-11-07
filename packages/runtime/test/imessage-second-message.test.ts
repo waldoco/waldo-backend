@@ -17,11 +17,11 @@ import { SimulatedHost } from './helpers/imessage-sim-host';
 // before: work run at the start of the next owner reply calls, in order. An owner reply call carries the tool menu and one of
 // the owner's two messages; the owner object's other model calls (its boot day plan, memory) run on their own timing and must
 // neither count nor take a hold. Each owner reply names the turn it answers.
-const proof = vi.hoisted(() => ({ turns: [] as string[], before: [] as (() => Promise<unknown>)[] }));
-vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
+const proof = vi.hoisted(() => ({ turns: [] as string[], before: [] as ((signal?: AbortSignal) => Promise<unknown>)[] }));
+vi.mock('openai', () => ({ default: class { responses = { create: async (input: any, options?: { signal?: AbortSignal }) => {
   const format = input.text?.format?.name, said = JSON.stringify(input.input ?? '');
   const owner = !format && Array.isArray(input.tools) && input.tools.length > 0 && ['flights to Goa', 'raining in Pune'].some(words => said.includes(words));
-  if (owner) { await proof.before.shift()?.(); proof.turns.push(said); }
+  if (owner) { await proof.before.shift()?.(options?.signal); proof.turns.push(said); }
   if (format === 'progress_note') return { id: 'scripted', output: [], output_text: JSON.stringify({ note: null }), usage: { input_tokens: 1, output_tokens: 1 } };
   const reply = owner ? `Reply to turn ${proof.turns.length}.` : 'Scripted.';
   return { id: 'scripted', output: [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : reply, usage: { input_tokens: 1, output_tokens: 1 } };
@@ -198,9 +198,16 @@ it('with no other wake, a refused threaded reply goes out plain on the wake its 
 
 // IMESSAGE_STOP: a typed /stop from the owner, the control Telegram and WhatsApp have. It stops the running turn at once and
 // the messages waiting ahead of it, and answers once; an approval decision waiting is not stopped. Off, it waits its turn.
+// The held call ends as a real model call does when its turn is aborted.
 async function holdA(w: Awaited<ReturnType<typeof world>>) {
-  const gate = { held: false, open: false };
-  proof.before.push(async () => { gate.held = true; while (!gate.open) await new Promise(resolve => setTimeout(resolve, 10)); });
+  const gate = { held: false, open: false, aborted: false };
+  proof.before.push(async signal => {
+    gate.held = true;
+    while (!gate.open) {
+      if (signal?.aborted) { gate.aborted = true; throw new Error('aborted'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  });
   expect((await w.host.send(w.host.message('Find me three flights to Goa for Friday.'))).status).toBe(200);
   await w.handOver();
   await vi.waitFor(() => expect(gate.held).toBe(true), { timeout: 10_000, interval: 20 });
@@ -216,12 +223,35 @@ it('a /stop stops the running turn and what waits ahead of it, answers once that
   expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
   await w.handOver();
   await vi.waitFor(async () => expect(await w.inbox()).toEqual(['interrupted', 'revoked', 'completed']), { timeout: 10_000, interval: 20 });
-  gate.open = true;
-  await w.pump();
+  // The stop reaches the held model call at once, and its answer reaches the host while that call has not been let go.
+  await vi.waitFor(() => expect(gate.aborted).toBe(true), { timeout: 10_000, interval: 20 });
+  expect(gate.open).toBe(false);
   expect(await answer(w)).toContain(JSON.stringify(INTERRUPTED_NOTICES.stopped).slice(1, -1));
+  await w.pump();
   expect((await w.host.pull()).delivery).toBeNull();
   expect(w.host.nativeSends.map(send => send.text)).toEqual([INTERRUPTED_NOTICES.stopped]);
-  expect(proof.turns).toHaveLength(1);
+  expect(proof.turns).toHaveLength(0);
+}, 30_000);
+
+it('a /stop answers at once even while the stopped turn ignores its abort, and that turn\'s late reply never goes out', async () => {
+  const w = await world();
+  await w.activate();
+  const gate = { held: false, open: false };
+  proof.before.push(async () => { gate.held = true; while (!gate.open) await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect((await w.host.send(w.host.message('Find me three flights to Goa for Friday.'))).status).toBe(200);
+  await w.handOver();
+  await vi.waitFor(() => expect(gate.held).toBe(true), { timeout: 10_000, interval: 20 });
+  expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
+  await w.handOver();
+  // The answer is with the bridge while the stopped turn still holds the owner's queue.
+  await vi.waitFor(async () => expect(await w.outcomes()).toContain('stop:queued'), { timeout: 10_000, interval: 20 });
+  expect(await answer(w)).toContain(JSON.stringify(INTERRUPTED_NOTICES.stopped).slice(1, -1));
+  expect(gate.open).toBe(false);
+  gate.open = true;
+  await vi.waitFor(() => expect(proof.turns).toHaveLength(1), { timeout: 10_000, interval: 20 });
+  await w.pump();
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends.map(send => send.text)).toEqual([INTERRUPTED_NOTICES.stopped]);
 }, 30_000);
 
 it('a /stop leaves an approval decision waiting behind the running turn to run', async () => {
@@ -232,12 +262,10 @@ it('a /stop leaves an approval decision waiting behind the running turn to run',
   await w.handOver();
   expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
   await w.handOver();
-  await vi.waitFor(async () => expect(await w.inbox()).toEqual(['interrupted', 'admitted', 'completed']), { timeout: 10_000, interval: 20 });
-  // The cut-off turn finishes its held call before the test ends, so nothing of it reaches the next test.
-  gate.open = true;
-  await vi.waitFor(() => expect(proof.turns).toHaveLength(1), { timeout: 10_000, interval: 20 });
+  // The decision is not revoked: once the stopped turn ends, it runs as its own turn.
+  await vi.waitFor(() => expect(gate.aborted).toBe(true), { timeout: 10_000, interval: 20 });
   await w.pump();
-  expect(await w.inbox()).toEqual(['interrupted', 'completed', 'completed']);
+  await vi.waitFor(async () => expect(await w.inbox()).toEqual(['interrupted', 'completed', 'completed']), { timeout: 10_000, interval: 20 });
 }, 30_000);
 
 it('a /stop with nothing running answers that nothing is running, and starts no turn', async () => {

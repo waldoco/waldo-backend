@@ -19,13 +19,13 @@ import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
-import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
+import { IMessageFinalOutbox, STOP_ANSWER, targetOf } from './imessage/final-outbox';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, handOffIMessageStopAnswer, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, openedForTurn, type OwnerHost } from './imessage/owner-runtime';
 import { reactToMessageHandler, type TapbackPort } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
@@ -227,7 +227,7 @@ import { signedRpc } from '../identity/owner-directory';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
-import { INTERRUPTED_NOTICES, NOTHING_RUNNING } from '../prompt/fixed-lines';
+import { INTERRUPTED_NOTICES, NOTHING_RUNNING, STOPPED_BEFORE_START } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition, reconnectNoticeText } from '../connectors/google-reconnect';
@@ -1209,10 +1209,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const inbox = new IMessageOwnerInbox(this.ctx.storage);
     const row = inbox.records().find(record => record.dedupKey === input.dedupKey);
     if (!row) return;
-    const stopped = inbox.stop(row.id, record => NUMBERED_REPLY.test(record.text),
-      (record, closed) => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, closed.length ? INTERRUPTED_NOTICES.stopped : NOTHING_RUNNING); });
+    // The answer is said the way the stop went: a turn that had started may have changed something; waiting messages had not
+    // started. A full outbox costs only the answer, never the stop.
+    const answer = (closed: readonly IMessageInboxRecord[]) => closed.some(record => record.state === 'running') ? INTERRUPTED_NOTICES.stopped : closed.length ? STOPPED_BEFORE_START : NOTHING_RUNNING;
+    const stopped = inbox.stop(row.id, record => NUMBERED_REPLY.test(record.text), (record, closed) => {
+      try { new IMessageFinalOutbox(this.ctx.storage).freeze(record, answer(closed), 'stop'); }
+      catch (error) { console.error(JSON.stringify({ hop: 'imessage_stop', ok: false, code: 'answer_not_frozen', error_class: error instanceof Error ? error.name : 'unknown' })); }
+    });
     if (stopped === null) return;
-    if (this.activeIMessage && stopped.some(record => record.id === this.activeIMessage!.id)) this.activeAbort?.abort();
+    if (this.activeIMessage && stopped.some(record => record.id === this.activeIMessage!.id) && this.activeScope?.runId === this.activeIMessage.id) this.activeAbort?.abort();
+    this.ctx.waitUntil(handOffIMessageStopAnswer(this.imessageHost, `${STOP_ANSWER}${row.id}`).catch(() => { console.error('imessage stop answer deferred'); }));
     this.ctx.waitUntil(this.stopOwnerWork().catch(error => { console.error(JSON.stringify({ hop: 'imessage_stop', ok: false, code: 'background_stop_failed', error_class: error instanceof Error ? error.name : 'unknown' })); }));
     this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
   }
