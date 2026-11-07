@@ -170,6 +170,8 @@ const failed = (outcome: MedicationFailure) => outcome.failed === 'not_found'
     ? { ok: false as const, code: 'invalid_args' as const, error: 'the owner already tracks 20 medicines; stop one first' }
     : { ok: false as const, code: 'transient' as const, error: 'the medicine list could not be reached, so nothing was saved' };
 
+// Each result lives in the turn that asked (turn_only_output): a medicine's name, times and dose statuses never reach the tool
+// ledger in the owner object, so a later turn, owner's or machine's, reads them only by calling list_medications.
 export const medicationHandlers = (book: MedicationBook) => [
   {
     name: 'track_medication',
@@ -177,6 +179,7 @@ export const medicationHandlers = (book: MedicationBook) => [
     schema: trackMedicationArgsSchema,
     trigger_allowlist: allowlist('track_medication'),
     autonomy_gated: false,
+    turn_only_output: true,
     mutates_state: true,
     async handle(args) {
       const outcome = await book.track(args);
@@ -189,6 +192,7 @@ export const medicationHandlers = (book: MedicationBook) => [
     schema: logMedicationArgsSchema,
     trigger_allowlist: allowlist('log_medication'),
     autonomy_gated: false,
+    turn_only_output: true,
     mutates_state: true,
     async handle(args) {
       const outcome = await book.log(args);
@@ -202,6 +206,7 @@ export const medicationHandlers = (book: MedicationBook) => [
     schema: listMedicationsArgsSchema,
     trigger_allowlist: allowlist('list_medications'),
     autonomy_gated: false,
+    turn_only_output: true,
     async handle() {
       const medications = await book.list();
       return medications === null ? failed({ failed: 'unavailable' }) : { ok: true, data: { medications }, source_taint: null };
@@ -213,6 +218,7 @@ export const medicationHandlers = (book: MedicationBook) => [
     schema: stopMedicationArgsSchema,
     trigger_allowlist: allowlist('stop_medication'),
     autonomy_gated: false,
+    turn_only_output: true,
     mutates_state: true,
     async handle({ medication_id }) {
       const stopped = await book.stop(medication_id);

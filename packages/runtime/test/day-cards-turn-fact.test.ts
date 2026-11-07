@@ -22,6 +22,17 @@ const lineFor = (state: DurableObjectState, queued: (day: string, card: string) 
   dayCardsLine({ scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), book: dayPlanBook(state.storage.sql), kv: state.storage.kv,
     timezone: ZONE, now: NOW, queued });
 
+it('says the time the owner keeps every day beside today\'s plan, so a turn can tell them apart, and says nothing of a default', async () => {
+  await inObject('day-fact-kept', state => {
+    const plans = dayPlanBook(state.storage.sql);
+    plans.save(DAY, { card: 'card:close', time: '21:30', reason: 'planned' });
+    expect(lineFor(state)).toBe("Today's cards: The Close is due at 21:30.");
+    plans.pin('card:brief', '07:10');
+    plans.pin('card:close', '22:15');
+    expect(lineFor(state)).toBe("Today's cards: The Close is due at 21:30. Every day, the owner keeps The Daily Brief at 07:10 and The Close at 22:15.");
+  });
+});
+
 it('names each planned card by where it stands: reached the app at a time, still due, held, skipped, failed or on its way', async () => {
   await inObject('day-fact-states', state => {
     const plans = dayPlanBook(state.storage.sql);

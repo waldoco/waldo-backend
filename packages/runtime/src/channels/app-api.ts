@@ -5,7 +5,7 @@ import type { AppApprovalCards } from './approvals';
 import { appQuickRepliesPart } from './surfaces/app';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerPlaceMoved, notifyOwnerZoneChange } from '../health/zone-change-route';
 import { wakeFreshMs } from '../health/wake-notice';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
@@ -266,7 +266,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (url.pathname === APP_DEVICE_CONTEXT_PATH || url.pathname.startsWith(`${APP_DEVICE_CONTEXT_PATH}/`)) {
     if (env.DEVICE_PLACE !== '1') return fail(404);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
+    const secret = env.WALDO_ROUTER_HMAC_SECRET;
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(defer ? { defer } : {}) });
   }
   // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
   // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.
