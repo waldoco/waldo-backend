@@ -154,6 +154,8 @@ export const toolNameSchema = z.enum([
   'review_experiment',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
+  // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them; offered while DEVICE_CALENDAR is on.
+  'query_phone_calendar',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -171,6 +173,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_device_context',
     'get_weather',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'get_communication',
     'search_communication',
@@ -211,6 +214,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_health',
     'get_screen_time',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'get_communication',
     'search_communication',
@@ -230,7 +234,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'search_tools',
     'skills_load',
   ],
-  handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
+  handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'query_phone_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
   // The mutation cluster: execute_action + writes + send_message, reachable only after
   // explicit user approval through propose_action (ADR-0008).
   handoff_act: [
@@ -257,7 +261,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_action',
     'skills_load',
   ],
-  intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
+  intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_phone_calendar', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
     'use_mac',
@@ -267,6 +271,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_device_context',
     'get_weather',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'send_console_link',
     'connect_app',
