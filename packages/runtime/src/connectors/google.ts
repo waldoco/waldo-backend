@@ -203,7 +203,9 @@ export type CalendarItem = Readonly<{ id: string; title: string; start: string; 
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted';
   // The event carries the private mark Waldo writes on the events it creates.
-  waldo_made?: true }>;
+  waldo_made?: true;
+  // The event's iCal UID, the one id a phone calendar shares with Google for the same meeting.
+  ical_uid?: string }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
@@ -215,8 +217,8 @@ export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: stri
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
 // the join link, attachments and the owner's status stay out of the shared card projection; meeting
 // prep adds the link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status' | 'waldo_made'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, waldo_made: _made, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status' | 'waldo_made' | 'ical_uid'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, waldo_made: _made, ical_uid: _uid, ...projection } = event;
   return projection;
 };
 
@@ -1239,6 +1241,7 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
   ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
   ...(event.extendedProperties?.private?.waldoMade === '1' ? { waldo_made: true as const } : {}),
+  ...(typeof event.iCalUID === 'string' && event.iCalUID.length > 0 && event.iCalUID.length <= 1024 ? { ical_uid: event.iCalUID } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
@@ -1298,7 +1301,7 @@ const historyChanges = (records: readonly GmailHistoryRecord[]): Readonly<{ adde
 };
 
 type GoogleEvent = {
-  id: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
+  id: string; iCalUID?: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   recurrence?: string[];
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };

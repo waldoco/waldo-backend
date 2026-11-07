@@ -88,6 +88,12 @@ const TABLES: Record<string, Row> = {
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
   calendar_last_seen: exempt('Google event ids, start and end times, an all-day flag, an HMAC of the title under a random per-object key (never the title) and an attendee count; rows expire two weeks after the event was last seen'),
   google_delta_shown: exempt('dedupe keys: a Google message id, or an event id with a digest of the version last shown, and when; no sender, subject, title or body; rows expire after fourteen days'),
+  device_calendar_consent: exempt('phone-calendar consent per purpose: epochs and grant/withdraw times; no calendar content'),
+  device_calendar_requests: exempt('request ids, a payload digest and the answer (consent views or an accepted/superseded receipt); no calendar content; kept seven days, ingest receipts deleted on withdrawal'),
+  device_calendar_phones: exempt("per phone: platform, time zone, window, times-only and complete flags, and the names and account types of the calendars the owner chose to share; replaced on every sync, dropped after 30 days of silence and deleted on withdrawal"),
+  device_calendar_events: gap('a mirror of the owner\'s own phone calendar (times and, unless times only, titles and places) from a day back to two weeks ahead, replaced on every sync and deleted on withdrawal; a forgotten topic is not edited out of the mirror, since the next sync would bring it back from the owner\'s calendar'),
+  device_calendar_changes: gap('phone-calendar changes waiting for the update sweep, at most two days; once taken they live in update_cards, which a forget purges; a forget does not edit a change still waiting'),
+  waldo_block_owner: exempt('Google event ids of Waldo\'s blocks the owner moved, renamed or deleted, and when; no title or time of the block; kept 30 days'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget

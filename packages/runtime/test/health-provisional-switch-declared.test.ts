@@ -131,6 +131,27 @@ describe('DEVICE_PLACE in the Worker config', () => {
   });
 });
 
+describe('DEVICE_CALENDAR in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration: the owner object keeps the consent and the events', () => {
+    expect(parsed.vars.DEVICE_CALENDAR).toBe('0');
+    expect(parsed.env.staging.vars.DEVICE_CALENDAR).toBe('1');
+  });
+});
+
+describe('CALENDAR_COVERAGE and FREE_WINDOW_OFFERS in the Worker config', () => {
+  it('are off in production and on in staging; neither needs a migration', () => {
+    expect([parsed.vars.CALENDAR_COVERAGE, parsed.vars.FREE_WINDOW_OFFERS]).toEqual(['0', '0']);
+    expect([parsed.env.staging.vars.CALENDAR_COVERAGE, parsed.env.staging.vars.FREE_WINDOW_OFFERS]).toEqual(['1', '1']);
+  });
+});
+
+describe('BLOCK_LIFECYCLE in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration', () => {
+    expect(parsed.vars.BLOCK_LIFECYCLE).toBe('0');
+    expect(parsed.env.staging.vars.BLOCK_LIFECYCLE).toBe('1');
+  });
+});
+
 describe('DEVICE_WEATHER in the Worker config', () => {
   it('is off in production and on in staging, where it offers get_weather only once the WeatherKit secrets are set', () => {
     expect(parsed.vars.DEVICE_WEATHER).toBe('0');
