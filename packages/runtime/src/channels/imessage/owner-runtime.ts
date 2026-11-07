@@ -209,13 +209,6 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
 };
 
 /**
- * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
- * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
- * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
- * A note never goes ahead of an earlier message still waiting for the same bridge, such as the last turn's reply on its
- * retry; the bridge cannot see that one yet.
- */
-/**
  * A /stop's answer handed to its bridge now, outside the owner's queue, where the turn it stopped may still be unwinding. It
  * keeps its place: an earlier message still waiting for that bridge, a busy bridge or a failed handoff leaves it frozen for
  * the drain, which sends it in order.
@@ -229,6 +222,13 @@ export const handOffIMessageStopAnswer = async (host: OwnerHost, replyRef: strin
   else if (outcome.kind === 'terminal') outbox.settle(replyRef, row.commandId, outcome.result);
 };
 
+/**
+ * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
+ * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
+ * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
+ * A note never goes ahead of an earlier message still waiting for the same bridge, such as the last turn's reply on its
+ * retry; the bridge cannot see that one yet.
+ */
 export const handOffIMessageProgress = async (host: OwnerHost, replyRef: string): Promise<boolean> => {
   const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef), turn = replyRef.split(':')[1];
   if (!row || row.state !== 'frozen') return false;

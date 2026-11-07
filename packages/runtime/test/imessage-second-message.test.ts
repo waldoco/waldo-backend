@@ -10,7 +10,7 @@ import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { IMESSAGE_BUSY_RETRY_MS, IMESSAGE_OUTBOX_DUE_KEY, IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import type { IMessageResult } from '@waldo/contracts';
-import { INTERRUPTED_NOTICES, NOTHING_RUNNING } from '../src/prompt/fixed-lines';
+import { INTERRUPTED_NOTICES, NOTHING_RUNNING, STOPPED_BEFORE_START } from '../src/prompt/fixed-lines';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
@@ -266,6 +266,30 @@ it('a /stop leaves an approval decision waiting behind the running turn to run',
   await vi.waitFor(() => expect(gate.aborted).toBe(true), { timeout: 10_000, interval: 20 });
   await w.pump();
   await vi.waitFor(async () => expect(await w.inbox()).toEqual(['interrupted', 'completed', 'completed']), { timeout: 10_000, interval: 20 });
+}, 30_000);
+
+// The process can end after a /stop's admit commits and before its stop runs. The switch is off while the /stop is admitted,
+// so its admit stops nothing; then, as after a restart, the next drain finds it waiting.
+it('a /stop whose stop never ran at its admit is stopped by the next drain, never run as a turn, and what waits ahead of it never runs', async () => {
+  const w = await world();
+  await w.activate();
+  const gate = await holdA(w);
+  await w.setStop(false);
+  expect((await w.host.send(w.host.message('Also, is it raining in Pune?'))).status).toBe(200);
+  await w.handOver();
+  expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
+  await w.handOver();
+  await vi.waitFor(async () => expect(await w.inbox()).toEqual(['running', 'admitted', 'admitted']), { timeout: 10_000, interval: 20 });
+  await w.setStop(true);
+  gate.open = true;
+  await vi.waitFor(async () => expect(await w.inbox()).toEqual(['completed', 'revoked', 'completed']), { timeout: 10_000, interval: 20 });
+  await w.pump();
+  expect(proof.turns).toHaveLength(1);
+  expect(proof.turns[0]).not.toContain('raining in Pune');
+  expect(await answer(w)).toContain('Reply to turn 1.');
+  expect(await answer(w)).toContain(JSON.stringify(STOPPED_BEFORE_START).slice(1, -1));
+  await w.pump();
+  expect((await w.host.pull()).delivery).toBeNull();
 }, 30_000);
 
 it('a /stop with nothing running answers that nothing is running, and starts no turn', async () => {
