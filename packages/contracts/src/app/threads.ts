@@ -3,6 +3,7 @@ import {
   APP_SEND_MAX_WIRE_BYTES, appHistoryResultV1Schema, appMessageReceiptV1Schema,
   appRatingRequestV1Schema, appRatingResultV1Schema, appSendRequestV1Schema, appSendResultV1Schema,
 } from './core';
+import { replyApprovalPartV1Schema } from './parts';
 
 // A thread is a chat beside main: its own transcript, sharing the owner's memory and approvals. Messaging
 // surfaces and proactive messages use main only. Deleting a thread erases its transcript and recall index;
@@ -39,7 +40,21 @@ export const appThreadListV1Schema = z.strictObject({ threads: z.array(appThread
 export const appThreadReadQueryV1Schema = z.strictObject({
   cursor: z.string().max(512).regex(/^(?:\d{1,9}|before:.{1,500})$/).optional(), limit: z.coerce.number().int().min(1).max(50).optional(),
 });
-export const appThreadReadV1Schema = z.strictObject({ thread: appThreadV1Schema, history: appHistoryResultV1Schema });
+// Chat revision 9 (`chat=9`): while a background task started in this thread waits on the owner's card, the thread's read carries
+// that card in `task_cards`, so the owner decides it where the task lives; deciding it resumes the task. `approval` is the same
+// part an inline reply card carries, decided the same way, and a decided or expired card leaves the list. `title` is the
+// task's own label, null when it was written after outside content. The card is never approved in words. Builds below
+// revision 9 never receive the key: their cards stay in the Approvals list, where every card always is.
+export const APP_CHAT_TASK_CARDS_REVISION = 9;
+export const APP_TASK_CARDS_MAX_V1 = 10;
+// The same id start_task returns (tools/schemas/tasks taskJobIdSchema); the app pins this directory alone, so it is spelled here.
+export const appTaskJobIdV1Schema = z.string().regex(/^job_[0-9a-f]{12}$/);
+export const appTaskCardV1Schema = z.strictObject({ job_id: appTaskJobIdV1Schema, title: z.string().min(1).max(80).nullable(), approval: replyApprovalPartV1Schema });
+export type AppTaskCardV1 = z.infer<typeof appTaskCardV1Schema>;
+export const appThreadReadV1Schema = z.strictObject({
+  thread: appThreadV1Schema, history: appHistoryResultV1Schema,
+  task_cards: z.array(appTaskCardV1Schema).min(1).max(APP_TASK_CARDS_MAX_V1).refine(cards => new Set(cards.map(card => card.approval.approval_id)).size === cards.length, 'a card repeats').optional(),
+});
 export const appThreadSendV1Schema = appSendRequestV1Schema.extend({ expected_revision: revision });
 // Failures carry `error`: thread_not_found and message_not_found (404), thread_deleted (410), thread_revision_conflict,
 // title_revision_conflict, thread_archived and operation_conflict (409), thread_capacity (429).

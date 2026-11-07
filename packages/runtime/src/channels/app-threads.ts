@@ -1,6 +1,6 @@
 import {
   APP_THREAD_MAX_V1, appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadIdV1Schema, appThreadListQueryV1Schema,
-  appThreadReadQueryV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema, type AppThreadOperationResultV1, type AppThreadV1,
+  appThreadReadQueryV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema, APP_CHAT_TASK_CARDS_REVISION, type AppTaskCardV1, type AppThreadOperationResultV1, type AppThreadV1,
 } from '../../../contracts/src/app/threads';
 import { literalTextRedactor } from '../../../contracts/src/runtime/conversation-entry';
 import { carriesTopic } from '../memory/forget-guard';
@@ -102,6 +102,8 @@ export type AppThreadsHost = Readonly<{
     receipt(conversationRef: string, clientId: string, revision?: number): unknown;
     cancel(conversationRef: string, clientId: string): unknown;
     history(thread: string, cursor: string | null, limit: number): Promise<ReturnType<typeof appTranscriptPage>>;
+    // The cards the owner's background tasks started in this thread wait on; asked only for a build that reads chat revision 9.
+    taskCards?(thread: string): readonly AppTaskCardV1[];
     preview(thread: string): string | null;
     // Erases the thread's transcript, recall, earlier tool results and messages inside the delete's transaction, and
     // answers how many messages went.
@@ -219,7 +221,8 @@ export const appThreadsRequest = async (request: Request, host: AppThreadsHost):
     const refused = refusal(thread);
     if (refused) return problem(refused.status, refused.code);
     const history = await host.messages.history(id, page.data.cursor ?? null, page.data.limit ?? 20);
-    return answer({ thread: view(host, thread!), history });
+    const cards = chatRevision(request) >= APP_CHAT_TASK_CARDS_REVISION ? host.messages.taskCards?.(id) ?? [] : [];
+    return answer({ thread: view(host, thread!), history, ...(cards.length ? { task_cards: cards } : {}) });
   }
   if (request.method !== 'POST' || !['rename', 'archive', 'delete'].includes(action)) return problem(404, 'not_found');
   const raw = await bodyOf(request);
