@@ -5425,7 +5425,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // What the source pass reads with, for the nightly run and the daytime pass alike.
     const sourcesFor = (trace: string): SourcesDeps => {
       const read = responder.sourceClaims!.bind(responder), health = healthMemoryOn(identity);
-      return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, log, ask: text => read(trace, text, { health }) };
+      const people = this.env.PEOPLE_MAP === '1';
+      return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, people, log, ask: text => read(trace, text, { health, people }) };
     };
     const nightlyPass = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;

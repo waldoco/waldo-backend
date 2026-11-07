@@ -79,6 +79,17 @@ export const peopleTables = (sql: Sql) => {
       const shared = (name: string) => others.some(other => carriesTopic(other, name) || carriesTopic(name, other));
       return [...namesOf(row).filter(name => !shared(name)), ...listOf(row.addresses)];
     },
+    // Last contact: a person heard from when mail Waldo saw came from one of their addresses. Exact address, newest time kept.
+    heardFrom(address: string, at: string): number {
+      const key = addressKey(address);
+      let touched = 0;
+      for (const row of all()) {
+        if (!listOf(row.addresses).includes(key) || (row.last_contact_at !== null && row.last_contact_at >= at)) continue;
+        sql.exec("UPDATE entities SET last_contact_at = ?, last_contact_via = 'mail' WHERE id = ?", at, row.id);
+        touched += 1;
+      }
+      return touched;
+    },
     // A person is derived: one with no live claim left is deleted, and so are links to claims that are gone or being forgotten.
     prune(): void {
       sql.exec(`DELETE FROM claim_links WHERE claim_id NOT IN (SELECT id FROM claims WHERE status NOT IN ('purging', 'forgotten'))`);
@@ -104,4 +115,10 @@ export const nextOccurrence = (onDate: string, today: string): string | null => 
     if (!Number.isNaN(real.getTime()) && real.toISOString().slice(0, 10) === day && day >= today) return day;
   }
   return null;
+};
+
+// The address a From header names: inside the angle brackets, or the header itself when it is a bare address.
+export const fromAddress = (header: string): string | null => {
+  const inside = /<([^<>\s]+@[^<>\s]+)>/.exec(header)?.[1] ?? (/^[^<>\s]+@[^<>\s]+$/.test(header.trim()) ? header.trim() : null);
+  return inside ? inside.toLowerCase() : null;
 };

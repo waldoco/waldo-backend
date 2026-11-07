@@ -1,3 +1,4 @@
+import { fromAddress } from '../memory/people';
 import { applyClaimOps, sourceClaimOps, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import type { TurnLogEntry } from './owner-turn-types';
@@ -28,6 +29,8 @@ export type SourcesDeps = Readonly<{
   timezone: string;
   now: () => number;
   health: boolean;
+  // PEOPLE_MAP: the pass may say who a claim is about, and new mail from a person's address is their last contact.
+  people?: boolean;
   // One model call over the changes text; its reply is applied here.
   ask: (updates: string) => Promise<string>;
   log: (entry: TurnLogEntry) => void;
@@ -66,7 +69,16 @@ export const consolidateSources = async (deps: SourcesDeps, trace: string, calls
       const ops = deps.health ? sourceClaimOps(raw) : withoutHealthClaims(sourceClaimOps(raw));
       const detail = deps.transaction(() => {
         if (!settle(last)) return null;
-        return applyClaimOps(deps.claims, ops, new Date(deps.now()).toISOString(), `outside content, ${trace}`, undefined, { shared: updates, outside: true }, false);
+        const at = new Date(deps.now()).toISOString();
+        const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true }, false, undefined, undefined, undefined, deps.people === true);
+        if (deps.people) for (const row of rows) if (row.at <= last) for (const change of row.changes) {
+          if (change.source !== 'mail' || change.kind !== 'new') continue;
+          let from: unknown;
+          try { from = (JSON.parse(change.detail) as { from?: unknown }).from; } catch { continue; }
+          const address = typeof from === 'string' ? fromAddress(from) : null;
+          if (address) deps.claims.people.heardFrom(address, new Date(row.at).toISOString());
+        }
+        return detail;
       });
       if (detail === null) return raced();
       through = last;
