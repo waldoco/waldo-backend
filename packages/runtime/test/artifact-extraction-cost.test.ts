@@ -43,6 +43,9 @@ describe('artifact extraction on hostile text', () => {
     ['Hangul fillers between digits', 'code ' + '1\u3164'.repeat(N / 2)],
     ['musical format characters between digits', 'code ' + '1\u{1d173}'.repeat(N / 3)],
     ['links with a code parameter that never ends', 'https://a?code=1234'.repeat(N / 19)],
+    ['a keyword and "is", then one long run of spaces', 'code is' + ' '.repeat(N) + 'x'],
+    ['a keyword, "is" and a colon, then one long run of spaces', 'code is' + ' '.repeat(N / 2) + ':' + ' '.repeat(N / 2) + 'x'],
+    ['"code is -" repeated', 'code is -'.repeat(N / 9)],
     ['an adjective glued to itself', 'verification'.repeat(N / 12) + 'code 1'],
   ])('stays linear: %s', (_shape, text) => {
     const started = performance.now();

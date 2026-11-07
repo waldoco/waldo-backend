@@ -1584,10 +1584,6 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
 // An outside tool result the health filter denies is replaced by this, so the model knows the page was read and why
 // it cannot see it.
 const HEALTH_WITHHELD_OUTPUT = JSON.stringify({ ok: false, code: 'withheld', error: "This page's text was withheld by the health-data filter. Try another source or a different page." });
-// A tool result holding the owner's own health number never sits beside an outside tool result, where the model could
-// carry the number into an outgoing tool call. It is replaced by this in that request, and the turn goes on with the
-// health zones the system prompt already gives.
-const OWNER_HEALTH_HIDDEN_OUTPUT = JSON.stringify({ ok: false, code: 'withheld', error: "The owner's health readings were read, but their numbers are hidden because outside content was read in this turn. Reading them again in this turn returns the same. Answer now from the shared health zones in your context, if any, and do not state or estimate the numbers." });
 
 async function sanitiseRequest(
   request: LLMRequest,
@@ -1864,26 +1860,25 @@ async function sanitiseRequest(
     const batchTaint: SourceTaint = kept.some((_turn, index) => taintAt(index) === 'external')
       ? 'external'
       : sourceTaint.data;
-    // The owner's own health passes its own scan, but not beside outside content: each owner-side turn the scribe denies
-    // health at external taint is withheld whole, call arguments included, and the turn goes on. Every other denial is
-    // left to the batch pass below, which still fails the request closed on a hard one.
+    // The owner's own readings stay in view beside outside content; the tool loop fences every call that could carry one out
+    // (conversation/health-fence). The batch pass reads them at their own taint: the outside-taint pass covers every other
+    // turn, and a second pass at the run's taint covers the whole batch, size included.
+    const ownerHealth = new Set<number>();
     if (batchTaint === 'external') {
       for (let i = 0; i < kept.length; i += 1) {
-        const turn = kept[i]!;
-        if (taintAt(i) === 'external' || receipts.has(turn)) continue;
-        const outside = await sanitiseValue([turn], 'internal_context', 'external');
-        if (outside.ok || outside.error.reason !== 'scribe:health_value_leak') continue;
-        const hidden = await sanitiseValue([{ call: { ...turn.call, arguments: strippedArguments(i, turn) }, output: OWNER_HEALTH_HIDDEN_OUTPUT }], 'internal_context', 'external');
-        if (!hidden.ok || !Array.isArray(hidden.payload) || hidden.payload.length !== 1) {
-          return { ok: false, error: hidden.ok ? new HookHaltError('llm_provider', 'withheld turn invalid', 'transient') : hidden.error, scribeDestination: 'internal_context' };
-        }
-        receipts.add(hidden.payload[0] as LLMToolTurn);
-        kept[i] = hidden.payload[0] as LLMToolTurn;
+        if (taintAt(i) === 'external' || receipts.has(kept[i]!)) continue;
+        const outside = await sanitiseValue([kept[i]!], 'internal_context', 'external');
+        if (!outside.ok && outside.error.reason === 'scribe:health_value_leak') ownerHealth.add(i);
       }
     }
+    const batchPass = async () => {
+      if (ownerHealth.size === 0) return sanitiseValue(kept, 'internal_context', batchTaint);
+      const outside = await sanitiseValue(kept.filter((_turn, i) => !ownerHealth.has(i)), 'internal_context', batchTaint);
+      return outside.ok ? sanitiseValue(kept, 'internal_context', sourceTaint.data) : outside;
+    };
     const COMPACT_HEAD = 4_000;
     const omittedTurns = new Set<number>();
-    let batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+    let batch = await batchPass();
     while (!batch.ok && batch.error.reason === 'scribe:oversize') {
       // Compact the largest oversized turn. A verified stored-output id earns a retrieval promise in the receipt; without one the receipt says no copy exists. Never fail the run while a turn can still be trimmed.
       let pick = -1;
@@ -1903,7 +1898,7 @@ async function sanitiseRequest(
         if (!receipted.ok) return { ok: false, error: receipted.error, scribeDestination: 'internal_context' };
         kept[pick] = receipted.value;
         omittedTurns.add(pick);
-        batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+        batch = await batchPass();
         continue;
       }
       const compactedStore = storedReceiptOf(kept[pick]!);
@@ -1927,7 +1922,7 @@ async function sanitiseRequest(
         };
       }
       kept[pick] = checkedItem.payload[0] as LLMToolTurn;
-      batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+      batch = await batchPass();
     }
     if (!batch.ok) return { ...batch, scribeDestination: 'internal_context' };
     toolTurns = { ok: true, payload: kept.map(labelled) };

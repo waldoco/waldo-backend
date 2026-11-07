@@ -219,7 +219,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
       } else if ('health_change' in step) {
         const { outcome, proposal, notice } = await world.healthChange((id, prompt, format) => responder.prompt(id, 1, prompt, time, [], async () => undefined, format));
-        transcript.push({ role: 'world', text: `The owner's health moves zone and the health trigger runs (${outcome}).` });
+        transcript.push({ role: 'world', text: `${scenario.world.health_wake && scenario.world.health_wake !== 'zone_change' ? 'A health signal moves outside the owner\'s usual' : 'The owner\'s health moves zone'} and the health trigger runs (${outcome}).` });
         if (proposal) transcript.push({ role: 'waldo', surface: 'notification', text: proposal.reason });
         if (notice) transcript.push({ role: 'waldo', surface: 'notification', text: notice });
       } else if ('card' in step) {

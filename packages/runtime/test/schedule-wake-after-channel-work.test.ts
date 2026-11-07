@@ -74,7 +74,7 @@ it('a Mac follow-up drain that sets aside a row from a revoked device keeps the 
     const due = await remindInTwoHours(state), inbox = macInbox(state.storage);
     expect(await inbox.admit({ kind: 'session_event', request_id: 'event_fixture', device_id: 'revoked_device', owner_id: 'owner_fixture',
       payload: { project: 'fixture', session_id: 'session_fixture', event: 'blocked_on_tool' } })).toBe(true);
-    await (telegramOwner as unknown as { drainMacDeliveries(): Promise<void> }).drainMacDeliveries();
+    await (telegramOwner as unknown as { drainMacDeliveries(channel: string): Promise<void> }).drainMacDeliveries('telegram');
     expect(inbox.pending()).toEqual([]);
     await keepsSchedule(state, due);
   });

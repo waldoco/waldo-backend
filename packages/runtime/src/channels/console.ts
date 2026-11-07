@@ -181,7 +181,6 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
   'health_memory.set': 'Saved. Notes Waldo keeps on its own include health only while this is on; what you ask it to remember is kept either way.',
-  'schedule.set': 'Saved. That scheduled behavior is updated.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
@@ -242,7 +241,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean; drive?: boolean; docs?: boolean; sheets?: boolean; slides?: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   // Every catalogue app as a Connections tile. Only the app's read fills it.
@@ -268,6 +267,8 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
+  // WAKE_BRIEF: a wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
+  wakeBrief?: boolean;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
   pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];

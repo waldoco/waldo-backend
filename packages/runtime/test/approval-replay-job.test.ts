@@ -129,7 +129,7 @@ describe('an approved browser card runs as a replay job', () => {
       await serial(() => pass().then(() => undefined));
       await serial(() => pass().then(() => undefined));
       expect([...sent.keys()]).toEqual([replayKey(id)]);
-      expect(sent.get(replayKey(id))).toMatch(/^Done: Run browse_act: .*table for two, 8pm/);
+      expect(sent.get(replayKey(id))).toBe('Done: Run browse_act: The restaurant email offered the 8pm table.');
       expect(status(sql, id)).toBe('done');
       expect(book.byKey(replayKey(id))!.status).toBe('applied');
       expect(await desk.decide(id, 'a', 'late-tap')).toEqual({ toast: 'Already handled.', message: 'Already handled.' });
@@ -340,7 +340,7 @@ describe('an approved browser card runs as a replay job', () => {
       await desk.decide(waiting, 'a', 'tap');
       const job = book.byKey(replayKey(waiting))!;
       // The owner's turn sees the approved action and its id beside the running tasks, never its page-derived arguments.
-      expect(runningTasksLine(book)).toBe(`Actions the owner approved that have not finished (ids for cancel_task):\n- ${job.id}: the approved browse_act action (waiting to run)`);
+      expect(runningTasksLine(book, clock.at)).toBe(`Actions the owner approved that have not finished (ids for cancel_task):\n- ${job.id}: the approved browse_act action (waiting to run)`);
       expect(await cancel.handle({ job_id: job.id })).toMatchObject({ ok: true, data: { title: 'the approved browse_act action', cancelled: true } });
       await pass();
       await settle();

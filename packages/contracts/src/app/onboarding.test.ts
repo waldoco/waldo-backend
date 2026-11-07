@@ -5,7 +5,7 @@ import {
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
   appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
-  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1,
+  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
 } from './onboarding';
 import { appJsonWireBytes } from './core';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
@@ -32,6 +32,21 @@ describe('consent ledger', () => {
     const offered = { agreements_offered: true, owner_lookup_offered: false };
     accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, ...offered, consents }, { age_attested_18_plus: true, agreements_offered: false, owner_lookup_offered: true, consents }]);
     rejected(appConsentListV1Schema, [{ consents, ...offered }, { age_attested_18_plus: false, consents }, { age_attested_18_plus: false, owner_lookup_offered: false, consents }, { age_attested_18_plus: false, ...offered, agreements_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, owner_lookup_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, consents: consents.slice(1) }, { age_attested_18_plus: false, ...offered, consents: [consents[0], consents[0], consents[1]] }]);
+  });
+  it('a listed row may name the copy version required now, a positive integer', () => {
+    accepted(appConsentStateV1Schema, [{ ...granted, current_version: 2 }, { purpose: 'terms', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false, current_version: 1 }]);
+    rejected(appConsentStateV1Schema, [{ ...granted, current_version: 0 }, { ...granted, current_version: '2' }, { ...granted, current_version: null }, { ...granted, current_version: 1.5 }]);
+  });
+  it('lists current_version only for a build at onboarding revision 3; below it, each row is as before', () => {
+    const row = (purpose: string, current_version: number) => ({ purpose, version: 1, status: 'granted', granted_at: 1_000, withdrawn_at: null, active: current_version === 1, current_version });
+    const list = appConsentListV1Schema.parse({ age_attested_18_plus: true, agreements_offered: true, owner_lookup_offered: true, consents: [row('terms', 1), row('privacy_notice', 2), row('owner_lookup', 2)] });
+    expect(APP_ONBOARDING_CONSENT_VERSION_REVISION_V1).toBe(3);
+    for (const revision of [1, 2]) {
+      const shown = appConsentListAtRevision(list, revision);
+      for (const consent of shown.consents) expect(Object.keys(consent).sort()).toEqual(['active', 'granted_at', 'purpose', 'status', 'version', 'withdrawn_at']);
+      expect({ ...shown, consents: shown.consents.map(consent => consent.purpose) }).toEqual({ ...list, consents: ['terms', 'privacy_notice', 'owner_lookup'] });
+    }
+    for (const revision of [3, 4]) expect(appConsentListAtRevision(list, revision)).toEqual(list);
   });
   it('grants name a copy version and always carry the 18+ attestation; only the look-up can be withdrawn', () => {
     const grant = { request_id: 'consent-001', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true };

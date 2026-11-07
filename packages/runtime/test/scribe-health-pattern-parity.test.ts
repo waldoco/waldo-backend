@@ -25,14 +25,16 @@ const AFTER = ['', 'ms', 'bpm', '%', 'mmhg', 'hours', 'hrs', 'mins', '°c', ' ms
 const SEPS = ['', ':', '=', ',', ': ', ' = ', ', ', '"', ': "', "'"];
 
 // Two patterns were widened afterwards: the HRV one takes the method in brackets ("hrv (rmssd) 45 ms") and the sleep one a
-// short unit ("sleep 7h", "deep sleep 1h 20m"), and a wrist temperature pattern was added at the end. A widened pattern still
-// finds every match the earlier one found, where it found it, and may find more of the same text; the rest are as before.
+// short unit ("sleep 7h", "deep sleep 1h 20m") and a "~" before the number ("slept ~7h"), and two patterns were added at the
+// end: a wrist temperature, and hours and minutes glued after a sleep word ("sleep 7h22"). A widened pattern still finds every
+// match the earlier one found, where it found it, and may find more of the same text; the rest are as before.
 const WIDENED = new Set([1, 4]);
 
 describe('the rewritten numeric health patterns find what the ones they replaced found', () => {
-  it('the same patterns, in the same order, and the wrist temperature pattern after them', () => {
-    expect(HEALTH_FREE_TEXT_NUMERIC).toHaveLength(BASE.length + 1);
+  it('the same patterns, in the same order, then the wrist temperature and the glued sleep duration patterns', () => {
+    expect(HEALTH_FREE_TEXT_NUMERIC).toHaveLength(BASE.length + 2);
     expect(HEALTH_FREE_TEXT_NUMERIC[BASE.length]!.source).toContain('wrist');
+    expect(HEALTH_FREE_TEXT_NUMERIC[BASE.length + 1]!.source).toContain('h[0-5]');
   });
 
   it('over random text where numbers stand alone or follow a letter', () => {

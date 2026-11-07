@@ -220,9 +220,10 @@ describe('whatsapp voice notes (W4)', () => {
 
   describe('replayed wamids', () => {
     const fakeKv = () => { const map = new Map<string, unknown>(); return { map, kv: { get: <T>(k: string) => map.get(k) as T | undefined, put: (k: string, v: unknown) => { map.set(k, v); }, delete: (k: string) => map.delete(k), list: <T>({ prefix }: { prefix: string }) => [...map].filter(([k]) => k.startsWith(prefix)) as [string, T][] } }; };
-    it('a redelivered wamid is dropped, a new one passes, and an id-less message cannot be deduped', () => {
-      const { kv } = fakeKv();
-      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.B' }, {}], 1000)).toHaveLength(3);
+    it('a redelivered wamid is dropped, a new one passes, and an id-less message is never claimed', () => {
+      const { kv, map } = fakeKv();
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.B' }, {}, { id: '' }], 1000)).toEqual([{ id: 'wamid.A' }, { id: 'wamid.B' }]);
+      expect([...map.keys()]).toEqual(['wamid:wamid.A', 'wamid:wamid.B']);
       expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.C' }], 2000)).toEqual([{ id: 'wamid.C' }]);
     });
     it('the same wamid twice in one payload runs once', () => {
