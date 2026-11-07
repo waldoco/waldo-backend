@@ -98,6 +98,13 @@ describe('health log tools', () => {
     expect(deleteHealthLog!.mutates_state).toBe(true);
   });
 
+  // A logged entry carries the owner's values (calories, duration): a result that shows one reaches the model in the turn that
+  // asked and nowhere else, so the cross-turn tool ledger keeps a content-free line. A log's own result is an id and a time.
+  it('list and delete return entries only to the turn that asked; log_meal and log_workout return no values', () => {
+    expect([listHealthLogs!.turn_only_output, deleteHealthLog!.turn_only_output]).toEqual([true, true]);
+    expect(['turn_only_output' in logMeal!, 'turn_only_output' in logWorkout!]).toEqual([false, false]);
+  });
+
   it('delete answers what it removed, at the owner\'s local time, so the reply can quote it and the owner can log it again', async () => {
     const result = await deleteHealthLog!.handle({ id: 1 } as never);
     expect(result).toEqual({

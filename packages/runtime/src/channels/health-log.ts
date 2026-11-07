@@ -148,6 +148,8 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     schema: listHealthLogsArgsSchema,
     trigger_allowlist: allowlist('list_health_logs'),
     autonomy_gated: false,
+    // The entries carry the owner's values: the model sees them in this turn only, never the cross-turn tool ledger.
+    turn_only_output: true,
     async handle(args) {
       const entries = (await book.recent(args.limit)).filter((entry) => args.kind === undefined || entry.kind === args.kind);
       return { ok: true, data: { linked: book.linked(), entries }, source_taint: null };
@@ -159,6 +161,8 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     schema: deleteHealthLogArgsSchema,
     trigger_allowlist: allowlist('delete_health_log'),
     autonomy_gated: false,
+    // The entries carry the owner's values: the model sees them in this turn only, never the cross-turn tool ledger.
+    turn_only_output: true,
     mutates_state: true,
     async handle(args) {
       try {
