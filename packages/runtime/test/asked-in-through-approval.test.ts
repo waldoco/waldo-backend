@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionState, type TaskResult, type ToolName } from '@waldo/contracts';
 import { approvalDesk } from '../src/channels/approvals';
 import { routedDelivery } from '../src/channels/delivery-routes';
-import { askedOnWhatsApp } from '../src/channels/proactive-surface';
+import { answersOwnerIn } from '../src/channels/proactive-surface';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 import { sanitise } from '../src/scribe/sanitiser';
 import type { TaskHost } from '../src/tasks/brain';
@@ -94,11 +94,11 @@ describe('a report addressed to the WhatsApp chat it was asked in', () => {
   it('goes to WhatsApp ahead of the proactive surface, and nothing else is pulled there', async () => {
     const sent: string[] = [];
     // The proactive route takes everything addressed to the app owner; the answer route only answers asked on WhatsApp.
-    const delivery = routedDelivery([route('whatsapp', askedOnWhatsApp(SUBJECT), sent) as never, route('app', r => r.payload.chat_id === 7, sent) as never]);
-    await delivery.send({ chat_id: Number(SUBJECT), text: 'x' }, record({ askedOn: 'whatsapp' }));
+    const delivery = routedDelivery([route('whatsapp', answersOwnerIn(SUBJECT), sent) as never, route('app', r => r.payload.chat_id === 7, sent) as never]);
+    await delivery.send({ chat_id: Number(SUBJECT), text: 'x' }, record({ answersOwner: true }));
     await delivery.send({ chat_id: 7, text: 'x' }, record({ payload: { chat_id: 7, text: 'x' }, ownerSubject: '7' }));
     expect(sent).toEqual(['whatsapp', 'app']);
-    expect(askedOnWhatsApp(SUBJECT)(record({}))).toBe(false);
-    expect(askedOnWhatsApp(SUBJECT)(record({ askedOn: 'whatsapp', ownerSubject: '15550009999', payload: { chat_id: 15550009999, text: 'x' } }))).toBe(false);
+    expect(answersOwnerIn(SUBJECT)(record({}))).toBe(false);
+    expect(answersOwnerIn(SUBJECT)(record({ answersOwner: true, ownerSubject: '15550009999', payload: { chat_id: 15550009999, text: 'x' } }))).toBe(false);
   });
 });

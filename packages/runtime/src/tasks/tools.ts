@@ -50,7 +50,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
       // An approved replay runs outside any turn, so the thread comes from the turn whose card it was.
-      const askedThread = ctx.askedIn?.surface === 'app' && threadOfChain(ctx.askedIn.conversation_ref) ? ctx.askedIn.conversation_ref : null;
+      const askedThread = ctx.askedIn && threadOfChain(ctx.askedIn.conversation_ref) ? ctx.askedIn.conversation_ref : null;
       const conversationRef = deps.conversationRef?.(ctx) ?? askedThread;
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,

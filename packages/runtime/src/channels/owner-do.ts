@@ -251,7 +251,7 @@ import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memo
 import { capacityBudgetContext, cardCapacityNote, recentBlocks, recentMoves, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
-import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, askedOnWhatsApp, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -3318,8 +3318,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work. Once
         // the number is unbound it goes to the app, so the answer is never left with no route.
         const whatsappSubject = this.ctx.storage.kv.get<string>('whatsapp_subject');
-        if (this.whatsappBound() && whatsappSubject) routes.unshift(this.outboxRoute('whatsapp', askedOnWhatsApp(whatsappSubject)));
-        else if (this.appBound()) routes.push(this.linkingAppRows(this.outboxRoute('app', record => record.askedOn === 'whatsapp')));
+        if (this.whatsappBound() && whatsappSubject) routes.unshift(this.outboxRoute('whatsapp', answersOwnerIn(whatsappSubject)));
+        else if (this.appBound()) routes.push(this.linkingAppRows(this.outboxRoute('app', record => record.answersOwner === true && record.ownerSubject === whatsappSubject)));
         const settled = copies.length ? this.copiedFollowups(settleFinal, copies) : settleFinal;
         try { await lane('transport', () => finalOutbox.drain({ ...routedDelivery(routes), settled })); } finally { await scheduler.rearm(); }
         return;
@@ -3603,14 +3603,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         deliver: async (id, trace, text, commit, conversationRef, askedIn) => {
           // Work the owner asked for on WhatsApp answers in their WhatsApp chat while that number is still bound; everything
           // else goes where this lane's work goes.
-          const askedOnWhatsApp = askedIn?.surface === 'whatsapp' && this.whatsappBound();
-          const target = askedOnWhatsApp ? this.setup('whatsapp') : runtime;
-          if (askedOnWhatsApp) await target.ready;
+          const askedThere = askedIn !== undefined && ANSWERS_WHERE_ASKED.has(askedIn.surface) && this.whatsappBound();
+          const target = askedThere ? this.setup(askedIn.surface as ChannelKind) : runtime;
+          if (askedThere) await target.ready;
           if (target.finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
           // Only the app route reads it; any other surface's send ignores it.
-          const appThread = !askedOnWhatsApp && conversationRef ? threadOfChain(conversationRef) : null;
+          const appThread = !askedThere && conversationRef ? threadOfChain(conversationRef) : null;
           await target.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: target.owner, text: redactSecretUrls(text).text }, ownerSubject: String(target.owner),
-            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}), ...(askedOnWhatsApp ? { askedOn: 'whatsapp' as const } : {}) },
+            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}), ...(askedThere ? { answersOwner: true as const } : {}) },
             work => storage.transactionSync(() => { work(); commit(); }));
         },
         room: () => this.machineRoom(alarmEnd),

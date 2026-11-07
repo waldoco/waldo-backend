@@ -564,6 +564,8 @@ const withdrawalOf = (entry: LedgerRow): Pick<AppApprovalV1, 'withdrawal'> => en
 // The chat surfaces where a send to another person, and every other kind that reaches beyond the owner's own things, is
 // handed to the app rather than approved. Which kinds is the app's own rule; a request that cannot be classified is handed over.
 const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessage']);
+// The surfaces whose buttons show only while the card's words stay under a provider's body limit.
+const BUTTON_BODY_MAX: Readonly<Partial<Record<ApprovalSurface, number>>> = { whatsapp: WHATSAPP_REPLY_BODY_MAX };
 // Classified from every detail of the frozen request, never the app card's trimmed one.
 const stepUpFor = (entry: LedgerRow, action: ApprovalActionV1): boolean => {
   try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, action); } catch { return true; }
@@ -894,7 +896,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // to the short form when the whole review would push it past the reply buttons' body limit, so its buttons still show.
   const handedText = (review: string, handoff: string, short: string) => {
     const text = `${review}\n\n${handoff}`;
-    return surface !== 'whatsapp' || text.length <= WHATSAPP_REPLY_BODY_MAX ? text : `${short.slice(0, WHATSAPP_REPLY_BODY_MAX - handoff.length - 3)}\n\n${handoff}`;
+    const max = BUTTON_BODY_MAX[surface];
+    return max === undefined || text.length <= max ? text : `${short.slice(0, max - handoff.length - 3)}\n\n${handoff}`;
   };
   const appHandoff = (id: string, inApp: boolean) => !inApp ? `${NOT_IN_APP} Nothing was done.` : deps.appLink ? `Review and approve it there: ${deps.appLink(id)}` : 'Approve it in the Waldo app.';
   // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
