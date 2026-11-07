@@ -149,6 +149,7 @@ export const taintedActionReplay = (input: Readonly<{
   const ctx: ToolDispatcherContext = {
     ...input.context(), toolArgSourceTaint: 'external', turnId: callRef, toolCallId: callRef,
     approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest },
+    ...(proposal.origin ? { replayOrigin: proposal.origin } : {}),
   };
   const result = await dispatchTool({ id: callRef, name: tool.data, args: proposal.args }, ctx, { handlers });
   // The owner reads the outcome. The tool's payload and its error text were written for the model and can carry readings, ids

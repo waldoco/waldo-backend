@@ -460,3 +460,21 @@ describe('APPROVE_IN_CHAT in the Worker config', () => {
     expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
   });
 });
+
+describe('the chat a card was raised in', () => {
+  it('an app card raised in a thread records the app and that thread, so work it starts reports there', async () => {
+    await owner('card-origin-thread', async state => {
+      const f = harness(state, 'app', { thread: () => 'owner:prn_1:thr_0a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d' });
+      const args = { title: 'Pay invoice 44' };
+      const id = await f.desk.proposeTaintedAction({ tool: 'write_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'r', source: 'external' });
+      const payload = JSON.parse(f.sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', id).one().payload_json);
+      expect(payload.origin).toEqual({ surface: 'app', conversation_ref: 'owner:prn_1:thr_0a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d' });
+    });
+    await owner('card-origin-whatsapp', async state => {
+      const f = harness(state, 'whatsapp', { thread: () => 'owner:prn_1:thr_0a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d' });
+      const args = { title: 'Pay invoice 44' };
+      const id = await f.desk.proposeTaintedAction({ tool: 'write_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'r', source: 'external' });
+      expect(JSON.parse(f.sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', id).one().payload_json).origin).toEqual({ surface: 'whatsapp' });
+    });
+  });
+});

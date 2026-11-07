@@ -18,7 +18,7 @@ import { approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { stableJson, sha256Hex } from '../src/context-composer/canonical';
 import { sanitise } from '../src/scribe/sanitiser';
-import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
+import { argumentDigest, dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalReplayContext, FORGET_CARD_MAX_IDS, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
 import { memoryHandlers } from '../src/tools/live/memory';
@@ -284,6 +284,38 @@ describe('taint goes to a card', () => {
       const [card] = rows('tainted_action');
       expect(JSON.parse(card!.payload_json).preview).toEqual(['"Five signups", which would read your mail, calendar and files and the web together, after reading outside text']);
       expect(await proposeActionHandler(desk).handle({ tool: 'start_task', args: { ...brief, profile: 'web' }, reasoning: 'Research them.' } as never, owner({ toolCallId: 'p2' }))).toMatchObject({ ok: false, error: expect.stringMatching(/needs no approval; call it directly/) });
+    });
+  });
+
+  // The work keeps its conversation through an approval: the card records the chat its turn was in, and the replay hands it to
+  // start_task, so the job reports where the owner asked, not where the card was approved.
+  it('a task approved elsewhere keeps the surface and app thread the card was raised in', async () => {
+    await runInDurableObject(stub('task-origin'), async (_instance, state) => {
+      let n = 0;
+      const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+      const handlers = taskToolHandlers({ book, now: () => 1_800_000_000_000, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const replay = taintedActionReplay({ handlers: () => handlers, context: () => context() });
+      const args = { profile: 'reader', title: 'Vendor invoices', goal: 'Collect every invoice the vendor sent.', context: '', done_when: 'A list of invoices.' };
+      const THREAD = 'owner:prn_1:thr_0a1b2c3d-1e2f-4a5b-8c6d-7e8f9a0b1c2d';
+      const proposal = async (origin?: { surface: string; conversation_ref?: string }) => ({ tool: 'start_task', args, args_digest: (await argumentDigest(args))!, reasoning: 'r', source: 'external' as const, ...(origin ? { origin } : {}) });
+      expect(await replay(await proposal({ surface: 'whatsapp' }), 'p1')).toMatchObject({ status: 'done' });
+      expect(await replay(await proposal({ surface: 'app', conversation_ref: THREAD }), 'p2')).toMatchObject({ status: 'done' });
+      expect(await replay(await proposal(), 'p3')).toMatchObject({ status: 'done' });
+      const [fromWhatsApp, fromThread, unknown] = book.open();
+      expect(fromWhatsApp).toMatchObject({ surface: 'whatsapp' });
+      expect(taskBrief(fromWhatsApp!)).not.toHaveProperty('conversation_ref');
+      expect(fromThread).toMatchObject({ surface: 'app' });
+      expect(taskBrief(fromThread!)).toMatchObject({ conversation_ref: THREAD });
+      expect(unknown).toMatchObject({ surface: 'app' });
+    });
+  });
+
+  it('the desk records the chat a card was raised in: its own surface', async () => {
+    await runInDurableObject(stub('card-origin'), async (_instance, state) => {
+      const { desk, rows } = deskIn(state);
+      const args = { title: 'Pay invoice 44' };
+      await desk.proposeTaintedAction({ tool: 'write_task', args, args_digest: (await argumentDigest(args))!, reasoning: 'r', source: 'external' });
+      expect(JSON.parse(rows('tainted_action')[0]!.payload_json).origin).toEqual({ surface: 'telegram' });
     });
   });
 

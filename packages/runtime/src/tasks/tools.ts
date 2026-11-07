@@ -8,6 +8,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { isMachine, jobCheckpoint, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
 import { TASK_PROFILE_SPECS } from './profiles';
 import { quoted } from '../prompt/turn-prompt';
+import { threadOfChain } from '../channels/app-threads';
 
 // The brain's two task tools. Whether a piece of work becomes a task is the model's call: nothing here routes work by its
 // size or kind. start_task writes the job and wakes the jobs lane, which starts the worker after the write commits.
@@ -44,7 +45,10 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (unavailable) return refusal(unavailable, 'invalid_args');
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
-      const conversationRef = deps.conversationRef?.(ctx) ?? null;
+      // An approved card's replay starts the work in the chat the card was raised in, not where it was approved.
+      const origin = ctx.replayOrigin;
+      const surface = origin?.surface ?? deps.surface;
+      const conversationRef = origin ? (origin.conversation_ref && threadOfChain(origin.conversation_ref) ? origin.conversation_ref : null) : deps.conversationRef?.(ctx) ?? null;
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
@@ -62,7 +66,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         if (counts.open >= TASK_MAX_OPEN) return refusal(`${TASK_MAX_OPEN} background tasks are already open, the most at once. Wait for one to report, or cancel one the owner no longer needs with cancel_task, then start this one.`);
       }
       const { job, created } = deps.book.create({
-        kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId, surface: deps.surface,
+        kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId, surface,
         brief, dueAt: now, deadlineAt: now + TASK_DEADLINE_MS,
         // A brief written in a turn that read someone else's words may carry them, so the report is applied as tainted.
         taint: tainted ? 'external' : null,

@@ -29,13 +29,15 @@ export type JobsLaneDeps = Readonly<{
   // still the one being applied, and the taint of what it carries.
   // A retried turn answers the owner's own message, so it runs on the model their turns use.
   // toolNames: the tools the turn holds. A job that names none over outside text gets the read-and-card ceiling.
-  turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[]): Promise<string>;
+  // surface: the job's own, where it was asked; the host runs the turn there while that surface is still the owner's.
+  turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[], surface?: string): Promise<string>;
   // The owner's tools but starting or cancelling tasks, so neither an apply turn nor a retried turn starts more work.
   applyTools(): readonly ToolName[];
   // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
   // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
   // conversationRef: the app thread a task was started in, where its messages go while that thread is open.
-  deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string): Promise<void>;
+  // surface: the job's own, where its messages go while that surface is still the owner's.
+  deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string, surface?: string): Promise<void>;
   // Whether this alarm still has time for a model turn; work left over waits for the next pass.
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
@@ -149,7 +151,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
         // A worker that read the owner's mail, files or the web reports what those said, so its report gets the ceiling of any
         // job over outside text: reads, and the owner's card for a change.
         const tools = row.taint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : deps.applyTools();
-        reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, tools));
+        reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, tools, row.surface));
       } catch (error) {
         // Closed in this pass (the job moved on, or the owner's admission closed): nothing was lost, so the intent goes.
         if (error instanceof ClosedRunError) { book.endApply(row.id); return; }
@@ -161,7 +163,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       }
     }
     try {
-      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref);
+      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref, row.surface);
       else settle(row);
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;

@@ -175,6 +175,8 @@ export type HookRuntimeContext = {
   // An owner-approved tainted action (the propose_action card): the dispatcher verifies the call's tool and argument
   // digest against it before any hook runs, so the autonomy gate may admit exactly that call despite the taint.
   approvedTaintedAction?: Readonly<{ tool: ToolName; args_digest: string }>;
+  // An approved replay's card origin: the chat the card was raised in, where work the call starts reports (start_task).
+  replayOrigin?: Readonly<{ surface: string; conversation_ref?: string }>;
   // Set by the dispatcher for one call whose handler declares proposal_only: the call only raises the owner's card.
   proposalOnlyCall?: ToolName;
   // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.

@@ -3306,6 +3306,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const routeFor = (surface: ChannelKind): OutboxRoute => this.linkingAppRows(this.outboxRoute(surface));
         // An owner the directory admits on the app has the app's route and, while WhatsApp takes proactive work, WhatsApp's.
         const routes = whatsappTarget === null ? [routeFor(channel)] : [routeFor('app'), ...(whatsappTarget ? [routeFor('whatsapp')] : [])];
+        // A reply to what the owner asked on WhatsApp (a task's report) goes there even when the app takes their proactive work.
+        if (whatsappTarget === false && this.whatsappBound()) {
+          const whatsappRoute = routeFor('whatsapp');
+          routes.unshift({ ...whatsappRoute, addressed: record => record.askedOn === 'whatsapp' && whatsappRoute.addressed(record) });
+        }
         if (appWithTelegramCopy) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
@@ -3582,6 +3587,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (app) { runtime = app; surface = 'app'; }
       }
       const kv = storage.kv, jobs = this.jobs();
+      // A job's turn and messages go to the surface it was asked on: WhatsApp while it is still bound there; an app thread rides
+      // in its conversation ref. Anything else stays on this pass's surface.
+      const forJob = (asked: string | undefined): OwnerRuntime => asked === 'whatsapp' && surface !== 'whatsapp' && this.whatsappBound() ? this.setup('whatsapp') : runtime;
       const ran = await runJobsLane({
         book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, surface, log: runtime.log,
         quiet: () => isQuiet(loopBook(storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), runtime.timezone),
@@ -3590,15 +3598,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!workers) throw new Error('task workers are not configured');
           await workers.get(workers.idFromName(taskWorkerName(this.ctx.id.toString(), ticket))).start({ owner: this.ctx.id.toString(), ticket });
         },
-        turn: (job, trace, text, current, sourceTaint, toolNames) => this.asOwnerJob(job, trace, () =>
-          runtime.macFollowup(trace, runtime.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined, job === 'retry_turn')),
+        turn: (job, trace, text, current, sourceTaint, toolNames, asked) => { const target = forJob(asked); return this.asOwnerJob(job, trace, () =>
+          target.macFollowup(trace, target.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined, job === 'retry_turn')); },
         applyTools: () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task'),
-        deliver: async (id, trace, text, commit, conversationRef) => {
-          if (runtime.finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        deliver: async (id, trace, text, commit, conversationRef, asked) => {
+          const target = forJob(asked);
+          if (target.finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
           // Only the app route reads it; any other surface's send ignores it.
           const appThread = conversationRef ? threadOfChain(conversationRef) : null;
-          await runtime.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text }, ownerSubject: String(runtime.owner),
-            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
+          await target.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: target.owner, text: redactSecretUrls(text).text }, ownerSubject: String(target.owner),
+            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}), ...(target !== runtime ? { askedOn: 'whatsapp' as const } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
         },
         room: () => this.machineRoom(alarmEnd),
         heldTopics: () => heldTopicsOf(claimStore(storage.sql)),

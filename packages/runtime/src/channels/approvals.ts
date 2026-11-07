@@ -149,7 +149,10 @@ const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.serve
 // preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget
 // removes, the loop a close ends).
 // It is shown on the card and never replayed; the frozen args and their digest are what runs.
-export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[] }>;
+// origin: the chat the card's turn was in (its surface, and the app thread on an app turn). The desk records it, so an approved
+// call that starts work (start_task) reports there, wherever the card was approved.
+export type CardOrigin = Readonly<{ surface: string; conversation_ref?: string }>;
+export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[]; origin?: CardOrigin }>;
 // What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
 // refused before the handler ran; failed means the tool reported its own typed failure; uncertain is everything else.
 // message is owner-facing and fixed; code is the dispatcher's typed code, for the trace only.
@@ -2088,7 +2091,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (await sha256Hex(stableJson(payload.args)) !== payload.args_digest) throw new Error('tainted action digest mismatch');
       const originRunRef = options?.runRef ?? deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'tainted_action', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeTaintedAction(payload), JSON.stringify(payload), deps.now(), payload.args_digest);
+      const thread = surface === 'app' ? deps.conversationRef?.() : undefined;
+      const stored: TaintedActionProposal = { ...payload, origin: { surface, ...(thread ? { conversation_ref: thread } : {}) } };
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'tainted_action', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeTaintedAction(stored), JSON.stringify(stored), deps.now(), payload.args_digest);
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
       await present(id);
