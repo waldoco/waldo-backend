@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appControlActionV1Schema, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import { appSubjectFor } from '../src/channels/app-api';
 import { traceBook } from '../src/channels/harness';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, textFingerprint } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 const { OwnerDO } = await import('../src/channels/owner-do');
@@ -64,7 +64,7 @@ const seed = ({ state }: Ctx) => {
   store.add({ kind: 'event', text: 'Priya\'s birthday is 14 March', source: 'stated', evidence: 'birthday is 14 March', origin: 'owner', source_ref: 'owner, m1', on_date: '--03-14' }, at);
   const [priya] = store.people.link(1, [{ name: 'Priya', role: 'subject', relation: 'sister', ring: 'inner' }], at);
   store.people.link(2, [{ ref: priya!, role: 'subject' }], at);
-  store.add({ kind: 'fact', text: 'Dana runs the book club', source: 'inferred', evidence: 'note', origin: 'agent', source_ref: 'owner, m2' }, at);
+  store.add({ kind: 'fact', text: 'Dana runs the book club', source: 'inferred', evidence: 'forwarded mail', origin: 'untrusted', source_ref: 'mail:1' }, at);
   const [dana] = store.people.link(3, [{ name: 'Dana', role: 'subject', relation: 'book club' }], at);
   return { store, priya: priya!, dana: dana! };
 };
@@ -123,4 +123,38 @@ it('takes a person action only in the people view, naming one person, with the v
   for (const bad of [{ action: 'person.confirm', value: 'x' }, { action: 'person.rename' }, { action: 'person.rename', value: 'x'.repeat(121) }, { action: 'person.ring', value: 'family' },
     { action: 'person.forget', id: 'memory:claim:3' }, { action: 'person.forget', view: 'constellation' }, { action: 'claim.forget', id: 'memory:claim:3' }, { action: 'person.forget', volume: 'low' }])
     expect(appControlActionV1Schema.safeParse({ ...base, ...bad }).success, JSON.stringify(bad)).toBe(false);
+});
+
+it('confirms only that the owner knows someone, once; renames keep the old name; forget takes the person, their claims and every name', async () => {
+  await appOwner('app-people-owner-word', { PEOPLE_MAP: '1' }, async ctx => {
+    const { store, priya, dana } = seed(ctx);
+    const detail = async (id: number) => people(ctx, `&id=memory:person:${id}`);
+    // A list revision is not a person's read.
+    const listed = await people(ctx);
+    expect((await act(ctx, { action: 'person.ring', id: `memory:person:${dana}`, value: 'close', revision: listed.revision })).status).toBe(409);
+    expect((await act(ctx, { action: 'person.confirm', id: `memory:person:${dana}`, revision: (await detail(dana)).revision })).body).toMatchObject({ receipt: { state: 'recorded' } });
+    const said = store.people.claimsOf(dana).find(claim => claim.origin === 'owner')!;
+    expect(said.text).toBe('Dana is someone the owner knows');
+    expect(store.people.claimsOf(dana).find(claim => claim.text === 'Dana runs the book club')).toMatchObject({ origin: 'untrusted' });
+    // Confirmed once, confirm is no longer offered and a second one is refused.
+    const after = await detail(dana);
+    if (!('person' in after.data)) throw Error('expected a person');
+    expect(after.data.person).toMatchObject({ held_as: 'yours', actions: ['person.rename', 'person.ring', 'person.forget'] });
+    expect((await act(ctx, { action: 'person.confirm', id: `memory:person:${dana}`, revision: after.revision })).status).toBe(409);
+    expect(store.people.claimsOf(dana).filter(claim => claim.origin === 'owner')).toHaveLength(1);
+    // A rename keeps the old name, so the forget bars it too.
+    await act(ctx, { action: 'person.rename', id: `memory:person:${dana}`, value: 'Dana Okoye', revision: (await detail(dana)).revision });
+    expect(store.people.person(dana)).toMatchObject({ name: 'Dana Okoye', aliases: '["Dana"]' });
+    expect((await act(ctx, { action: 'person.forget', id: `memory:person:${dana}`, revision: (await detail(dana)).revision })).body).toMatchObject({ receipt: { state: 'recorded', message: expect.stringContaining('Gmail') } });
+    const hashes = store.barriers().map(barrier => barrier.topic_hash);
+    for (const name of ['Dana Okoye', 'Dana']) expect(hashes).toContain(textFingerprint(name));
+    expect(ctx.state.storage.sql.exec('SELECT * FROM entities WHERE id = ?', dana).toArray()).toEqual([]);
+    expect(ctx.state.storage.sql.exec('SELECT * FROM claim_links WHERE entity_id = ?', dana).toArray()).toEqual([]);
+    expect(store.people.person(priya)).toBeDefined();
+    expect((await act(ctx, { action: 'person.forget', id: `memory:person:${dana}`, revision: listed.revision })).status).toBe(409);
+  });
+  await appOwner('app-people-act-off', {}, async ctx => {
+    const { dana } = seed(ctx);
+    expect((await act(ctx, { action: 'person.forget', id: `memory:person:${dana}`, revision: 'a'.repeat(64) })).status).toBe(400);
+  });
 });

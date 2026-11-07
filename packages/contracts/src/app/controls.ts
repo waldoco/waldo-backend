@@ -41,6 +41,8 @@ const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.f
 // list names each person once; with id (memory:person:<n>) it is one person and the claims about them, which keep their own
 // claim actions in the constellation view. A person takes person.confirm (they are someone the owner knows), person.rename
 // (their name, in value), person.ring (inner, close or wider, in value) and person.forget (them and everything about them).
+// An action carries the revision of that person's read (id=memory:person:<n>), never the list's, and is refused once the person
+// no longer offers it. The one-person read returns at most APP_MEMORY_PAGE_MAX_V1 of their claims; claims counts them all.
 // A build below 22 is refused the view and the actions; it still sees every claim about a person in the constellation view.
 export const APP_CONTROLS_PEOPLE_REVISION = 22;
 export const APP_PERSON_NAME_MAX_V1 = 120;

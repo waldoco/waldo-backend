@@ -88,7 +88,7 @@ The match is the exact address, lower-cased. Nothing else is inferred.
 
 The person is the unit the owner acts on. Each action reuses the claim machinery.
 
-- **Confirm** (`person.confirm`) writes one owner-origin claim stating the person as the owner now sees them ("Priya Shah, my sister"), linked as subject.
+- **Confirm** (`person.confirm`) writes one owner-origin claim that the owner knows them ("Priya Shah is someone the owner knows"), linked as subject. It copies nothing from Waldo's reads: a relation from an untrusted mail never becomes the owner's word.
   - That makes the person visible in turns.
   - It does not ground the untrusted claims behind it one by one.
   - It mirrors `node.confirm` (D5-b, resolved 30 Oct).

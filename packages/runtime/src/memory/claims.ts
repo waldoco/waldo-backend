@@ -595,26 +595,28 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     // The people claims are about. Written only here, beside the claims they hang on.
     people,
-    // The owner's yes to a person: one claim in their own name stating who the person is to them now, linked to the person, so
-    // the person is theirs on every turn. It grounds none of the claims Waldo read about them; those keep their own confirm.
+    // The owner's yes to a person: one claim in their own name saying they know them, linked to the person, so the person is
+    // theirs on every turn. It says nothing more: who they are to the owner stays in the claims Waldo read, each with its own
+    // confirm, and none of those is grounded by this.
     confirmPerson(id: number, at: string, where: string): number | null {
       const row = people.person(id);
       if (!row) return null;
-      const relation = people.claimsOf(id).find(claim => claim.relation)?.relation;
-      const text = relation ? `${row.name}: ${relation}` : `${row.name} is someone the owner knows`;
       const add = () => {
-        sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, verification_status, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          'fact', text, 'confirmed', `confirmed: ${where}`, 'owner', at, at, where, at, at, 'owner-grounded', 'people', 'model');
+        sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, created_at, last_seen_at, source_ref, learned_at, valid_from, verification_status, area) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'fact', `${row.name} is someone the owner knows`, 'confirmed', `confirmed: ${where}`, 'owner', at, at, where, at, at, 'owner-grounded', 'people');
         const claim = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id;
-        people.link(claim, [{ ref: id, role: 'subject', ...(relation ? { relation } : {}) }], at);
+        people.link(claim, [{ ref: id, role: 'subject' }], at);
         return claim;
       };
       return transaction ? transaction(add) : add();
     },
-    // What forgetting one person takes: every claim about them, earlier wordings included, and the words to bar.
-    personForget(id: number): Readonly<{ ids: readonly number[]; texts: readonly string[] }> | null {
+    // What forgetting one person takes: every claim about them, earlier wordings included; the words to bar (their names and
+    // addresses); and the words to clear from history, as the chat forget clears them (each claim, and the owner's own quote).
+    personForget(id: number): Readonly<{ ids: readonly number[]; texts: readonly string[]; words: readonly string[] }> | null {
       if (!people.person(id)) return null;
-      return { ids: lineageOf(sql, people.claimIdsOf(id)), texts: people.forgetTexts(id) };
+      const ids = lineageOf(sql, people.claimIdsOf(id));
+      const rows = ids.length ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray() : [];
+      return { ids, texts: people.forgetTexts(id), words: rows.flatMap(claim => claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]) };
     },
     seen(id: number, at: string): void {
       db.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);

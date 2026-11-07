@@ -209,7 +209,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'person.rename.failed': 'Nothing was changed. The name must be 1 to 120 characters and hold no password, key or token.',
   'person.ring': 'Saved. Waldo now keeps them where you put them.',
   'person.ring.failed': 'Nothing was changed. Choose inner, close or wider.',
-  'person.forget': 'Forgotten: everything Waldo held about them, and their name and addresses are blocked from relearning, unless someone else you know shares the name. Older copies are cleared from storage in the background.',
+  'person.forget': 'Forgotten: everything Waldo held about them, and their name and addresses are blocked from relearning, unless someone else you know shares the name. Older copies are cleared from storage in the background. Their mail and calendar events stay in Gmail and Google Calendar.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'node.correct.failed': 'Nothing was changed. The text must be 1 to 140 characters and hold no password, key or token.',
   'schedule.resume': 'Resumed. It runs now.',

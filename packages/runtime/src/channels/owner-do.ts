@@ -6386,7 +6386,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!chosen) return false;
           const at = new Date(now).toISOString();
           for (const text of chosen.texts) memory.barrier(text, at);
-          await this.forgetPurgeJob().track(memory.purge(chosen.ids, at, chosen.texts).texts);
+          await this.forgetPurgeJob().track(memory.purge(chosen.ids, at, chosen.texts, chosen.words).texts);
         } else if (action === 'node.correct') {
           // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
           // same scribe check a spot edit crosses, so a credential never enters memory.

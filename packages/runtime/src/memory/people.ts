@@ -52,7 +52,6 @@ export const peopleTables = (sql: Sql) => {
         const ring = link.ring !== undefined && row.ring_by !== 'owner' ? link.ring : row.ring;
         sql.exec('UPDATE entities SET last_seen_at = ?, addresses = ?, ring = ?, ring_by = CASE WHEN ? THEN \'model\' ELSE ring_by END WHERE id = ?',
           at, addresses.length ? JSON.stringify(addresses) : null, ring, link.ring !== undefined && row.ring_by !== 'owner' ? 1 : 0, id);
-        // The owner named them; a model write that names them differently is a new person, never a rename.
         sql.exec('INSERT OR IGNORE INTO claim_links (claim_id, entity_id, role, relation) VALUES (?, ?, ?, ?)', claimId, id, link.role, link.relation ?? null);
         return id;
       });
@@ -81,8 +80,12 @@ export const peopleTables = (sql: Sql) => {
       return [...namesOf(row).filter(name => !shared(name)), ...listOf(row.addresses)];
     },
     // The owner's own word on a person: their name, or how close they are. Later model writes never overwrite either.
+    // A renamed person keeps the old name as another of theirs, so mail under it is still them and a forget still bars it.
     rename(id: number, name: string, at: string): boolean {
-      return person(id) !== undefined && sql.exec("UPDATE entities SET name = ?, name_by = 'owner', last_seen_at = ? WHERE id = ?", name, at, id).rowsWritten === 1;
+      const row = person(id);
+      if (!row) return false;
+      const aliases = [...new Set([...listOf(row.aliases), ...(same(row.name, name) ? [] : [row.name])])].slice(-10);
+      return sql.exec("UPDATE entities SET name = ?, name_by = 'owner', aliases = ?, last_seen_at = ? WHERE id = ?", name, aliases.length ? JSON.stringify(aliases) : null, at, id).rowsWritten === 1;
     },
     setRing(id: number, ring: PersonRing, at: string): boolean {
       return person(id) !== undefined && sql.exec("UPDATE entities SET ring = ?, ring_by = 'owner', last_seen_at = ? WHERE id = ?", ring, at, id).rowsWritten === 1;
@@ -99,7 +102,6 @@ export type PeopleTables = ReturnType<typeof peopleTables>;
 // A ref that named a living person when it was checked, and no longer did when the write committed.
 export class StalePersonRef extends Error { constructor(readonly ref: number) { super('stale_person_ref'); } }
 export const personAddresses = (row: Pick<Person, 'addresses'>): string[] => listOf(row.addresses);
-export const personAliases = (row: Pick<Person, 'aliases'>): string[] => listOf(row.aliases);
 
 // The next time a dated claim's day comes round, on or after today (YYYY-MM-DD), or null when a fixed date has passed.
 export const nextOccurrence = (onDate: string, today: string): string | null => {

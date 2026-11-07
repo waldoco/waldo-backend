@@ -10,6 +10,7 @@ import type { ConsoleAction, ConsoleView } from './console';
 import { claimStore, memoryRevision, type Claim } from '../memory/claims';
 import { PERSON_RINGS } from '@waldo/contracts';
 import { personCard, type Person } from '../memory/people';
+import { carriesTopic } from '../memory/forget-guard';
 import { appClaimActions, claimHeldAs } from './dashboard-memory-actions';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
@@ -170,11 +171,12 @@ const peopleFor=(request:Request,host:AppControlsHost)=>host.people===true&&appC
 const peopleData=(request:Request,host:AppControlsHost,id?:string)=>{
   const store=claimStore(host.storage.sql),graph=readMemoryGraph(host.storage.sql,MEMORY_SCOPE);
   const listed=new Map(graph.claims.map(claim=>[claim.local_id,claim as unknown as Item]));
-  const today=new Date().toISOString().slice(0,10);
+  const zone=host.storage.kv.get<string>('timezone')??'UTC',today=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const held=store.pendingTopics();
   const shown=(row:Person)=>{
     const claims=store.people.claimsOf(row.id).filter(claim=>listed.has(claim.id));
-    if(!claims.length)return null;
-    const card=personCard(row,claims,today),yours=claims.some(claim=>claim.origin==='owner');
+    if(!claims.length||held.some(topic=>carriesTopic(row.name,topic)))return null;
+    const card=personCard(row,claims,today),yours=claims.some(claim=>claimHeldAs(claim)==='owner_said');
     const item={id:`memory:person:${row.id}`,name:card.name,other_names:card.other_names.slice(0,10),ring:card.ring,ring_by:card.ring_by,relations:card.relations,
       next_date:card.next_date?{date:card.next_date.date,claim_id:`memory:claim:${card.next_date.claim_id}`,text:card.next_date.text}:null,
       last_contact:card.last_contact&&(card.last_contact.via==='mail'||card.last_contact.via==='meeting')?{at:card.last_contact.at,via:card.last_contact.via}:null,
@@ -296,10 +298,13 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   // A person action runs as the console's memory action on the person it names, against the revision of that person's detail read.
   if(action.success&&action.data.view==='people'){
     if(!peopleFor(request,host))return reply({error:'invalid_action'},400);
+    // Only what the person offers now: confirm names someone Waldo only read about, never one the owner already knows.
+    const offered=(()=>{try{const data=peopleData(request,host,action.data.id);return data&&'person' in data&&data.person?data.person.actions as readonly string[]:[];}catch{return [];}})();
+    if(!offered.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
-      projection:async()=>peopleData(request,host,id) as never,
+      projection:async()=>{try{return peopleData(request,host,id) as never;}catch{return null;}},
       act:async person=>{await host.assertCurrent();return host.act({...person,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
