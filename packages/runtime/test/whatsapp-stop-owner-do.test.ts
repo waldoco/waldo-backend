@@ -1,6 +1,7 @@
 // The owner's explicit stop on WhatsApp (WHATSAPP_STOP): a typed /stop, the same control Telegram has, stops the running turn
 // at once, even while it waits on a long call, and stops the owner's background browser work as Telegram's does. Anything
-// else the owner writes meanwhile is the model's to weigh (the second-message desk); no wording is read as a stop.
+// else the owner writes meanwhile is the model's to weigh (the second-message desk); no wording is read as a stop. The
+// owner's messages still waiting ahead of the /stop are stopped with it; what they write after it runs as usual.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +14,7 @@ import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const LATE = 'Here is your whole week, planned.';
-const world = vi.hoisted(() => ({ started: 0, release: () => undefined as void, hold: Promise.resolve() as Promise<void>, sent: [] as { text: string; quote?: string }[] }));
+const world = vi.hoisted(() => ({ started: 0, returned: 0, release: () => undefined as void, hold: Promise.resolve() as Promise<void>, sent: [] as { text: string; quote?: string }[], refuseNotice: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -21,6 +22,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (request.response_format) return reply('{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     world.started += 1;
     await world.hold;
+    world.returned += 1;
     return reply(LATE);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -33,7 +35,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' };
 
 beforeEach(() => {
-  world.started = 0; world.sent = [];
+  world.started = 0; world.returned = 0; world.sent = []; world.refuseNotice = false;
   world.hold = new Promise<void>(resolve => { world.release = resolve; });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -44,6 +46,7 @@ beforeEach(() => {
     if (fn === 'health_log_recent') return Response.json([]);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string }; context?: { message_id: string } };
+      if (world.refuseNotice && body.text?.body === INTERRUPTED_NOTICES.stopped) return Response.json({ error: { message: 'synthetic refusal', code: 131000 } }, { status: 500 });
       if (body.type === 'text') world.sent.push({ text: body.text!.body, ...(body.context ? { quote: body.context.message_id } : {}) });
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${world.sent.length}` }] });
     }
@@ -66,6 +69,8 @@ const owner = (name: string, switches: Record<string, string>, run: (o: Owner, s
     const admit = async (m: object) => (await o.fetch(new Request('https://telegram-owner/whatsapp-admit', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ messages: [m] }) }))).status;
     try { await run(o, state, admit, () => stopped.mock.calls.length); } finally { world.release(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
+// The cut-off turn's model call returns only once released; whatever it would still do has had its chance after this.
+const settled = async () => { await vi.waitFor(() => expect(world.returned).toBe(world.started), { timeout: 10_000, interval: 20 }); await new Promise(resolve => setTimeout(resolve, 100)); };
 const rows = (state: DurableObjectState) => [...state.storage.kv.list<{ wamid: string; state: string }>({ prefix: 'whatsapp:inbox-record:' })].map(([, row]) => [row.wamid, row.state]);
 
 describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
@@ -75,13 +80,73 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
       expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
-      expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]);
+      await vi.waitFor(() => expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]), { timeout: 5_000, interval: 20 });
       expect(stops()).toBe(1);
       // The turn ends now, while its model call is still out: the drain finishes before that call returns.
       await draining;
+      expect(world.returned).toBe(0);
       world.release();
+      await settled();
       await drainWhatsAppTurns(o);
       expect(world.sent.map(sent => sent.text)).toEqual([INTERRUPTED_NOTICES.stopped]);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('stops the messages waiting behind the running turn, not what the owner writes after the /stop', async () => {
+    await owner('wa-stop-queued', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      const draining = drainWhatsAppTurns(o);
+      await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
+      expect(await admit(message('wamid.in.queued', 'And book the dentist'))).toBe(200);
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await draining;
+      expect(await admit(message('wamid.in.after', 'What is on today?'))).toBe(200);
+      world.release();
+      await settled();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(2);
+      expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }, { text: LATE }]);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.queued', 'revoked'], ['wamid.in.stop', 'completed'], ['wamid.in.after', 'completed']]));
+    });
+  });
+
+  it('does not stop an approval tap waiting behind the running turn: a decision is not a message, and it still runs', async () => {
+    await owner('wa-stop-keeps-tap', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      const draining = drainWhatsAppTurns(o);
+      await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
+      expect(await admit(message('wamid.in.tap', 'a:synthetic-approval'))).toBe(200);
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await draining;
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.tap', 'completed'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('sent before the turn began stops the waiting message: it never runs, and the owner is told', async () => {
+    await owner('wa-stop-before-claim', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      world.release();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(0);
+      await vi.waitFor(() => expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]), { timeout: 5_000, interval: 20 });
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'revoked'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('still stops, and Meta still gets its 200, when WhatsApp refuses the notice', async () => {
+    world.refuseNotice = true;
+    await owner('wa-stop-notice-refused', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      const draining = drainWhatsAppTurns(o);
+      await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await draining;
+      world.release();
+      await settled();
+      await drainWhatsAppTurns(o);
+      expect(world.sent).toEqual([]);
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
     });
   });
@@ -107,6 +172,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
       world.release();
       await draining;
       expect(world.sent.map(sent => sent.text)).toContain(LATE);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.fwd', 'completed'], ['wamid.in.words', 'completed']]));
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'completed']]));
     });
   });

@@ -186,18 +186,27 @@ export class WhatsAppOwnerInbox {
   }
 
   /**
-   * The owner's explicit stop: the row running under `attempt` closes as interrupted, so its turn stops at its next scope
-   * check and its settle owes no second notice, and the waiting /stop rows close as done, so none runs a turn of its own.
-   * True when the running row was still this attempt's and closed here.
+   * The owner's explicit stop. What the owner asked for before it ends: the row running under `running`'s attempt closes as
+   * interrupted (its turn stops at its next scope check and its settle owes no second notice), and the owner's messages
+   * still waiting ahead of the /stop close as revoked, never run. An approval tap is not a message to stop and is left. When
+   * something closed, the /stop rows close as done, so none runs a turn of its own; when nothing did, they run as any message.
+   * Returns the closed rows, the running one first.
    */
-  stop(id: string, attempt: string, stopWamids: ReadonlySet<string>): boolean {
+  stop(running: Readonly<{ id: string; attempt: string }> | null, stopWamids: ReadonlySet<string>): WhatsAppInboxRecord[] {
     return this.storage.transactionSync(() => {
-      const r = this.get(id);
-      if (!r || r.state !== 'running' || r.attempt !== attempt) return false;
-      this.close(r, 'interrupted');
-      for (const row of this.records()) if (row.state === 'admitted' && stopWamids.has(row.wamid)) this.close(row, 'completed');
+      const stops = this.records().filter(row => row.state === 'admitted' && stopWamids.has(row.wamid));
+      if (!stops.length) return [];
+      const first = Math.min(...stops.map(row => row.updateId)), closed: WhatsAppInboxRecord[] = [];
+      const r = running ? this.get(running.id) : null;
+      if (r && r.state === 'running' && r.attempt === running!.attempt) { closed.push({ ...r }); this.close(r, 'interrupted'); }
+      for (const row of this.records()) {
+        if (row.state !== 'admitted' || row.updateId >= first || (row.update as { message?: unknown } | null)?.message === undefined) continue;
+        closed.push({ ...row }); this.close(row, 'revoked');
+      }
+      if (!closed.length) return [];
+      for (const row of stops) this.close(row, 'completed');
       this.refreshDue();
-      return true;
+      return closed;
     });
   }
 
