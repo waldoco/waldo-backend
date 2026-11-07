@@ -137,7 +137,7 @@ import {
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
-import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profiles';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
 import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];

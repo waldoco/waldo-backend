@@ -445,12 +445,12 @@ describe('a report after the owner may already have heard it', () => {
     });
   });
 
-  it('an exchange that carried outside text runs the report tainted, with the outside-text ceiling', async () => {
+  it('an exchange that carried outside text runs the report tainted, with the outside-text ceiling and the sends that only raise a card', async () => {
     await withLane(async ({ book, deps }) => {
       reported(book, 'k1');
       const turns: Turn[] = [];
       await runJobsLane(deps({ ...capture(turns), recentExchange: () => ({ text: 'Waldo: the vendor says yes.', outside: true }) }));
-      expect(turns[0]).toMatchObject({ taint: 'external', tools: OUTSIDE_TEXT_JOB_TOOLS });
+      expect(turns[0]).toMatchObject({ taint: 'external', tools: [...OUTSIDE_TEXT_JOB_TOOLS, 'send_email', 'send_message'] });
     });
   });
 
