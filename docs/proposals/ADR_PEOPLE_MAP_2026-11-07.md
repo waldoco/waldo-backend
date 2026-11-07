@@ -40,7 +40,7 @@ There is **no separate people store.** A person is an S9 entity of kind `person`
 | What | Lives in | Written by | Why there |
 |---|---|---|---|
 | Who the person is: name, other names, area | `entities` row (S9 shape) | `ClaimStore`, from the model's link or the owner's correction | One identity that claims point at; the model decides which entity a name means |
-| How close they are: ring `inner`, `close` or `wider` | `entities.ring`, plus `ring_by` (`model` or `owner`) | The model sets it; the owner can change it, and the owner's choice stands, as with `area_by` | A judgment, so the model makes it. A fixed vocabulary of three keeps the map drawable |
+| How close they are: ring `inner`, `close` or `wider` | `entities.ring`, plus `ring_by` (`model` or `owner`) | The owner, in the app (`person.ring`); the owner's choice stands. The chat tool's link does not carry a ring: the owner's tool definitions are at their per-round budget, and the ring is the owner's own call. A later slice may let the model propose one | How close someone is, is the owner's call. A fixed vocabulary of three keeps the map drawable |
 | The addresses Waldo knows them by | `entities.addresses`: at most 5 email addresses | The source pass, from an address it saw in mail or the calendar (slice 3). Not a field of the chat tool, which keeps the owner's tool definitions inside their budget | The key for last contact (§3). Identity, not a fact about their life |
 | Last contact: when and how | `entities.last_contact_at` and `last_contact_via` (`mail` or `meeting`) | `ClaimStore`, as bookkeeping (§3) | Derived from what the source pass already sees. Not a fact anyone stated |
 | Everything said about them: "my sister", "works at Acme", "loves jazz", their birthday | Claims linked through `claim_links` (S9) | Every existing claim writer, unchanged, plus an optional `entities` link | Confirm, correct, forget, origin and validity already work on claims |
@@ -57,7 +57,7 @@ Old code ignores all three.
 
 | Source | How a person is written | Claim origin | Visible in turns | On the map |
 |---|---|---|---|---|
-| The owner, in chat ("my sister Priya…") | `remember` with `people: [{ ref or name, role, relation?, ring? }]`, and `on_date` for a dated claim | `owner` | Yes | Yes, as **yours** |
+| The owner, in chat ("my sister Priya…") | `remember` with `people: [{ ref or name, role, relation? }]`, and `on_date` for a dated claim | `owner` | Yes | Yes, as **yours** |
 | An import from another assistant (B1) | `import_memories` carries the same optional `people` (a later change, once B1 merges) | as B1 stores them (`agent`, from the owner's own quotes) | As B1's claims are | Yes, as **Waldo thinks** until confirmed |
 | Mail and calendar, via the nightly and daytime source pass | The source pass may link people and their addresses on the claims it adds | `untrusted` | **No**, until the owner confirms (the #1650 fence; S9's rule that an entity is visible only through a visible claim) | Yes, as **Waldo thinks**, with Confirm and Forget |
 | Google contacts | **Not ingested.** Looked up live, when the owner asks about someone (`search_contacts`) | — | — | Only once the owner says to keep it |

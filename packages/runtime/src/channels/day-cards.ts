@@ -9,7 +9,7 @@ import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiple
 import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
 import { localDayWindow, shiftDay } from '../health/scores/time';
-import { APP_CARD_EXCERPT_MAX_V1, type AppScheduleTimeTodayV1 } from '../../../contracts/src/app/controls';
+import { APP_CARD_EXCERPT_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appScheduleTimeReceiptV1, type AppScheduleTimeTodayV1, type APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -328,6 +328,13 @@ export const setCardTime = async (deps: CardDeps & Readonly<{ enabled: boolean; 
   return deps.quiet(at) ? 'quiet' : at === deps.now ? 'now' : 'planned';
 };
 
+// The owner's every-day Brief or Close time from the app, the console or chat, with the fixed receipt that says what changed.
+// wake: WAKE_BRIEF is on, so the Brief time is the latest it comes.
+export const ownerCardTime = async (deps: Parameters<typeof setCardTime>[0], card: (typeof APP_SCHEDULE_TIME_IDS_V1)[number], time: string, wake: boolean) => {
+  const today = await setCardTime(deps, card, time, true);
+  return today === 'unreadable' ? APP_SCHEDULE_RECEIPTS_V1.unavailable : appScheduleTimeReceiptV1({ card, time, today, noLaterThan: card === 'card:brief' && wake });
+};
+
 // One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
 // change is always planned on and a burst costs at most two model calls.
 export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {
@@ -499,7 +506,10 @@ export const dayCardsLine = (deps: CardDeps): string => {
       default: return deps.queued(day, card.id) ? [`${card.name} is on its way`] : due ? [`${card.name} is due at ${due}`] : [];
     }
   });
-  return said.length ? `Today's cards: ${said.join('; ')}.` : '';
+  // A time the owner set keeps every day, so a turn can tell it from today's plan before it changes or names one.
+  const pins = deps.book.pins();
+  const kept = DAY_CARDS.filter(card => pins[card.id]).map(card => `${card.name} at ${pins[card.id]}`);
+  return [said.length ? `Today's cards: ${said.join('; ')}.` : '', kept.length ? `Every day, the owner keeps ${kept.join(' and ')}.` : ''].filter(Boolean).join(' ');
 };
 
 // Local days, so a 23- or 25-hour day around a clock change is read whole and no hour of the next day leaks in.
