@@ -33,6 +33,8 @@ export const healthReadSignalSchema = z.enum([
   'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
   'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
   'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
+  // Food the owner's own app logged to the phone's health store: energy and the three macros, each a day's sum.
+  'food_energy', 'protein', 'carbs', 'fat',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -49,7 +51,7 @@ export const getHealthArgsSchema = z
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
