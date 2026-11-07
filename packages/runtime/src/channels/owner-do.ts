@@ -2491,22 +2491,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const stops = claimed.filter(m => m.from === subject && m.type === 'text' && m.text?.body?.trim() === '/stop' && !whatsappForwarded(m));
     return stops.length ? inbox.stop(new Set(stops.flatMap(m => typeof m.id === 'string' ? [m.id] : []))) : null;
   }
-  // After that commit: the owner's background work stops, the stopped turn is aborted at once rather than at its next scope
-  // check, and when anything stopped the owner is told once, quoting the message it stopped, after Meta has its
-  // acknowledgement; the /stop runs no turn of its own. When nothing stopped, the /stop runs as ever ("Nothing is running
-  // right now.").
+  // After that commit: the stopped turn is aborted at once rather than at its next scope check, and when anything stopped the
+  // owner is told once, quoting the message it stopped, after Meta has its acknowledgement; the /stop runs no turn of its own.
+  // Then the owner's background work stops. None of this can fail the admission, whose commit already holds the stop. When
+  // nothing stopped, the /stop runs as ever ("Nothing is running right now.").
   private async whatsappStopped(closed: readonly WhatsAppInboxRecord[]): Promise<void> {
-    await this.stopOwnerWork();
-    if (!closed.length) return;
-    const active = this.activeWhatsApp;
-    if (active && closed[0]!.id === active.scope.runId && this.activeScope === active.scope) this.activeAbort?.abort();
-    const quoted = closed[0]!.wamid;
-    this.ctx.waitUntil((async () => {
-      try {
-        const { api, owner } = this.setup('whatsapp');
-        await api.sendMessage({ chat_id: owner, text: INTERRUPTED_NOTICES.stopped, ...(quoted ? { quote_message_id: quoted } : {}) });
-      } catch { console.error('whatsapp stop notice unavailable'); }
-    })());
+    if (closed.length) {
+      const active = this.activeWhatsApp;
+      if (active && closed[0]!.id === active.scope.runId && this.activeScope === active.scope) this.activeAbort?.abort();
+      const quoted = closed[0]!.wamid;
+      this.ctx.waitUntil((async () => {
+        try {
+          const { api, owner } = this.setup('whatsapp');
+          await api.sendMessage({ chat_id: owner, text: INTERRUPTED_NOTICES.stopped, ...(quoted ? { quote_message_id: quoted } : {}) });
+        } catch { console.error('whatsapp stop notice unavailable'); }
+      })());
+    }
+    try { await this.stopOwnerWork(); } catch (error) { console.error(JSON.stringify({ hop: 'whatsapp_stop', ok: false, code: 'background_stop_failed', error_class: error instanceof Error ? error.name : 'unknown' })); }
   }
   // One WhatsApp turn under its row's run scope. A commit holds only while the row is still running under this attempt, before
   // its deadline, and while the sender is still the bound, linked subject under an unchanged owner name. The scope is aborted
