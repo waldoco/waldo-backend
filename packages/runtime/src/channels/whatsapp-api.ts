@@ -107,7 +107,9 @@ export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
 // notices). Direct system sends (sign-in and connect links among them) are never heard.
 export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void;
   // WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message.
-  replyButtons?: boolean }>;
+  replyButtons?: boolean;
+  // WHATSAPP_LIST_CARDS: a card those buttons cannot hold (four choices, or reply buttons off) goes out as one interactive list.
+  listCards?: boolean }>;
 
 // Meta's limits for an interactive reply-buttons message, read on 6 Nov 2026 from
 // https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages
@@ -117,21 +119,37 @@ export const WHATSAPP_REPLY_BUTTONS_MAX = 3;
 export const WHATSAPP_REPLY_BUTTON_TITLE_MAX = 20;
 export const WHATSAPP_REPLY_BUTTON_ID_MAX = 256;
 export const WHATSAPP_REPLY_BODY_MAX = 1024;
+// Meta's limits for an interactive list message, read on 7 Nov 2026 from
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-list-messages: a body of at
+// most 4,096 characters, a button label of at most 20, at least one section with a required title of at most 24, at most 10
+// rows across sections, and a row title of at most 24 characters and an id of at most 200.
+export const WHATSAPP_LIST_ROWS_MAX = 10;
+export const WHATSAPP_LIST_ROW_TITLE_MAX = 24;
+export const WHATSAPP_LIST_ROW_ID_MAX = 200;
+export const WHATSAPP_LIST_BODY_MAX = 4096;
 // The ids the approval desk reads (approvals.ts callback): an action letter and the card's id.
 const CALLBACK_ID = /^([aseud]):(\S+)$/;
 type ShimButton = Readonly<{ text: string; callback_data?: string; url?: string }>;
-// The interactive body for a card whose every button is a callback button that fits, or null when it must go as text.
-const replyButtonsBody = (text: string, buttons: readonly ShimButton[]): { type: 'interactive'; interactive: object } | null => {
+type Choice = Readonly<{ id: string; title: string }>;
+// The card's buttons as choices when every one is a callback button within the form's limits and no two share a title; null
+// when the card must go as text.
+const choicesWithin = (buttons: readonly ShimButton[], max: number, titleMax: number, idMax: number): Choice[] | null => {
+  if (buttons.length === 0 || buttons.length > max) return null;
+  const choices = buttons.map(button => ({ id: button.callback_data ?? '', title: button.text.trim(), url: button.url }));
+  const fits = choices.every(choice => !choice.url && CALLBACK_ID.test(choice.id) && choice.id.length <= idMax && choice.title !== '' && choice.title.length <= titleMax);
+  return fits && new Set(choices.map(choice => choice.title)).size === choices.length ? choices.map(({ id, title }) => ({ id, title })) : null;
+};
+// The interactive body for a card: reply buttons when they hold it, a list when list cards are on and it holds it; null when it
+// must go as text.
+const interactiveCard = (text: string, buttons: readonly ShimButton[], options: WhatsAppShimOptions): { type: 'interactive'; interactive: object } | null => {
   const body = text.trim();
-  if (buttons.length === 0 || buttons.length > WHATSAPP_REPLY_BUTTONS_MAX || body === '' || body.length > WHATSAPP_REPLY_BODY_MAX) return null;
-  const titles = new Set<string>();
-  for (const button of buttons) {
-    const title = button.text.trim();
-    if (button.url || !button.callback_data || !CALLBACK_ID.test(button.callback_data) || button.callback_data.length > WHATSAPP_REPLY_BUTTON_ID_MAX
-      || title === '' || title.length > WHATSAPP_REPLY_BUTTON_TITLE_MAX || titles.has(title)) return null;
-    titles.add(title);
-  }
-  return { type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: buttons.map(button => ({ type: 'reply', reply: { id: button.callback_data, title: button.text.trim() } })) } } };
+  if (body === '') return null;
+  const replies = options.replyButtons === true && body.length <= WHATSAPP_REPLY_BODY_MAX
+    ? choicesWithin(buttons, WHATSAPP_REPLY_BUTTONS_MAX, WHATSAPP_REPLY_BUTTON_TITLE_MAX, WHATSAPP_REPLY_BUTTON_ID_MAX) : null;
+  if (replies) return { type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: replies.map(reply => ({ type: 'reply', reply })) } } };
+  const rows = options.listCards === true && body.length <= WHATSAPP_LIST_BODY_MAX
+    ? choicesWithin(buttons, WHATSAPP_LIST_ROWS_MAX, WHATSAPP_LIST_ROW_TITLE_MAX, WHATSAPP_LIST_ROW_ID_MAX) : null;
+  return rows ? { type: 'interactive', interactive: { type: 'list', body: { text: body }, action: { button: 'Choose', sections: [{ title: 'Your choices', rows }] } } } : null;
 };
 
 export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch, options: WhatsAppShimOptions = {}): TelegramShimCall => {
@@ -169,7 +187,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
       // One interactive message carries the whole card: it is a single message, so a longer text or any button it cannot hold
       // keeps the text-with-instructions form, which every WhatsApp client shows.
-      const interactive = options.replyButtons === true ? replyButtonsBody(b.fallback_text ?? b.text, buttons) : null;
+      const interactive = interactiveCard(b.fallback_text ?? b.text, buttons, options);
       if (interactive) {
         // Meta refusing the interactive form (a 4xx that is not the window's 131047) falls back to the text form once, so the
         // owner still gets the card. A timeout or a 5xx may have gone out, and a window refusal must reach the window layer: both propagate.
@@ -352,6 +370,20 @@ export const waButtonReplySchema = z.object({
     button_reply: z.object({ id: z.string().max(WHATSAPP_REPLY_BUTTON_ID_MAX).regex(CALLBACK_ID), title: z.string().max(WHATSAPP_REPLY_BUTTON_TITLE_MAX * 4).optional() }),
   }),
 });
+export const waListReplySchema = z.object({
+  type: z.literal('interactive'),
+  interactive: z.object({
+    type: z.literal('list_reply'),
+    list_reply: z.object({ id: z.string().max(WHATSAPP_LIST_ROW_ID_MAX).regex(CALLBACK_ID), title: z.string().max(WHATSAPP_LIST_ROW_TITLE_MAX * 4).optional() }),
+  }),
+});
+// The card callback a reply button or a list row carries, or null for any other interactive message.
+const chosenCallback = (message: unknown): string | null => {
+  const button = waButtonReplySchema.safeParse(message);
+  if (button.success) return button.data.interactive.button_reply.id;
+  const row = waListReplySchema.safeParse(message);
+  return row.success ? row.data.interactive.list_reply.id : null;
+};
 const waForwardContextSchema = z.object({ forwarded: z.boolean().optional(), frequently_forwarded: z.boolean().optional(), id: z.string().optional(), from: z.string().optional() });
 
 type WaLocation = { latitude?: unknown; longitude?: unknown; name?: unknown; address?: unknown };
@@ -468,13 +500,13 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       continue;
     }
     if (message.type === 'interactive') {
-      const tapped = forwarded ? null : waButtonReplySchema.safeParse(message);
+      const tapped = forwarded ? null : chosenCallback(message);
       // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that
       // approval. A tap that names no card cannot be checked, so it is not a decision.
       const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? message.context.id : null;
-      if (tapped?.success && cardRef !== null) {
+      if (tapped !== null && cardRef !== null) {
         seq += 1;
-        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped.data.interactive.button_reply.id, card_ref: cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
+        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped, card_ref: cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
       } else push({ whatsapp_type: 'interactive' });
       continue;
     }
