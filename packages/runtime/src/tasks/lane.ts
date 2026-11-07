@@ -30,7 +30,7 @@ export type JobsLaneDeps = Readonly<{
   // A retried turn answers the owner's own message, so it runs on the model their turns use.
   // toolNames: the tools the turn holds. A job that names none over outside text gets the read-and-card ceiling.
   turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[]): Promise<string>;
-  // The owner's tools but starting or cancelling tasks, so neither an apply turn nor a retried turn starts more work.
+  // The owner's tools but starting, changing or cancelling tasks, so neither an apply turn nor a retried turn starts more work.
   applyTools(): readonly ToolName[];
   // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
   // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
@@ -85,11 +85,14 @@ export const resultApplyText = (row: JobRow): string => {
 
 export const parkedApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
-  const done = jobCheckpoint(row).turns.map((turn) => ({ tool: turn.call.name, args: turn.call.arguments }));
+  const { turns, draft, steers = [] } = jobCheckpoint(row);
+  const done = turns.map((turn) => ({ tool: turn.call.name, args: turn.call.arguments }));
+  // The changes Waldo made while it ran: one no worker was shown was not done; one a worker was shown may be unfinished.
+  const changes = steers.length ? { changes: steers.map((steer) => ({ change: steer.text, worker_saw_it: steer.shown !== undefined })) } : {};
   return [
     `[A background task you started stopped before it finished: ${quoted(brief.title)} (${row.profile} worker, ${row.id}), because ${PARK_WORDS[row.park_reason!]}. The steps it finished, as data:]`,
-    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) })}\n</task_progress>`,
-    'Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way. Do not start it again yourself.',
+    `<task_progress>\n${quoted({ steps: done, partial_result: jobResult(row) ?? draft ?? null, ...changes })}\n</task_progress>`,
+    `Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way.${steers.length ? ' Name each change Waldo made to it that was not done: one the worker never saw was not done at all.' : ''} Do not start it again yourself.`,
   ].join('\n\n');
 };
 

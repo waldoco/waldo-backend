@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { hopFeature, langfuseOtlpConfig, otlpTurnExporter } from '../src/observability/otlp-turns';
+import { turnAbortedEntry } from '../src/observability/turn-aborted';
 
 type Attr = { key: string; value: { stringValue?: string; arrayValue?: { values: { stringValue: string }[] } } };
 type OtlpSpan = { traceId: string; spanId: string; parentSpanId?: string; name: string; startTimeUnixNano: string; endTimeUnixNano: string; attributes: Attr[]; status: { code: number; message?: string } };
@@ -221,6 +222,26 @@ describe('otlpTurnExporter', () => {
     });
     expect(hops.map((span) => span.name)).toEqual(['send', 'reminder']);
     expect(hops.every((span) => span.traceId === root!.traceId && span.parentSpanId === root!.spanId)).toBe(true);
+  });
+
+  it('exports a recovered turn_aborted on its own, under the lost turn\'s trace key, with only its last persisted state', async () => {
+    const { calls, send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true }, send, () => 5_000);
+    await log(turnAbortedEntry('telegram', { updateId: 904958621, phase: 'claimed' }));
+    expect(calls).toHaveLength(1);
+    const [root, ...rest] = spans(0);
+    expect(rest).toEqual([]);
+    expect(root!.name).toBe('telegram.turn_aborted');
+    expect(root!.status.code).toBe(2);
+    expect(attrs(root!)).toMatchObject({
+      'langfuse.trace.name': 'telegram.turn_aborted',
+      'langfuse.trace.metadata.trace_key': 'tg-904958621',
+      'langfuse.observation.metadata.code': 'claimed',
+      'langfuse.trace.metadata.outcome': 'failed',
+    });
+    expect(Object.keys(attrs(root!)).filter((key) => /\.(input|output)$/.test(key))).toEqual([]);
+    await log({ trace: 'tg-904958621', hop: 'outbox_delivery', ms: 40, ok: true });
+    expect(spans(1)[0]!.parentSpanId).toBe(root!.spanId);
   });
 
   it('marks a failed machine turn at the trace level', async () => {
