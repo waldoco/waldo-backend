@@ -168,6 +168,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_SECOND_MESSAGE?: string;
   // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
   WALDO_ASYNC_TOOLS?: string;
+  // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
+  WALDO_JOB_OUTCOME_ROWS?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
