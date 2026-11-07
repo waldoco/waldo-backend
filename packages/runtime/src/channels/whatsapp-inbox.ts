@@ -185,6 +185,22 @@ export class WhatsAppOwnerInbox {
     this.storage.transactionSync(() => { if (this.records().some(open)) this.storage.kv.put(WHATSAPP_INBOX_DUE_KEY, this.now() + delayMs); });
   }
 
+  /**
+   * The owner's explicit stop: the row running under `attempt` closes as interrupted, so its turn stops at its next scope
+   * check and its settle owes no second notice, and the waiting /stop rows close as done, so none runs a turn of its own.
+   * True when the running row was still this attempt's and closed here.
+   */
+  stop(id: string, attempt: string, stopWamids: ReadonlySet<string>): boolean {
+    return this.storage.transactionSync(() => {
+      const r = this.get(id);
+      if (!r || r.state !== 'running' || r.attempt !== attempt) return false;
+      this.close(r, 'interrupted');
+      for (const row of this.records()) if (row.state === 'admitted' && stopWamids.has(row.wamid)) this.close(row, 'completed');
+      this.refreshDue();
+      return true;
+    });
+  }
+
   /** Closes the claimed row. True when this call closed it as interrupted, so the caller owes the owner a notice. */
   settle(record: WhatsAppInboxRecord, completed: boolean): boolean {
     return this.storage.transactionSync(() => {
