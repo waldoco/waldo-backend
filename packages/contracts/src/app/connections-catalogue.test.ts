@@ -74,3 +74,22 @@ describe('the wearables catalogue', () => {
     }
   });
 });
+
+describe('the primary Google account', () => {
+  const second = { ...account, id: 'conn-2', email: 'second@example.test' };
+  it('comes at revision 20, with exactly one primary account whenever primary is named', async () => {
+    const { APP_CONTROLS_GOOGLE_PRIMARY_REVISION } = await import('./controls');
+    expect(APP_CONTROLS_GOOGLE_PRIMARY_REVISION).toBe(20);
+    const shown = (accounts: object[]) => appControlProjectionV1Schema.safeParse(connections({ google: { connectAvailable: true, accounts } })).success;
+    expect(shown([{ ...account, primary: true }, { ...second, primary: false }])).toBe(true);
+    expect(shown([account, second])).toBe(true);
+    expect(shown([{ ...account, primary: true }, { ...second, primary: true }])).toBe(false);
+    expect(shown([{ ...account, primary: false }, { ...second, primary: false }])).toBe(false);
+  });
+  it('is chosen from the connections view naming one account and nothing else', async () => {
+    const { appControlActionV1Schema } = await import('./controls');
+    const choose = { view: 'connections', action: 'google.set_primary', id: 'conn-2', revision, request_id: 'primary-0001' };
+    expect(appControlActionV1Schema.safeParse(choose).success).toBe(true);
+    for (const bad of [{ ...choose, id: undefined }, { ...choose, view: 'account' }, { ...choose, value: 'x' }, { ...choose, account: 'signin' }]) expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+});

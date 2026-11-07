@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_GOOGLE_PRIMARY_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -18,6 +18,7 @@ import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 import { googlePicturePaths } from './app-google-picture';
+import { GOOGLE_PRIMARY_KEY, primaryAccountId } from '../connectors/google-primary';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
 export type AppControlsHost = Readonly<{
@@ -130,6 +131,20 @@ const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:s
 const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit','claim.confirm':'spot.confirm','claim.forget':'spot.forget','claim.dismiss':'spot.dismiss','claim.quiet':'spot.quiet','claim.unquiet':'spot.unquiet'};
 // Controls revision 17 gives each Google account its picture and lists the wearables; builds below it never receive either.
 // Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
+// Controls revision 20 names the primary Google account and takes google.set_primary; builds below it never receive either.
+const namesPrimary=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_GOOGLE_PRIMARY_REVISION;
+// With no choice stored, the account the owner signs in with becomes primary when it is connected and healthy, and is stored
+// so the runtime uses the same one; otherwise the first connected account is primary, as the runtime already picks.
+const withPrimary=async<T extends {id:string;email:string;health:string}>(host:AppControlsHost,accounts:readonly T[])=>{
+  let chosen=await host.storage.get<string>(GOOGLE_PRIMARY_KEY);
+  if(chosen===undefined&&accounts.length>1){
+    const signin=await ownerAccountEmail(host.phone,host.account.owner);
+    const own=signin?accounts.find(account=>account.email.toLowerCase()===signin&&account.health==='access_granted'):undefined;
+    if(own){await host.storage.put(GOOGLE_PRIMARY_KEY,own.id);chosen=own.id;}
+  }
+  const primary=primaryAccountId(accounts,chosen);
+  return accounts.map(account=>({...account,primary:account.id===primary}));
+};
 const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
 // The Workspace services each account's saved grant lets Waldo read come from the same console read as calendar, mail and tasks.
 const SERVICES=['drive','docs','sheets','slides'] as const;
@@ -233,7 +248,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
     const catalogue=google!==null&&listsCatalogue(request);
-    const connections=google?{google:{...google,...(catalogue?{accounts:await withRevision17(host,google.accounts,built?.google.accounts??[])}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
+    const connections=google?{google:{...google,...(catalogue?{accounts:await (async()=>{const shown=await withRevision17(host,google.accounts as {id:string;email:string;health:string}[],built?.google.accounts??[]);return namesPrimary(request)?withPrimary(host,shown):shown;})()}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
     const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
@@ -282,10 +297,11 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(action.success&&action.data.action==='card.retry'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_CARD_STATE_REVISION)return reply({error:'invalid_action'},400);
   // Disconnecting Google came with controls=7: a build below it never named it, so it gets what it got before.
   if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.action==='google.set_primary'&&!namesPrimary(request))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.action==='proactive_surface.set'&&!choosesSurface(request,host))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.action==='schedule.set'&&!setsSchedules(request))return reply({error:'invalid_action'},400);
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','google.set_primary','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
   const phone=action.data.view==='phone',mail=action.data.view==='agent_mail'?host.agentMail:undefined;
