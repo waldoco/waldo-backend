@@ -74,6 +74,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF?: string;
   WAKE_BRIEF_FRESH_MIN?: string;
   WAKE_BRIEF_TURNS_PER_DAY?: string;
+  // WORKOUT_WAKE: an upload with a workout that just ended wakes the health trigger once that day, which may propose one change
+  // to the rest of the day around recovery, or none. Off unless "1"; the owner's health proposals preference still governs it.
+  WORKOUT_WAKE?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
   // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
