@@ -68,6 +68,15 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
   // Off: Telegram, as before.
   OWNER_SURFACE_DEFAULT?: string;
+  // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
+  // not there and a send that names an attachment is refused.
+  APP_CHAT_ATTACHMENTS?: string;
+  // "1" serves the operator commands (/trace /e2e /usage /langfuse /heldrows /fire /ledger) to the owner in the console
+  // (DASHBOARD_HARNESS_PATH), so none needs Telegram. Off, the route is not there.
+  CONSOLE_HARNESS?: string;
+  // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
+  // waits its turn as any message does.
+  WHATSAPP_STOP?: string;
   // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
   // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
   // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
@@ -163,6 +172,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_REPLY_MERGE?: string;
   // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
   WALDO_TASK_ASK?: string;
+  WALDO_TASK_STEER?: string;
   // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
   WALDO_TASK_NOTES?: string;
   // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
@@ -171,6 +181,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_SECOND_MESSAGE?: string;
   // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
   WALDO_ASYNC_TOOLS?: string;
+  // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
+  WALDO_JOB_OUTCOME_ROWS?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
@@ -185,6 +197,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   // '1': a card whose buttons fit WhatsApp's three reply buttons goes out as an interactive message; any other card stays text.
   WHATSAPP_REPLY_BUTTONS?: string;
+  /** "1": an approval card WhatsApp's reply buttons cannot hold goes out as one interactive list instead of typed codes. */
+  WHATSAPP_LIST_CARDS?: string;
   // The approved template for a message the owner did not ask for (a day card, an update); unset, such a message waits without a knock.
   WHATSAPP_PROACTIVE_TEMPLATE?: string;
   WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string;

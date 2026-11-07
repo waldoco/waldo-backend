@@ -858,6 +858,10 @@ footer .refresh:disabled { opacity:1; }
 .access-log-table { width:100%; border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; margin-bottom:8px; }
 .access-log-table th,.access-log-table td { text-align:left; padding:6px 10px 6px 0; border-bottom:.5px solid var(--hair); white-space:nowrap; }
 .access-log-table th { font-weight:500; color:var(--t2); }
+.operator-panel { margin-top:20px; }
+.operator-commands { display:flex; gap:8px; flex-wrap:wrap; }
+.operator-commands>input { flex:1 1 200px; min-width:0; font-family:var(--mono, ui-monospace, monospace); }
+.operator-output { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; max-height:420px; overflow:auto; padding:10px; border:.5px solid var(--hair); border-radius:8px; }
 
 /* ── Today's messages: the Brief, Check-in and the Close in the order of the day, each under its name and time and split by hairlines,
    as the app's Home lists them. A message seen for the first time plays in word by word at the app's pace: each word fades up over
