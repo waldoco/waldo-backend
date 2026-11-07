@@ -13,11 +13,18 @@ export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
 // set. Any other 'owner' row is a whole message, quotes and media notes included (stored before this index split messages,
 // or by a build that does not), so it is never the owner's own words. The mark is on the row, not inferred from its time.
 export const OWNER_SAID = 'owner_said';
-type StoredSpeaker = Speaker | typeof OWNER_SAID;
+// A reply from a turn that read outside content is stored as WALDO_READ_OUTSIDE, and the owner's own words in the message
+// that answers it as OWNER_ANSWERED_OUTSIDE: still theirs, but what they agree to there may be the outside content's. Reads
+// show them as 'waldo' and as the owner's own words, with `answersOutside` set.
+export const WALDO_READ_OUTSIDE = 'waldo_read_outside';
+export const OWNER_ANSWERED_OUTSIDE = 'owner_said_answering_outside';
+type StoredSpeaker = Speaker | typeof OWNER_SAID | typeof WALDO_READ_OUTSIDE | typeof OWNER_ANSWERED_OUTSIDE;
 type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string; row?: number }>;
 // row is the index row's id, where a reader needs to come back to exactly that row.
-export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; row?: number }>;
-const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => (speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true } : { ...row, speaker });
+export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; answersOutside?: true; row?: number }>;
+const shownSpeaker = (speaker: StoredSpeaker): Speaker => speaker === OWNER_SAID || speaker === OWNER_ANSWERED_OUTSIDE ? 'owner' : speaker === WALDO_READ_OUTSIDE ? 'waldo' : speaker;
+const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true }
+  : speaker === OWNER_ANSWERED_OUTSIDE ? { ...row, speaker: 'owner', own: true, answersOutside: true } : { ...row, speaker: shownSpeaker(speaker) };
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 // surface and links are set only with the recall chain on (history/recall-chain.ts).
@@ -25,6 +32,8 @@ export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Spea
 
 export type EpisodeIndex = Readonly<{
   add(entryId: string, speaker: StoredSpeaker, text: string, at: number): void;
+  // Whether the reply stored under this entry id came from a turn that read outside content.
+  readOutside(entryId: string): boolean;
   // Removes every row of the given entries, as when the chat that held them is deleted.
   remove(entryIds: readonly string[]): void;
   count(): number;
@@ -55,7 +64,19 @@ export const ftsQuery = (text: string): string | null => {
 // Whether the owner said anything, on any surface, after `at`: their next message answers or skips a question Waldo asked.
 // An owner message is stored whole ('owner') or split into their own words and what they quoted; any of its rows counts.
 export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
-  sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, at).toArray().length > 0;
+  sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, OWNER_ANSWERED_OUTSIDE, at).toArray().length > 0;
+
+// What Waldo and the owner said since `at`, oldest first, the newest kept within maxChars: the owner's own words and Waldo's
+// replies, never a quote or a machine note. outside: a reply from a turn that read outside content, or the owner's words
+// answering one, is among them, so a turn that reads this runs as one over outside text.
+export const RECENT_EXCHANGE_CHARS = 4_000;
+export const recentExchange = (index: EpisodeIndex, at: number, maxChars = RECENT_EXCHANGE_CHARS): Readonly<{ text: string; outside: boolean }> => {
+  const said = index.since(at, maxChars).filter((episode) => episode.speaker === 'waldo' || (episode.speaker === 'owner' && episode.own === true));
+  return {
+    text: said.map((episode) => `${episode.speaker === 'owner' ? 'Owner' : 'Waldo'}: ${episode.text}`).join('\n'),
+    outside: said.some((episode) => episode.speaker === 'waldo' ? index.readOutside(episode.entry_id) : episode.answersOutside === true),
+  };
+};
 
 export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   sql.exec("CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5(entry_id UNINDEXED, speaker UNINDEXED, at UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')");
@@ -63,6 +84,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     add(entryId, speaker, text, at) {
       if (text.trim()) sql.exec('INSERT INTO episodes (entry_id, speaker, at, text) VALUES (?, ?, ?, ?)', entryId, speaker, at, text);
     },
+    readOutside: (entryId) => sql.exec('SELECT 1 FROM episodes WHERE entry_id = ? AND speaker = ? LIMIT 1', entryId, WALDO_READ_OUTSIDE).toArray().length > 0,
     remove(entryIds) { for (const entryId of new Set(entryIds)) sql.exec('DELETE FROM episodes WHERE entry_id = ?', entryId); },
     count: () => sql.exec<{ n: number }>('SELECT count(*) AS n FROM episodes').one().n,
     get(ref) {
@@ -79,7 +101,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
          WHERE episodes MATCH ? AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?)${prefix === undefined ? '' : ' AND substr(entry_id, 1, ?) = ?'}
          ORDER BY bm25(episodes) LIMIT ?`,
         match, from ?? null, from ?? null, to ?? null, to ?? null, ...(prefix === undefined ? [] : [prefix.length, prefix]), limit,
-      ).toArray().map((row) => ({ ref: String(row.ref), entry_id: row.entry_id, speaker: row.speaker === OWNER_SAID ? 'owner' : row.speaker, at: row.at > 0 ? new Date(row.at).toISOString() : null, snippet: row.snippet }));
+      ).toArray().map((row) => ({ ref: String(row.ref), entry_id: row.entry_id, speaker: shownSpeaker(row.speaker), at: row.at > 0 ? new Date(row.at).toISOString() : null, snippet: row.snippet }));
     },
     since(at, maxChars) {
       const rows = sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at DESC', at).toArray();
@@ -157,8 +179,10 @@ export const indexedConversationStore = (store: ConversationStore, index: Episod
     if (entry.role === 'compaction') return;
     const speaker = speakerOfEntry(entry), noted = quoted.get(entry.id);
     quoted.delete(entry.id);
+    if (speaker === 'waldo' && entry.readOutside) { index.add(entry.id, WALDO_READ_OUTSIDE, entry.appPayload, at); return; }
     if (speaker !== 'owner' || !noted) { index.add(entry.id, speaker, entry.appPayload, at); return; }
-    for (const row of ownerRows(entry.appPayload, noted.text, noted.ranges)) index.add(entry.id, row.speaker, row.text, at);
+    const answers = entry.parentId !== null && index.readOutside(entry.parentId);
+    for (const row of ownerRows(entry.appPayload, noted.text, noted.ranges)) index.add(entry.id, answers && row.speaker === OWNER_SAID ? OWNER_ANSWERED_OUTSIDE : row.speaker, row.text, at);
   };
   const persistOwnerInput = store.persistOwnerInput;
   return {
@@ -202,7 +226,7 @@ export const consolidationSides = (day: readonly Episode[]) => {
     owner: owner.map((episode) => episode.text).join('\n'),
     shared: texts((episode) => episode.speaker === 'quoted' || (episode.speaker === 'owner' && !episode.own)),
     waldo: texts((episode) => episode.speaker === 'waldo'),
-    ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
+    ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text, ...(episode.answersOutside ? { answersOutside: true as const } : {}) })),
   };
 };
 

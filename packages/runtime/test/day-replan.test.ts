@@ -112,13 +112,13 @@ describe('the re-plan prompt', () => {
     const text = dayPlanInput({ localNow: '2026-10-20T07:00', calendar: '- 07:30 Call with Asha', cards: DAY_CARDS.slice(0, 1), proactivity: 'Proactivity: normal',
       replan: { 'card:brief': '08:00' } });
     expect(text).toContain('Today\'s calendar just changed.');
-    expect(text).toContain('- card:brief (The Brief), default 08:00, planned 08:00');
+    expect(text).toContain('- card:brief (The Daily Brief), default 08:00, planned 08:00');
     expect(text).toContain('a time after now');
   });
 
   it('the nightly plan reads as before', () => {
     const text = dayPlanInput({ localNow: '2026-10-20T03:00', calendar: '', cards: DAY_CARDS.slice(0, 1), proactivity: 'Proactivity: normal' });
-    expect(text).toContain('Plan these cards for today:\n\n- card:brief (The Brief), default 08:00\n\n<calendar>');
+    expect(text).toContain('Plan these cards for today:\n\n- card:brief (The Daily Brief), default 08:00\n\n<calendar>');
     expect(text).not.toContain('just changed');
   });
 });

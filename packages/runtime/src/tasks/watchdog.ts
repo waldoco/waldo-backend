@@ -193,7 +193,7 @@ export const watchdogJudgeText = (row: JobRow, seen: Seen | null, earlier: reado
     `Task: ${brief.title}`,
     `Goal:\n${brief.goal}`,
     // A change the owner's turn made after the task started wins over the goal, so a worker following it is not drifting.
-    ...(steers?.length ? [`Changes made after it started, on the owner's word, which win over the goal where they differ:\n${steers.map(steer => `- ${steer.text}`).join('\n')}`] : []),
+    ...(steers?.length ? [`Changes made after it started, on the owner's word, which win over the goal where they differ:\n${steers.map(steer => `- ${cut(steer.text, CONTEXT_SHOWN)}`).join('\n')}`] : []),
     `A good result:\n${brief.done_when}`,
     `${brief.machine ? 'Data the job was started on' : 'Context from the owner\'s conversation'}:\n${cut(brief.context, CONTEXT_SHOWN) || '(none)'}`,
     `Timings: started ${minutes(now - row.created_at)} min ago, ${minutes(row.deadline_at - now)} min before its deadline; ${row.checkpoint_seq} rounds over ${row.attempt} attempt(s); lost attempts ${row.crashes}; waits for a model ${row.deferrals}.`,

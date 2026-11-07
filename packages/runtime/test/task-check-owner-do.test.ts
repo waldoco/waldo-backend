@@ -30,7 +30,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       if (rounds < 2) return data({ tool_calls: [{ call_id: `pick-${rounds}`, name: 'check_task', arguments: JSON.stringify({ job_id: rounds === 0 ? model.otherId : model.jobId }) }] });
       return data({ text: PICKED });
     }
-    if (!request.request.response_format && said.includes('A background task you started has finished')) return data({ text: REPORTED });
+    if (!request.request.response_format && said.includes('A background task you started has finished')) return data({ text: said.includes('The research just came in') ? 'SKIP' : REPORTED });
     if (!request.request.response_format && said.includes('only vendors that ship to Pune') && !request.request.tool_turns?.length) {
       return data({ tool_calls: [{ call_id: 'steer', name: 'steer_task', arguments: JSON.stringify({ job_id: model.jobId, instruction: 'Only vendors that ship to Pune.', mode: 'interrupt' }) }] });
     }
@@ -166,7 +166,7 @@ it('with WALDO_TASK_STEER on, the owner corrects a running task: one steer_task 
   }, { WALDO_TASK_STEER: '1' });
 });
 
-it('with WALDO_TASK_PICKUP on, a task that finishes mid-turn is named at the next round and read with check_task; its report still follows once', async () => {
+it('with WALDO_TASK_PICKUP on, a task that finishes mid-turn is named at the next round and read with check_task; its report reads that reply and sends nothing more', async () => {
   await withAppOwner('task-pickup-owner', async ({ owner, state, call }) => {
     model.jobId = running(state);
     model.otherId = running(state, 'b1b2c3d4e5f6', 'Venue search');
@@ -196,14 +196,17 @@ it('with WALDO_TASK_PICKUP on, a task that finishes mid-turn is named at the nex
     expect(at('llm_reply')).toBeLessThan(at('send'));
     expect(await mainTexts(call)).toContain(PICKED);
 
-    // The jobs lane still applies the report once, after the reply: the turn that read it never settles the job.
+    // The jobs lane still applies the report once, after the reply: the turn that read it never settles the job. The report
+    // turn reads what was said since the task finished, sees the reply already told the owner, and sends nothing.
     await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
     await owner.alarm(); await owner.alarm();
     await vi.waitFor(async () => expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'x', newToken: () => 'x' }).get(model.jobId)!.status).toBe('applied'), { timeout: 5_000, interval: 20 });
     await new Promise(resolve => setTimeout(resolve, 300));
     await owner.alarm(); await owner.alarm();
+    const report = model.requests.map(text => JSON.parse(text) as Request).find(request => JSON.stringify(request.messages).includes('A background task you started has finished'))!;
+    expect(JSON.stringify(report.messages)).toContain(PICKED);
     const shown = await mainTexts(call);
-    expect(shown.filter(text => text === PICKED || text === REPORTED)).toEqual([PICKED, REPORTED]);
+    expect(shown.filter(text => text === PICKED || text === REPORTED)).toEqual([PICKED]);
   }, { WALDO_TASK_PICKUP: '1' });
   expect(wire.telegramSent).toBe(0);
 });

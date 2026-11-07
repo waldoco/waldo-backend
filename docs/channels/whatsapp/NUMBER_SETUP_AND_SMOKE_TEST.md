@@ -57,8 +57,9 @@ Each step ends with a check you can see. A step whose check fails is the answer:
    which holds the subscription.
    *Check:* MCP `whatsapp_biz_onboarding_status`, given the number's `phone_number_id`, reports the account
    subscription done. Then message the number from a phone on nobody's file, never the smoke-test phone or an
-   owner's: the tail filter below shows a webhook event (`"webhook":true`) with status 200. Until step 6, Waldo
-   replies from the old number, so expect that reply to be refused or not to arrive.
+   owner's: the tail filter below shows a webhook event (`"webhook":true`) with status 200. Until step 6 the
+   Worker is configured for the old number, so it acknowledges the message without answering and logs
+   `whatsapp_other_number`.
 5. **Give the system user `waldo-staging` full control of both of the number's accounts** (owner, in Business
    Settings): its WhatsApp account and its Messaging account.
    *Check:* Business Settings lists `waldo-staging` with full control on both. After step 6, a send refused
@@ -66,14 +67,14 @@ Each step ends with a check you can see. A step whose check fails is the answer:
 6. **Switch the Worker to the number** (owner sets the `WHATSAPP_PHONE_NUMBER_ID` secret). The switch is
    all-or-nothing: every send reads that one secret (`whatsapp-webhook.ts:203-243`, `owner-do.ts:2474`).
    Before switching:
-   - **Unsubscribe the old number's Messaging account.** The owner does this on the app's WhatsApp
-     configuration page in the App Dashboard, which is where the Meta MCP's own description sends subscription
-     changes; the MCP cannot remove a subscription.
-     - Why: the webhook never compares an entry's `metadata.phone_number_id` with the configured number. Its
-       only mention is the type at `whatsapp-webhook.ts:69`. A message to any subscribed number is answered
-       from the configured one, so a tester writing to the old number would get the answer from the new one.
+   - **Unsubscribe the old number's Messaging account once its testers have moved.** The owner does this on the
+     app's WhatsApp configuration page in the App Dashboard, which is where the Meta MCP's own description sends
+     subscription changes; the MCP cannot remove a subscription.
+     - Why: the webhook handles only messages whose `metadata.phone_number_id` is the configured number. A
+       message to the old number is acknowledged unanswered and logged as `whatsapp_other_number`, so a tester
+       still writing there hears nothing. Status reports for sends made before the switch still reach the owner.
      - Exception: if the old and new numbers share a Messaging account, don't unsubscribe it, because that
-       cuts off both. The cross-answer risk then stays until the webhook compares numbers.
+       cuts off both.
    - **Have each tester write to the new number first.** An owner's window record is kept per owner, not per
      business number (`whatsapp-window.ts:20`), and survives the switch. It is cleared only when the owner's
      own number changes or the owner unlinks (`whatsapp-window.ts:223-226`, `owner-do.ts:1731`). Meta has no

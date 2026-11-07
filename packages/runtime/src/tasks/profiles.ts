@@ -1,5 +1,7 @@
 import type { TaskProfile, ToolName } from '@waldo/contracts';
 import { TOOL_REPLAY_CLASS } from '../hooks/tool-replay-class';
+import { EGRESS_READ_TOOLS } from '../tools/records';
+export { EGRESS_READ_TOOLS };
 import { isMachine, MACHINE_ORIGIN, type JobRow } from './jobs';
 
 // What each worker profile may call. The brain enforces this on every call a worker sends; the worker never holds a
@@ -13,11 +15,6 @@ const READER: readonly ToolName[] = [
   'read_drive', 'read_mcp_tool', 'web_search', 'browse_page', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
   'read_tool_output',
 ];
-// The reads whose arguments leave the account: a search query, a page URL, an MCP call. Nothing cards a read, so a turn that
-// starts on text nobody asked Waldo to read, with no owner in the loop, could be steered into carrying private data out in
-// them. A machine job's worker and every unattended outside-text turn (channels/check-back) go without; the owner's own turns
-// and the tasks the owner starts keep them.
-export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'browse_page', 'read_mcp_tool'];
 export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
 // The owner look-up's worker: the one machine job with egress reads. It holds no private read (no mail, calendar, memory or
 // health), and its brief holds no time zone, so the only owner data it can carry out in a query is the name and address the

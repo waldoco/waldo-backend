@@ -17,6 +17,7 @@ import type { ConversationModelMessage, RunOrigin } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
+import { healthInContext } from '../conversation/health-fence';
 import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
@@ -95,7 +96,18 @@ export const spendHold = (now: Date): ToolError => {
 // public (useless as tripwires) and a false-positive source for any tool output quoting it.
 export const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-const EXTERNAL_DATA_MAX_BYTES = 4096;
+// Earlier turns' tool results and the saved-file receipts each join the owner turn up to this size. They ride the owner's
+// message suffix, which a turn builds once and resends unchanged, so the provider's cached prefix is untouched; at most about
+// 8k tokens per request each.
+const EXTERNAL_DATA_MAX_BYTES = 32_768;
+// Outside data joins the owner turn item by item: each item passes the gate on its own or is left out, and the newest items
+// are kept whole within maxBytes.
+export const admitEach = async (items: readonly string[], admits: (item: string) => Promise<boolean>, maxBytes: number): Promise<string[]> => {
+  const kept: string[] = [];
+  for (const item of items) if (await admits(item)) kept.push(item);
+  while (kept.length && utf8Bytes(kept.join('\n')) > maxBytes) kept.shift();
+  return kept;
+};
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -125,10 +137,13 @@ class LightStepFailed extends Error {}
 // lightRoles: the models each role runs on, where the environment sets them.
 // skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
 // capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
-export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles }>;
+export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles;
+  // While an alarm runs machine turns: the time they may run to (the alarm's end less the close margin) and whether the
+  // owner's own message is waiting for the chain. Undefined outside an alarm, where a machine turn keeps TURN_TIME_BUDGET_MS.
+  machineTime?: () => Readonly<{ deadline: number; yieldNow(): boolean }> | undefined }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; machineTime?: OwnerContextIntegration['machineTime'] }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -216,9 +231,9 @@ export const createOwnerResponder = (
   // re-billed the whole prompt on the next call. get_context gives the model the exact time mid-turn.
   let turnClockLine: string | undefined;
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
-  // Earlier turns' tool results, without anything the owner removed or is forgetting.
+  // What earlier turns' tools returned that a later turn may read, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
-    const fragments = await toolLedger?.recent(heldTopics(), thread) ?? [];
+    const fragments = await toolLedger?.carried(heldTopics(), thread) ?? [];
     return barrier().texts(fragments, fragment => fragment.text, (fragment, text) => ({ ...fragment, text }));
   };
   const earlierOwnerResults = async () => {
@@ -263,7 +278,7 @@ export const createOwnerResponder = (
   // The running turn's request sanitisation results, begun again when a forget lands (this turn's or the console's).
   let turnSanitise: Readonly<{ forgets: string; memo: TurnSanitiseMemo }> | undefined;
   // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
-  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined;
+  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown; healthShown?: boolean }> | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
   // out), else the plain line.
   const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
@@ -284,7 +299,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {
     await assertCurrent();
     if (await access.held?.()) throw new OwnerHeldError();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
@@ -342,7 +357,7 @@ export const createOwnerResponder = (
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
           ...(tools ? brainTools(tools, providerSearch && purpose === 'reply' && !light) : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
-          ...(tools && ownerTurnActive && purpose === 'reply' && !light ? { web_search: searchLocation(clock.timezone) } : {}),
+          ...(tools && ownerTurnActive && purpose === 'reply' && !light && hostedSearch ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
@@ -559,11 +574,12 @@ export const createOwnerResponder = (
         : guardedHandlers;
       // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
       // counter resets each turn and the spawner closes over this turn's LLM step. The child
-      // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
+      // runs a nested tool loop on the read tools (CHILD_TOOL_NAMES) with its own round
       // slice; flat by construction - children never get delegate_task.
       // One shared round budget per submitted turn: the parent loop and every child it spawns
       // draw from it, so the turn's stated cap is absolute (Codex #224 hold). Its time and rounds follow the run.
-      const turnEnd = turnDeadlineFor(privateRunScope);
+      const machine = ownerTurnActive || privateRunScope ? undefined : privateOwner?.machineTime?.();
+      const turnEnd = machine?.deadline ?? turnDeadlineFor(privateRunScope);
       const turnRounds = toolRoundsFor(turnEnd - Date.now());
       const turnBudget = { remaining: turnRounds, deadline: turnEnd };
       const delegate = delegateTaskHandler(async (task) => {
@@ -578,7 +594,9 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: childHandlers,
           budget: turnBudget,
-          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say,
+          // and a child whose task was written after the owner's readings were shown fences its egress once it is tainted.
+          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -610,6 +628,7 @@ export const createOwnerResponder = (
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
       const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
+      let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
@@ -618,10 +637,11 @@ export const createOwnerResponder = (
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
+        ...(machine ? { yieldNow: machine.yieldNow } : {}),
         // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
         onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
-        step: async function turnStep(tools, turns) {
+        step: async function turnStep(tools, turns, view) {
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
@@ -671,15 +691,17 @@ export const createOwnerResponder = (
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
             const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
-            while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
-            const earlierShown = await admitsExternal(earlier.join('\n'));
-            if (!earlierShown && earlier.length && !withheldLogged) {
+            const earlierShown = await admitEach(earlier, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
+            if (earlierShown.length < earlier.length && !withheldLogged) {
               withheldLogged = true;
-              log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
+              log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length - earlierShown.length}` });
             }
+            // The receipts block is one receipt per line between Waldo's own lead and closing lines; with no receipt left, none.
+            const receiptLines = rawTaskContext ? rawTaskContext.split('\n') : [];
+            const receiptsShown = await admitEach(receiptLines, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
             return {
-              recalled, earlier: earlierShown ? earlier.join('\n') : '',
-              receipts: await admitsExternal(rawTaskContext) ? rawTaskContext : '',
+              recalled, earlier: earlierShown.join('\n'),
+              receipts: receiptsShown.length === receiptLines.length || receiptsShown.some(line => line.startsWith('{')) ? receiptsShown.join('\n') : '',
               // A committed receipt authenticates identity, not user/provider-authored path text. Externally authored path text
               // never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
               taskContext: rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '',
@@ -766,11 +788,19 @@ export const createOwnerResponder = (
               : light.truncated ? 'truncated' : 'answered';
             log({ trace, hop: 'light_route', ms: Date.now() - started, ok: true, detail: route });
             if (route === 'answered') return light!;
-            if (control.revision() !== contextSteering) return turnStep(tools, turns);
+            if (control.revision() !== contextSteering) return turnStep(tools, turns, view);
           }
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
           // to it, gets the chat model.
-          return complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel);
+          // A reading in this request's own context fences the turn's egress once it is tainted, and keeps a hosted search off it.
+          let contextHealth = false;
+          if (!view.healthShown && ((tools !== undefined && ownerTurnActive) || view.tainted)) {
+            const key = `${system.text}\u0000${JSON.stringify(entries)}`;
+            if (contextHealthCheck?.key !== key) contextHealthCheck = { key, holds: healthInContext([{ role: 'system', content: system.text }, ...entries], loopCtx) };
+            contextHealth = await contextHealthCheck.holds;
+          }
+          const answer = await complete(trace, 'reply', system, entries, undefined, files, tools, cut.turns, ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel, undefined, false, !view.healthShown && !contextHealth);
+          return contextHealth ? { ...answer, healthInContext: true } : answer;
         },
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
@@ -898,7 +928,7 @@ export const createOwnerResponder = (
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -949,7 +979,8 @@ export const createOwnerResponder = (
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const answered = tree.get(publication.leafId)!;
       const told = notice ? { ...answered, modelPayload: `${answered.modelPayload}\n\n${notice.modelLine}` } : answered;
-      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
+      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       if (told !== answered) tree.replace(told);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }

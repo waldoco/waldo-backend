@@ -405,7 +405,9 @@ describe('the note a running owner turn gets when a task finishes', () => {
       expect(note).toContain(`- ${stopped}: title "Stopped" (stopped before it finished)`);
       expect(note).not.toContain(before);
       expect(note).not.toContain(running);
-      expect(note).toMatch(/depends on one, read it with check_task.*full report reaches the owner right after this reply/s);
+      expect(note).toMatch(/depends on one, read it with check_task/);
+      expect(note).toMatch(/report follows later and leaves out what this reply already told them/);
+      expect(note).not.toMatch(/right after this reply/);
       expect(note).not.toContain('Done.');
     });
   });
