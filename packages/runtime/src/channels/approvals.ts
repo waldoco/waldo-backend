@@ -2372,6 +2372,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 // part unread, so the card's words go in the message text instead, never a card hidden without a word.
 export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[] }>;
 const UPDATE_TO_REVIEW = 'Update the Waldo app to review and approve it.';
+// One waiting card as the app shows it inline, wherever it was presented in the app: for a card that belongs beside the work it
+// came from rather than a reply (a background task's ask, in that task's thread). Null once it is decided or retired, or for a
+// kind the reading build's approvals revision predates, which keeps it in the Approvals list.
+export const appApprovalPartFor = (sql: SqlStorage, approvalId: string, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION): AppApprovalPart | null => {
+  if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return null;
+  const entry = sql.exec<LedgerRow & { approvable: number; payload_digest: string }>("SELECT l.*, p.approvable, p.payload_digest FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.approval_id = ? AND p.retired_at IS NULL ORDER BY p.presented_at DESC LIMIT 1", approvalId).toArray()[0];
+  if (!entry || (entry.status !== 'open' && entry.status !== 'review_only')) return null;
+  const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
+  const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
+  return part.success && appApprovalKindShownAt(part.data.kind, approvalsRevision) ? part.data : null;
+};
+
 export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
   const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [];

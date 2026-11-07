@@ -235,7 +235,7 @@ import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-t
 import { deviceContextReadBook, getDeviceContextHandler } from '../tools/live/device-context';
 import { weatherTools } from '../tools/live/weather';
 import { cacheApiWeatherCache } from '../connectors/weatherkit';
-import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalPartFor, appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers, approveShownHandler } from '../tools/live/raise-approval';
@@ -300,6 +300,7 @@ import { consoleWatchdog, DASHBOARD_WATCHDOG_PATH } from './dashboard-watchdog';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
 import { modelProviderSetting, ownerModels, type OwnerModelAccess } from '../llm/owner-routes';
 import { finishedTasksNote, runningTasksLine, taskToolHandlers } from '../tasks/tools';
+import { taskCardsIn } from '../tasks/task-cards';
 import { promiseRetry, RETRY_FIRST_TRY_MS } from '../tasks/retry-turn';
 import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
 import type { ProviderOutcome, TaskOutcome, TaskSpend } from '../tasks/worker-loop';
@@ -2098,6 +2099,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{return await this.appChatPage(name,hash,thread,cursor,limit,at,false,approvals);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
+      taskCards:thread=>taskCardsIn(this.jobs(),id=>appApprovalPartFor(this.ctx.storage.sql,id,approvals),thread),
       // The newest shown text, cut at read time.
       preview:thread=>{for(const row of this.shownThreadRows(chain(thread),true,8))return row.text.slice(0,280);return null;},
       erase:thread=>{
